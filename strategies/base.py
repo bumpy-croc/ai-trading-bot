@@ -1,0 +1,42 @@
+from abc import ABC, abstractmethod
+import pandas as pd
+import logging
+
+class BaseStrategy(ABC):
+    """
+    Abstract base class for all trading strategies.
+    All concrete strategy implementations must inherit from this class.
+    """
+    
+    def __init__(self, name: str):
+        self.name = name
+        self.logger = logging.getLogger(name)
+    
+    @abstractmethod
+    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate strategy-specific indicators on the data"""
+        pass
+        
+    @abstractmethod
+    def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+        """Check if entry conditions are met at the given index"""
+        pass
+        
+    @abstractmethod
+    def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
+        """Check if exit conditions are met at the given index"""
+        pass
+        
+    @abstractmethod
+    def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
+        """Calculate the position size for a new trade"""
+        pass
+        
+    @abstractmethod
+    def get_parameters(self) -> dict:
+        """Return strategy parameters for logging"""
+        pass
+        
+    def prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare data for strategy execution"""
+        return self.calculate_indicators(df.copy()) 

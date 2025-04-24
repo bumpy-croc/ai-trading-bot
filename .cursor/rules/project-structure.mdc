@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+- All stratgies inherit from a base class. 
+- Each strategy only contains the necessary code for that strategy. 
+- Any code related to executing a backtest or running the strategy lives in backtest.py.
+
+## Backtesting
+- When I ask you to run a backtest with a specific strategy and number of days, use the `run_backtest.py` script. For example, to run a backtest with the adaptive strategy for the last 100 days you would run `python run_backtest.py adaptive --days 100`
+
