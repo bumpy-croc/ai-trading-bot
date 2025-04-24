@@ -9,10 +9,6 @@ from pathlib import Path
 API_KEY = os.getenv('BINANCE_API_KEY', '')
 API_SECRET = os.getenv('BINANCE_API_SECRET', '')
 
-# Print API credentials for debugging
-print(f"API Key: {API_KEY}")
-print(f"API Secret: {API_SECRET}")
-
 # Ensure API keys are set
 if not API_KEY or not API_SECRET:
     raise ValueError(
