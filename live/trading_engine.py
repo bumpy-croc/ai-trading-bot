@@ -90,7 +90,7 @@ class LiveTradingEngine:
                 'entry_price': candle['close'],
                 'entry_time': candle.name,
                 'size': size,
-                'stop_loss': self.strategy.calculate_stop_loss(candle['close'], 'long')
+                'stop_loss': self.strategy.calculate_stop_loss(data, len(data) - 1, candle['close'], 'long')
             }
             
             # Update risk tracking

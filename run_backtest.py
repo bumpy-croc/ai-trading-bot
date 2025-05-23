@@ -14,7 +14,7 @@ from pathlib import Path
 from core.data import BinanceDataProvider
 from core.risk import RiskParameters
 from backtesting import Backtester
-from strategies import AdaptiveStrategy, EnhancedStrategy, AdaptiveStrategy2  # Direct imports
+from strategies import AdaptiveStrategy, EnhancedStrategy, AdaptiveStrategy2, HighRiskHighRewardStrategy  # Direct imports
 
 # Set up logging
 logging.basicConfig(
@@ -30,7 +30,8 @@ def load_strategy(strategy_name: str):
         strategy_map = {
             'enhanced': EnhancedStrategy,
             'adaptive': AdaptiveStrategy,
-            'adaptive2': AdaptiveStrategy2
+            'adaptive2': AdaptiveStrategy2,
+            'high_risk_high_reward': HighRiskHighRewardStrategy
         }
         
         # Get the strategy class

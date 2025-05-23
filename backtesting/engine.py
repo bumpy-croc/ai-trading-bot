@@ -138,7 +138,8 @@ class Backtester:
                 
                 if size > 0:
                     # Enter new trade
-                    stop_loss = self.strategy.calculate_stop_loss(candle['close'], 'long')
+                    # Assuming df and index are available in this context
+                    stop_loss = self.strategy.calculate_stop_loss(df, len(df) - 1, candle['close'], 'long')
                     self.current_trade = Trade(
                         symbol=symbol,
                         side='long',

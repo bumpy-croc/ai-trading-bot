@@ -6,34 +6,28 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class AdaptiveStrategy2(BaseStrategy):
-    def __init__(self, name="AdaptiveStrategy2"):
+class HighRiskHighRewardStrategy(BaseStrategy):
+    def __init__(self, name="HighRiskHighRewardStrategy"):
         super().__init__(name)
         
         # Risk parameters
-        self.stop_loss_pct = 0.015  # 1.5% stop loss
-        self.take_profit_pct = 0.025  # 2.5% take profit
-        self.base_position_size = 0.15  # 15% of balance
-        self.max_position_size = 0.25  # 25% of balance
+        self.stop_loss_pct = 0.0005  # 0.05% stop loss
+        self.take_profit_pct = 0.002  # 0.2% take profit
+        self.base_position_size = 0.7  # 70% of balance
+        self.max_position_size = 1.0  # 100% of balance
         
         # Technical indicator parameters
-        self.short_window = 9
-        self.long_window = 21
-        self.signal_window = 9
-        self.rsi_period = 14
-        self.rsi_oversold = 30
-        self.rsi_overbought = 70
+        self.short_window = 5
+        self.long_window = 13
+        self.signal_window = 5
+        self.rsi_period = 7
+        self.rsi_oversold = 20
+        self.rsi_overbought = 80
         
         # Volatility parameters
-        self.atr_period = 14
-        self.volatility_window = 20
-        self.atr_multiplier = 2.0
-        self.min_stop_loss = 0.01
-        self.max_stop_loss = 0.03
-
-        # Trend confirmation using moving averages
-        self.trend_short_window = 50
-        self.trend_long_window = 200
+        self.atr_period = 7
+        self.volatility_window = 10
+        self.atr_multiplier = 3.0
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate strategy-specific indicators"""
@@ -50,50 +44,20 @@ class AdaptiveStrategy2(BaseStrategy):
         # RSI
         df['rsi'] = talib.RSI(df['close'], timeperiod=self.rsi_period)
         
-        # ATR for volatility
+        # ATR for volatility-based position sizing
         df['atr'] = talib.ATR(df['high'], df['low'], df['close'], timeperiod=self.atr_period)
         
-        # Volatility ratio
-        df['volatility'] = df['atr'] / df['close']
-        df['volatility_ma'] = df['volatility'].rolling(window=self.volatility_window).mean()
-        
-        # Trend confirmation
-        df['trend_short_ma'] = df['close'].rolling(window=self.trend_short_window).mean()
-        df['trend_long_ma'] = df['close'].rolling(window=self.trend_long_window).mean()
+        # Moving Averages for trend confirmation
+        df['50_MA'] = df['close'].rolling(window=50).mean()
+        df['200_MA'] = df['close'].rolling(window=200).mean()
         
         return df
 
     def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
         """Calculate dynamic position size based on volatility"""
-        if index >= len(df):
-            return 0.0
-            
-        if balance <= 0:
-            return 0.0
-            
-        volatility = df['volatility'].iloc[index]
-        volatility_ma = df['volatility_ma'].iloc[index]
-        
-        # Base position size as percentage of balance
-        base_size = min(balance * self.base_position_size, balance * 0.15)  # Never risk more than 15%
-        
-        # Adjust position size based on volatility
-        if volatility > volatility_ma * 1.5:
-            position_size = base_size * 0.5  # Reduce position in high volatility
-        elif volatility < volatility_ma * 0.5:
-            position_size = min(base_size * 1.2, balance * self.max_position_size)  # Less aggressive scaling
-        else:
-            position_size = base_size
-            
-        # Additional safety checks
-        max_allowed = balance * self.max_position_size
-        position_size = min(position_size, max_allowed)
-        
-        # Ensure minimum position size
-        if position_size < balance * 0.01:  # Minimum 1% of balance
-            return 0.0  # Don't trade if position would be too small
-            
-        return position_size
+        atr = df['atr'].iloc[index]
+        volatility_adjusted_size = self.base_position_size * (1 + atr / df['close'].iloc[index])
+        return min(volatility_adjusted_size, self.max_position_size) * balance
 
     def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = 'long') -> float:
         """Calculate stop loss price"""
@@ -110,27 +74,13 @@ class AdaptiveStrategy2(BaseStrategy):
             
         price = df['close'].iloc[index]
         rsi = df['rsi'].iloc[index]
-        macd = df['macd'].iloc[index]
-        macd_signal = df['macd_signal'].iloc[index]
-        prev_macd = df['macd'].iloc[index-1]
-        prev_macd_signal = df['macd_signal'].iloc[index-1]
-        
-        # MACD crossover
-        macd_cross_up = prev_macd < prev_macd_signal and macd > macd_signal
-        
-        # RSI conditions
-        rsi_buy_zone = rsi < self.rsi_oversold
-        
-        # Volatility check
-        volatility = df['volatility'].iloc[index]
-        volatility_ma = df['volatility_ma'].iloc[index]
-        acceptable_volatility = volatility <= volatility_ma * 2.0  # Don't enter in extreme volatility
+        macd_hist = df['macd_hist'].iloc[index]
         
         # Trend confirmation
-        trend_up = df['trend_short_ma'].iloc[index] > df['trend_long_ma'].iloc[index]
+        trend_up = df['50_MA'].iloc[index] > df['200_MA'].iloc[index]
         
-        # Combined entry conditions
-        return trend_up and acceptable_volatility and (macd_cross_up or rsi_buy_zone)
+        # Entry condition: MACD histogram positive, RSI oversold, and trend up
+        return macd_hist > 0 and rsi < self.rsi_oversold and trend_up
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Check if exit conditions are met at the given index"""
