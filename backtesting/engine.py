@@ -53,7 +53,7 @@ class Backtester:
         strategy: BaseStrategy,
         data_provider: DataProvider,
         risk_parameters: Optional[RiskParameters] = None,
-        initial_balance: float = 10000
+        initial_balance: float = 1000
     ):
         self.strategy = strategy
         self.data_provider = data_provider
