@@ -121,6 +121,7 @@ def main():
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
         print(f"Total Return: {results['total_return']:.2f}%")
+        print(f"Annualized Return: {results['annualized_return']:.2f}%")
         print(f"Max Drawdown: {results['max_drawdown']:.2f}%")
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Balance: ${results['final_balance']:.2f}")

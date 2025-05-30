@@ -161,11 +161,16 @@ class Backtester:
         else:
             sharpe_ratio = 0
         
+        # Calculate annualized return
+        days = (end - start).days if end else (datetime.now() - start).days
+        annualized_return = ((1 + total_return / 100) ** (365 / days) - 1) * 100
+
         return {
             'total_trades': total_trades,
             'win_rate': win_rate,
             'total_return': total_return,
             'max_drawdown': max_drawdown * 100,
             'sharpe_ratio': sharpe_ratio,
-            'final_balance': self.balance
+            'final_balance': self.balance,
+            'annualized_return': annualized_return
         } 
