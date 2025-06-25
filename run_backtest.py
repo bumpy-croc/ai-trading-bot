@@ -16,6 +16,7 @@ from core.data_providers.cached_data_provider import CachedDataProvider
 from core.data_providers.cryptocompare_sentiment import CryptoCompareSentimentProvider
 from core.risk import RiskParameters
 from backtesting import Backtester
+
 from strategies import AdaptiveStrategy, EnhancedStrategy, AdaptiveStrategy2, HighRiskHighRewardStrategy, MlModelStrategy  # Direct imports
 
 # Set up logging
@@ -128,9 +129,16 @@ def main():
             initial_balance=args.initial_balance
         )
         
+        # Use strategy-specific trading pair if not overridden by command line
+        # If user provided a symbol explicitly, use it; otherwise use strategy's default
+        if args.symbol != 'BTCUSDT':  # User provided a specific symbol
+            trading_symbol = args.symbol
+        else:  # Use strategy's default trading pair
+            trading_symbol = strategy.get_trading_pair()
+        
         # Run backtest
         results = backtester.run(
-            symbol=args.symbol,
+            symbol=trading_symbol,
             timeframe=args.timeframe,
             start=start_date,
             end=end_date
@@ -140,7 +148,7 @@ def main():
         print("\nBacktest Results:")
         print("=" * 50)
         print(f"Strategy: {strategy.name}")
-        print(f"Symbol: {args.symbol}")
+        print(f"Symbol: {trading_symbol}")
         print(f"Period: {start_date.date()} to {end_date.date()}")
         print(f"Timeframe: {args.timeframe}")
         print(f"Using Sentiment: {args.use_sentiment}")

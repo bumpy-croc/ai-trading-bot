@@ -7,6 +7,10 @@ from strategies.base import BaseStrategy
 class MlModelStrategy(BaseStrategy):
     def __init__(self, name="MlModelStrategy", model_path="ml/model_ethusdt.onnx", sequence_length=120):
         super().__init__(name)
+        
+        # Set strategy-specific trading pair - ML model trained on ETH
+        self.trading_pair = 'ETHUSDT'
+        
         self.model_path = model_path
         self.sequence_length = sequence_length
         self.ort_session = ort.InferenceSession(self.model_path)

@@ -4,7 +4,10 @@ from binance.client import Client
 from typing import Optional
 import logging
 from .data_provider import DataProvider
-from config.settings import API_KEY, API_SECRET
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +25,13 @@ class BinanceDataProvider(DataProvider):
     
     def __init__(self):
         super().__init__()
-        self.client = Client(API_KEY, API_SECRET)
+        api_key = os.getenv('BINANCE_API_KEY')
+        api_secret = os.getenv('BINANCE_API_SECRET')
+        
+        if not api_key or not api_secret:
+            raise ValueError("Binance API credentials not found. Please set BINANCE_API_KEY and BINANCE_API_SECRET environment variables.")
+        
+        self.client = Client(api_key, api_secret)
         
     def _convert_timeframe(self, timeframe: str) -> str:
         """Convert generic timeframe to Binance-specific interval"""

@@ -10,6 +10,9 @@ class HighRiskHighRewardStrategy(BaseStrategy):
     def __init__(self, name="HighRiskHighRewardStrategy"):
         super().__init__(name)
         
+        # Set strategy-specific trading pair - this strategy focuses on ETH
+        self.trading_pair = 'ETHUSDT'
+        
         # Risk parameters
         self.stop_loss_pct = 0.0005  # 0.05% stop loss
         self.take_profit_pct = 0.002  # 0.2% take profit

@@ -14,3 +14,4 @@ alwaysApply: true
 - All startegies live in the /strategies folder and extend the BaseStrategy class.
 - When asked to create a new strategy, be sure to keep to the same structure as the existing strategies.
 
+

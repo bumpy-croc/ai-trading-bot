@@ -10,6 +10,9 @@ class EnhancedStrategy(BaseStrategy):
     def __init__(self, name: str = "EnhancedStrategy"):
         super().__init__(name)
         
+        # Set strategy-specific trading pair
+        self.trading_pair = 'BTCUSDT'
+        
         # Risk Management Parameters
         self.risk_per_trade = 0.01  # 1% risk per trade
         self.max_position_size = 0.20  # Maximum 20% of balance per position
@@ -23,10 +26,11 @@ class EnhancedStrategy(BaseStrategy):
         self.min_volume_ma = 1000  # Minimum volume moving average
         self.trend_ma_period = 20  # Trend MA period
         self.short_ma_period = 10  # Short MA period
+        self.long_ma_period = 20   # Long MA period
         self.volume_ma_period = 20  # Volume MA period
         self.rsi_period = 14
         self.rsi_overbought = 80  # Made less conservative (was 75)
-        self.rsi_oversold = 20  # Made less conservative (was 25)
+        self.rsi_oversold = 20    # Made less conservative (was 25)
         self.atr_period = 14
         self.min_conditions = 4  # Reduced from 6 to 4 conditions needed for entry
 
@@ -87,7 +91,7 @@ class EnhancedStrategy(BaseStrategy):
         # Ensure position size doesn't exceed maximum
         return min(position_size, balance * self.max_position_size)
 
-    def calculate_stop_loss(self, price: float, side: str = 'long') -> float:
+    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = 'long') -> float:
         """Calculate stop loss price"""
         if side == 'long':
             return price * (1 - self.base_stop_loss_pct)

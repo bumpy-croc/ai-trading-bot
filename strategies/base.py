@@ -11,6 +11,17 @@ class BaseStrategy(ABC):
     def __init__(self, name: str):
         self.name = name
         self.logger = logging.getLogger(name)
+        
+        # Default trading pair - strategies can override this
+        self.trading_pair = 'BTCUSDT'
+        
+    def get_trading_pair(self) -> str:
+        """Get the trading pair for this strategy"""
+        return self.trading_pair
+    
+    def set_trading_pair(self, trading_pair: str):
+        """Set the trading pair for this strategy"""
+        self.trading_pair = trading_pair
     
     @abstractmethod
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:

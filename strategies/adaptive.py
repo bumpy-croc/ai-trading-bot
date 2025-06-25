@@ -16,6 +16,9 @@ class AdaptiveStrategy(BaseStrategy):
     def __init__(self, name="AdaptiveStrategy"):
         super().__init__(name)
         
+        # Set strategy-specific trading pair
+        self.trading_pair = 'BTCUSDT'
+        
         # Dynamic Risk Management - More adaptive
         self.base_risk_per_trade = 0.015   # Increased from 1% to 1.5%
         self.max_risk_per_trade = 0.025    # Increased from 2% to 2.5%
@@ -152,9 +155,15 @@ class AdaptiveStrategy(BaseStrategy):
         
         return position_size
 
-    def calculate_stop_loss(self, price: float, side: str = 'long') -> float:
+    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = 'long') -> float:
         """Calculate adaptive stop loss level"""
-        stop_pct = max(self.min_stop_loss_pct, min(self.base_stop_loss_atr, self.max_stop_loss_pct))
+        if index >= len(df):
+            stop_pct = self.min_stop_loss_pct
+        else:
+            # Use ATR for adaptive stop loss calculation
+            atr = df['atr'].iloc[index] if index < len(df) and 'atr' in df.columns else price * 0.02
+            stop_pct = max(self.min_stop_loss_pct, min(atr / price * self.base_stop_loss_atr, self.max_stop_loss_pct))
+        
         if side == 'long':
             return price * (1 - stop_pct)
         else:  # short
