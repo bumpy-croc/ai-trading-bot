@@ -4,7 +4,7 @@ from typing import Optional
 from datetime import datetime
 import pandas as pd
 
-from core.data import DataProvider
+from core.data_providers import DataProvider
 from strategies import BaseStrategy
 from core.risk import RiskManager, RiskParameters
 

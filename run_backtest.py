@@ -11,8 +11,9 @@ import importlib
 import sys
 from pathlib import Path
 
-from core.data import BinanceDataProvider
-from core.data.cryptocompare_sentiment import CryptoCompareSentimentProvider
+from core.data_providers import BinanceDataProvider
+from core.data_providers.cached_data_provider import CachedDataProvider
+from core.data_providers.cryptocompare_sentiment import CryptoCompareSentimentProvider
 from core.risk import RiskParameters
 from backtesting import Backtester
 from strategies import AdaptiveStrategy, EnhancedStrategy, AdaptiveStrategy2, HighRiskHighRewardStrategy, MlModelStrategy  # Direct imports
@@ -60,6 +61,8 @@ def parse_args():
     parser.add_argument('--risk-per-trade', type=float, default=0.01, help='Risk per trade (1% = 0.01)')
     parser.add_argument('--max-risk-per-trade', type=float, default=0.02, help='Maximum risk per trade')
     parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis in backtest')
+    parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
+    parser.add_argument('--cache-ttl', type=int, default=24, help='Cache TTL in hours (default: 24)')
     return parser.parse_args()
 
 def get_date_range(args):
@@ -88,8 +91,21 @@ def main():
         strategy = load_strategy(args.strategy)
         logger.info(f"Loaded strategy: {strategy.name}")
         
-        # Initialize data provider
-        data_provider = BinanceDataProvider()
+        # Initialize data provider with caching
+        binance_provider = BinanceDataProvider()
+        if args.no_cache:
+            data_provider = binance_provider
+            logger.info("Data caching disabled")
+        else:
+            data_provider = CachedDataProvider(
+                binance_provider, 
+                cache_ttl_hours=args.cache_ttl
+            )
+            logger.info(f"Using cached data provider (TTL: {args.cache_ttl} hours)")
+            
+            # Show cache info
+            cache_info = data_provider.get_cache_info()
+            logger.info(f"Cache info: {cache_info['total_files']} files, {cache_info['total_size_mb']} MB")
         
         # Initialize sentiment provider if requested
         sentiment_provider = None
@@ -128,6 +144,7 @@ def main():
         print(f"Period: {start_date.date()} to {end_date.date()}")
         print(f"Timeframe: {args.timeframe}")
         print(f"Using Sentiment: {args.use_sentiment}")
+        print(f"Using Cache: {not args.no_cache}")
         print("-" * 50)
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
@@ -137,6 +154,11 @@ def main():
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print("=" * 50)
+        
+        # Show final cache info if using cache
+        if not args.no_cache:
+            final_cache_info = data_provider.get_cache_info()
+            logger.info(f"Final cache info: {final_cache_info['total_files']} files, {final_cache_info['total_size_mb']} MB")
         
         # --- Save aligned sentiment data to file if sentiment is used ---
         if sentiment_provider is not None:

@@ -2,7 +2,7 @@
 Bottrade - Cryptocurrency Trading Bot Framework
 """
 
-from core.data import DataProvider, BinanceDataProvider
+from core.data_providers import DataProvider, BinanceDataProvider
 from core.indicators import (
     calculate_moving_averages,
     calculate_rsi,

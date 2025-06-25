@@ -2,11 +2,11 @@ from typing import Optional, Dict, List
 import pandas as pd
 import logging
 from datetime import datetime
-from core.data.data_provider import DataProvider
+from core.data_providers.data_provider import DataProvider
 from strategies.base import BaseStrategy
 from core.risk.risk_manager import RiskManager, RiskParameters
 import numpy as np
-from core.data.sentiment_provider import SentimentDataProvider
+from core.data_providers.sentiment_provider import SentimentDataProvider
 
 logger = logging.getLogger(__name__)
 
