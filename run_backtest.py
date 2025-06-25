@@ -12,9 +12,10 @@ import sys
 from pathlib import Path
 
 from core.data import BinanceDataProvider
+from core.data.cryptocompare_sentiment import CryptoCompareSentimentProvider
 from core.risk import RiskParameters
 from backtesting import Backtester
-from strategies import AdaptiveStrategy, EnhancedStrategy, AdaptiveStrategy2, HighRiskHighRewardStrategy  # Direct imports
+from strategies import AdaptiveStrategy, EnhancedStrategy, AdaptiveStrategy2, HighRiskHighRewardStrategy, MlModelStrategy  # Direct imports
 
 # Set up logging
 logging.basicConfig(
@@ -31,7 +32,8 @@ def load_strategy(strategy_name: str):
             'enhanced': EnhancedStrategy,
             'adaptive': AdaptiveStrategy,
             'adaptive2': AdaptiveStrategy2,
-            'high_risk_high_reward': HighRiskHighRewardStrategy
+            'high_risk_high_reward': HighRiskHighRewardStrategy,
+            'ml_model_strategy': MlModelStrategy
         }
         
         # Get the strategy class
@@ -54,9 +56,10 @@ def parse_args():
     parser.add_argument('--days', type=int, default=30, help='Number of days to backtest')
     parser.add_argument('--start', help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end', help='End date (YYYY-MM-DD)')
-    parser.add_argument('--initial-balance', type=float, default=1000, help='Initial balance')
+    parser.add_argument('--initial-balance', type=float, default=10000, help='Initial balance')
     parser.add_argument('--risk-per-trade', type=float, default=0.01, help='Risk per trade (1% = 0.01)')
     parser.add_argument('--max-risk-per-trade', type=float, default=0.02, help='Maximum risk per trade')
+    parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis in backtest')
     return parser.parse_args()
 
 def get_date_range(args):
@@ -88,6 +91,12 @@ def main():
         # Initialize data provider
         data_provider = BinanceDataProvider()
         
+        # Initialize sentiment provider if requested
+        sentiment_provider = None
+        if args.use_sentiment:
+            sentiment_provider = CryptoCompareSentimentProvider()
+            logger.info("Using sentiment analysis in backtest")
+        
         # Set up risk parameters
         risk_params = RiskParameters(
             base_risk_per_trade=args.risk_per_trade,
@@ -98,6 +107,7 @@ def main():
         backtester = Backtester(
             strategy=strategy,
             data_provider=data_provider,
+            sentiment_provider=sentiment_provider,
             risk_parameters=risk_params,
             initial_balance=args.initial_balance
         )
@@ -117,6 +127,7 @@ def main():
         print(f"Symbol: {args.symbol}")
         print(f"Period: {start_date.date()} to {end_date.date()}")
         print(f"Timeframe: {args.timeframe}")
+        print(f"Using Sentiment: {args.use_sentiment}")
         print("-" * 50)
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
@@ -126,6 +137,25 @@ def main():
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print("=" * 50)
+        
+        # --- Save aligned sentiment data to file if sentiment is used ---
+        if sentiment_provider is not None:
+            # Fetch price data
+            df = data_provider.get_historical_data(args.symbol, args.timeframe, start_date, end_date)
+            sentiment_df = sentiment_provider.get_historical_sentiment(args.symbol, start_date, end_date)
+            if not sentiment_df.empty:
+                sentiment_df = sentiment_provider.aggregate_sentiment(sentiment_df, window=args.timeframe)
+                aligned_df = df.join(sentiment_df, how='left')
+                print(f"Shape of aligned DataFrame: {aligned_df.shape}")
+                if aligned_df.empty:
+                    print("Warning: aligned DataFrame is empty. No file will be written.")
+                output_path = 'data/sentiment_aligned_output.csv'
+                try:
+                    aligned_df.to_csv(output_path)
+                    print(f'Aligned sentiment and price data saved to {output_path}')
+                except Exception as file_err:
+                    print(f'Error writing {output_path}: {file_err}')
+                    logger.error(f'Error writing {output_path}: {file_err}')
         
     except Exception as e:
         logger.error(f"Error running backtest: {e}")
