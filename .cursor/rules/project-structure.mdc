@@ -9,6 +9,7 @@ alwaysApply: true
 
 ## Backtesting
 - When I ask you to run a backtest with a specific strategy and number of days, use the `run_backtest.py` script. For example, to run a backtest with the adaptive strategy for the last 100 days you would run `python run_backtest.py adaptive --days 100`
+- When I say "run the training model" or "train the model" run the `scripts/train_model.py` script.
 
 ## Strategies
 - All startegies live in the /strategies folder and extend the BaseStrategy class.

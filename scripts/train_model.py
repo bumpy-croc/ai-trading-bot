@@ -43,6 +43,10 @@ def main():
     """Main training function"""
     parser = argparse.ArgumentParser(description='Train a neural network model for cryptocurrency price prediction')
     parser.add_argument('symbol', help='Trading pair symbol (e.g., ETHUSDT, BTCUSDT, SOLUSDT)')
+    parser.add_argument('--start-date', type=str, default='2000-01-01', 
+                       help='Start date for training data (YYYY-MM-DD format, default: 2000-01-01)')
+    parser.add_argument('--end-date', type=str, default='2022-01-01',
+                       help='End date for training data (YYYY-MM-DD format, default: 2022-01-01)')
     args = parser.parse_args()
     
     # Hardcoded parameters
@@ -60,9 +64,15 @@ def main():
     print(f"Time steps: {time_steps}")
     print(f"Batch size: {batch_size}")
     
-    # Determine date range first
-    end_date = datetime(2025, 4, 30)
-    start_date = datetime(2020, 1, 1)
+    # Parse and format the date arguments
+    try:
+        start_date = datetime.strptime(args.start_date, '%Y-%m-%d')
+        end_date = datetime.strptime(args.end_date, '%Y-%m-%d')
+    except ValueError as e:
+        print(f"❌ Invalid date format: {e}")
+        print("Please use YYYY-MM-DD format for dates")
+        sys.exit(1)
+    
     start_date_str = start_date.strftime('%Y-%m-%dT00:00:00Z')
     end_date_str = end_date.strftime('%Y-%m-%dT23:59:59Z')
     
@@ -155,7 +165,7 @@ def main():
         plt.xlabel('Epochs')
         plt.ylabel('Loss/RMSE')
         plt.legend()
-        plot_path = os.path.join(PROJECT_ROOT, f'{args.symbol}_{timeframe}.png')
+        plot_path = os.path.join(PROJECT_ROOT, 'ml', f'{args.symbol}_{timeframe}.png')
         plt.savefig(plot_path)
         print(f"Training plot saved as '{plot_path}'")
         
