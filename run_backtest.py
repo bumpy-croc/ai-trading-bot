@@ -29,22 +29,33 @@ logger = logging.getLogger('backtest')
 def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     try:
-        # Map strategy names to classes
-        strategy_map = {
-            'enhanced': EnhancedStrategy,
-            'adaptive': AdaptiveStrategy,
-            'adaptive2': AdaptiveStrategy2,
-            'high_risk_high_reward': HighRiskHighRewardStrategy,
-            'ml_model_strategy': MlModelStrategy
-        }
-        
-        # Get the strategy class
-        strategy_class = strategy_map.get(strategy_name.lower())
-        if strategy_class is None:
-            raise ValueError(f"Strategy '{strategy_name}' not found. Available strategies: {list(strategy_map.keys())}")
+        # Import strategies
+        if strategy_name == 'adaptive':
+            from strategies.adaptive import AdaptiveStrategy
+            strategy = AdaptiveStrategy()
+        elif strategy_name == 'adaptive2':
+            from strategies.adaptive2 import Adaptive2Strategy
+            strategy = Adaptive2Strategy()
+        elif strategy_name == 'enhanced':
+            from strategies.enhanced import EnhancedStrategy
+            strategy = EnhancedStrategy()
+        elif strategy_name == 'high_risk_high_reward':
+            from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
+            strategy = HighRiskHighRewardStrategy()
+        elif strategy_name == 'ml_model_strategy':
+            from strategies.ml_model_strategy import MlModelStrategy
+            strategy = MlModelStrategy()
+        elif strategy_name == 'ml_sentiment_strategy':
+            from strategies.ml_sentiment_strategy import MlSentimentStrategy
+            strategy = MlSentimentStrategy(use_sentiment=True)
+        else:
+            print(f"Unknown strategy: {strategy_name}")
+            available_strategies = ['adaptive', 'adaptive2', 'enhanced', 'high_risk_high_reward', 'ml_model_strategy', 'ml_sentiment_strategy']
+            print(f"Available strategies: {', '.join(available_strategies)}")
+            sys.exit(1)
         
         # Create and return strategy instance
-        return strategy_class()
+        return strategy
         
     except Exception as e:
         logger.error(f"Error loading strategy: {e}")
