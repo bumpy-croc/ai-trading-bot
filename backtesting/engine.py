@@ -187,6 +187,19 @@ class Backtester:
             days = (end - start).days if end else (datetime.now() - start).days
             annualized_return = ((1 + total_return / 100) ** (365 / days) - 1) * 100
 
+            # --- Yearly returns calculation ---
+            yearly_returns = {}
+            if not df.empty and hasattr(df.index, 'year'):
+                df_years = df.copy()
+                df_years['year'] = df_years.index.year
+                for year, group in df_years.groupby('year'):
+                    first_close = group['close'].iloc[0]
+                    last_close = group['close'].iloc[-1]
+                    if first_close > 0:
+                        yearly_return = (last_close / first_close - 1) * 100
+                        yearly_returns[str(year)] = yearly_return
+            # --- End yearly returns ---
+
             return {
                 'total_trades': total_trades,
                 'win_rate': win_rate,
@@ -194,7 +207,8 @@ class Backtester:
                 'max_drawdown': max_drawdown * 100,
                 'sharpe_ratio': sharpe_ratio,
                 'final_balance': self.balance,
-                'annualized_return': annualized_return
+                'annualized_return': annualized_return,
+                'yearly_returns': yearly_returns
             }
             
         except Exception as e:

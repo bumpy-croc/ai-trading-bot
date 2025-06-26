@@ -162,6 +162,14 @@ def main():
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print("=" * 50)
+
+        # Print yearly returns if available
+        if 'yearly_returns' in results and results['yearly_returns']:
+            print("Yearly Returns:")
+            print(f"{'Year':<8} {'Return (%)':>12}")
+            for year in sorted(results['yearly_returns'].keys()):
+                print(f"{year:<8} {results['yearly_returns'][year]:>12.2f}")
+            print("=" * 50)
         
         # Show final cache info if using cache
         if not args.no_cache:
