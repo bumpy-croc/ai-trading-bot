@@ -125,44 +125,32 @@ def create_robust_features(df: pd.DataFrame, sentiment_assessment: dict, time_st
     # Always include price features
     price_features = ['close', 'volume', 'high', 'low', 'open']
     
-    # Standard sentiment features
-    sentiment_features = [
-        'sentiment_primary', 'sentiment_momentum', 'sentiment_volatility',
-        'sentiment_extreme_positive', 'sentiment_extreme_negative',
-        'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14'
-    ]
+    # SIMPLIFIED: Only use primary sentiment (mean score)
+    sentiment_features = ['sentiment_primary']  # Just the mean sentiment score
     
     # Create feature DataFrame
     feature_data = df[price_features].copy()
     
     # Handle sentiment features based on assessment
     if sentiment_assessment['recommendation'] in ['full_sentiment', 'hybrid_with_fallback']:
-        print(f"🔮 Including sentiment features (quality: {sentiment_assessment['quality_score']:.2f})")
+        print(f"🔮 Including simplified sentiment feature (quality: {sentiment_assessment['quality_score']:.2f})")
         
-        for feature in sentiment_features:
-            if feature in df.columns:
-                # Use actual sentiment data where available
-                feature_data[feature] = df[feature]
-            else:
-                # Create neutral baseline
-                feature_data[feature] = get_neutral_sentiment_value(feature)
+        # Only process the single sentiment feature
+        if 'sentiment_primary' in df.columns:
+            # Use actual sentiment data where available
+            feature_data['sentiment_primary'] = df['sentiment_primary']
+        else:
+            # Create neutral baseline (0.5 for mean sentiment)
+            feature_data['sentiment_primary'] = 0.5
+            print("   Created neutral sentiment baseline (0.5)")
         
-        # Fill missing sentiment with neutral values instead of forward fill
-        for feature in sentiment_features:
-            mask = feature_data[feature].isna()
-            if mask.any():
-                neutral_val = get_neutral_sentiment_value(feature)
-                feature_data.loc[mask, feature] = neutral_val
-                print(f"   Filled {mask.sum()} missing {feature} values with {neutral_val}")
+        # Fill missing sentiment with neutral value
+        mask = feature_data['sentiment_primary'].isna()
+        if mask.any():
+            feature_data.loc[mask, 'sentiment_primary'] = 0.5
+            print(f"   Filled {mask.sum()} missing sentiment values with neutral (0.5)")
         
-        # Add sentiment confidence indicator
-        feature_data['sentiment_confidence'] = 1.0  # Default high confidence
-        
-        # Reduce confidence in areas with missing data
-        if 'sentiment_freshness' in df.columns:
-            feature_data['sentiment_confidence'] = df['sentiment_freshness'].fillna(0.5)
-        
-        all_features = price_features + sentiment_features + ['sentiment_confidence']
+        all_features = price_features + sentiment_features
         
     else:
         print("📊 Using price-only features (sentiment data insufficient)")
@@ -172,21 +160,20 @@ def create_robust_features(df: pd.DataFrame, sentiment_assessment: dict, time_st
     scalers = {}
     normalized_data = pd.DataFrame(index=feature_data.index)
     
-    # Normalize price features
+    # Normalize price features using MinMaxScaler
     for feature in price_features:
         if feature in feature_data.columns:
             scaler = MinMaxScaler(feature_range=(0, 1))
             normalized_data[feature] = scaler.fit_transform(feature_data[[feature]]).flatten()
             scalers[feature] = scaler
     
-    # Normalize sentiment features (if included)
+    # Normalize sentiment feature (if included)
     if sentiment_assessment['recommendation'] in ['full_sentiment', 'hybrid_with_fallback']:
-        for feature in sentiment_features + ['sentiment_confidence']:
-            if feature in feature_data.columns:
-                # Sentiment features might already be normalized, but standardize anyway
-                scaler = StandardScaler()
-                normalized_data[feature] = scaler.fit_transform(feature_data[[feature]]).flatten()
-                scalers[feature] = scaler
+        if 'sentiment_primary' in feature_data.columns:
+            # Sentiment already ranges from -1 to 1, normalize to 0-1
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            normalized_data['sentiment_primary'] = scaler.fit_transform(feature_data[['sentiment_primary']]).flatten()
+            scalers['sentiment_primary'] = scaler
     
     return normalized_data, scalers, all_features
 
@@ -208,46 +195,30 @@ def get_neutral_sentiment_value(feature_name: str) -> float:
         return 0.0  # Default neutral
 
 def create_adaptive_model(input_shape, num_features: int, has_sentiment: bool = True):
-    """Create model that adapts to available features"""
+    """Create SIMPLIFIED model to prevent overfitting"""
     
     inputs = Input(shape=input_shape)
     
-    # CNN feature extraction layers
-    conv1 = Conv1D(filters=128, kernel_size=3, activation='relu', padding='same')(inputs)
+    # Simpler CNN feature extraction layers (reduced filters)
+    conv1 = Conv1D(filters=64, kernel_size=3, activation='relu', padding='same')(inputs)
     pool1 = MaxPooling1D(pool_size=2)(conv1)
     
-    conv2 = Conv1D(filters=64, kernel_size=3, activation='relu', padding='same')(pool1)
+    conv2 = Conv1D(filters=32, kernel_size=3, activation='relu', padding='same')(pool1)
     pool2 = MaxPooling1D(pool_size=2)(conv2)
     
-    # LSTM layers for sequence modeling
-    if has_sentiment:
-        # More complex model for sentiment-enhanced data
-        lstm1 = LSTM(100, return_sequences=True)(pool2)
-        dropout1 = Dropout(0.3)(lstm1)
-        
-        lstm2 = LSTM(50, return_sequences=False)(dropout1)
-        dropout2 = Dropout(0.3)(lstm2)
-        
-        # Dense layers
-        dense1 = Dense(50, activation='relu')(dropout2)
-        dropout3 = Dropout(0.2)(dense1)
-        
-        dense2 = Dense(25, activation='relu')(dropout3)
-        
-    else:
-        # Simpler model for price-only data
-        lstm1 = LSTM(50, return_sequences=True)(pool2)
-        dropout1 = Dropout(0.2)(lstm1)
-        
-        lstm2 = LSTM(25, return_sequences=False)(dropout1)
-        dropout2 = Dropout(0.2)(lstm2)
-        
-        # Dense layers
-        dense1 = Dense(25, activation='relu')(dropout2)
-        dense2 = dense1  # Skip extra layer for simpler model
+    # Simplified LSTM layers for both cases (avoiding overfitting)
+    lstm1 = LSTM(50, return_sequences=True)(pool2)
+    dropout1 = Dropout(0.2)(lstm1)
+    
+    lstm2 = LSTM(25, return_sequences=False)(dropout1)
+    dropout2 = Dropout(0.2)(lstm2)
+    
+    # Simple dense layers
+    dense1 = Dense(25, activation='relu')(dropout2)
+    dropout3 = Dropout(0.1)(dense1)
     
     # Output layer
-    outputs = Dense(1, activation='sigmoid')(dense2)
+    outputs = Dense(1, activation='sigmoid')(dropout3)
     
     model = Model(inputs=inputs, outputs=outputs)
     return model

@@ -1,22 +1,14 @@
 {
   "symbol": "BTCUSDT",
   "model_type": "sentiment",
-  "training_date": "2025-06-27T20:04:56.041452",
+  "training_date": "2025-06-27T21:16:53.825960",
   "feature_names": [
     "close",
     "volume",
     "high",
     "low",
     "open",
-    "sentiment_primary",
-    "sentiment_momentum",
-    "sentiment_volatility",
-    "sentiment_extreme_positive",
-    "sentiment_extreme_negative",
-    "sentiment_ma_3",
-    "sentiment_ma_7",
-    "sentiment_ma_14",
-    "sentiment_confidence"
+    "sentiment_primary"
   ],
   "sequence_length": 120,
   "has_sentiment": true,
@@ -32,13 +24,13 @@
   },
   "robustness_results": {
     "base_performance": {
-      "mse": 0.004546256601629669,
-      "rmse": 0.06742593419174606
+      "mse": 0.0037983302060047765,
+      "rmse": 0.06163059472376343
     },
     "no_sentiment_performance": {
-      "mse": 0.006990480126379837,
-      "rmse": 0.08360909117063668,
-      "degradation_pct": 53.76343086032587
+      "mse": 0.02149586293343348,
+      "rmse": 0.1466146750275479,
+      "degradation_pct": 465.92928385875166
     }
   },
   "training_params": {
@@ -49,10 +41,10 @@
     "end_date": "2025-06-27"
   },
   "evaluation_results": {
-    "train_loss": 0.021151291206479073,
-    "test_loss": 0.004546256735920906,
-    "train_rmse": 0.14543484151363373,
-    "test_rmse": 0.067425936460495,
-    "mape": 1.7151533545954107
+    "train_loss": 0.021543506532907486,
+    "test_loss": 0.0037983304355293512,
+    "train_rmse": 0.14677706360816956,
+    "test_rmse": 0.06163059547543526,
+    "mape": 1.5285981001699023
   }
 }
