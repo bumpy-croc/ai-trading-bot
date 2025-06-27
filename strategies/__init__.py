@@ -1,8 +1,9 @@
 from .base import BaseStrategy
-from .adaptive2 import AdaptiveStrategy2
 from .adaptive import AdaptiveStrategy
+from .adaptive2 import AdaptiveStrategy2
 from .enhanced import EnhancedStrategy
 from .high_risk_high_reward import HighRiskHighRewardStrategy
-from .ml_model_strategy import MlModelStrategy
+from .ml_basic_strategy import MlBasicStrategy
+from .ml_premium_strategy import MlPremiumStrategy
 
-__all__ = ['BaseStrategy', 'AdaptiveStrategy', 'AdaptiveStrategy2', 'EnhancedStrategy', 'HighRiskHighRewardStrategy', 'MlModelStrategy'] 
+__all__ = ['BaseStrategy', 'AdaptiveStrategy', 'AdaptiveStrategy2', 'EnhancedStrategy', 'HighRiskHighRewardStrategy', 'MlBasicStrategy', 'MlPremiumStrategy'] 

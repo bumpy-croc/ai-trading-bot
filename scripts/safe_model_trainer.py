@@ -25,8 +25,7 @@ import numpy as np
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-from scripts.train_model import train_model
-from scripts.train_model_with_sentiment import train_model_with_sentiment
+import subprocess
 from live.strategy_manager import StrategyManager
 
 logging.basicConfig(level=logging.INFO)
@@ -188,55 +187,86 @@ class SafeModelTrainer:
     
     def _train_in_staging(self, symbol: str, with_sentiment: bool, 
                          days: int, epochs: int) -> Dict[str, Any]:
-        """Train model in staging area"""
+        """Train model in staging area using the new train_model.py script"""
         
-        # Create staging paths
+        # Create staging timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         if with_sentiment:
-            staging_model = self.staging_dir / f"model_{symbol.lower()}_sentiment_{timestamp}.onnx"
-            staging_metadata = self.staging_dir / f"model_{symbol.lower()}_sentiment_{timestamp}_metadata.json"
-            strategy_name = "ml_sentiment_strategy"
+            strategy_name = "ml_premium_strategy"
+            model_type = "sentiment"
         else:
-            staging_model = self.staging_dir / f"model_{symbol.lower()}_{timestamp}.onnx"
-            staging_metadata = self.staging_dir / f"model_{symbol.lower()}_{timestamp}_metadata.json"
-            strategy_name = "ml_model_strategy"
-        
-        # Temporarily redirect model output to staging
-        original_cwd = os.getcwd()
-        os.chdir(self.staging_dir)
+            strategy_name = "ml_basic_strategy"
+            model_type = "price"
         
         try:
-            if with_sentiment:
-                # Train with sentiment
-                results = train_model_with_sentiment(
-                    symbol=symbol,
-                    days=days,
-                    epochs=epochs,
-                    save_path=str(staging_model),
-                    verbose=True
-                )
-            else:
-                # Train without sentiment
-                results = train_model(
-                    symbol=symbol,
-                    days=days,
-                    epochs=epochs,
-                    save_path=str(staging_model),
-                    verbose=True
-                )
+            logger.info(f"📊 Training {model_type} model for {symbol}")
             
-            # Save metadata
+            # Calculate date range (days back from today)
+            from datetime import timedelta
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=days)
+            
+            # Prepare training command
+            cmd = [
+                'python', 'scripts/train_model.py', symbol,
+                '--start-date', start_date.strftime('%Y-%m-%d'),
+                '--end-date', end_date.strftime('%Y-%m-%d')
+            ]
+            
+            # Add sentiment flag if needed
+            if with_sentiment:
+                cmd.append('--force-sentiment')
+            else:
+                cmd.append('--force-price-only')
+            
+            # Run training in project root directory
+            logger.info(f"🚀 Running: {' '.join(cmd)}")
+            result = subprocess.run(
+                cmd,
+                cwd=str(self.project_root),
+                capture_output=True,
+                text=True,
+                timeout=3600  # 1 hour timeout
+            )
+            
+            if result.returncode != 0:
+                raise Exception(f"Training failed: {result.stderr}")
+            
+            logger.info("✅ Training completed successfully")
+            
+            # Find the generated model files
+            model_pattern = f"{symbol.lower()}_{model_type}"
+            onnx_model = self.project_root / "ml" / f"{model_pattern}.onnx"
+            metadata_file = self.project_root / "ml" / f"{model_pattern}_metadata.json"
+            
+            # Move files to staging with timestamp
+            staging_model = self.staging_dir / f"{model_pattern}_{timestamp}.onnx"
+            staging_metadata = self.staging_dir / f"{model_pattern}_{timestamp}_metadata.json"
+            
+            if onnx_model.exists():
+                shutil.copy2(onnx_model, staging_model)
+                logger.info(f"📁 Moved ONNX model to staging: {staging_model}")
+            else:
+                raise Exception(f"ONNX model not found: {onnx_model}")
+            
+            if metadata_file.exists():
+                shutil.copy2(metadata_file, staging_metadata)
+                logger.info(f"📁 Moved metadata to staging: {staging_metadata}")
+            
+            # Create compatible metadata for safe trainer
             metadata = {
                 'symbol': symbol,
                 'with_sentiment': with_sentiment,
                 'training_days': days,
                 'epochs': epochs,
                 'timestamp': timestamp,
-                'training_results': results if results else {},
-                'strategy_name': strategy_name
+                'strategy_name': strategy_name,
+                'model_type': model_type,
+                'training_output': result.stdout
             }
             
+            # Save metadata to staging
             with open(staging_metadata, 'w') as f:
                 json.dump(metadata, f, indent=2, default=str)
             
@@ -247,11 +277,15 @@ class SafeModelTrainer:
                 'staging_metadata_path': str(staging_metadata),
                 'strategy_name': strategy_name,
                 'timestamp': timestamp,
-                'training_results': results
+                'training_output': result.stdout,
+                'model_type': model_type
             }
             
-        finally:
-            os.chdir(original_cwd)
+        except subprocess.TimeoutExpired:
+            raise Exception("Training timed out after 1 hour")
+        except Exception as e:
+            logger.error(f"❌ Training failed: {e}")
+            raise
     
     def _validate_model(self, model_info: Dict[str, Any]) -> Dict[str, Any]:
         """Validate trained model"""
@@ -434,7 +468,7 @@ def main():
         # Create deployment package from model path
         deployment_package = {
             'staging_path': args.model_path,
-            'strategy_name': 'ml_sentiment_strategy' if 'sentiment' in args.model_path else 'ml_model_strategy',
+            'strategy_name': 'ml_premium_strategy' if 'sentiment' in args.model_path else 'ml_basic_strategy',
             'ready_for_deployment': True
         }
         

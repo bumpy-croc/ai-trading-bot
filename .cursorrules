@@ -1,0 +1,43 @@
+# Crypto Trading Bot - Cursor AI Rules
+
+You are assisting with a cryptocurrency trading system inspired by Ray Dalio's principles. The project focuses on trend-following with strict risk management.
+
+## Key Context
+- All strategies inherit from `BaseStrategy` in `/strategies/base.py`
+- Use `CachedDataProvider` wrapper for backtesting to avoid API limits
+- Risk management: Max 1-2% capital per trade
+- ML models stored in `/ml/` folder with .h5, .keras, and .onnx formats
+- Backtesting via: `python run_backtest.py <strategy> --days <n>`
+- Model training via: `python scripts/train_model.py`
+
+## Architecture Overview
+```
+Data Providers → Indicators/ML → Strategies → Backtest/Live Engine → Risk Manager
+```
+
+## When Coding
+1. **Security First**: Never hardcode API keys, validate all inputs
+2. **Error Handling**: Always implement fallbacks for external APIs
+3. **Logging**: Use Python logging module, not print statements
+4. **Strategy Pattern**: Implement `generate_signals()` and `calculate_position_size()`
+5. **Data Access**: Use cached providers for historical data, live providers for real-time
+
+## Important Files
+- `/CURSOR_RULES.md` - Detailed architecture documentation
+- `/strategies/__init__.py` - Register new strategies here
+- `/core/risk/risk_manager.py` - Risk validation logic
+- `/backtesting/engine.py` - Backtesting implementation
+
+## Common Commands
+- Backtest: `python run_backtest.py adaptive --days 100`
+- Train models: `python scripts/train_model.py`
+- Live trading: `python run_live_trading.py <strategy>`
+- Cache management: `python scripts/cache_manager.py`
+
+## Development Workflow
+1. Create strategy in `/strategies/`
+2. Test with backtesting
+3. Validate risk parameters
+4. Paper trade before live deployment
+
+Remember: This handles real money. Prioritize safety and thorough testing. 

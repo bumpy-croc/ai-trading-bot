@@ -18,7 +18,7 @@ import logging
 from typing import Dict, Any
 
 from core.data_providers.senticrypt_provider import SentiCryptProvider
-from strategies.ml_sentiment_strategy import MlSentimentStrategy
+from strategies.ml_premium_strategy import MlPremiumStrategy
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -50,7 +50,7 @@ class LiveSentimentDemo:
         
         # Initialize ML strategy
         try:
-            self.strategy = MlSentimentStrategy(
+            self.strategy = MlPremiumStrategy(
                 name="LiveSentimentDemo",
                 use_sentiment=True,
                 sentiment_csv_path='data/senticrypt_sentiment_data.csv'

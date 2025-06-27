@@ -1,0 +1,234 @@
+# Crypto Trading Bot - Project Architecture & Development Guide
+
+## Project Overview
+This is a sophisticated cryptocurrency trading system inspired by Ray Dalio's principles, focusing on trend-following with risk containment. The system supports both backtesting and live trading with multiple data sources, ML models, and trading strategies.
+
+## Core Architecture
+
+### 1. Data Layer (`/core/data_providers/`)
+**Purpose**: Abstracts data acquisition from multiple sources
+
+- **Base Class**: `data_provider.py` - Defines the interface all providers must implement
+- **Implementations**:
+  - `binance_data_provider.py` - Live/historical price data from Binance
+  - `senticrypt_provider.py` - Sentiment data from SentiCrypt API
+  - `augmento_provider.py` - Alternative sentiment data source
+  - `cryptocompare_sentiment.py` - CryptoCompare sentiment integration
+  - `cached_data_provider.py` - Caches API responses to reduce load and costs
+
+**Usage Pattern**:
+```python
+# Always prefer cached providers for backtesting
+provider = CachedDataProvider(BinanceDataProvider())
+data = provider.get_historical_data('BTCUSDT', start_date, end_date)
+```
+
+### 2. Indicator Layer (`/core/indicators/`)
+**Purpose**: Calculate technical indicators for trading signals
+
+- `technical.py` - Contains all technical indicator calculations (RSI, EMA, Bollinger Bands, etc.)
+- Indicators should be pure functions that operate on price/volume data
+- Always return pandas Series or DataFrames
+
+### 3. ML Layer (`/ml/`)
+**Purpose**: Store trained models and metadata
+
+- Models are saved in multiple formats: `.h5`, `.keras`, `.onnx`
+- Each model has accompanying metadata JSON and training visualization PNG
+- Two main model types:
+  - Price prediction models (`btcusdt_price.*`)
+  - Sentiment-based models (`btcusdt_sentiment.*`)
+
+### 4. Strategy Layer (`/strategies/`)
+**Purpose**: Implement trading logic
+
+**Base Class Pattern**:
+```python
+class YourStrategy(BaseStrategy):
+    def __init__(self, config):
+        super().__init__(config)
+        # Strategy-specific initialization
+    
+    def generate_signals(self, data):
+        # Must return: signals, confidence, metadata
+        pass
+    
+    def calculate_position_size(self, signal, confidence, current_price, account_balance):
+        # Risk management logic
+        pass
+```
+
+**Strategy Types**:
+- `adaptive.py` / `adaptive2.py` - Adjusts to market conditions
+- `enhanced.py` - Combines multiple indicators
+- `high_risk_high_reward.py` - Aggressive trading
+- `ml_basic_strategy.py` - Uses ML price predictions
+- `ml_premium_strategy.py` - Advanced ML with sentiment
+
+### 5. Execution Layer
+
+**Backtesting (`/backtesting/`)**: 
+- `engine.py` - Simulates trades on historical data
+- Tracks performance metrics, drawdowns, and generates reports
+
+**Live Trading (`/live/`)**: 
+- `trading_engine.py` - Executes real trades via exchange APIs
+- `strategy_manager.py` - Manages strategy lifecycle and switching
+
+**Risk Management (`/core/risk/`)**: 
+- `risk_manager.py` - Position sizing, stop-loss management, exposure limits
+- Always enforces max risk per trade (1-2% of capital)
+
+## Development Workflows
+
+### 1. Creating a New Strategy
+1. Create new file in `/strategies/` extending `BaseStrategy`
+2. Implement required methods: `generate_signals()`, `calculate_position_size()`
+3. Add strategy to `/strategies/__init__.py`
+4. Test with backtesting before live deployment
+
+### 2. Running Backtests
+```bash
+# Standard backtest
+python run_backtest.py <strategy_name> --days <num_days>
+
+# Example
+python run_backtest.py adaptive --days 100
+```
+
+### 3. Training ML Models
+```bash
+# Train new models with latest data
+python scripts/train_model.py
+
+# Safe training with validation
+python scripts/safe_model_trainer.py
+```
+
+### 4. Live Trading
+```bash
+# Start live trading with specific strategy
+python run_live_trading.py <strategy_name>
+
+# Control panel for monitoring
+python live_trading_control.py
+```
+
+## Data Management
+
+### CSV Files (`/data/`)
+- `BTCUSDT_1d.csv` - Historical daily price data
+- `senticrypt_sentiment_data.csv` - Cached sentiment data
+- Update regularly for accurate backtesting
+
+### Caching Strategy
+- Use `CachedDataProvider` wrapper for expensive API calls
+- Cache invalidation handled by `scripts/cache_manager.py`
+- Cached data stored in `/data/` directory
+
+## Important Conventions
+
+### 1. Error Handling
+```python
+try:
+    # Risky operation
+    result = api_call()
+except SpecificException as e:
+    logger.error(f"API call failed: {e}")
+    # Always have fallback behavior
+    return default_value
+```
+
+### 2. Logging
+- Use Python's logging module, not print statements
+- Log levels: DEBUG (dev only), INFO (important events), WARNING (issues), ERROR (failures)
+- Include context in log messages
+
+### 3. Security
+- NEVER commit API keys or secrets
+- Use environment variables for credentials
+- Validate all external data inputs
+- Implement rate limiting for API calls
+
+### 4. Configuration
+- Strategy configs passed via constructor
+- Use sensible defaults for all parameters
+- Document all configuration options
+
+### 5. Testing
+- Backtest new strategies on multiple market conditions
+- Validate ML models with out-of-sample data
+- Paper trade before real money
+
+## Common Patterns
+
+### Getting Market Data
+```python
+# For backtesting
+provider = CachedDataProvider(BinanceDataProvider())
+df = provider.get_historical_data('BTCUSDT', start_date, end_date)
+
+# For live trading
+provider = BinanceDataProvider()
+current_price = provider.get_current_price('BTCUSDT')
+```
+
+### Using Indicators
+```python
+from core.indicators.technical import calculate_rsi, calculate_ema
+
+# Always check data has enough history
+if len(df) > 20:
+    df['rsi'] = calculate_rsi(df['close'], period=14)
+    df['ema_short'] = calculate_ema(df['close'], period=9)
+```
+
+### Risk Management Integration
+```python
+# In strategy
+position_size = self.calculate_position_size(
+    signal, confidence, current_price, account_balance
+)
+
+# Risk manager validates
+validated_size = risk_manager.validate_position_size(
+    position_size, current_exposure, account_balance
+)
+```
+
+## Project Philosophy
+- **Trend Following**: Trade with the trend, not against it
+- **Risk First**: Protect capital above all else
+- **Data Driven**: Let data guide decisions, not emotions
+- **Modular Design**: Each component should have a single responsibility
+- **Fail Gracefully**: Always have fallbacks for external dependencies
+
+## Troubleshooting Guide
+
+### Common Issues
+1. **Stale Data**: Check data provider timestamps, refresh caches
+2. **API Limits**: Implement exponential backoff, use cached providers
+3. **Model Drift**: Retrain models monthly or when performance degrades
+4. **Memory Issues**: Use data chunking for large datasets
+
+### Debug Commands
+```bash
+# Check data freshness
+python scripts/cache_manager.py --check
+
+# Validate models
+python scripts/simple_model_validator.py
+
+# Test specific strategy signals
+python -m strategies.<strategy_name> --test
+```
+
+## Future Considerations
+- Multi-exchange support planned
+- Real-time sentiment aggregation from multiple sources
+- Advanced portfolio management across strategies
+- Automated model retraining pipelines
+
+---
+
+**Remember**: This is real money. Always validate changes thoroughly. When in doubt, backtest more. 

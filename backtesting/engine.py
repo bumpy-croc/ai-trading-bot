@@ -101,8 +101,10 @@ class Backtester:
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
             
-            # Remove warmup period
-            df = df.dropna()
+            # Remove warmup period - only drop rows where essential price data is missing
+            # Don't drop rows just because ML predictions or sentiment data is missing
+            essential_columns = ['open', 'high', 'low', 'close', 'volume']
+            df = df.dropna(subset=essential_columns)
             
             logger.info(f"Starting backtest with {len(df)} candles")
             

@@ -1,6 +1,13 @@
 # Binance Trading Bot
 
-A simple trading bot that implements a moving average crossover strategy on the Binance platform.
+A comprehensive cryptocurrency trading bot with backtesting capabilities, machine learning integration, and live trading support.
+
+## 📚 Documentation
+
+- **[Project Architecture & Development Guide](./CURSOR_RULES.md)** - Detailed system architecture, workflows, and conventions
+- **[AI Assistant Rules](./.cursorrules)** - Quick reference for Cursor AI integration
+- **[Live Trading Guide](./LIVE_TRADING_GUIDE.md)** - Setup and usage for live trading
+- **[Live Sentiment Analysis](./LIVE_SENTIMENT_ANALYSIS.md)** - Sentiment data integration guide
 
 ## Features
 

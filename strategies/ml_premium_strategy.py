@@ -1,3 +1,31 @@
+"""
+ML Premium Strategy
+
+This is the advanced machine learning strategy that combines price data with sentiment analysis
+for enhanced prediction accuracy. It uses sophisticated feature engineering and can gracefully
+handle missing or stale sentiment data.
+
+Key Features:
+- Multi-modal predictions using price + sentiment data (14 features total)
+- Real-time sentiment integration via SentiCrypt API
+- Graceful degradation when sentiment data is unavailable
+- Advanced feature engineering with sentiment confidence scoring
+- Live trading optimization with sentiment freshness tracking
+- Automatic fallback to price-only mode when needed
+
+Sentiment Features:
+- Primary sentiment, momentum, volatility
+- Extreme positive/negative sentiment detection
+- Moving averages (3, 7, 14 days) of sentiment
+- Sentiment confidence weighting
+
+Ideal for:
+- Maximum prediction accuracy in live trading
+- Markets where sentiment significantly impacts price
+- Advanced trading systems with reliable data feeds
+- Sophisticated risk management scenarios
+"""
+
 import numpy as np
 import pandas as pd
 import onnx
@@ -8,8 +36,8 @@ from datetime import datetime, timedelta
 from strategies.base import BaseStrategy
 from core.data_providers.senticrypt_provider import SentiCryptProvider
 
-class MlSentimentStrategy(BaseStrategy):
-    def __init__(self, name="MlSentimentStrategy", model_path=None, sequence_length=120, 
+class MlPremiumStrategy(BaseStrategy):
+    def __init__(self, name="MlPremiumStrategy", model_path=None, sequence_length=120, 
                  use_sentiment=True, sentiment_csv_path=None):
         super().__init__(name)
         
@@ -22,8 +50,8 @@ class MlSentimentStrategy(BaseStrategy):
         
         # Determine model path
         if model_path is None:
-            model_suffix = "sentiment" if use_sentiment else "price_only"
-            model_path = f"ml/model_{self.trading_pair.lower()}_{model_suffix}.onnx"
+            model_suffix = "sentiment" if use_sentiment else "price"
+            model_path = f"ml/{self.trading_pair.lower()}_{model_suffix}.onnx"
         
         self.model_path = model_path
         
@@ -74,8 +102,8 @@ class MlSentimentStrategy(BaseStrategy):
                     self.metadata = json.load(f)
                 
                 # Extract feature information
-                if 'features' in self.metadata:
-                    self.feature_names = self.metadata['features']
+                if 'feature_names' in self.metadata:
+                    self.feature_names = self.metadata['feature_names']
                     self.sentiment_features = [f for f in self.feature_names if f.startswith('sentiment_')]
                 
                 # Update trading pair from metadata
@@ -246,7 +274,7 @@ class MlSentimentStrategy(BaseStrategy):
         expected_features = [
             'sentiment_primary', 'sentiment_momentum', 'sentiment_volatility',
             'sentiment_extreme_positive', 'sentiment_extreme_negative',
-            'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14'
+            'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14', 'sentiment_confidence'
         ]
         
         # Use model metadata features if available
@@ -260,6 +288,17 @@ class MlSentimentStrategy(BaseStrategy):
             sentiment_cols = [col for col in df.columns if col.startswith('sentiment_')]
             if sentiment_cols:
                 df[sentiment_cols] = df[sentiment_cols].fillna(method='ffill')
+            
+            # Calculate derived sentiment features if base sentiment exists
+            if 'sentiment_primary' in df.columns:
+                # Calculate sentiment_confidence based on data availability and freshness
+                df['sentiment_confidence'] = 0.8  # Default confidence for historical data
+                
+                # Check if we have recent/fresh data
+                current_time = pd.Timestamp.now()
+                recent_mask = df.index >= (current_time - pd.Timedelta(hours=2))
+                if recent_mask.any():
+                    df.loc[recent_mask, 'sentiment_confidence'] = 0.9  # Higher confidence for recent data
                 
             # Ensure all expected features exist
             for feature in expected_features:
@@ -309,6 +348,8 @@ class MlSentimentStrategy(BaseStrategy):
             return 0.0  # No extreme negative sentiment
         elif 'ma_' in feature_name.lower():
             return 0.5  # Neutral moving average
+        elif 'confidence' in feature_name.lower():
+            return 0.7  # Moderate confidence
         else:
             return 0.0  # Default neutral value
     
@@ -324,36 +365,57 @@ class MlSentimentStrategy(BaseStrategy):
     def _generate_predictions(self, df: pd.DataFrame):
         """Generate ML predictions for the dataframe"""
         try:
-            # Determine which features to use based on model training
+            # Calculate denormalization parameters from data
+            price_min = df['close'].min()
+            price_max = df['close'].max()
+            price_range = price_max - price_min
+            
+            # Use exact feature names from model training (excluding metadata fields)
             if self.feature_names:
                 features_to_use = self.feature_names.copy()
-                # Replace original features with normalized versions for price features
-                price_features = ['close', 'volume', 'high', 'low', 'open']
-                for i, feature in enumerate(features_to_use):
-                    if feature in price_features and f'{feature}_normalized' in df.columns:
-                        features_to_use[i] = f'{feature}_normalized'
+                # Remove metadata fields that shouldn't be model features
+                metadata_fields = ['sentiment_freshness']
+                features_to_use = [f for f in features_to_use if f not in metadata_fields]
             else:
                 # Fallback to basic features
-                features_to_use = ['close_normalized']
+                features_to_use = ['close', 'volume', 'high', 'low', 'open']
                 if self.use_sentiment:
-                    sentiment_cols = [col for col in df.columns if col.startswith('sentiment_')]
-                    features_to_use.extend(sentiment_cols)
+                    # Only include actual sentiment features, not metadata
+                    sentiment_features = [
+                        'sentiment_primary', 'sentiment_momentum', 'sentiment_volatility',
+                        'sentiment_extreme_positive', 'sentiment_extreme_negative',
+                        'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14', 'sentiment_confidence'
+                    ]
+                    features_to_use.extend(sentiment_features)
             
             # Ensure all required features are present
             available_features = []
+            missing_features = 0
             for feature in features_to_use:
                 if feature in df.columns:
                     available_features.append(feature)
                 else:
-                    print(f"Warning: Feature {feature} not found, using 0")
-                    df[feature] = 0.0
+                    # Create missing feature with neutral values
+                    if feature.startswith('sentiment_'):
+                        df[feature] = self._get_neutral_sentiment_value(feature)
+                    else:
+                        df[feature] = 0.0
                     available_features.append(feature)
+                    missing_features += 1
             
             # Generate predictions for each valid window
+            predictions_generated = 0
+            prediction_errors = 0
+            
             for i in range(self.sequence_length, len(df)):
                 try:
                     # Extract feature window
                     window_data = df[available_features].iloc[i-self.sequence_length:i].values
+                    
+                    # Check for NaN values in the input
+                    if np.isnan(window_data).any():
+                        prediction_errors += 1
+                        continue
                     
                     # Reshape for model input and ensure float32 type
                     input_window = window_data.astype(np.float32)
@@ -377,18 +439,13 @@ class MlSentimentStrategy(BaseStrategy):
                     output = self.ort_session.run(None, {self.input_name: input_window})
                     prediction = output[0][0][0]
                     
-                    # Store prediction (denormalized if needed)
-                    if 'close_normalized' in available_features:
-                        # Denormalize prediction
-                        close_window = df['close'].iloc[i-self.sequence_length:i].values
-                        min_close = np.min(close_window)
-                        max_close = np.max(close_window)
-                        if max_close != min_close:
-                            denormalized_pred = prediction * (max_close - min_close) + min_close
-                        else:
-                            denormalized_pred = df['close'].iloc[i-1]
-                    else:
-                        denormalized_pred = prediction
+                    # Denormalize prediction from MinMaxScaler(0, 1) back to price
+                    denormalized_pred = prediction * price_range + price_min
+                    
+                    # Skip invalid predictions
+                    if np.isnan(denormalized_pred) or np.isinf(denormalized_pred):
+                        prediction_errors += 1
+                        continue
                     
                     df.iloc[i, df.columns.get_loc('ml_prediction')] = denormalized_pred
                     
@@ -397,9 +454,15 @@ class MlSentimentStrategy(BaseStrategy):
                     confidence = 1.0 - abs(denormalized_pred - current_price) / current_price
                     df.iloc[i, df.columns.get_loc('prediction_confidence')] = max(0, min(1, confidence))
                     
+                    predictions_generated += 1
+                    
                 except Exception as e:
-                    print(f"Warning: Could not generate prediction for index {i}: {e}")
+                    prediction_errors += 1
                     continue
+            
+            # Report final results
+            if predictions_generated > 0 or prediction_errors > 0:
+                print(f"Generated {predictions_generated} ML predictions ({prediction_errors} errors)")
                     
         except Exception as e:
             print(f"Error generating predictions: {e}")
@@ -422,13 +485,15 @@ class MlSentimentStrategy(BaseStrategy):
         freshness_boost = 1.1 if sentiment_freshness > 0 else 1.0  # 10% boost for live sentiment
         
         # Entry condition: prediction is higher than current price with sufficient confidence
-        price_increase_threshold = 0.005 / freshness_boost  # Lower threshold for fresh sentiment
-        confidence_threshold = 0.6 / freshness_boost  # Lower threshold for fresh sentiment
+        price_increase_threshold = 0.002 / freshness_boost  # More lenient: 0.2% vs 0.5%
+        confidence_threshold = 0.3 / freshness_boost  # More lenient: 30% vs 60%
         
         predicted_return = (prediction - current_price) / current_price
         
         entry_signal = (predicted_return > price_increase_threshold and 
                        confidence > confidence_threshold)
+        
+
         
         if entry_signal and sentiment_freshness > 0:
             print(f"🚀 LIVE SENTIMENT ENTRY: Fresh sentiment boosted confidence!")

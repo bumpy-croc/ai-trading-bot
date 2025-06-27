@@ -1,0 +1,58 @@
+{
+  "symbol": "BTCUSDT",
+  "model_type": "sentiment",
+  "training_date": "2025-06-27T20:04:56.041452",
+  "feature_names": [
+    "close",
+    "volume",
+    "high",
+    "low",
+    "open",
+    "sentiment_primary",
+    "sentiment_momentum",
+    "sentiment_volatility",
+    "sentiment_extreme_positive",
+    "sentiment_extreme_negative",
+    "sentiment_ma_3",
+    "sentiment_ma_7",
+    "sentiment_ma_14",
+    "sentiment_confidence"
+  ],
+  "sequence_length": 120,
+  "has_sentiment": true,
+  "sentiment_assessment": {
+    "total_sentiment_points": 161,
+    "total_price_points": 209,
+    "coverage_ratio": 0.7692307692307693,
+    "data_freshness_days": 48,
+    "missing_periods": [],
+    "quality_score": 0.8451633298208641,
+    "recommendation": "full_sentiment",
+    "reason": "High quality sentiment data available"
+  },
+  "robustness_results": {
+    "base_performance": {
+      "mse": 0.004546256601629669,
+      "rmse": 0.06742593419174606
+    },
+    "no_sentiment_performance": {
+      "mse": 0.006990480126379837,
+      "rmse": 0.08360909117063668,
+      "degradation_pct": 53.76343086032587
+    }
+  },
+  "training_params": {
+    "epochs": 300,
+    "batch_size": 32,
+    "timeframe": "1d",
+    "start_date": "2024-12-01",
+    "end_date": "2025-06-27"
+  },
+  "evaluation_results": {
+    "train_loss": 0.021151291206479073,
+    "test_loss": 0.004546256735920906,
+    "train_rmse": 0.14543484151363373,
+    "test_rmse": 0.067425936460495,
+    "mape": 1.7151533545954107
+  }
+}

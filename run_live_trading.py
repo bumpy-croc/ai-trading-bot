@@ -13,7 +13,7 @@ Usage:
     python run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
     
     # With custom settings
-    python run_live_trading.py ml_sentiment_strategy --symbol BTCUSDT --balance 5000 --max-position 0.05
+    python run_live_trading.py ml_premium_strategy --symbol BTCUSDT --balance 5000 --max-position 0.05
 """
 
 from dotenv import load_dotenv
@@ -34,11 +34,11 @@ from live.trading_engine import LiveTradingEngine
 
 # Import strategies
 from strategies.adaptive import AdaptiveStrategy
-from strategies.adaptive2 import Adaptive2Strategy
+from strategies.adaptive2 import AdaptiveStrategy2
 from strategies.enhanced import EnhancedStrategy
 from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
-from strategies.ml_model_strategy import MlModelStrategy
-from strategies.ml_sentiment_strategy import MlSentimentStrategy
+from strategies.ml_basic_strategy import MlBasicStrategy
+from strategies.ml_premium_strategy import MlPremiumStrategy
 
 # Set up logging
 logging.basicConfig(
@@ -55,11 +55,11 @@ def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
         'adaptive': AdaptiveStrategy,
-        'adaptive2': Adaptive2Strategy,
+        'adaptive2': AdaptiveStrategy2,
         'enhanced': EnhancedStrategy,
         'high_risk_high_reward': HighRiskHighRewardStrategy,
-        'ml_model_strategy': MlModelStrategy,
-        'ml_sentiment_strategy': lambda: MlSentimentStrategy(use_sentiment=True)
+        'ml_basic_strategy': MlBasicStrategy,
+        'ml_premium_strategy': lambda: MlPremiumStrategy(use_sentiment=True)
     }
     
     if strategy_name not in strategies:
@@ -80,7 +80,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Run live trading bot')
     
     # Strategy selection
-    parser.add_argument('strategy', help='Strategy name (e.g., adaptive, ml_sentiment_strategy)')
+    parser.add_argument('strategy', help='Strategy name (e.g., adaptive, ml_premium_strategy)')
     
     # Trading parameters
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')

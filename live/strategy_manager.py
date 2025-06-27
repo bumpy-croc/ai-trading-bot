@@ -13,8 +13,8 @@ import logging
 from strategies.base import BaseStrategy
 from strategies.adaptive import AdaptiveStrategy
 from strategies.enhanced import EnhancedStrategy
-from strategies.ml_model_strategy import MlModelStrategy
-from strategies.ml_sentiment_strategy import MlSentimentStrategy
+from strategies.ml_basic_strategy import MlBasicStrategy
+from strategies.ml_premium_strategy import MlPremiumStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +60,8 @@ class StrategyManager:
         self.strategy_registry = {
             'adaptive': AdaptiveStrategy,
             'enhanced': EnhancedStrategy,
-            'ml_model_strategy': MlModelStrategy,
-            'ml_sentiment_strategy': MlSentimentStrategy
+            'ml_basic_strategy': MlBasicStrategy,
+            'ml_premium_strategy': MlPremiumStrategy
         }
         
         # Version history

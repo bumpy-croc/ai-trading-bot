@@ -354,7 +354,7 @@ def main():
             try:
                 sentiment_provider = SentiCryptProvider(csv_path=sentiment_csv_path)
                 sentiment_df = sentiment_provider.get_historical_sentiment(
-                    symbol=args.symbol,
+            symbol=args.symbol,
                     start=start_date,
                     end=end_date
                 )
@@ -437,7 +437,7 @@ def main():
             metrics=[tf.keras.metrics.RootMeanSquaredError(name='rmse')]
         )
         
-        model_type = "sentiment_robust" if has_sentiment else "price_only"
+        model_type = "sentiment" if has_sentiment else "price"
         print(f"Model type: {model_type}")
         print(f"Total parameters: {model.count_params():,}")
         
@@ -449,7 +449,7 @@ def main():
         )
         
         os.makedirs(output_dir, exist_ok=True)
-        model_name = f'robust_{args.symbol.lower()}_{model_type}'
+        model_name = f'{args.symbol.lower()}_{model_type}'
         checkpoint = ModelCheckpoint(
             f'{output_dir}/{model_name}.h5', 
             monitor='val_loss', 
@@ -459,11 +459,11 @@ def main():
         # Train model
         print(f"\n🏋️ Training model...")
         history = model.fit(
-            X_train, y_train,
-            epochs=epochs,
-            validation_data=(X_test, y_test),
-            batch_size=batch_size,
-            callbacks=[early_stopping, checkpoint],
+            X_train, y_train, 
+            epochs=epochs, 
+            validation_data=(X_test, y_test), 
+            batch_size=batch_size, 
+            callbacks=[early_stopping, checkpoint], 
             verbose=1
         )
         
@@ -705,10 +705,10 @@ def convert_to_onnx(model, onnx_path):
         else:
             print(f"⚠️ ONNX conversion failed: {result.stderr}")
             return None
-            
+        
     except Exception as e:
         print(f"⚠️ ONNX conversion failed: {e}")
         return None
 
 if __name__ == "__main__":
-    main() 
+    main()
