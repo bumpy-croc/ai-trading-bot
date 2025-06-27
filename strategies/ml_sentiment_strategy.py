@@ -101,7 +101,12 @@ class MlSentimentStrategy(BaseStrategy):
                 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 csv_path = os.path.join(project_root, 'data', 'senticrypt_sentiment_data.csv')
             
-            self.sentiment_provider = SentiCryptProvider(csv_path=csv_path)
+            # Initialize with live mode for real-time trading
+            self.sentiment_provider = SentiCryptProvider(
+                csv_path=csv_path, 
+                live_mode=True,  # Enable live API calls
+                cache_duration_minutes=15  # Refresh every 15 minutes
+            )
             print(f"Initialized sentiment provider with {len(self.sentiment_provider.data)} records")
             
         except Exception as e:
@@ -132,6 +137,7 @@ class MlSentimentStrategy(BaseStrategy):
         # Prepare predictions column
         df['ml_prediction'] = np.nan
         df['prediction_confidence'] = np.nan
+        df['sentiment_freshness'] = np.nan  # Track sentiment data age
         
         # Generate predictions
         self._generate_predictions(df)
@@ -139,32 +145,81 @@ class MlSentimentStrategy(BaseStrategy):
         return df
     
     def _add_sentiment_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add sentiment features to the dataframe"""
+        """Add sentiment features to the dataframe with live data support"""
         try:
             # Get sentiment data for the date range
             start_date = df.index.min()
             end_date = df.index.max()
             
-            sentiment_df = self.sentiment_provider.get_historical_sentiment(
-                symbol=self.trading_pair,
-                start=start_date,
-                end=end_date
-            )
+            # Check if we're dealing with recent data (live trading scenario)
+            current_time = pd.Timestamp.now()
+            is_recent_data = (end_date - current_time).total_seconds() > -3600  # Within last hour
             
-            if not sentiment_df.empty:
-                # Resample sentiment to match price data frequency
-                if len(df) > len(sentiment_df):
-                    # Upsample sentiment data
-                    sentiment_resampled = sentiment_df.resample('1h').fillna(method='ffill')
-                else:
-                    sentiment_resampled = sentiment_df
+            if is_recent_data and hasattr(self.sentiment_provider, 'get_live_sentiment'):
+                print("🔴 LIVE TRADING MODE: Using real-time sentiment data")
                 
-                # Merge with price data
-                df = df.join(sentiment_resampled, how='left')
+                # Get historical sentiment for the bulk of the data
+                historical_sentiment = self.sentiment_provider.get_historical_sentiment(
+                    symbol=self.trading_pair,
+                    start=start_date,
+                    end=end_date - pd.Timedelta(hours=2)  # Get historical up to 2 hours ago
+                )
                 
-                # Forward fill sentiment data
-                sentiment_cols = [col for col in df.columns if col.startswith('sentiment_')]
+                # Get live sentiment for the most recent data points
+                live_sentiment = self.sentiment_provider.get_live_sentiment()
+                
+                # Apply historical sentiment to older data
+                if not historical_sentiment.empty:
+                    df = df.join(historical_sentiment, how='left')
+                
+                # Apply live sentiment to recent data points
+                recent_mask = df.index >= (end_date - pd.Timedelta(hours=1))
+                for feature, value in live_sentiment.items():
+                    if feature not in df.columns:
+                        df[feature] = 0.0
+                    df.loc[recent_mask, feature] = value
+                
+                # Mark freshness of sentiment data
+                df['sentiment_freshness'] = 0  # Historical data
+                df.loc[recent_mask, 'sentiment_freshness'] = 1  # Fresh live data
+                
+                print(f"Applied live sentiment to {recent_mask.sum()} recent data points")
+                
+            else:
+                print("📊 BACKTEST MODE: Using historical sentiment data")
+                
+                # Standard historical sentiment loading
+                sentiment_df = self.sentiment_provider.get_historical_sentiment(
+                    symbol=self.trading_pair,
+                    start=start_date,
+                    end=end_date
+                )
+                
+                if not sentiment_df.empty:
+                    # Resample sentiment to match price data frequency
+                    if len(df) > len(sentiment_df):
+                        # Upsample sentiment data
+                        sentiment_resampled = sentiment_df.resample('1h').fillna(method='ffill')
+                    else:
+                        sentiment_resampled = sentiment_df
+                    
+                    # Merge with price data
+                    df = df.join(sentiment_resampled, how='left')
+                
+                # Mark as historical data
+                df['sentiment_freshness'] = 0
+            
+            # Forward fill sentiment data and ensure all expected features exist
+            sentiment_cols = [col for col in df.columns if col.startswith('sentiment_')]
+            if sentiment_cols:
                 df[sentiment_cols] = df[sentiment_cols].fillna(method='ffill').fillna(0)
+            else:
+                # Add dummy sentiment features if none exist
+                for feature in ['sentiment_primary', 'sentiment_momentum', 'sentiment_volatility',
+                               'sentiment_extreme_positive', 'sentiment_extreme_negative',
+                               'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14']:
+                    df[feature] = 0.0
+                df['sentiment_freshness'] = -1  # No sentiment data available
                 
         except Exception as e:
             print(f"Warning: Could not add sentiment features: {e}")
@@ -172,6 +227,7 @@ class MlSentimentStrategy(BaseStrategy):
             if self.sentiment_features:
                 for feature in self.sentiment_features:
                     df[feature] = 0.0
+            df['sentiment_freshness'] = -1
         
         return df
     
@@ -271,14 +327,26 @@ class MlSentimentStrategy(BaseStrategy):
         current_price = df['close'].iloc[index]
         confidence = df.get('prediction_confidence', pd.Series([0.5] * len(df))).iloc[index]
         
+        # Get sentiment freshness (higher weight for fresh sentiment)
+        sentiment_freshness = df.get('sentiment_freshness', pd.Series([0] * len(df))).iloc[index]
+        freshness_boost = 1.1 if sentiment_freshness > 0 else 1.0  # 10% boost for live sentiment
+        
         # Entry condition: prediction is higher than current price with sufficient confidence
-        price_increase_threshold = 0.005  # 0.5% minimum predicted increase
-        confidence_threshold = 0.6  # 60% confidence threshold
+        price_increase_threshold = 0.005 / freshness_boost  # Lower threshold for fresh sentiment
+        confidence_threshold = 0.6 / freshness_boost  # Lower threshold for fresh sentiment
         
         predicted_return = (prediction - current_price) / current_price
         
-        return (predicted_return > price_increase_threshold and 
-                confidence > confidence_threshold)
+        entry_signal = (predicted_return > price_increase_threshold and 
+                       confidence > confidence_threshold)
+        
+        if entry_signal and sentiment_freshness > 0:
+            print(f"🚀 LIVE SENTIMENT ENTRY: Fresh sentiment boosted confidence!")
+            print(f"   Predicted return: {predicted_return:.3f}")
+            print(f"   Confidence: {confidence:.3f}")
+            print(f"   Sentiment primary: {df.get('sentiment_primary', pd.Series([0])).iloc[index]:.3f}")
+        
+        return entry_signal
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Check if conditions are met for exiting a position"""

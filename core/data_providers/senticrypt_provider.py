@@ -15,17 +15,22 @@ class SentiCryptProvider(SentimentDataProvider):
     Provides normalized sentiment scores correlated with Bitcoin price data.
     """
     
-    def __init__(self, csv_path: Optional[str] = None, api_url: str = "https://api.senticrypt.com/v2/all.json"):
+    def __init__(self, csv_path: Optional[str] = None, api_url: str = "https://api.senticrypt.com/v2/all.json",
+                 live_mode: bool = False, cache_duration_minutes: int = 30):
         super().__init__()
         self.csv_path = csv_path
         self.api_url = api_url
+        self.live_mode = live_mode
+        self.cache_duration_minutes = cache_duration_minutes
         self.data = None
+        self._live_cache = {}
+        self._last_api_call = None
         self._load_data()
         
     def _load_data(self):
         """Load sentiment data from CSV file or API"""
         try:
-            if self.csv_path and os.path.exists(self.csv_path):
+            if self.csv_path and os.path.exists(self.csv_path) and not self.live_mode:
                 logger.info(f"Loading sentiment data from CSV: {self.csv_path}")
                 self.data = pd.read_csv(self.csv_path)
             else:
@@ -193,18 +198,152 @@ class SentiCryptProvider(SentimentDataProvider):
         avg_score = np.mean(scores)
         return np.tanh(avg_score)  # Normalize to [-1, 1]
     
-    def get_sentiment_for_date(self, date: datetime) -> Dict[str, float]:
+    def get_live_sentiment(self, force_refresh: bool = False) -> Dict[str, float]:
+        """
+        Get the most recent sentiment data for live trading.
+        
+        Args:
+            force_refresh: Force API call even if cache is valid
+            
+        Returns:
+            Dictionary of current sentiment features
+        """
+        current_time = datetime.now()
+        
+        # Check if we need to refresh the cache
+        should_refresh = (
+            force_refresh or 
+            self._last_api_call is None or 
+            (current_time - self._last_api_call).total_seconds() > (self.cache_duration_minutes * 60)
+        )
+        
+        if should_refresh:
+            try:
+                logger.info("Fetching fresh sentiment data for live trading")
+                response = requests.get(self.api_url, timeout=10)
+                response.raise_for_status()
+                
+                fresh_data = response.json()
+                if fresh_data:
+                    # Get the most recent entry
+                    latest_entry = max(fresh_data, key=lambda x: x.get('date', ''))
+                    
+                    # Calculate live sentiment features
+                    live_sentiment = self._calculate_live_sentiment_features(latest_entry, fresh_data[-10:])
+                    
+                    # Update cache
+                    self._live_cache = live_sentiment
+                    self._last_api_call = current_time
+                    
+                    logger.info(f"Updated live sentiment cache: {live_sentiment.get('sentiment_primary', 0):.3f}")
+                    return live_sentiment
+                    
+            except Exception as e:
+                logger.error(f"Failed to fetch live sentiment: {e}")
+                
+        # Return cached data or fallback
+        if self._live_cache:
+            logger.debug("Using cached sentiment data")
+            return self._live_cache
+        else:
+            logger.warning("No live sentiment data available, using neutral values")
+            return self._get_neutral_sentiment()
+    
+    def _calculate_live_sentiment_features(self, latest_entry: Dict, recent_entries: List[Dict]) -> Dict[str, float]:
+        """
+        Calculate sentiment features from fresh API data.
+        
+        Args:
+            latest_entry: Most recent sentiment data point
+            recent_entries: List of recent entries for momentum/volatility calculation
+            
+        Returns:
+            Dictionary of calculated sentiment features
+        """
+        features = {}
+        
+        # Primary sentiment score
+        if 'mean' in latest_entry:
+            features['sentiment_primary'] = np.tanh(latest_entry['mean'])
+        elif all(key in latest_entry for key in ['score1', 'score2', 'score3']):
+            composite = 0.4 * latest_entry['score1'] + 0.3 * latest_entry['score2'] + 0.3 * latest_entry['score3']
+            features['sentiment_primary'] = np.tanh(composite)
+        else:
+            features['sentiment_primary'] = 0.0
+        
+        # Calculate momentum from recent entries
+        if len(recent_entries) >= 2:
+            recent_scores = []
+            for entry in recent_entries:
+                if 'mean' in entry:
+                    recent_scores.append(np.tanh(entry['mean']))
+                elif all(key in entry for key in ['score1', 'score2', 'score3']):
+                    composite = 0.4 * entry['score1'] + 0.3 * entry['score2'] + 0.3 * entry['score3']
+                    recent_scores.append(np.tanh(composite))
+            
+            if len(recent_scores) >= 2:
+                # Calculate momentum as rate of change
+                features['sentiment_momentum'] = (recent_scores[-1] - recent_scores[-2]) / abs(recent_scores[-2] + 1e-8)
+                
+                # Calculate volatility
+                features['sentiment_volatility'] = np.std(recent_scores) if len(recent_scores) > 1 else 0.0
+                
+                # Moving averages
+                features['sentiment_ma_3'] = np.mean(recent_scores[-3:]) if len(recent_scores) >= 3 else recent_scores[-1]
+                features['sentiment_ma_7'] = np.mean(recent_scores[-7:]) if len(recent_scores) >= 7 else np.mean(recent_scores)
+                features['sentiment_ma_14'] = np.mean(recent_scores) if len(recent_scores) >= 10 else np.mean(recent_scores)
+            else:
+                features['sentiment_momentum'] = 0.0
+                features['sentiment_volatility'] = 0.0
+                features['sentiment_ma_3'] = features['sentiment_primary']
+                features['sentiment_ma_7'] = features['sentiment_primary']
+                features['sentiment_ma_14'] = features['sentiment_primary']
+        else:
+            features['sentiment_momentum'] = 0.0
+            features['sentiment_volatility'] = 0.0
+            features['sentiment_ma_3'] = features['sentiment_primary']
+            features['sentiment_ma_7'] = features['sentiment_primary']
+            features['sentiment_ma_14'] = features['sentiment_primary']
+        
+        # Extreme sentiment flags
+        sentiment_threshold = 0.5  # Adjust based on historical data
+        features['sentiment_extreme_positive'] = 1.0 if features['sentiment_primary'] > sentiment_threshold else 0.0
+        features['sentiment_extreme_negative'] = 1.0 if features['sentiment_primary'] < -sentiment_threshold else 0.0
+        
+        return features
+    
+    def _get_neutral_sentiment(self) -> Dict[str, float]:
+        """Return neutral sentiment values as fallback"""
+        return {
+            'sentiment_primary': 0.0,
+            'sentiment_momentum': 0.0,
+            'sentiment_volatility': 0.0,
+            'sentiment_extreme_positive': 0.0,
+            'sentiment_extreme_negative': 0.0,
+            'sentiment_ma_3': 0.0,
+            'sentiment_ma_7': 0.0,
+            'sentiment_ma_14': 0.0
+        }
+
+    def get_sentiment_for_date(self, date: datetime, use_live: bool = False) -> Dict[str, float]:
         """
         Get sentiment features for a specific date.
         
         Args:
             date: The date to get sentiment for
+            use_live: If True and date is recent, use live API data
             
         Returns:
             Dictionary of sentiment features
         """
+        # If requesting very recent data and live mode is enabled, use live API
+        if use_live and self.live_mode:
+            time_diff = datetime.now() - date
+            if time_diff.total_seconds() < 3600:  # Within last hour
+                return self.get_live_sentiment()
+        
         if self.data.empty:
-            return {}
+            return self._get_neutral_sentiment()
         
         # Find the closest date
         closest_date = self.data.index[self.data.index.get_indexer([date], method='nearest')[0]]
