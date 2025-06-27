@@ -145,7 +145,11 @@ class MlSentimentStrategy(BaseStrategy):
         return df
     
     def _add_sentiment_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add sentiment features to the dataframe with live data support"""
+        """Add sentiment features to the dataframe with graceful missing data handling"""
+        
+        # Always initialize the sentiment data availability flag
+        sentiment_data_available = False
+        
         try:
             # Get sentiment data for the date range
             start_date = df.index.min()
@@ -156,80 +160,166 @@ class MlSentimentStrategy(BaseStrategy):
             is_recent_data = (end_date - current_time).total_seconds() > -3600  # Within last hour
             
             if is_recent_data and hasattr(self.sentiment_provider, 'get_live_sentiment'):
-                print("🔴 LIVE TRADING MODE: Using real-time sentiment data")
+                print("🔴 LIVE TRADING MODE: Attempting to use real-time sentiment data")
                 
-                # Get historical sentiment for the bulk of the data
-                historical_sentiment = self.sentiment_provider.get_historical_sentiment(
-                    symbol=self.trading_pair,
-                    start=start_date,
-                    end=end_date - pd.Timedelta(hours=2)  # Get historical up to 2 hours ago
-                )
-                
-                # Get live sentiment for the most recent data points
-                live_sentiment = self.sentiment_provider.get_live_sentiment()
-                
-                # Apply historical sentiment to older data
-                if not historical_sentiment.empty:
-                    df = df.join(historical_sentiment, how='left')
-                
-                # Apply live sentiment to recent data points
-                recent_mask = df.index >= (end_date - pd.Timedelta(hours=1))
-                for feature, value in live_sentiment.items():
-                    if feature not in df.columns:
-                        df[feature] = 0.0
-                    df.loc[recent_mask, feature] = value
-                
-                # Mark freshness of sentiment data
-                df['sentiment_freshness'] = 0  # Historical data
-                df.loc[recent_mask, 'sentiment_freshness'] = 1  # Fresh live data
-                
-                print(f"Applied live sentiment to {recent_mask.sum()} recent data points")
+                try:
+                    # Get historical sentiment for the bulk of the data
+                    historical_sentiment = self.sentiment_provider.get_historical_sentiment(
+                        symbol=self.trading_pair,
+                        start=start_date,
+                        end=end_date - pd.Timedelta(hours=2)  # Get historical up to 2 hours ago
+                    )
+                    
+                    # Get live sentiment for the most recent data points
+                    live_sentiment = self.sentiment_provider.get_live_sentiment()
+                    
+                    # Apply historical sentiment to older data
+                    if not historical_sentiment.empty:
+                        df = df.join(historical_sentiment, how='left')
+                        sentiment_data_available = True
+                    
+                    # Apply live sentiment to recent data points
+                    if live_sentiment:
+                        recent_mask = df.index >= (end_date - pd.Timedelta(hours=1))
+                        for feature, value in live_sentiment.items():
+                            if feature not in df.columns:
+                                df[feature] = 0.0
+                            df.loc[recent_mask, feature] = value
+                        sentiment_data_available = True
+                        print(f"✅ Applied live sentiment to {recent_mask.sum()} recent data points")
+                    
+                except Exception as e:
+                    print(f"⚠️ Live sentiment retrieval failed: {e}")
+                    sentiment_data_available = False
                 
             else:
                 print("📊 BACKTEST MODE: Using historical sentiment data")
                 
-                # Standard historical sentiment loading
-                sentiment_df = self.sentiment_provider.get_historical_sentiment(
-                    symbol=self.trading_pair,
-                    start=start_date,
-                    end=end_date
-                )
-                
-                if not sentiment_df.empty:
-                    # Resample sentiment to match price data frequency
-                    if len(df) > len(sentiment_df):
-                        # Upsample sentiment data
-                        sentiment_resampled = sentiment_df.resample('1h').fillna(method='ffill')
-                    else:
-                        sentiment_resampled = sentiment_df
+                try:
+                    # Standard historical sentiment loading
+                    sentiment_df = self.sentiment_provider.get_historical_sentiment(
+                        symbol=self.trading_pair,
+                        start=start_date,
+                        end=end_date
+                    )
                     
-                    # Merge with price data
-                    df = df.join(sentiment_resampled, how='left')
-                
-                # Mark as historical data
-                df['sentiment_freshness'] = 0
+                    if not sentiment_df.empty:
+                        # Check if sentiment data is too old/stale
+                        latest_sentiment_date = sentiment_df.index.max()
+                        data_age_days = (end_date - latest_sentiment_date).days
+                        
+                        if data_age_days > 30:  # More than 30 days old
+                            print(f"⚠️ Sentiment data is {data_age_days} days old - may be stale")
+                        
+                        # Resample sentiment to match price data frequency
+                        if len(df) > len(sentiment_df):
+                            # Upsample sentiment data
+                            sentiment_resampled = sentiment_df.resample('1h').fillna(method='ffill')
+                        else:
+                            sentiment_resampled = sentiment_df
+                        
+                        # Merge with price data
+                        df = df.join(sentiment_resampled, how='left')
+                        sentiment_data_available = True
+                        print(f"✅ Applied historical sentiment for {len(sentiment_df)} data points")
+                    else:
+                        print("⚠️ No sentiment data found for this period")
+                        
+                except Exception as e:
+                    print(f"⚠️ Historical sentiment retrieval failed: {e}")
+                    sentiment_data_available = False
             
-            # Forward fill sentiment data and ensure all expected features exist
-            sentiment_cols = [col for col in df.columns if col.startswith('sentiment_')]
-            if sentiment_cols:
-                df[sentiment_cols] = df[sentiment_cols].fillna(method='ffill').fillna(0)
-            else:
-                # Add dummy sentiment features if none exist
-                for feature in ['sentiment_primary', 'sentiment_momentum', 'sentiment_volatility',
-                               'sentiment_extreme_positive', 'sentiment_extreme_negative',
-                               'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14']:
-                    df[feature] = 0.0
-                df['sentiment_freshness'] = -1  # No sentiment data available
+            # Ensure all required sentiment features exist with appropriate fallback values
+            self._ensure_sentiment_features(df, sentiment_data_available)
                 
         except Exception as e:
-            print(f"Warning: Could not add sentiment features: {e}")
-            # Add dummy sentiment features if expected by model
-            if self.sentiment_features:
-                for feature in self.sentiment_features:
-                    df[feature] = 0.0
-            df['sentiment_freshness'] = -1
+            print(f"⚠️ Sentiment feature processing failed: {e}")
+            # Fallback to neutral sentiment values
+            self._ensure_sentiment_features(df, False)
         
         return df
+    
+    def _ensure_sentiment_features(self, df: pd.DataFrame, data_available: bool):
+        """Ensure all required sentiment features exist with appropriate fallback values"""
+        
+        # Define expected sentiment features (from model training)
+        expected_features = [
+            'sentiment_primary', 'sentiment_momentum', 'sentiment_volatility',
+            'sentiment_extreme_positive', 'sentiment_extreme_negative',
+            'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14'
+        ]
+        
+        # Use model metadata features if available
+        if hasattr(self, 'sentiment_features') and self.sentiment_features:
+            expected_features = self.sentiment_features
+        
+        if data_available:
+            print("🔄 Processing available sentiment data...")
+            
+            # Forward fill existing sentiment columns
+            sentiment_cols = [col for col in df.columns if col.startswith('sentiment_')]
+            if sentiment_cols:
+                df[sentiment_cols] = df[sentiment_cols].fillna(method='ffill')
+                
+            # Ensure all expected features exist
+            for feature in expected_features:
+                if feature not in df.columns:
+                    print(f"⚠️ Missing expected sentiment feature: {feature}, using neutral value")
+                    df[feature] = self._get_neutral_sentiment_value(feature)
+                else:
+                    # Fill any remaining NaN with appropriate neutral values
+                    neutral_value = self._get_neutral_sentiment_value(feature)
+                    df[feature] = df[feature].fillna(neutral_value)
+            
+            # Mark sentiment freshness
+            current_time = pd.Timestamp.now()
+            df['sentiment_freshness'] = 0  # Default to historical
+            
+            # Check for recent data and mark as fresh
+            recent_mask = df.index >= (current_time - pd.Timedelta(hours=2))
+            if recent_mask.any():
+                df.loc[recent_mask, 'sentiment_freshness'] = 1
+                
+        else:
+            print("🔄 FALLBACK MODE: Using neutral sentiment values for all features")
+            
+            # No sentiment data available - use neutral/model-friendly values
+            for feature in expected_features:
+                neutral_value = self._get_neutral_sentiment_value(feature)
+                df[feature] = neutral_value
+                print(f"   {feature}: {neutral_value}")
+                
+            df['sentiment_freshness'] = -1  # No real sentiment data
+            
+        print(f"✅ Ensured {len(expected_features)} sentiment features are available")
+    
+    def _get_neutral_sentiment_value(self, feature_name: str) -> float:
+        """Get appropriate neutral value for a sentiment feature"""
+        
+        # Map feature names to appropriate neutral values
+        if 'primary' in feature_name.lower():
+            return 0.5  # Neutral sentiment (assuming 0-1 scale)
+        elif 'momentum' in feature_name.lower():
+            return 0.0  # No momentum
+        elif 'volatility' in feature_name.lower():
+            return 0.3  # Low-moderate volatility
+        elif 'extreme_positive' in feature_name.lower():
+            return 0.0  # No extreme positive sentiment
+        elif 'extreme_negative' in feature_name.lower():
+            return 0.0  # No extreme negative sentiment
+        elif 'ma_' in feature_name.lower():
+            return 0.5  # Neutral moving average
+        else:
+            return 0.0  # Default neutral value
+    
+    def _is_sentiment_data_fresh(self, df: pd.DataFrame) -> bool:
+        """Check if sentiment data is reasonably fresh"""
+        if 'sentiment_freshness' not in df.columns:
+            return False
+            
+        # Consider data fresh if any recent points have fresh data
+        recent_freshness = df['sentiment_freshness'].tail(10).max()
+        return recent_freshness > 0
     
     def _generate_predictions(self, df: pd.DataFrame):
         """Generate ML predictions for the dataframe"""
