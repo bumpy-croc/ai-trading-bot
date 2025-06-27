@@ -229,8 +229,8 @@ class TestStrategyManagerThreadSafety:
         for thread in threads:
             thread.join()
         
-        # Should have loaded strategies without major errors
-        assert len(errors) <= 1  # At most one error due to race conditions
+        # Should have loaded strategies without any errors
+        assert len(errors) == 0  # Ensure thread safety by requiring zero errors
         assert len(results) >= 2  # At least some should succeed
 
     @pytest.mark.live_trading
