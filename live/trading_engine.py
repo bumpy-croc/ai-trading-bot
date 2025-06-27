@@ -17,6 +17,8 @@ from core.data_providers.sentiment_provider import SentimentDataProvider
 from strategies.base import BaseStrategy
 from core.risk.risk_manager import RiskManager, RiskParameters
 from live.strategy_manager import StrategyManager
+from core.database.manager import DatabaseManager
+from core.database.models import TradeSource
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +85,8 @@ class LiveTradingEngine:
         enable_live_trading: bool = False,  # Safety flag - must be explicitly enabled
         log_trades: bool = True,
         alert_webhook_url: Optional[str] = None,
-        enable_hot_swapping: bool = True  # Enable strategy hot-swapping
+        enable_hot_swapping: bool = True,  # Enable strategy hot-swapping
+        database_url: Optional[str] = None  # Database connection URL
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -98,6 +101,10 @@ class LiveTradingEngine:
         self.alert_webhook_url = alert_webhook_url
         self.enable_hot_swapping = enable_hot_swapping
         
+        # Initialize database manager
+        self.db_manager = DatabaseManager(database_url)
+        self.trading_session_id: Optional[int] = None
+        
         # Initialize strategy manager for hot-swapping
         self.strategy_manager = None
         if enable_hot_swapping:
@@ -109,8 +116,10 @@ class LiveTradingEngine:
         # Trading state
         self.is_running = False
         self.positions: Dict[str, Position] = {}
+        self.position_db_ids: Dict[str, int] = {}  # Map order_id to database position ID
         self.completed_trades: List[Trade] = []
         self.last_data_update = None
+        self.last_account_snapshot = None  # Track when we last logged account state
         
         # Performance tracking
         self.total_trades = 0
@@ -149,6 +158,17 @@ class LiveTradingEngine:
         if not self.enable_live_trading:
             logger.warning("⚠️  PAPER TRADING MODE - No real orders will be executed")
         
+        # Create trading session in database
+        mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
+        self.trading_session_id = self.db_manager.create_trading_session(
+            strategy_name=self.strategy.__class__.__name__,
+            symbol=symbol,
+            timeframe=timeframe,
+            mode=mode,
+            initial_balance=self.initial_balance,
+            strategy_config=getattr(self.strategy, 'config', {})
+        )
+        
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(target=self._trading_loop, args=(symbol, timeframe))
         self.main_thread.daemon = True
@@ -184,6 +204,14 @@ class LiveTradingEngine:
             
         # Print final statistics
         self._print_final_stats()
+        
+        # End the trading session in database
+        if self.trading_session_id:
+            self.db_manager.end_trading_session(
+                session_id=self.trading_session_id,
+                final_balance=self.current_balance
+            )
+        
         logger.info("Trading engine stopped")
         
     def _signal_handler(self, signum, frame):
@@ -246,6 +274,12 @@ class LiveTradingEngine:
                 
                 # Update performance metrics
                 self._update_performance_metrics()
+                
+                # Log account snapshot to database periodically (every 5 minutes)
+                now = datetime.now()
+                if self.last_account_snapshot is None or (now - self.last_account_snapshot).seconds >= 300:
+                    self._log_account_snapshot()
+                    self.last_account_snapshot = now
                 
                 # Log status periodically
                 if self.total_trades % 10 == 0 or len(self.positions) > 0:
@@ -402,6 +436,22 @@ class LiveTradingEngine:
             )
             
             self.positions[order_id] = position
+            
+            # Log position to database
+            position_db_id = self.db_manager.log_position(
+                symbol=symbol,
+                side=side.value,
+                entry_price=price,
+                size=size,
+                strategy_name=self.strategy.__class__.__name__,
+                order_id=order_id,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                quantity=position_value / price,  # Calculate actual quantity
+                session_id=self.trading_session_id
+            )
+            self.position_db_ids[order_id] = position_db_id
+            
             logger.info(f"🚀 Opened {side.value} position: {symbol} @ ${price:.2f} (Size: ${position_value:.2f})")
             
             # Send alert if configured
@@ -409,6 +459,14 @@ class LiveTradingEngine:
             
         except Exception as e:
             logger.error(f"Failed to open position: {e}")
+            self.db_manager.log_event(
+                "ERROR",
+                f"Failed to open position: {str(e)}",
+                severity="error",
+                component="LiveTradingEngine",
+                stack_trace=str(e),
+                session_id=self.trading_session_id
+            )
             
     def _close_position(self, position: Position, reason: str):
         """Close an existing position"""
@@ -459,6 +517,31 @@ class LiveTradingEngine:
             self.total_trades += 1
             if pnl_dollar > 0:
                 self.winning_trades += 1
+            
+            # Log trade to database
+            source = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
+            trade_db_id = self.db_manager.log_trade(
+                symbol=position.symbol,
+                side=position.side.value,
+                entry_price=position.entry_price,
+                exit_price=exit_price,
+                size=position.size,
+                entry_time=position.entry_time,
+                exit_time=trade.exit_time,
+                pnl=pnl_dollar,
+                exit_reason=reason,
+                strategy_name=self.strategy.__class__.__name__,
+                source=source,
+                stop_loss=position.stop_loss,
+                take_profit=position.take_profit,
+                order_id=position.order_id,
+                session_id=self.trading_session_id
+            )
+            
+            # Update position status in database
+            if position.order_id in self.position_db_ids:
+                self.db_manager.close_position(self.position_db_ids[position.order_id])
+                del self.position_db_ids[position.order_id]
                 
             # Remove from active positions
             if position.order_id in self.positions:
@@ -468,7 +551,7 @@ class LiveTradingEngine:
             pnl_str = f"+${pnl_dollar:.2f}" if pnl_dollar > 0 else f"${pnl_dollar:.2f}"
             logger.info(f"🏁 Closed {position.side.value} position: {position.symbol} @ ${exit_price:.2f} ({reason}) - PnL: {pnl_str}")
             
-            # Save trade log
+            # Save trade log (file-based for backward compatibility)
             if self.log_trades:
                 self._log_trade(trade)
             
@@ -477,6 +560,14 @@ class LiveTradingEngine:
             
         except Exception as e:
             logger.error(f"Failed to close position: {e}")
+            self.db_manager.log_event(
+                "ERROR",
+                f"Failed to close position: {str(e)}",
+                severity="error",
+                component="LiveTradingEngine",
+                stack_trace=str(e),
+                session_id=self.trading_session_id
+            )
             
     def _execute_order(self, symbol: str, side: PositionSide, value: float, price: float) -> Optional[str]:
         """Execute a real market order (implement based on your exchange)"""
@@ -521,6 +612,39 @@ class LiveTradingEngine:
             
         current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
         self.max_drawdown = max(self.max_drawdown, current_drawdown)
+    
+    def _log_account_snapshot(self):
+        """Log current account state to database"""
+        try:
+            # Calculate total exposure
+            total_exposure = sum(pos.size * self.current_balance for pos in self.positions.values())
+            
+            # Calculate equity (balance + unrealized P&L)
+            unrealized_pnl = sum(pos.unrealized_pnl for pos in self.positions.values())
+            equity = self.current_balance + unrealized_pnl
+            
+            # Calculate current drawdown percentage
+            current_drawdown = 0
+            if self.peak_balance > 0:
+                current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance * 100
+            
+            # TODO: Calculate daily P&L (requires tracking of day start balance)
+            daily_pnl = 0  # Placeholder
+            
+            # Log snapshot to database
+            self.db_manager.log_account_snapshot(
+                balance=self.current_balance,
+                equity=equity,
+                total_pnl=self.total_pnl,
+                open_positions=len(self.positions),
+                total_exposure=total_exposure,
+                drawdown=current_drawdown,
+                daily_pnl=daily_pnl,
+                session_id=self.trading_session_id
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to log account snapshot: {e}")
         
     def _log_status(self, symbol: str, current_price: float):
         """Log current trading status"""

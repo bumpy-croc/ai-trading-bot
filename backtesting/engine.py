@@ -7,6 +7,8 @@ from strategies.base import BaseStrategy
 from core.risk.risk_manager import RiskManager, RiskParameters
 import numpy as np
 from core.data_providers.sentiment_provider import SentimentDataProvider
+from core.database.manager import DatabaseManager
+from core.database.models import TradeSource, PositionSide
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,9 @@ class Backtester:
         data_provider: DataProvider,
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[RiskParameters] = None,
-        initial_balance: float = 10000
+        initial_balance: float = 10000,
+        database_url: Optional[str] = None,
+        log_to_database: bool = True
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -67,6 +71,13 @@ class Backtester:
         self.trades: List[Trade] = []
         self.current_trade: Optional[Trade] = None
         
+        # Database logging
+        self.log_to_database = log_to_database
+        self.db_manager = None
+        self.trading_session_id = None
+        if log_to_database:
+            self.db_manager = DatabaseManager(database_url)
+        
     def run(
         self,
         symbol: str,
@@ -76,6 +87,18 @@ class Backtester:
     ) -> Dict:
         """Run backtest with sentiment data if available"""
         try:
+            # Create trading session in database if enabled
+            if self.log_to_database and self.db_manager:
+                self.trading_session_id = self.db_manager.create_trading_session(
+                    strategy_name=self.strategy.__class__.__name__,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    mode=TradeSource.BACKTEST,
+                    initial_balance=self.initial_balance,
+                    strategy_config=getattr(self.strategy, 'config', {}),
+                    session_name=f"Backtest_{symbol}_{start.strftime('%Y%m%d')}"
+                )
+            
             # Fetch price data
             df = self.data_provider.get_historical_data(symbol, timeframe, start, end)
             if df.empty:
@@ -146,6 +169,25 @@ class Backtester:
                         # Log trade
                         logger.info(f"Exited position at {candle['close']}, Balance: {self.balance:.2f}")
                         
+                        # Log to database if enabled
+                        if self.log_to_database and self.db_manager:
+                            self.db_manager.log_trade(
+                                symbol=symbol,
+                                side="long",  # Backtester only does long trades currently
+                                entry_price=self.current_trade.entry_price,
+                                exit_price=self.current_trade.exit_price,
+                                size=self.current_trade.size,
+                                entry_time=self.current_trade.entry_time,
+                                exit_time=self.current_trade.exit_time,
+                                pnl=trade_pnl,
+                                exit_reason=self.current_trade.exit_reason,
+                                strategy_name=self.strategy.__class__.__name__,
+                                source=TradeSource.BACKTEST,
+                                stop_loss=self.current_trade.stop_loss,
+                                take_profit=self.current_trade.take_profit,
+                                session_id=self.trading_session_id
+                            )
+                        
                         # Store trade
                         self.trades.append(self.current_trade)
                         self.current_trade = None
@@ -201,6 +243,13 @@ class Backtester:
                         yearly_return = (last_close / first_close - 1) * 100
                         yearly_returns[str(year)] = yearly_return
             # --- End yearly returns ---
+            
+            # End trading session in database if enabled
+            if self.log_to_database and self.db_manager and self.trading_session_id:
+                self.db_manager.end_trading_session(
+                    session_id=self.trading_session_id,
+                    final_balance=self.balance
+                )
 
             return {
                 'total_trades': total_trades,
@@ -210,7 +259,8 @@ class Backtester:
                 'sharpe_ratio': sharpe_ratio,
                 'final_balance': self.balance,
                 'annualized_return': annualized_return,
-                'yearly_returns': yearly_returns
+                'yearly_returns': yearly_returns,
+                'session_id': self.trading_session_id if self.log_to_database else None
             }
             
         except Exception as e:
