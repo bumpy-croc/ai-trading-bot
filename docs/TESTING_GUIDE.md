@@ -70,7 +70,7 @@ pip install -r requirements.txt
 pytest
 
 # Run with coverage
-pytest --cov=bottrade --cov-report=html
+pytest --cov=ai-trader --cov-report=html
 
 # Run specific test categories
 pytest -m live_trading          # Live trading tests only
@@ -309,7 +309,7 @@ def test_data_consistency():
 
 Before deploying to live trading:
 
-1. **All Tests Pass**: `pytest --cov=bottrade`
+1. **All Tests Pass**: `pytest --cov=ai-trader`
 2. **Performance Tests**: `pytest tests/test_performance.py`
 3. **Integration Tests**: `pytest -m integration`
 4. **Manual Risk Testing**: Verify risk limits manually
@@ -333,7 +333,7 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements.txt
     - name: Run tests
-      run: pytest --cov=bottrade
+      run: pytest --cov=ai-trader
     - name: Check critical tests
       run: pytest -m "live_trading or risk_management" --tb=short
 ```
@@ -473,7 +473,7 @@ Minimum coverage requirements:
 
 ```bash
 # Generate coverage report
-pytest --cov=bottrade --cov-report=html
+pytest --cov=ai-trader --cov-report=html
 
 # View coverage report
 open htmlcov/index.html
@@ -552,7 +552,7 @@ Regularly review and clean up:
 pytest -m "live_trading or risk_management" -v
 
 # Before deployment
-pytest --cov=bottrade --cov-min-percentage=85
+pytest --cov=ai-trader --cov-min-percentage=85
 
 # Performance tests
 pytest tests/test_performance.py -v

@@ -133,7 +133,7 @@ def run_coverage_analysis():
     
     cmd = [
         sys.executable, '-m', 'pytest',
-        '--cov=bottrade',
+                    '--cov=ai-trader',
         '--cov-report=term-missing',
         '--cov-report=html',
         'tests/'
@@ -184,7 +184,7 @@ def validate_test_environment():
     print_header("Validating Test Environment")
     
     # Check if we're in the right directory
-    if not (Path.cwd() / 'bottrade').exists():
+    if not (Path.cwd() / 'ai-trader').exists():
         print_error("Not in the correct project directory")
         print_warning("Please run this script from the project root directory")
         return False

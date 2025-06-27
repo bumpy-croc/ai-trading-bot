@@ -85,7 +85,7 @@ def parse_args():
     # Trading parameters
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')
     parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
-    parser.add_argument('--balance', type=float, default=10000, help='Initial balance')
+    parser.add_argument('--balance', type=float, default=100, help='Initial balance')
     parser.add_argument('--max-position', type=float, default=0.1, help='Max position size (0.1 = 10% of balance)')
     parser.add_argument('--check-interval', type=int, default=60, help='Check interval in seconds')
     

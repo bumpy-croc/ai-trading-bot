@@ -1,5 +1,5 @@
 """
-Bottrade - Cryptocurrency Trading Bot Framework
+AI-Trader - Cryptocurrency Trading Bot Framework
 """
 
 from core.data_providers import DataProvider, BinanceDataProvider
