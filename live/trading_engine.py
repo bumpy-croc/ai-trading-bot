@@ -16,6 +16,7 @@ from core.data_providers.binance_data_provider import BinanceDataProvider
 from core.data_providers.sentiment_provider import SentimentDataProvider
 from strategies.base import BaseStrategy
 from core.risk.risk_manager import RiskManager, RiskParameters
+from live.strategy_manager import StrategyManager
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,8 @@ class LiveTradingEngine:
         max_position_size: float = 0.1,  # 10% of balance per position
         enable_live_trading: bool = False,  # Safety flag - must be explicitly enabled
         log_trades: bool = True,
-        alert_webhook_url: Optional[str] = None
+        alert_webhook_url: Optional[str] = None,
+        enable_hot_swapping: bool = True  # Enable strategy hot-swapping
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -94,6 +96,15 @@ class LiveTradingEngine:
         self.enable_live_trading = enable_live_trading
         self.log_trades = log_trades
         self.alert_webhook_url = alert_webhook_url
+        self.enable_hot_swapping = enable_hot_swapping
+        
+        # Initialize strategy manager for hot-swapping
+        self.strategy_manager = None
+        if enable_hot_swapping:
+            self.strategy_manager = StrategyManager()
+            self.strategy_manager.current_strategy = strategy
+            self.strategy_manager.on_strategy_change = self._handle_strategy_change
+            self.strategy_manager.on_model_update = self._handle_model_update
         
         # Trading state
         self.is_running = False
@@ -197,6 +208,17 @@ class LiveTradingEngine:
                 # Add sentiment data if available
                 if self.sentiment_provider:
                     df = self._add_sentiment_data(df, symbol)
+                
+                # Check for pending strategy/model updates
+                if self.strategy_manager and self.strategy_manager.has_pending_update():
+                    logger.info("🔄 Applying pending strategy/model update...")
+                    success = self.strategy_manager.apply_pending_update()
+                    if success:
+                        self.strategy = self.strategy_manager.current_strategy
+                        logger.info("✅ Strategy/model update applied successfully")
+                        self._send_alert("Strategy/Model updated in live trading")
+                    else:
+                        logger.error("❌ Failed to apply strategy/model update")
                 
                 # Calculate indicators
                 df = self.strategy.calculate_indicators(df)
@@ -597,4 +619,89 @@ class LiveTradingEngine:
             'active_positions': len(self.positions),
             'last_update': self.last_data_update.isoformat() if self.last_data_update else None,
             'is_running': self.is_running
-        } 
+        }
+    
+    def _handle_strategy_change(self, swap_data: Dict[str, Any]):
+        """Handle strategy change callback"""
+        logger.info(f"🔄 Strategy change requested: {swap_data}")
+        
+        # If requested to close positions, close them now
+        if swap_data.get('close_positions', False):
+            logger.info("🚪 Closing all positions before strategy swap")
+            for position in list(self.positions.values()):
+                self._close_position(position, "Strategy change - close requested")
+        else:
+            logger.info("📊 Keeping existing positions during strategy swap")
+    
+    def _handle_model_update(self, update_data: Dict[str, Any]):
+        """Handle model update callback"""
+        logger.info(f"🤖 Model update requested: {update_data}")
+        # Model update logic is handled in strategy_manager.apply_pending_update()
+    
+    def hot_swap_strategy(self, new_strategy_name: str, 
+                         close_positions: bool = False,
+                         new_config: Optional[Dict] = None) -> bool:
+        """
+        Hot-swap to a new strategy during live trading
+        
+        Args:
+            new_strategy_name: Name of new strategy
+            close_positions: Whether to close existing positions
+            new_config: Configuration for new strategy
+            
+        Returns:
+            True if swap was initiated successfully
+        """
+        
+        if not self.strategy_manager:
+            logger.error("Strategy manager not initialized - hot swapping disabled")
+            return False
+        
+        logger.info(f"🔄 Initiating hot-swap to strategy: {new_strategy_name}")
+        
+        success = self.strategy_manager.hot_swap_strategy(
+            new_strategy_name=new_strategy_name,
+            new_config=new_config,
+            close_existing_positions=close_positions
+        )
+        
+        if success:
+            logger.info(f"✅ Hot-swap initiated successfully - will apply on next cycle")
+            self._send_alert(f"Strategy hot-swap initiated: {self.strategy.name} → {new_strategy_name}")
+        else:
+            logger.error(f"❌ Hot-swap initiation failed")
+        
+        return success
+    
+    def update_model(self, new_model_path: str) -> bool:
+        """
+        Update ML models during live trading
+        
+        Args:
+            new_model_path: Path to new model file
+            
+        Returns:
+            True if update was initiated successfully
+        """
+        
+        if not self.strategy_manager:
+            logger.error("Strategy manager not initialized - model updates disabled")
+            return False
+        
+        strategy_name = self.strategy.name.lower()
+        
+        logger.info(f"🤖 Initiating model update for strategy: {strategy_name}")
+        
+        success = self.strategy_manager.update_model(
+            strategy_name=strategy_name,
+            new_model_path=new_model_path,
+            validate_model=True
+        )
+        
+        if success:
+            logger.info(f"✅ Model update initiated successfully - will apply on next cycle")
+            self._send_alert(f"Model update initiated for {strategy_name}")
+        else:
+            logger.error(f"❌ Model update initiation failed")
+        
+        return success 
