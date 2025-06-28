@@ -11,12 +11,33 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
+# Parse command line arguments
 ENVIRONMENT=${1:-staging}  # Default to staging
-AWS_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+DRY_RUN=false
+VERBOSE=false
+
+# Parse additional arguments
+shift || true  # Remove first argument (environment)
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --verbose)
+            VERBOSE=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Configuration - Use actual AWS CLI configured region
+AWS_REGION=$(aws configure get region 2>/dev/null || echo "us-east-1")
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")
-DRY_RUN=${DRY_RUN:-false}  # Set to true for dry run mode
-VERBOSE=${VERBOSE:-false}  # Set to true for verbose output
 
 # Logging setup
 LOG_FILE="/tmp/ai-trading-bot-iam-setup-$(date +%Y%m%d-%H%M%S).log"
@@ -40,6 +61,12 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"
 }
 
+# Helper function to capitalize first letter
+capitalize() {
+    local str="$1"
+    echo "$(tr '[:lower:]' '[:upper:]' <<< ${str:0:1})${str:1}"
+}
+
 # Enhanced AWS command wrapper with retry logic
 aws_cmd() {
     local max_attempts=3
@@ -53,10 +80,10 @@ aws_cmd() {
         fi
         
         if [ "$VERBOSE" = "true" ]; then
-            log_info "Executing: aws $*"
+            log_info "Executing: aws --region ${AWS_REGION} $*"
         fi
         
-        if aws "$@"; then
+        if aws --region "${AWS_REGION}" "$@"; then
             return 0
         else
             local exit_code=$?
@@ -139,6 +166,26 @@ validate_prerequisites() {
 
 validate_prerequisites
 
+# Validate region configuration
+validate_region() {
+    log_info "Validating AWS region configuration..."
+    
+    if [ -z "$AWS_REGION" ]; then
+        log_error "AWS region not configured. Please run: aws configure set region <your-region>"
+        exit 1
+    fi
+    
+    # Test if region is valid by making a simple API call
+    if ! aws sts get-caller-identity --region "$AWS_REGION" >/dev/null 2>&1; then
+        log_error "Invalid AWS region: $AWS_REGION"
+        exit 1
+    fi
+    
+    log_info "Using AWS region: $AWS_REGION"
+}
+
+validate_region
+
 # Function to create trust policy
 create_trust_policy() {
     local env=$1
@@ -169,6 +216,7 @@ EOF
 # Function to create secrets policy
 create_secrets_policy() {
     local env=$1
+    local env_capitalized=$(capitalize "$env")
     local conditions=""
     
     if [ "$env" = "production" ]; then
@@ -186,13 +234,13 @@ create_secrets_policy() {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadSecretsFor${env^}",
+      "Sid": "ReadSecretsFor${env_capitalized}",
       "Effect": "Allow",
       "Action": [
         "secretsmanager:GetSecretValue",
         "secretsmanager:DescribeSecret"
       ],
-                  "Resource": "arn:aws:secretsmanager:*:*:secret:ai-trading-bot/${env}-*",
+      "Resource": "arn:aws:secretsmanager:*:*:secret:ai-trading-bot/${env}-*",
       "Condition": {
         "DateLessThan": {
           "aws:CurrentTime": "2025-12-31T23:59:59Z"
@@ -212,7 +260,7 @@ create_secrets_policy() {
           "kms:ViaService": "secretsmanager.${AWS_REGION}.amazonaws.com"
         },
         "StringLike": {
-                          "kms:EncryptionContext:SecretARN": "arn:aws:secretsmanager:*:*:secret:ai-trading-bot/${env}-*"
+          "kms:EncryptionContext:SecretARN": "arn:aws:secretsmanager:*:*:secret:ai-trading-bot/${env}-*"
         }
       }
     }
@@ -226,7 +274,7 @@ create_s3_policy() {
     local env=$1
     local bucket_name="ai-trading-bot-backups-${env}"
     
-    cat > ai-trading-bot-s3-policy-${env}.json << EOF
+    cat > ai-trading-bot-s3-backup-policy-${env}.json << EOF
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -269,6 +317,7 @@ EOF
 # Function to create CloudWatch policy
 create_cloudwatch_policy() {
     local env=$1
+    local env_capitalized=$(capitalize "$env")
     
     cat > ai-trading-bot-cloudwatch-policy-${env}.json << EOF
 {
@@ -283,7 +332,7 @@ create_cloudwatch_policy() {
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "cloudwatch:namespace": "AITrader/${env^}"
+          "cloudwatch:namespace": "AITrader/${env_capitalized}"
         }
       }
     },
@@ -296,7 +345,7 @@ create_cloudwatch_policy() {
         "logs:PutLogEvents",
         "logs:DescribeLogStreams"
       ],
-                  "Resource": "arn:aws:logs:*:*:log-group:/aws/ai-trading-bot/${env}*"
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/ai-trading-bot/${env}*"
     }
   ]
 }
@@ -401,8 +450,13 @@ setup_iam_role() {
     local policies=("Secrets" "S3Backup" "CloudWatch" "SNS" "SSM")
     
     for policy_type in "${policies[@]}"; do
-        local policy_name="AITrader${policy_type}${env^}Policy"
-        local policy_file="ai-trading-bot-${policy_type,,}-policy-${env}.json"
+        local env_capitalized=$(capitalize "$env")
+        local policy_type_lower=$(echo "${policy_type}" | tr '[:upper:]' '[:lower:]')
+        if [ "$policy_type" = "S3Backup" ]; then
+            policy_type_lower="s3-backup"
+        fi
+        local policy_name="AITrader${policy_type}${env_capitalized}Policy"
+        local policy_file="ai-trading-bot-${policy_type_lower}-policy-${env}.json"
         
         echo -e "📋 Creating policy: ${policy_name}"
         
@@ -573,24 +627,26 @@ create_backup_bucket() {
     log_info "Setting bucket tags..."
     aws_cmd s3api put-bucket-tagging \
         --bucket "${bucket_name}" \
-        --tagging 'TagSet=[
-            {
-                "Key": "Project",
-                "Value": "AI-Trading-Bot"
-            },
-            {
-                "Key": "Environment", 
-                "Value": "'${env}'"
-            },
-            {
-                "Key": "Purpose",
-                "Value": "Backup"
-            },
-            {
-                "Key": "CreatedBy",
-                "Value": "iam-security-setup"
-            }
-        ]'
+        --tagging '{
+            "TagSet": [
+                {
+                    "Key": "Project",
+                    "Value": "AI-Trading-Bot"
+                },
+                {
+                    "Key": "Environment", 
+                    "Value": "'${env}'"
+                },
+                {
+                    "Key": "Purpose",
+                    "Value": "Backup"
+                },
+                {
+                    "Key": "CreatedBy",
+                    "Value": "iam-security-setup"
+                }
+            ]
+        }'
 }
 
 # Create SNS topic for alerts
@@ -600,10 +656,11 @@ create_alert_topic() {
     
     echo -e "${BLUE}Creating SNS alert topic: ${topic_name}${NC}"
     
-    local topic_arn=$(aws sns create-topic --name "$topic_name" --query 'TopicArn' --output text)
+    local topic_arn=$(aws sns create-topic --region "${AWS_REGION}" --name "$topic_name" --query 'TopicArn' --output text)
     
     # Set topic policy
     aws sns set-topic-attributes \
+        --region "${AWS_REGION}" \
         --topic-arn "$topic_arn" \
         --attribute-name Policy \
         --attribute-value '{
@@ -633,8 +690,10 @@ setup_security_monitoring() {
     echo -e "${BLUE}Setting up security monitoring for ${env}...${NC}"
     
     # Alarm for failed secret access
+    local env_capitalized=$(capitalize "$env")
     aws cloudwatch put-metric-alarm \
-        --alarm-name "AI-Trading-Bot-${env^}-Unauthorized-Secret-Access" \
+        --region "${AWS_REGION}" \
+        --alarm-name "AI-Trading-Bot-${env_capitalized}-Unauthorized-Secret-Access" \
         --alarm-description "Alert on failed secret access attempts in ${env}" \
         --metric-name "UserErrors" \
         --namespace "AWS/SecretsManager" \
@@ -694,8 +753,9 @@ rollback() {
     if [ "$env" != "production" ]; then  # Safety check
         log_info "Detaching policies from role..."
         local policies=("Secrets" "S3Backup" "CloudWatch" "SNS" "SSM")
+        local env_capitalized=$(capitalize "$env")
         for policy_type in "${policies[@]}"; do
-            local policy_name="AITrader${policy_type}${env^}Policy"
+            local policy_name="AITrader${policy_type}${env_capitalized}Policy"
             aws_cmd iam detach-role-policy --role-name "$role_name" --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/${policy_name}" 2>/dev/null || true
         done
         
@@ -798,7 +858,7 @@ main() {
     echo -e "2. Launch EC2 instance with IAM instance profile:"
     echo -e "   ${YELLOW}--iam-instance-profile Name=ai-trading-bot-${ENVIRONMENT}-profile${NC}"
     echo -e "3. Subscribe to SNS alerts:"
-    echo -e "   ${YELLOW}aws sns subscribe --topic-arn arn:aws:sns:${AWS_REGION}:${ACCOUNT_ID}:ai-trading-bot-alerts-${ENVIRONMENT} --protocol email --notification-endpoint your-email@example.com${NC}"
+    echo -e "   ${YELLOW}aws sns subscribe --region ${AWS_REGION} --topic-arn arn:aws:sns:${AWS_REGION}:${ACCOUNT_ID}:ai-trading-bot-alerts-${ENVIRONMENT} --protocol email --notification-endpoint your-email@example.com${NC}"
     echo
     echo -e "${BLUE}Security features enabled:${NC}"
     echo -e "• ✅ Least privilege IAM policies"
