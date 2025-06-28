@@ -4,10 +4,7 @@ from binance.client import Client
 from typing import Optional
 import logging
 from .data_provider import DataProvider
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
+from core.config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +22,17 @@ class BinanceDataProvider(DataProvider):
     
     def __init__(self):
         super().__init__()
-        api_key = os.getenv('BINANCE_API_KEY')
-        api_secret = os.getenv('BINANCE_API_SECRET')
+        config = get_config()
         
-        if not api_key or not api_secret:
-            raise ValueError("Binance API credentials not found. Please set BINANCE_API_KEY and BINANCE_API_SECRET environment variables.")
+        try:
+            api_key = config.get_required('BINANCE_API_KEY')
+            api_secret = config.get_required('BINANCE_API_SECRET')
+        except ValueError as e:
+            raise ValueError(
+                "Binance API credentials not found. Please ensure BINANCE_API_KEY and "
+                "BINANCE_API_SECRET are set in AWS Secrets Manager, environment variables, "
+                "or .env file."
+            ) from e
         
         self.client = Client(api_key, api_secret)
         

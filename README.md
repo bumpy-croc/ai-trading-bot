@@ -8,6 +8,11 @@ A comprehensive cryptocurrency trading bot with backtesting capabilities, machin
 - **[AI Assistant Rules](./.cursorrules)** - Quick reference for Cursor AI integration
 - **[Live Trading Guide](./LIVE_TRADING_GUIDE.md)** - Setup and usage for live trading
 - **[Live Sentiment Analysis](./LIVE_SENTIMENT_ANALYSIS.md)** - Sentiment data integration guide
+- **[AWS Deployment Guide](./docs/AWS_DEPLOYMENT_GUIDE.md)** - Complete guide for deploying to AWS EC2
+- **[AWS Secrets Manager Guide](./docs/AWS_SECRETS_MANAGER_GUIDE.md)** - Secure credential management
+- **[AWS VPC Setup Guide](./docs/AWS_VPC_SETUP_GUIDE.md)** - Network isolation setup
+- **[Configuration Migration Guide](./docs/CONFIG_MIGRATION_GUIDE.md)** - Migrating to the new config system
+- **[Deployment Checklist](./deploy/DEPLOYMENT_CHECKLIST.md)** - Step-by-step deployment checklist
 
 ## Features
 
@@ -23,21 +28,52 @@ A comprehensive cryptocurrency trading bot with backtesting capabilities, machin
 pip install -r requirements.txt
 ```
 
-2. Create a `.env` file in the project root with your Binance API credentials:
+2. Configure your credentials using one of these methods:
+
+### Method A: .env File (Local Development)
+Create a `.env` file in the project root:
 ```
 BINANCE_API_KEY=your_api_key_here
 BINANCE_API_SECRET=your_api_secret_here
-TRADING_PAIR=BTCUSDT
-QUANTITY=0.001
-SHORT_MA_PERIOD=10
-LONG_MA_PERIOD=20
+DATABASE_URL=sqlite:///data/trading_bot.db
+TRADING_MODE=paper
+INITIAL_BALANCE=1000
 ```
+
+### Method B: Environment Variables (Docker/CI)
+```bash
+export BINANCE_API_KEY=your_api_key_here
+export BINANCE_API_SECRET=your_api_secret_here
+export DATABASE_URL=sqlite:///data/trading_bot.db
+export TRADING_MODE=paper
+```
+
+### Method C: AWS Secrets Manager (Production)
+The bot automatically uses AWS Secrets Manager when deployed to AWS EC2. See the [AWS Deployment Guide](./docs/AWS_DEPLOYMENT_GUIDE.md) for details.
 
 3. Get your API keys from Binance:
    - Log in to your Binance account
    - Go to API Management
    - Create a new API key
    - Make sure to enable trading permissions
+
+## Configuration System
+
+The trading bot uses a flexible configuration system that automatically loads settings from multiple sources in priority order:
+
+1. **AWS Secrets Manager** (if available) - Secure storage for production
+2. **Environment Variables** - Good for Docker and CI/CD
+3. **.env File** - Convenient for local development
+
+The bot will automatically use the first available source for each configuration value. This means:
+- On AWS EC2: Secrets are read directly from AWS Secrets Manager (no .env file needed)
+- In Docker: Use environment variables
+- Local development: Use .env file
+
+Test the configuration system:
+```bash
+python scripts/test_config_system.py
+```
 
 ## Usage
 
@@ -114,6 +150,37 @@ python scripts/cache_manager.py clear-old --hours 48
 ### Cache Location
 
 Cache files are stored in `data/cache/` directory as pickle files. Each file contains a pandas DataFrame with OHLCV data for a specific request.
+
+## 🚀 AWS Deployment
+
+The trading bot is designed for easy deployment to AWS EC2. We provide comprehensive deployment scripts and documentation:
+
+### Quick Start
+```bash
+# Basic deployment for development/testing
+./deploy/aws_setup.sh
+
+# Production deployment with enhanced security and monitoring
+./deploy/aws_setup_production.sh
+```
+
+### Key Features
+- **Automated Setup**: Scripts handle all dependencies and configuration
+- **Security First**: AWS Secrets Manager integration, IAM roles, fail2ban
+- **Monitoring**: CloudWatch integration with custom dashboards
+- **Backups**: Automated S3 backups with retention policies
+- **Health Checks**: Automatic recovery from failures
+- **Cost Optimized**: Guidance on instance selection and resource usage
+
+### Documentation
+- [Complete AWS Deployment Guide](./docs/AWS_DEPLOYMENT_GUIDE.md) - Detailed instructions with best practices
+- [Deployment Checklist](./deploy/DEPLOYMENT_CHECKLIST.md) - Step-by-step checklist
+- [Production Setup Script](./deploy/aws_setup_production.sh) - Enhanced security and monitoring
+
+### Instance Recommendations
+- **Development**: t3.micro (free tier eligible)
+- **Testing**: t3.small (~$15/month)
+- **Production**: t3.medium (~$30/month)
 
 ## Disclaimer
 

@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
-
 import argparse
 from datetime import datetime, timedelta
 import logging
 import importlib
 import sys
 from pathlib import Path
+
+from core.config import get_config
 
 from core.data_providers import BinanceDataProvider
 from core.data_providers.cached_data_provider import CachedDataProvider

@@ -16,15 +16,13 @@ Usage:
     python run_live_trading.py ml_premium_strategy --symbol BTCUSDT --balance 5000 --max-position 0.05
 """
 
-from dotenv import load_dotenv
-load_dotenv()
-
 import argparse
 import logging
 import sys
-import os
 from datetime import datetime
 from pathlib import Path
+
+from core.config import get_config
 
 from core.data_providers.binance_data_provider import BinanceDataProvider
 from core.data_providers.cached_data_provider import CachedDataProvider
@@ -115,9 +113,15 @@ def validate_configuration(args):
     logger.info("Validating configuration...")
     
     # Check API credentials
-    if not os.getenv('BINANCE_API_KEY') or not os.getenv('BINANCE_API_SECRET'):
+    config = get_config()
+    try:
+        config.get_required('BINANCE_API_KEY')
+        config.get_required('BINANCE_API_SECRET')
+        logger.info("✅ API credentials found")
+    except ValueError as e:
         logger.error("Binance API credentials not found!")
-        logger.error("Please set BINANCE_API_KEY and BINANCE_API_SECRET environment variables")
+        logger.error("Please ensure BINANCE_API_KEY and BINANCE_API_SECRET are configured")
+        logger.error("They can be set in AWS Secrets Manager, environment variables, or .env file")
         return False
     
     # Validate trading mode
