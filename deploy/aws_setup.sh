@@ -23,13 +23,13 @@ sudo systemctl enable postgresql
 
 # Create app directory
 echo "📁 Creating application directory..."
-sudo mkdir -p /opt/ai-trader
-sudo chown $USER:$USER /opt/ai-trader
-cd /opt/ai-trader
+sudo mkdir -p /opt/ai-trading-bot
+sudo chown $USER:$USER /opt/ai-trading-bot
+cd /opt/ai-trading-bot
 
 # Clone your repository (replace with your repo URL)
 echo "📥 Cloning repository..."
-# git clone https://github.com/yourusername/ai-trader.git .
+# git clone https://github.com/yourusername/ai-trading-bot.git .
 # OR upload your code via SCP/SFTP
 
 # Create virtual environment
@@ -54,7 +54,7 @@ BINANCE_API_SECRET=your_api_secret_here
 
 # Database (use SQLite for simplicity or PostgreSQL)
 DATABASE_URL=sqlite:///data/trading_bot.db
-# DATABASE_URL=postgresql://botuser:password@localhost/ai-trader
+# DATABASE_URL=postgresql://botuser:password@localhost/ai-trading-bot
 
 # Trading settings
 TRADING_MODE=paper
@@ -63,7 +63,7 @@ EOF
 
 # Create systemd service for the trading bot
 echo "⚙️ Creating systemd service..."
-sudo tee /etc/systemd/system/ai-trader.service > /dev/null << EOF
+sudo tee /etc/systemd/system/ai-trading-bot.service > /dev/null << EOF
 [Unit]
 Description=Crypto Trading Bot
 After=network.target
@@ -71,9 +71,9 @@ After=network.target
 [Service]
 Type=simple
 User=$USER
-WorkingDirectory=/opt/ai-trader
-Environment="PATH=/opt/ai-trader/venv/bin"
-ExecStart=/opt/ai-trader/venv/bin/python run_live_trading.py adaptive --paper-trading --balance 1000
+WorkingDirectory=/opt/ai-trading-bot
+Environment="PATH=/opt/ai-trading-bot/venv/bin"
+ExecStart=/opt/ai-trading-bot/venv/bin/python run_live_trading.py adaptive --paper-trading --balance 1000
 Restart=always
 RestartSec=10
 
@@ -83,8 +83,8 @@ EOF
 
 # Create log rotation config
 echo "📝 Setting up log rotation..."
-sudo tee /etc/logrotate.d/ai-trader > /dev/null << EOF
-/opt/ai-trader/*.log {
+sudo tee /etc/logrotate.d/ai-trading-bot > /dev/null << EOF
+/opt/ai-trading-bot/*.log {
     daily
     rotate 14
     compress
@@ -97,8 +97,8 @@ EOF
 
 # Setup cron jobs for maintenance tasks
 echo "⏰ Setting up cron jobs..."
-(crontab -l 2>/dev/null; echo "0 2 * * * cd /opt/ai-trader && /opt/ai-trader/venv/bin/python scripts/download_binance_data.py") | crontab -
-(crontab -l 2>/dev/null; echo "0 */6 * * * cd /opt/ai-trader && /opt/ai-trader/venv/bin/python scripts/cache_manager.py --refresh") | crontab -
+(crontab -l 2>/dev/null; echo "0 2 * * * cd /opt/ai-trading-bot && /opt/ai-trading-bot/venv/bin/python scripts/download_binance_data.py") | crontab -
+(crontab -l 2>/dev/null; echo "0 */6 * * * cd /opt/ai-trading-bot && /opt/ai-trading-bot/venv/bin/python scripts/cache_manager.py --refresh") | crontab -
 
 # Setup CloudWatch monitoring (optional)
 echo "📊 Setting up CloudWatch agent..."
@@ -109,19 +109,19 @@ rm amazon-cloudwatch-agent.deb
 # Enable and start the service
 echo "🎯 Starting the trading bot service..."
 sudo systemctl daemon-reload
-sudo systemctl enable ai-trader.service
-# sudo systemctl start ai-trader.service  # Uncomment after configuring .env
+sudo systemctl enable ai-trading-bot.service
+# sudo systemctl start ai-trading-bot.service  # Uncomment after configuring .env
 
 echo "✅ Setup complete!"
 echo ""
 echo "Next steps:"
-echo "1. Edit /opt/ai-trader/.env with your API credentials"
-echo "2. Run initial data download: cd /opt/ai-trader && ./venv/bin/python scripts/download_binance_data.py"
-echo "3. Start the bot: sudo systemctl start ai-trader"
-echo "4. Check logs: sudo journalctl -u ai-trader -f"
+echo "1. Edit /opt/ai-trading-bot/.env with your API credentials"
+echo "2. Run initial data download: cd /opt/ai-trading-bot && ./venv/bin/python scripts/download_binance_data.py"
+echo "3. Start the bot: sudo systemctl start ai-trading-bot"
+echo "4. Check logs: sudo journalctl -u ai-trading-bot -f"
 echo ""
 echo "Useful commands:"
-echo "- Check status: sudo systemctl status ai-trader"
-echo "- View logs: sudo journalctl -u ai-trader -f"
-echo "- Restart bot: sudo systemctl restart ai-trader"
-echo "- Stop bot: sudo systemctl stop ai-trader" 
+echo "- Check status: sudo systemctl status ai-trading-bot"
+echo "- View logs: sudo journalctl -u ai-trading-bot -f"
+echo "- Restart bot: sudo systemctl restart ai-trading-bot"
+echo "- Stop bot: sudo systemctl stop ai-trading-bot" 

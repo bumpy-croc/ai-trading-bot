@@ -42,12 +42,12 @@ aws configure  # Enter your AWS credentials
 ```bash
 # Create security group
 aws ec2 create-security-group \
-  --group-name ai-trader-sg \
+  --group-name ai-trading-bot-sg \
   --description "Security group for AI Trading Bot"
 
 # Add SSH access (replace YOUR_IP with your IP)
 aws ec2 authorize-security-group-ingress \
-  --group-name ai-trader-sg \
+  --group-name ai-trading-bot-sg \
   --protocol tcp \
   --port 22 \
   --cidr YOUR_IP/32
@@ -57,8 +57,8 @@ aws ec2 run-instances \
   --image-id ami-0c02fb55956c7d316 \  # Ubuntu 22.04 LTS
   --instance-type t3.small \
   --key-name your-key-pair \
-  --security-groups ai-trader-sg \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=ai-trader}]'
+      --security-groups ai-trading-bot-sg \
+      --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=ai-trading-bot}]'
 ```
 
 ### 2. Connect and Deploy
@@ -66,12 +66,12 @@ aws ec2 run-instances \
 ```bash
 # Get instance IP
 INSTANCE_IP=$(aws ec2 describe-instances \
-  --filters "Name=tag:Name,Values=ai-trader" \
+      --filters "Name=tag:Name,Values=ai-trading-bot" \
   --query 'Reservations[0].Instances[0].PublicIpAddress' \
   --output text)
 
 # Copy files
-scp -r /Users/alex/Sites/ai-trader/* ubuntu@$INSTANCE_IP:/tmp/ai-trader/
+scp -r /Users/alex/Sites/ai-trading-bot/* ubuntu@$INSTANCE_IP:/tmp/ai-trading-bot/
 
 # Connect
 ssh ubuntu@$INSTANCE_IP
@@ -95,7 +95,7 @@ chmod +x deploy/aws_setup_production.sh
 
 ### 1. Create IAM Role
 
-Create `ai-trader-role.json`:
+Create `ai-trading-bot-role.json`:
 ```json
 {
   "Version": "2012-10-17",
@@ -115,26 +115,26 @@ Create the role:
 ```bash
 # Create role
 aws iam create-role \
-  --role-name ai-trader-ec2-role \
-  --assume-role-policy-document file://ai-trader-role.json
+  --role-name ai-trading-bot-ec2-role \
+  --assume-role-policy-document file://ai-trading-bot-role.json
 
 # Attach policies
 aws iam attach-role-policy \
-  --role-name ai-trader-ec2-role \
+  --role-name ai-trading-bot-ec2-role \
   --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
 
 # Create instance profile
 aws iam create-instance-profile \
-  --instance-profile-name ai-trader-profile
+  --instance-profile-name ai-trading-bot-profile
 
 aws iam add-role-to-instance-profile \
-  --instance-profile-name ai-trader-profile \
-  --role-name ai-trader-ec2-role
+  --instance-profile-name ai-trading-bot-profile \
+  --role-name ai-trading-bot-ec2-role
 ```
 
 ### 2. Create Custom Policy
 
-Create `ai-trader-policy.json`:
+Create `ai-trading-bot-policy.json`:
 ```json
 {
   "Version": "2012-10-17",
@@ -144,7 +144,7 @@ Create `ai-trader-policy.json`:
       "Action": [
         "secretsmanager:GetSecretValue"
       ],
-      "Resource": "arn:aws:secretsmanager:*:*:secret:ai-trader/*"
+      "Resource": "arn:aws:secretsmanager:*:*:secret:ai-trading-bot/*"
     },
     {
       "Effect": "Allow",
@@ -155,8 +155,8 @@ Create `ai-trader-policy.json`:
         "s3:DeleteObject"
       ],
       "Resource": [
-        "arn:aws:s3:::ai-trader-backups-*/*",
-        "arn:aws:s3:::ai-trader-backups-*"
+        "arn:aws:s3:::ai-trading-bot-backups-*/*",
+        "arn:aws:s3:::ai-trading-bot-backups-*"
       ]
     },
     {
@@ -176,9 +176,9 @@ Create `ai-trader-policy.json`:
 Apply the policy:
 ```bash
 aws iam put-role-policy \
-  --role-name ai-trader-ec2-role \
-  --policy-name ai-trader-policy \
-  --policy-document file://ai-trader-policy.json
+  --role-name ai-trading-bot-ec2-role \
+  --policy-name ai-trading-bot-policy \
+  --policy-document file://ai-trading-bot-policy.json
 ```
 
 ### 3. Setup Secrets
@@ -186,7 +186,7 @@ aws iam put-role-policy \
 ```bash
 # Create secret
 aws secretsmanager create-secret \
-  --name ai-trader/production \
+  --name ai-trading-bot/production \
   --description "Production credentials for AI Trading Bot" \
   --secret-string '{
     "BINANCE_API_KEY": "your-api-key",
@@ -206,10 +206,10 @@ aws ec2 run-instances \
   --image-id ami-0c02fb55956c7d316 \
   --instance-type t3.medium \
   --key-name your-key-pair \
-  --security-groups ai-trader-sg \
-  --iam-instance-profile Name=ai-trader-profile \
+  --security-groups ai-trading-bot-sg \
+  --iam-instance-profile Name=ai-trading-bot-profile \
   --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":30,"VolumeType":"gp3"}}]' \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=ai-trader-prod},{Key=Environment,Value=production}]' \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=ai-trading-bot-prod},{Key=Environment,Value=production}]' \
   --user-data file://user-data.sh
 ```
 
@@ -220,7 +220,7 @@ aws ec2 run-instances \
 ssh ubuntu@PROD_INSTANCE_IP
 
 # Copy files and run production setup
-cd /tmp/ai-trader
+cd /tmp/ai-trading-bot
 chmod +x deploy/aws_setup_production.sh
 ./deploy/aws_setup_production.sh
 ```
@@ -249,7 +249,7 @@ chmod +x deploy/aws_setup_production.sh
 ```bash
 # Create CloudWatch alarm for unauthorized API calls
 aws cloudwatch put-metric-alarm \
-  --alarm-name ai-trader-unauthorized-api \
+  --alarm-name ai-trading-bot-unauthorized-api \
   --alarm-description "Alert on unauthorized API calls" \
   --metric-name UnauthorizedAPICalls \
   --namespace CloudTrailMetrics \
@@ -282,7 +282,7 @@ aws cloudwatch put-metric-alarm \
 ```bash
 # Set up billing alarm
 aws cloudwatch put-metric-alarm \
-  --alarm-name ai-trader-billing-alarm \
+  --alarm-name ai-trading-bot-billing-alarm \
   --alarm-description "Alert when estimated charges exceed $50" \
   --metric-name EstimatedCharges \
   --namespace AWS/Billing \
@@ -305,11 +305,11 @@ python scripts/create_cloudwatch_dashboard.py
 ### 2. SNS Alerts
 ```bash
 # Create SNS topic
-aws sns create-topic --name ai-trader-alerts
+aws sns create-topic --name ai-trading-bot-alerts
 
 # Subscribe email
 aws sns subscribe \
-  --topic-arn arn:aws:sns:region:account-id:ai-trader-alerts \
+  --topic-arn arn:aws:sns:region:account-id:ai-trading-bot-alerts \
   --protocol email \
   --notification-endpoint your-email@example.com
 ```
@@ -329,13 +329,13 @@ aws sns subscribe \
 #### 1. Service Won't Start
 ```bash
 # Check logs
-sudo journalctl -u ai-trader -n 100
+sudo journalctl -u ai-trading-bot -n 100
 
 # Check permissions
-ls -la /opt/ai-trader/
+ls -la /opt/ai-trading-bot/
 
 # Verify secrets
-aws secretsmanager get-secret-value --secret-id ai-trader/production
+aws secretsmanager get-secret-value --secret-id ai-trading-bot/production
 ```
 
 #### 2. API Connection Issues
@@ -359,33 +359,33 @@ ps aux | grep python | grep trading
 htop
 
 # Check for memory leaks
-sudo -u ai-trader /opt/ai-trader/venv/bin/python -m memory_profiler run_live_trading.py
+sudo -u ai-trading-bot /opt/ai-trading-bot/venv/bin/python -m memory_profiler run_live_trading.py
 ```
 
 ### Emergency Procedures
 
 #### Stop Trading Immediately
 ```bash
-sudo systemctl stop ai-trader
+sudo systemctl stop ai-trading-bot
 ```
 
 #### Rollback Deployment
 ```bash
 # Restore from backup
-aws s3 cp s3://ai-trader-backups/latest-backup.tar.gz .
-tar -xzf latest-backup.tar.gz -C /opt/ai-trader/
-sudo systemctl restart ai-trader
+aws s3 cp s3://ai-trading-bot-backups/latest-backup.tar.gz .
+tar -xzf latest-backup.tar.gz -C /opt/ai-trading-bot/
+sudo systemctl restart ai-trading-bot
 ```
 
 #### Disable Live Trading
 ```bash
 # Switch to paper trading
 aws secretsmanager update-secret \
-  --secret-id ai-trader/production \
+  --secret-id ai-trading-bot/production \
   --secret-string '{"TRADING_MODE": "paper"}'
   
 # Restart service
-sudo systemctl restart ai-trader
+sudo systemctl restart ai-trading-bot
 ```
 
 ## Maintenance Schedule
@@ -415,8 +415,8 @@ sudo systemctl restart ai-trader
 
 - AWS Support: https://aws.amazon.com/support
 - Binance API Docs: https://binance-docs.github.io/apidocs
-- Project Issues: https://github.com/yourusername/ai-trader/issues
-- CloudWatch Logs: Check `/aws/ec2/ai-trader` log group
+- Project Issues: https://github.com/yourusername/ai-trading-bot/issues
+- CloudWatch Logs: Check `/aws/ec2/ai-trading-bot` log group
 
 ---
 

@@ -71,9 +71,9 @@ symbols = config.get_list('TRADING_SYMBOLS', delimiter=',')
 #### Environment-Specific Configuration
 ```python
 # Automatically uses different secrets based on ENVIRONMENT variable
-# development -> ai-trader/development
-# staging -> ai-trader/staging
-# production -> ai-trader/production
+# development -> ai-trading-bot/development
+# staging -> ai-trading-bot/staging
+# production -> ai-trading-bot/production
 ```
 
 #### Configuration Priority
@@ -114,14 +114,14 @@ The new system is stricter about required values. Make sure all required configu
   "Statement": [{
     "Effect": "Allow",
     "Action": ["secretsmanager:GetSecretValue"],
-    "Resource": "arn:aws:secretsmanager:*:*:secret:ai-trader/*"
+                "Resource": "arn:aws:secretsmanager:*:*:secret:ai-trading-bot/*"
   }]
 }
 ```
 
 2. Verify secret exists:
 ```bash
-aws secretsmanager describe-secret --secret-id ai-trader/staging
+aws secretsmanager describe-secret --secret-id ai-trading-bot/staging
 ```
 
 ### Different Behavior Between Local and AWS

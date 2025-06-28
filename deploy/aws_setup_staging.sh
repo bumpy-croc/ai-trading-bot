@@ -43,13 +43,13 @@ fi
 
 # Create app directory
 echo "📁 Creating application directory..."
-sudo mkdir -p /opt/ai-trader
-sudo chown $USER:$USER /opt/ai-trader
-cd /opt/ai-trader
+sudo mkdir -p /opt/ai-trading-bot
+sudo chown $USER:$USER /opt/ai-trading-bot
+cd /opt/ai-trading-bot
 
 # Clone your repository (replace with your repo URL)
 echo "📥 Cloning repository..."
-# git clone https://github.com/yourusername/ai-trader.git .
+# git clone https://github.com/yourusername/ai-trading-bot.git .
 # OR upload your code via SCP/SFTP
 
 # Create virtual environment
@@ -76,7 +76,7 @@ cat > scripts/test_secrets_access.py << 'EOF'
 Test that the configuration system can access secrets from AWS Secrets Manager
 """
 import sys
-sys.path.insert(0, '/opt/ai-trader')
+sys.path.insert(0, '/opt/ai-trading-bot')
 
 from core.config import get_config
 
@@ -127,7 +127,7 @@ ENVIRONMENT=staging python scripts/test_secrets_access.py
 
 # Create systemd service for the trading bot
 echo "⚙️ Creating systemd service..."
-sudo tee /etc/systemd/system/ai-trader.service > /dev/null << EOF
+sudo tee /etc/systemd/system/ai-trading-bot.service > /dev/null << EOF
 [Unit]
 Description=Crypto Trading Bot (Staging)
 After=network.target
@@ -135,15 +135,15 @@ After=network.target
 [Service]
 Type=simple
 User=$USER
-WorkingDirectory=/opt/ai-trader
-Environment="PATH=/opt/ai-trader/venv/bin"
+WorkingDirectory=/opt/ai-trading-bot
+Environment="PATH=/opt/ai-trading-bot/venv/bin"
 Environment="ENVIRONMENT=staging"
 
 # Test configuration access before starting
-ExecStartPre=/opt/ai-trader/venv/bin/python /opt/ai-trader/scripts/test_secrets_access.py
+ExecStartPre=/opt/ai-trading-bot/venv/bin/python /opt/ai-trading-bot/scripts/test_secrets_access.py
 
 # Start the bot with staging configuration
-ExecStart=/opt/ai-trader/venv/bin/python run_live_trading.py adaptive --paper-trading
+ExecStart=/opt/ai-trading-bot/venv/bin/python run_live_trading.py adaptive --paper-trading
 
 # Restart configuration
 Restart=always
@@ -153,7 +153,7 @@ RestartSec=10
 PrivateTmp=true
 NoNewPrivileges=true
 ReadOnlyPaths=/
-ReadWritePaths=/opt/ai-trader/data /opt/ai-trader/logs
+ReadWritePaths=/opt/ai-trading-bot/data /opt/ai-trading-bot/logs
 
 [Install]
 WantedBy=multi-user.target
@@ -161,8 +161,8 @@ EOF
 
 # Create log rotation config
 echo "📝 Setting up log rotation..."
-sudo tee /etc/logrotate.d/ai-trader > /dev/null << EOF
-/opt/ai-trader/*.log {
+sudo tee /etc/logrotate.d/ai-trading-bot > /dev/null << EOF
+/opt/ai-trading-bot/*.log {
     daily
     rotate 14
     compress
@@ -175,8 +175,8 @@ EOF
 
 # Setup cron jobs for maintenance tasks
 echo "⏰ Setting up cron jobs..."
-(crontab -l 2>/dev/null; echo "0 2 * * * cd /opt/ai-trader && /opt/ai-trader/venv/bin/python scripts/download_binance_data.py") | crontab -
-(crontab -l 2>/dev/null; echo "0 */6 * * * cd /opt/ai-trader && /opt/ai-trader/venv/bin/python scripts/cache_manager.py --refresh") | crontab -
+(crontab -l 2>/dev/null; echo "0 2 * * * cd /opt/ai-trading-bot && /opt/ai-trading-bot/venv/bin/python scripts/download_binance_data.py") | crontab -
+(crontab -l 2>/dev/null; echo "0 */6 * * * cd /opt/ai-trading-bot && /opt/ai-trading-bot/venv/bin/python scripts/cache_manager.py --refresh") | crontab -
 
 # Setup CloudWatch monitoring (optional)
 echo "📊 Setting up CloudWatch agent..."
@@ -187,19 +187,19 @@ rm amazon-cloudwatch-agent.deb
 # Enable and start the service
 echo "🎯 Starting the trading bot service..."
 sudo systemctl daemon-reload
-sudo systemctl enable ai-trader.service
-# sudo systemctl start ai-trader.service  # Uncomment after configuring secrets
+sudo systemctl enable ai-trading-bot.service
+# sudo systemctl start ai-trading-bot.service  # Uncomment after configuring secrets
 
 echo "✅ Setup complete!"
 echo ""
 echo "⚠️  IMPORTANT: Before starting the bot, you need to:"
 echo ""
 echo "1. Create a secret in AWS Secrets Manager:"
-echo "   Secret name: ai-trader/staging"
+echo "   Secret name: ai-trading-bot/staging"
 echo ""
 echo "2. Run the following AWS CLI command to create the secret:"
 echo "   aws secretsmanager create-secret \\"
-echo "     --name ai-trader/staging \\"
+echo "     --name ai-trading-bot/staging \\"
 echo "     --description \"Staging environment secrets for AI Trading Bot\" \\"
 echo "     --secret-string '{"
 echo "       \"BINANCE_API_KEY\": \"your-staging-api-key\","
@@ -213,18 +213,18 @@ echo ""
 echo "3. Ensure this instance has an IAM role with permission to read the secret"
 echo ""
 echo "4. Initialize data:"
-echo "   cd /opt/ai-trader && ./venv/bin/python scripts/download_binance_data.py"
+echo "   cd /opt/ai-trading-bot && ./venv/bin/python scripts/download_binance_data.py"
 echo ""
 echo "5. Start the bot:"
-echo "   sudo systemctl start ai-trader"
+echo "   sudo systemctl start ai-trading-bot"
 echo ""
 echo "Useful commands:"
-echo "- Check status: sudo systemctl status ai-trader"
-echo "- View logs: sudo journalctl -u ai-trader -f"
-echo "- Update secrets: aws secretsmanager update-secret --secret-id ai-trader/staging"
-echo "- Test config access: cd /opt/ai-trader && ENVIRONMENT=staging ./venv/bin/python scripts/test_secrets_access.py"
-echo "- Restart bot: sudo systemctl restart ai-trader"
-echo "- Stop bot: sudo systemctl stop ai-trader"
+echo "- Check status: sudo systemctl status ai-trading-bot"
+echo "- View logs: sudo journalctl -u ai-trading-bot -f"
+echo "- Update secrets: aws secretsmanager update-secret --secret-id ai-trading-bot/staging"
+echo "- Test config access: cd /opt/ai-trading-bot && ENVIRONMENT=staging ./venv/bin/python scripts/test_secrets_access.py"
+echo "- Restart bot: sudo systemctl restart ai-trading-bot"
+echo "- Stop bot: sudo systemctl stop ai-trading-bot"
 echo ""
 echo "Note: The bot now reads secrets directly from AWS Secrets Manager."
 echo "No .env file is created - this is more secure!" 

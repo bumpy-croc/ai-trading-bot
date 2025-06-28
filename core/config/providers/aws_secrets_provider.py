@@ -41,7 +41,7 @@ class AWSSecretsProvider(ConfigProvider):
     def _get_secret_name(self) -> str:
         """Determine secret name from environment"""
         environment = os.environ.get('ENVIRONMENT', 'development')
-        return f"ai-trader/{environment}"
+        return f"ai-trading-bot/{environment}"
     
     def _fetch_secrets(self) -> Dict[str, Any]:
         """Fetch secrets from AWS Secrets Manager"""

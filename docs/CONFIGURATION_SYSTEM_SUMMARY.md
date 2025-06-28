@@ -33,7 +33,7 @@ The AI Trading Bot now features a secure, flexible configuration system that eli
 │  │    Priority Chain (First Found Wins)     │  │
 │  │                                          │  │
 │  │  1. AWS Secrets Manager Provider         │  │
-│  │     └─ ai-trader/{environment}          │  │
+│  │     └─ ai-trading-bot/{environment}          │  │
 │  │                                          │  │
 │  │  2. Environment Variables Provider       │  │
 │  │     └─ System environment               │  │

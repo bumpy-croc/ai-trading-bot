@@ -5,9 +5,9 @@
 set -euo pipefail
 
 # Configuration
-APP_DIR="/opt/ai-trader"
-APP_USER="ai-trader"
-BACKUP_BUCKET="ai-trader-backups-$(date +%s)"
+APP_DIR="/opt/ai-trading-bot"
+APP_USER="ai-trading-bot"
+BACKUP_BUCKET="ai-trading-bot-backups-$(date +%s)"
 REGION="us-east-1"
 
 echo "🚀 Setting up Production Crypto Trading Bot on AWS EC2..."
@@ -42,9 +42,9 @@ echo "📁 Setting up application directory..."
 sudo mkdir -p $APP_DIR/{logs,backups,data}
 sudo chown -R $APP_USER:$APP_USER $APP_DIR
 
-# Copy application files (assuming they're in /tmp/ai-trader)
+# Copy application files (assuming they're in /tmp/ai-trading-bot)
 echo "📥 Copying application files..."
-sudo cp -r /tmp/ai-trader/* $APP_DIR/
+sudo cp -r /tmp/ai-trading-bot/* $APP_DIR/
 sudo chown -R $APP_USER:$APP_USER $APP_DIR
 
 # Setup Python environment
@@ -69,7 +69,7 @@ sudo tee $APP_DIR/scripts/test_secrets_access.py > /dev/null << 'EOF'
 #!/usr/bin/env python3
 """Test that the configuration system can access secrets"""
 import sys
-sys.path.insert(0, '/opt/ai-trader')
+sys.path.insert(0, '/opt/ai-trading-bot')
 
 from core.config import get_config
 
@@ -113,7 +113,7 @@ sudo chmod +x $APP_DIR/scripts/test_secrets_access.py
 
 # Create production systemd service
 echo "⚙️ Creating systemd service..."
-sudo tee /etc/systemd/system/ai-trader.service > /dev/null << EOF
+sudo tee /etc/systemd/system/ai-trading-bot.service > /dev/null << EOF
 [Unit]
 Description=AI Crypto Trading Bot
 After=network.target
@@ -170,13 +170,13 @@ sudo tee /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json > /de
         "collect_list": [
           {
             "file_path": "$APP_DIR/logs/trading.log",
-            "log_group_name": "/aws/ec2/ai-trader",
+            "log_group_name": "/aws/ec2/ai-trading-bot",
             "log_stream_name": "{instance_id}/trading",
             "retention_in_days": 30
           },
           {
             "file_path": "$APP_DIR/logs/trading-error.log",
-            "log_group_name": "/aws/ec2/ai-trader",
+            "log_group_name": "/aws/ec2/ai-trading-bot",
             "log_stream_name": "{instance_id}/errors",
             "retention_in_days": 30
           }
@@ -185,7 +185,7 @@ sudo tee /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json > /de
     }
   },
   "metrics": {
-    "namespace": "AITrader",
+    "namespace": "AITradingBot",
     "metrics_collected": {
       "cpu": {
         "measurement": [
@@ -218,10 +218,10 @@ EOF
 
 # Setup automated backups
 echo "💾 Setting up automated backups..."
-sudo tee /usr/local/bin/backup-ai-trader.sh > /dev/null << EOF
+sudo tee /usr/local/bin/backup-ai-trading-bot.sh > /dev/null << EOF
 #!/bin/bash
 TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="ai-trader-backup-\${TIMESTAMP}.tar.gz"
+BACKUP_FILE="ai-trading-bot-backup-\${TIMESTAMP}.tar.gz"
 
 # Create backup
 cd $APP_DIR
@@ -244,7 +244,7 @@ done
 # Clean up local file
 rm /tmp/\${BACKUP_FILE}
 EOF
-sudo chmod +x /usr/local/bin/backup-ai-trader.sh
+sudo chmod +x /usr/local/bin/backup-ai-trading-bot.sh
 
 # Setup cron jobs
 echo "⏰ Setting up cron jobs..."
@@ -256,10 +256,10 @@ sudo -u $APP_USER crontab - << EOF
 0 */6 * * * cd $APP_DIR && ./venv/bin/python scripts/cache_manager.py --refresh >> logs/cron.log 2>&1
 
 # Daily backups at 3 AM
-0 3 * * * /usr/local/bin/backup-ai-trader.sh >> $APP_DIR/logs/backup.log 2>&1
+0 3 * * * /usr/local/bin/backup-ai-trading-bot.sh >> $APP_DIR/logs/backup.log 2>&1
 
 # Health check every 5 minutes
-*/5 * * * * cd $APP_DIR && ./venv/bin/python scripts/health_check.py || systemctl restart ai-trader
+*/5 * * * * cd $APP_DIR && ./venv/bin/python scripts/health_check.py || systemctl restart ai-trading-bot
 EOF
 
 # Create health check script
@@ -281,7 +281,7 @@ def check_process():
 def check_database():
     """Check if database is accessible and has recent trades"""
     try:
-        conn = sqlite3.connect('/opt/ai-trader/data/trading_bot.db')
+        conn = sqlite3.connect('/opt/ai-trading-bot/data/trading_bot.db')
         cursor = conn.cursor()
         cursor.execute(
             "SELECT COUNT(*) FROM trades WHERE timestamp > datetime('now', '-1 hour')"
@@ -330,7 +330,7 @@ dashboard_body = {
             "type": "metric",
             "properties": {
                 "metrics": [
-                    ["AITrader", "cpu_usage_user", {"stat": "Average"}],
+                    ["AITradingBot", "cpu_usage_user", {"stat": "Average"}],
                     [".", "mem_used_percent", {"stat": "Average"}]
                 ],
                 "period": 300,
@@ -342,7 +342,7 @@ dashboard_body = {
         {
             "type": "log",
             "properties": {
-                "query": "SOURCE '/aws/ec2/ai-trader' | fields @timestamp, @message | filter @message like /ERROR/ | sort @timestamp desc | limit 20",
+                "query": "SOURCE '/aws/ec2/ai-trading-bot' | fields @timestamp, @message | filter @message like /ERROR/ | sort @timestamp desc | limit 20",
                 "region": "us-east-1",
                 "title": "Recent Errors"
             }
@@ -351,7 +351,7 @@ dashboard_body = {
 }
 
 cloudwatch.put_dashboard(
-    DashboardName='AITrader-Production',
+    DashboardName='AITradingBot-Production',
     DashboardBody=json.dumps(dashboard_body)
 )
 
@@ -360,7 +360,7 @@ EOF
 
 # Setup log rotation
 echo "📝 Configuring log rotation..."
-sudo tee /etc/logrotate.d/ai-trader > /dev/null << EOF
+sudo tee /etc/logrotate.d/ai-trading-bot > /dev/null << EOF
 $APP_DIR/logs/*.log {
     daily
     rotate 14
@@ -371,7 +371,7 @@ $APP_DIR/logs/*.log {
     create 0644 $APP_USER $APP_USER
     sharedscripts
     postrotate
-        systemctl reload ai-trader >/dev/null 2>&1 || true
+        systemctl reload ai-trading-bot >/dev/null 2>&1 || true
     endscript
 }
 EOF
@@ -379,7 +379,7 @@ EOF
 # Final setup steps
 echo "🎯 Finalizing setup..."
 sudo systemctl daemon-reload
-sudo systemctl enable ai-trader.service
+sudo systemctl enable ai-trading-bot.service
 
 echo "
 ✅ Production setup complete!
@@ -388,7 +388,7 @@ echo "
 
 1. Create AWS Secrets Manager secret:
    aws secretsmanager create-secret \\
-     --name ai-trader/production \\
+     --name ai-trading-bot/production \\
      --secret-string '{
        \"BINANCE_API_KEY\": \"your-api-key\",
        \"BINANCE_API_SECRET\": \"your-api-secret\",
@@ -409,15 +409,15 @@ echo "
    sudo -u $APP_USER $APP_DIR/venv/bin/python $APP_DIR/scripts/download_binance_data.py
 
 5. Start the service:
-   sudo systemctl start ai-trader
+   sudo systemctl start ai-trading-bot
 
 📊 Monitoring Commands:
-- Status: sudo systemctl status ai-trader
-- Logs: sudo journalctl -u ai-trader -f
+- Status: sudo systemctl status ai-trading-bot
+- Logs: sudo journalctl -u ai-trading-bot -f
 - Metrics: aws cloudwatch get-metric-statistics (or use console)
 
 🛠️ Maintenance:
-- Update code: git pull && sudo systemctl restart ai-trader
-- Force backup: sudo /usr/local/bin/backup-ai-trader.sh
+- Update code: git pull && sudo systemctl restart ai-trading-bot
+- Force backup: sudo /usr/local/bin/backup-ai-trading-bot.sh
 - Check health: sudo -u $APP_USER $APP_DIR/venv/bin/python $APP_DIR/scripts/health_check.py
 " 

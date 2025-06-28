@@ -6,7 +6,7 @@
 exec > >(tee /var/log/user-data.log)
 exec 2>&1
 
-echo "Starting AI Trader instance initialization at $(date)"
+echo "Starting AI Trading Bot instance initialization at $(date)"
 
 # Update system
 apt-get update
@@ -59,7 +59,7 @@ EOF
 sysctl -p
 
 # Create directory for deployment
-mkdir -p /tmp/ai-trader
+mkdir -p /tmp/ai-trading-bot
 
 # Install Python 3.11
 apt-get install -y software-properties-common
@@ -74,5 +74,5 @@ apt-get install -y gcc python3.11-dev
 touch /var/lib/cloud/instance/user-data-finished
 
 echo "User data script completed at $(date)"
-echo "Instance is ready for AI Trader deployment"
+echo "Instance is ready for AI Trading Bot deployment"
 echo "Next step: Copy application files and run setup script" 

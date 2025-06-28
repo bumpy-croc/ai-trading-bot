@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AI-Trader trading bot now includes comprehensive database logging for all trades, positions, and performance metrics. This enables better monitoring, analysis, and dashboard creation as outlined in the Week 1 go-live plan.
+The AI-Trading-Bot trading bot now includes comprehensive database logging for all trades, positions, and performance metrics. This enables better monitoring, analysis, and dashboard creation as outlined in the Week 1 go-live plan.
 
 ## Database Schema
 
@@ -57,7 +57,7 @@ data/trading_bot.db
 For production, use PostgreSQL by setting the `DATABASE_URL` environment variable:
 
 ```bash
-export DATABASE_URL="postgresql://username:password@localhost:5432/ai-trader"
+export DATABASE_URL="postgresql://username:password@localhost:5432/ai-trading-bot"
 ```
 
 Or pass it directly when initializing:
@@ -65,7 +65,7 @@ Or pass it directly when initializing:
 ```python
 from core.database.manager import DatabaseManager
 
-db_manager = DatabaseManager("postgresql://username:password@localhost:5432/ai-trader")
+db_manager = DatabaseManager("postgresql://username:password@localhost:5432/ai-trading-bot")
 ```
 
 ## Usage Examples
@@ -163,7 +163,7 @@ cp data/trading_bot.db data/backup/trading_bot_$(date +%Y%m%d).db
 
 For PostgreSQL:
 ```bash
-pg_dump ai-trader > backup/ai-trader_$(date +%Y%m%d).sql
+pg_dump ai-trading-bot > backup/ai-trading-bot_$(date +%Y%m%d).sql
 ```
 
 ## Viewing Data

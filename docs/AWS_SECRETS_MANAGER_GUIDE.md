@@ -40,7 +40,7 @@ AWS Secrets Manager provides secure storage for your trading bot's sensitive con
 1. Log into [Binance](https://www.binance.com)
 2. Go to **API Management** (Profile → API Management)
 3. Create a new API key:
-   - Label: `ai-trader-staging` (or `ai-trader-production`)
+   - Label: `ai-trading-bot-staging` (or `ai-trading-bot-production`)
    - Enable: **Reading** and **Spot Trading**
    - IP Restrictions: Add your EC2 Elastic IP (recommended)
 4. Save the API Key and Secret securely
@@ -71,7 +71,7 @@ LOG_LEVEL               INFO
 ```
 
 5. Click **Next**
-6. Secret name: `ai-trader/staging`
+6. Secret name: `ai-trading-bot/staging`
 7. Description: `Staging environment secrets for AI Trading Bot`
 8. Configure automatic rotation: **Disable** (we'll rotate manually)
 9. Review and store
@@ -81,7 +81,7 @@ LOG_LEVEL               INFO
 ```bash
 # For staging environment
 aws secretsmanager create-secret \
-  --name ai-trader/staging \
+  --name ai-trading-bot/staging \
   --description "Staging environment secrets for AI Trading Bot" \
   --secret-string '{
     "BINANCE_API_KEY": "your-staging-api-key",
@@ -98,12 +98,12 @@ aws secretsmanager create-secret \
 
 # For production environment
 aws secretsmanager create-secret \
-  --name ai-trader/production \
+  --name ai-trading-bot/production \
   --description "Production environment secrets for AI Trading Bot" \
   --secret-string '{
     "BINANCE_API_KEY": "your-production-api-key",
     "BINANCE_API_SECRET": "your-production-api-secret",
-    "DATABASE_URL": "postgresql://aitrader:password@localhost/aitrader",
+    "DATABASE_URL": "postgresql://aitradingbot:password@localhost/aitradingbot",
     "TRADING_MODE": "live",
     "INITIAL_BALANCE": "10000",
     "LOG_LEVEL": "WARNING",
@@ -130,7 +130,7 @@ Create a policy that allows your EC2 instance to read the secret:
         "secretsmanager:DescribeSecret"
       ],
       "Resource": [
-        "arn:aws:secretsmanager:us-east-1:YOUR-ACCOUNT-ID:secret:ai-trader/*"
+        "arn:aws:secretsmanager:us-east-1:YOUR-ACCOUNT-ID:secret:ai-trading-bot/*"
       ]
     },
     {
@@ -157,13 +157,13 @@ Create a policy that allows your EC2 instance to read the secret:
 ```bash
 # Create the policy
 aws iam create-policy \
-  --policy-name AITraderSecretsAccess \
+  --policy-name AITradingBotSecretsAccess \
   --policy-document file://secrets-policy.json
 
 # Attach to existing role
 aws iam attach-role-policy \
-  --role-name ai-trader-ec2-role \
-  --policy-arn arn:aws:iam::YOUR-ACCOUNT-ID:policy/AITraderSecretsAccess
+  --role-name ai-trading-bot-ec2-role \
+  --policy-arn arn:aws:iam::YOUR-ACCOUNT-ID:policy/AITradingBotSecretsAccess
 ```
 
 ## Step 5: Test Secret Access
@@ -172,10 +172,10 @@ On your EC2 instance, test that you can fetch secrets:
 
 ```bash
 # Test with AWS CLI
-aws secretsmanager get-secret-value --secret-id ai-trader/staging
+aws secretsmanager get-secret-value --secret-id ai-trading-bot/staging
 
 # Test with the Python script
-cd /opt/ai-trader
+cd /opt/ai-trading-bot
 ENVIRONMENT=staging ./venv/bin/python scripts/fetch_secrets.py
 ```
 
@@ -186,7 +186,7 @@ ENVIRONMENT=staging ./venv/bin/python scripts/fetch_secrets.py
 ```bash
 # Update via CLI
 aws secretsmanager update-secret \
-  --secret-id ai-trader/staging \
+  --secret-id ai-trading-bot/staging \
   --secret-string '{
     "BINANCE_API_KEY": "new-api-key",
     "BINANCE_API_SECRET": "new-api-secret",
@@ -195,7 +195,7 @@ aws secretsmanager update-secret \
 
 # Or update specific values
 aws secretsmanager put-secret-value \
-  --secret-id ai-trader/staging \
+  --secret-id ai-trading-bot/staging \
   --secret-string '{"TRADING_MODE": "live"}'
 ```
 
@@ -205,12 +205,12 @@ aws secretsmanager put-secret-value \
 2. Update the secret:
 ```bash
 aws secretsmanager update-secret \
-  --secret-id ai-trader/production \
+  --secret-id ai-trading-bot/production \
   --secret-string '{"BINANCE_API_KEY": "new-key", "BINANCE_API_SECRET": "new-secret"}'
 ```
 3. Restart the trading bot:
 ```bash
-sudo systemctl restart ai-trader
+sudo systemctl restart ai-trading-bot
 ```
 4. Delete old API keys in Binance
 
@@ -218,11 +218,11 @@ sudo systemctl restart ai-trader
 
 ```bash
 # List all versions
-aws secretsmanager list-secret-version-ids --secret-id ai-trader/staging
+aws secretsmanager list-secret-version-ids --secret-id ai-trading-bot/staging
 
 # Get specific version
 aws secretsmanager get-secret-value \
-  --secret-id ai-trader/staging \
+  --secret-id ai-trading-bot/staging \
   --version-id "EXAMPLE-VERSION-ID"
 ```
 
@@ -254,7 +254,7 @@ aws secretsmanager get-secret-value \
 ```bash
 # Alert on failed secret access attempts
 aws cloudwatch put-metric-alarm \
-  --alarm-name ai-trader-secret-access-failures \
+  --alarm-name ai-trading-bot-secret-access-failures \
   --alarm-description "Alert on failed secret access" \
   --metric-name UserErrors \
   --namespace AWS/SecretsManager \
@@ -290,7 +290,7 @@ aws cloudwatch put-metric-alarm \
 aws sts get-caller-identity
 
 # Test secret access
-aws secretsmanager describe-secret --secret-id ai-trader/staging
+aws secretsmanager describe-secret --secret-id ai-trading-bot/staging
 
 # Check instance profile
 curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/
@@ -304,7 +304,7 @@ The trading bot automatically fetches secrets:
 2. **Scheduled Updates**: Cron job refreshes secrets every 12 hours
 3. **Manual Refresh**: Run `fetch_secrets.py` anytime
 
-The secrets are written to `/opt/ai-trader/.env` with secure permissions (600).
+The secrets are written to `/opt/ai-trading-bot/.env` with secure permissions (600).
 
 ## Cost Considerations
 

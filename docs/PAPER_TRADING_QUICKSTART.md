@@ -14,7 +14,7 @@ Even for paper trading, you need Binance API credentials to fetch live market da
 #### Getting Binance API Keys:
 1. Log in to your Binance account
 2. Go to API Management: https://www.binance.com/en/my/settings/api-management
-3. Create a new API key with a label (e.g., "AI-Trader Paper Trading")
+3. Create a new API key with a label (e.g., "AI-Trading-Bot Paper Trading")
 4. **Important Security Settings:**
    - ❌ **Disable** "Enable Spot & Margin Trading" (for safety)
    - ❌ **Disable** "Enable Withdrawals"

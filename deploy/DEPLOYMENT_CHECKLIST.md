@@ -19,18 +19,18 @@
 - [ ] Note instance public IP
 
 ### 3. Deploy Code
-- [ ] SCP files to instance: `scp -r * ubuntu@IP:/tmp/ai-trader/`
+- [ ] SCP files to instance: `scp -r * ubuntu@IP:/tmp/ai-trading-bot/`
 - [ ] SSH to instance: `ssh ubuntu@IP`
 - [ ] Run setup script: `./deploy/aws_setup.sh`
 
 ### 4. Configure
-- [ ] Edit `/opt/ai-trader/.env` with API credentials
+- [ ] Edit `/opt/ai-trading-bot/.env` with API credentials
 - [ ] Download initial data: `python scripts/download_binance_data.py`
 - [ ] Test with paper trading first
 
 ### 5. Start Trading
-- [ ] Start service: `sudo systemctl start ai-trader`
-- [ ] Monitor logs: `sudo journalctl -u ai-trader -f`
+- [ ] Start service: `sudo systemctl start ai-trading-bot`
+- [ ] Monitor logs: `sudo journalctl -u ai-trading-bot -f`
 - [ ] Verify trades in database
 
 ## Production Deployment
@@ -97,8 +97,8 @@
 ## Emergency Procedures
 
 ### If Something Goes Wrong
-1. [ ] Stop service immediately: `sudo systemctl stop ai-trader`
-2. [ ] Check logs: `sudo journalctl -u ai-trader -n 500`
+1. [ ] Stop service immediately: `sudo systemctl stop ai-trading-bot`
+2. [ ] Check logs: `sudo journalctl -u ai-trading-bot -n 500`
 3. [ ] Switch to paper trading in Secrets Manager
 4. [ ] Restore from backup if needed
 
@@ -112,21 +112,21 @@
 
 ```bash
 # Service management
-sudo systemctl status ai-trader
-sudo systemctl start/stop/restart ai-trader
+sudo systemctl status ai-trading-bot
+sudo systemctl start/stop/restart ai-trading-bot
 
 # Logs
-sudo journalctl -u ai-trader -f
-tail -f /opt/ai-trader/logs/trading.log
+sudo journalctl -u ai-trading-bot -f
+tail -f /opt/ai-trading-bot/logs/trading.log
 
 # Database
-sqlite3 /opt/ai-trader/data/trading_bot.db
+sqlite3 /opt/ai-trading-bot/data/trading_bot.db
 
 # Manual backup
-/usr/local/bin/backup-ai-trader.sh
+/usr/local/bin/backup-ai-trading-bot.sh
 
 # Health check
-/opt/ai-trader/venv/bin/python /opt/ai-trader/scripts/health_check.py
+/opt/ai-trading-bot/venv/bin/python /opt/ai-trading-bot/scripts/health_check.py
 ```
 
 ## Contact Information

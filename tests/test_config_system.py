@@ -186,12 +186,12 @@ class TestAWSSecretsProvider:
         # Test with explicit environment
         with patch.dict(os.environ, {'ENVIRONMENT': 'production'}):
             provider = AWSSecretsProvider()
-            assert provider.secret_name == 'ai-trader/production'
+            assert provider.secret_name == 'ai-trading-bot/production'
         
         # Test with staging environment
         with patch.dict(os.environ, {'ENVIRONMENT': 'staging'}):
             provider = AWSSecretsProvider()
-            assert provider.secret_name == 'ai-trader/staging'
+            assert provider.secret_name == 'ai-trading-bot/staging'
         
         # Test default environment (development)
         env_backup = os.environ.get('ENVIRONMENT')
@@ -199,7 +199,7 @@ class TestAWSSecretsProvider:
             del os.environ['ENVIRONMENT']
         try:
             provider = AWSSecretsProvider()
-            assert provider.secret_name == 'ai-trader/development'
+            assert provider.secret_name == 'ai-trading-bot/development'
         finally:
             if env_backup:
                 os.environ['ENVIRONMENT'] = env_backup
