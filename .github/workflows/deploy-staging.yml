@@ -164,87 +164,215 @@ jobs:
         
     - name: Deploy to staging instance
       run: |
-        # Create deployment script
+        # Create deployment script with better error handling
         cat > deploy-script.sh << 'EOF'
         #!/bin/bash
         set -e
         
-        echo "🚀 Starting deployment to staging..."
+        # Function to log with timestamps
+        log() {
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
+        }
+        
+        # Function to handle errors
+        handle_error() {
+            log "❌ Error occurred at line $1"
+            log "📋 Last few lines of system log:"
+            tail -20 /var/log/syslog || true
+            log "📋 Current user and permissions:"
+            whoami
+            id
+            log "📋 Available disk space:"
+            df -h
+            exit 1
+        }
+        
+        trap 'handle_error $LINENO' ERR
+        
+        log "🚀 Starting deployment to staging..."
+        
+        # Check prerequisites
+        log "🔍 Checking prerequisites..."
+        
+        # Check if AWS CLI is available
+        if ! command -v aws &> /dev/null; then
+            log "❌ AWS CLI not found, installing..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install || sudo ./aws/install --update
+        fi
+        
+        # Check AWS credentials
+        log "🔐 Testing AWS credentials..."
+        aws sts get-caller-identity || {
+            log "❌ AWS credentials not configured properly"
+            exit 1
+        }
+        
+        # Check if directories exist and create if needed
+        log "📁 Setting up directories..."
+        sudo mkdir -p /opt/ai-trading-bot
+        sudo mkdir -p /opt/ai-trading-bot/data
+        sudo mkdir -p /opt/ai-trading-bot/logs
         
         # Download deployment package from S3
+        log "📥 Downloading deployment package..."
         cd /tmp
-        aws s3 cp s3://${{ env.S3_BUCKET }}/deployments/staging/ai-trading-bot-${{ github.sha }}.tar.gz .
+        aws s3 cp s3://${{ env.S3_BUCKET }}/deployments/staging/ai-trading-bot-${{ github.sha }}.tar.gz . || {
+            log "❌ Failed to download deployment package from S3"
+            log "📋 S3 bucket contents:"
+            aws s3 ls s3://${{ env.S3_BUCKET }}/deployments/staging/ || true
+            exit 1
+        }
         
         # Stop the current service
-        echo "⏹️ Stopping current service..."
-        sudo systemctl stop ai-trading-bot || true
+        log "⏹️ Stopping current service..."
+        sudo systemctl stop ai-trading-bot || {
+            log "⚠️ Service was not running or failed to stop"
+        }
         
         # Backup current deployment
-        echo "💾 Creating backup..."
-        sudo tar -czf /opt/ai-trading-bot-backup-$(date +%Y%m%d_%H%M%S).tar.gz -C /opt/ai-trading-bot . || true
+        log "💾 Creating backup..."
+        if [ -d "/opt/ai-trading-bot" ] && [ "$(ls -A /opt/ai-trading-bot)" ]; then
+            sudo tar -czf /opt/ai-trading-bot-backup-$(date +%Y%m%d_%H%M%S).tar.gz -C /opt/ai-trading-bot . || {
+                log "⚠️ Backup failed, but continuing..."
+            }
+        else
+            log "ℹ️ No existing deployment to backup"
+        fi
         
         # Extract new deployment
-        echo "📦 Extracting new deployment..."
+        log "📦 Extracting new deployment..."
         sudo rm -rf /tmp/ai-trading-bot-new
         mkdir -p /tmp/ai-trading-bot-new
-        tar -xzf ai-trading-bot-${{ github.sha }}.tar.gz -C /tmp/ai-trading-bot-new
+        tar -xzf ai-trading-bot-${{ github.sha }}.tar.gz -C /tmp/ai-trading-bot-new || {
+            log "❌ Failed to extract deployment package"
+            exit 1
+        }
         
         # Preserve data and logs
-        echo "🔄 Preserving data and logs..."
+        log "🔄 Preserving data and logs..."
         mkdir -p /tmp/ai-trading-bot-preserve
-        sudo cp -r /opt/ai-trading-bot/data /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No data directory to preserve"
-        sudo cp -r /opt/ai-trading-bot/logs /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No logs directory to preserve"
-        sudo cp /opt/ai-trading-bot/.env /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No .env file to preserve"
+        sudo cp -r /opt/ai-trading-bot/data /tmp/ai-trading-bot-preserve/ 2>/dev/null || log "ℹ️ No data directory to preserve"
+        sudo cp -r /opt/ai-trading-bot/logs /tmp/ai-trading-bot-preserve/ 2>/dev/null || log "ℹ️ No logs directory to preserve"
+        sudo cp /opt/ai-trading-bot/.env /tmp/ai-trading-bot-preserve/ 2>/dev/null || log "ℹ️ No .env file to preserve"
         
         # Replace application files
-        echo "🔄 Updating application files..."
+        log "🔄 Updating application files..."
         sudo rm -rf /opt/ai-trading-bot/*
         sudo cp -r /tmp/ai-trading-bot-new/* /opt/ai-trading-bot/
         
         # Restore preserved data
-        sudo cp -r /tmp/ai-trading-bot-preserve/data /opt/ai-trading-bot/ 2>/dev/null || echo "No data to restore"
-        sudo cp -r /tmp/ai-trading-bot-preserve/logs /opt/ai-trading-bot/ 2>/dev/null || echo "No logs to restore"
-        sudo cp /tmp/ai-trading-bot-preserve/.env /opt/ai-trading-bot/ 2>/dev/null || echo "No .env to restore"
+        sudo cp -r /tmp/ai-trading-bot-preserve/data /opt/ai-trading-bot/ 2>/dev/null || log "ℹ️ No data to restore"
+        sudo cp -r /tmp/ai-trading-bot-preserve/logs /opt/ai-trading-bot/ 2>/dev/null || log "ℹ️ No logs to restore"
+        sudo cp /tmp/ai-trading-bot-preserve/.env /opt/ai-trading-bot/ 2>/dev/null || log "ℹ️ No .env to restore"
         
         # Set permissions
+        log "🔧 Setting permissions..."
         sudo chown -R ubuntu:ubuntu /opt/ai-trading-bot
         
-        # Update Python dependencies
-        echo "📚 Updating dependencies..."
+        # Set up Python virtual environment if it doesn't exist
+        log "🐍 Setting up Python environment..."
         cd /opt/ai-trading-bot
-        sudo -u ubuntu ./venv/bin/pip install -r requirements.txt
+        if [ ! -d "venv" ]; then
+            log "📚 Creating new virtual environment..."
+            sudo -u ubuntu python3 -m venv venv
+        fi
+        
+        # Update Python dependencies
+        log "📚 Updating dependencies..."
+        sudo -u ubuntu ./venv/bin/pip install --upgrade pip
+        sudo -u ubuntu ./venv/bin/pip install -r requirements.txt || {
+            log "❌ Failed to install Python dependencies"
+            log "📋 Requirements file content:"
+            head -20 requirements.txt || true
+            exit 1
+        }
+        
+        # Create systemd service file if it doesn't exist
+        log "⚙️ Setting up systemd service..."
+        sudo tee /etc/systemd/system/ai-trading-bot.service > /dev/null << 'SYSTEMD_EOF'
+[Unit]
+Description=AI Trading Bot (STAGING)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/ai-trading-bot
+Environment="PATH=/opt/ai-trading-bot/venv/bin"
+Environment="ENVIRONMENT=staging"
+
+# Test configuration before starting
+ExecStartPre=/opt/ai-trading-bot/venv/bin/python /opt/ai-trading-bot/scripts/test_secrets_access.py
+
+# Start with a simple strategy for staging
+ExecStart=/opt/ai-trading-bot/venv/bin/python run_live_trading.py adaptive
+
+# Restart configuration
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitInterval=300
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD_EOF
         
         # Test configuration access
-        echo "🔐 Testing configuration access..."
-        sudo -u ubuntu ENVIRONMENT=staging ./venv/bin/python scripts/test_secrets_access.py
+        log "🔐 Testing configuration access..."
+        sudo -u ubuntu ENVIRONMENT=staging ./venv/bin/python scripts/test_secrets_access.py || {
+            log "❌ Configuration access test failed"
+            log "📋 Available environment variables:"
+            env | grep -E "(AWS|ENVIRONMENT)" || true
+            log "📋 Script exists check:"
+            ls -la scripts/test_secrets_access.py || true
+            exit 1
+        }
         
-        # Update data cache
-        echo "📊 Updating data cache..."
-        sudo -u ubuntu ./venv/bin/python scripts/download_binance_data.py || true
+        # Update data cache (non-critical)
+        log "📊 Updating data cache..."
+        sudo -u ubuntu ./venv/bin/python scripts/download_binance_data.py || {
+            log "⚠️ Data cache update failed, but continuing..."
+        }
         
         # Restart service
-        echo "🎯 Starting service..."
+        log "🎯 Starting service..."
         sudo systemctl daemon-reload
+        sudo systemctl enable ai-trading-bot
         sudo systemctl start ai-trading-bot
         
         # Wait for service to be ready
-        echo "⏳ Waiting for service to start..."
-        sleep 10
+        log "⏳ Waiting for service to start..."
+        sleep 15
         
-        # Check service status
+        # Check service status with more detailed output
+        log "🔍 Checking service status..."
         if sudo systemctl is-active --quiet ai-trading-bot; then
-          echo "✅ Deployment successful! Service is running."
+            log "✅ Deployment successful! Service is running."
+            log "📊 Service status:"
+            sudo systemctl status ai-trading-bot --no-pager --lines=5
         else
-          echo "❌ Deployment failed! Service is not running."
-          sudo journalctl -u ai-trading-bot -n 20
-          exit 1
+            log "❌ Deployment failed! Service is not running."
+            log "📋 Service status:"
+            sudo systemctl status ai-trading-bot --no-pager --lines=10 || true
+            log "📋 Recent service logs:"
+            sudo journalctl -u ai-trading-bot -n 20 --no-pager || true
+            log "📋 System logs:"
+            sudo journalctl -n 10 --no-pager || true
+            exit 1
         fi
         
         # Cleanup
+        log "🧹 Cleaning up..."
         rm -rf /tmp/ai-trading-bot-new /tmp/ai-trading-bot-preserve
         rm /tmp/ai-trading-bot-${{ github.sha }}.tar.gz
         
-        echo "🎉 Staging deployment completed successfully!"
+        log "🎉 Staging deployment completed successfully!"
         EOF
         
         # Execute deployment via AWS Systems Manager (more secure than SSH)
@@ -263,7 +391,30 @@ jobs:
         timeout 1200 aws ssm wait command-executed \
           --command-id $COMMAND_ID \
           --instance-id ${{ steps.find-instance.outputs.instance-id }} || {
-          echo "❌ Deployment timed out after 20 minutes"
+          echo "❌ Deployment command failed or timed out"
+          
+          # Get command status and output for debugging
+          echo "📋 Command status:"
+          aws ssm get-command-invocation \
+            --command-id $COMMAND_ID \
+            --instance-id ${{ steps.find-instance.outputs.instance-id }} \
+            --query 'Status' \
+            --output text || echo "Could not get command status"
+            
+          echo "📋 Standard output:"
+          aws ssm get-command-invocation \
+            --command-id $COMMAND_ID \
+            --instance-id ${{ steps.find-instance.outputs.instance-id }} \
+            --query 'StandardOutputContent' \
+            --output text || echo "Could not get standard output"
+            
+          echo "📋 Error output:"
+          aws ssm get-command-invocation \
+            --command-id $COMMAND_ID \
+            --instance-id ${{ steps.find-instance.outputs.instance-id }} \
+            --query 'StandardErrorContent' \
+            --output text || echo "Could not get error output"
+            
           exit 1
         }
           
