@@ -237,128 +237,11 @@ jobs:
       run: |
         COMMIT_SHA="${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}"
         
-        # Create production deployment script
-        cat > deploy-production-script.sh << 'EOF'
-        #!/bin/bash
-        set -e
-        
-        echo "🚀 Starting PRODUCTION deployment..."
-        echo "⚠️  This is a PRODUCTION deployment - proceeding with extra caution"
-        
-        COMMIT_SHA="$1"
-        
-        # Download deployment package from S3
-        cd /tmp
-        aws s3 cp s3://${{ env.S3_BUCKET }}/deployments/production/ai-trading-bot-${COMMIT_SHA}.tar.gz .
-        
-        # Stop the current service gracefully
-        echo "⏹️ Gracefully stopping production service..."
-        sudo systemctl stop ai-trading-bot || true
-        sleep 5  # Give it time to stop gracefully
-        
-        # Extract new deployment
-        echo "📦 Extracting new deployment..."
-        sudo rm -rf /tmp/ai-trading-bot-new
-        mkdir -p /tmp/ai-trading-bot-new
-        tar -xzf ai-trading-bot-${COMMIT_SHA}.tar.gz -C /tmp/ai-trading-bot-new
-        
-        # Preserve production data and logs
-        echo "🔄 Preserving production data and logs..."
-        mkdir -p /tmp/ai-trading-bot-preserve
-        sudo cp -r /opt/ai-trading-bot/data /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No data directory to preserve"
-        sudo cp -r /opt/ai-trading-bot/logs /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No logs directory to preserve"
-        
-        # Replace application files
-        echo "🔄 Updating application files..."
-        sudo rm -rf /opt/ai-trading-bot/*
-        sudo cp -r /tmp/ai-trading-bot-new/* /opt/ai-trading-bot/
-        
-        # Restore preserved data
-        sudo cp -r /tmp/ai-trading-bot-preserve/data /opt/ai-trading-bot/ 2>/dev/null || echo "No data to restore"
-        sudo cp -r /tmp/ai-trading-bot-preserve/logs /opt/ai-trading-bot/ 2>/dev/null || echo "No logs to restore"
-        
-        # Set permissions
-        sudo chown -R ubuntu:ubuntu /opt/ai-trading-bot
-        
-        # Update Python dependencies
-        echo "📚 Updating dependencies..."
-        cd /opt/ai-trading-bot
-        sudo -u ubuntu ./venv/bin/pip install -r requirements.txt
-        
-        # Test configuration access (CRITICAL for production)
-        echo "🔐 Testing production configuration access..."
-        sudo -u ubuntu ENVIRONMENT=production ./venv/bin/python scripts/test_secrets_access.py
-        
-        # Update systemd service for production
-        echo "⚙️ Updating systemd service for production..."
-        sudo tee /etc/systemd/system/ai-trading-bot.service > /dev/null << 'SYSTEMD_EOF'
-[Unit]
-Description=AI Trading Bot (PRODUCTION)
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/opt/ai-trading-bot
-Environment="PATH=/opt/ai-trading-bot/venv/bin"
-Environment="ENVIRONMENT=production"
-
-# Test configuration before starting
-ExecStartPre=/opt/ai-trading-bot/venv/bin/python /opt/ai-trading-bot/scripts/test_secrets_access.py
-
-# Start the bot in LIVE TRADING mode
-ExecStart=/opt/ai-trading-bot/venv/bin/python run_live_trading.py adaptive
-
-# Restart configuration (more conservative for production)
-Restart=on-failure
-RestartSec=30
-StartLimitBurst=3
-StartLimitInterval=300
-
-# Security settings
-PrivateTmp=true
-NoNewPrivileges=true
-ReadOnlyPaths=/
-ReadWritePaths=/opt/ai-trading-bot/data /opt/ai-trading-bot/logs
-
-[Install]
-WantedBy=multi-user.target
-SYSTEMD_EOF
-        
-        # Reload and start service
-        echo "🎯 Starting production service..."
-        sudo systemctl daemon-reload
-        sudo systemctl start ai-trading-bot
-        
-        # Wait longer for production service to start
-        echo "⏳ Waiting for production service to start..."
-        sleep 30
-        
-        # Verify service is running
-        if sudo systemctl is-active --quiet ai-trading-bot; then
-          echo "✅ PRODUCTION deployment successful! Service is running."
-          echo "📊 Service status:"
-          sudo systemctl status ai-trading-bot --no-pager
-        else
-          echo "❌ PRODUCTION deployment failed! Service is not running."
-          echo "📋 Service logs:"
-          sudo journalctl -u ai-trading-bot -n 20 --no-pager
-          exit 1
-        fi
-        
-        # Cleanup
-        rm -rf /tmp/ai-trading-bot-new /tmp/ai-trading-bot-preserve
-        rm /tmp/ai-trading-bot-${COMMIT_SHA}.tar.gz
-        
-        echo "🎉 PRODUCTION deployment completed successfully!"
-        echo "⚠️  Monitor the service closely for the next hour"
-        EOF
-        
-        # Execute production deployment
+        # Execute production deployment via AWS Systems Manager
         aws ssm send-command \
           --instance-ids ${{ steps.find-production.outputs.instance-id }} \
           --document-name "AWS-RunShellScript" \
-          --parameters "commands=[\"bash /dev/stdin $COMMIT_SHA << 'EOF'\",\"$(cat deploy-production-script.sh)\",\"EOF\"]" \
+          --parameters "commands=[\"curl -sL https://raw.githubusercontent.com/alexflorisca/ai-trading-bot/${COMMIT_SHA}/bin/deploy-production.sh | bash -s -- ${COMMIT_SHA} ${{ env.S3_BUCKET }}\"]" \
           --output text \
           --query 'Command.CommandId' > production-command-id.txt
           
@@ -399,7 +282,7 @@ SYSTEMD_EOF
             --output text
           exit 1
         fi
-        
+
     - name: Post-deployment verification
       run: |
         echo "🔍 Performing post-deployment verification..."
@@ -497,4 +380,3 @@ SYSTEMD_EOF
           echo "❌ Production promotion failed!"
           echo "🔧 Check the logs and consider rollback if necessary"
         fi
-``` 

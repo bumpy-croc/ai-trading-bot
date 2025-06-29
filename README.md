@@ -151,71 +151,30 @@ python scripts/cache_manager.py clear-old --hours 48
 
 Cache files are stored in `data/cache/` directory as pickle files. Each file contains a pandas DataFrame with OHLCV data for a specific request.
 
-## 🚀 AWS Deployment & GitHub Actions CI/CD
+## 🚀 Deployment
 
-The trading bot is designed for easy deployment to AWS EC2 with automated CI/CD via GitHub Actions. We provide comprehensive deployment scripts and documentation:
+### Current Status
+- **Tests**: Currently skipped in CI/CD pipeline (temporary)
+- **Staging**: Auto-deploys from `main` branch to AWS EC2
+- **Production**: Manual promotion from staging with approval gates
 
-### Quick Start
-```bash
-# Basic deployment for development/testing
-./deploy/aws_setup.sh
+### GitHub Actions Workflows
 
-# Staging deployment with AWS Secrets Manager
-./deploy/aws_setup_staging.sh
+The deployment process uses clean, external bash scripts located in the `bin/` directory:
 
-# Production deployment with enhanced security and monitoring
-./deploy/aws_setup_production.sh
-```
+- **Staging Workflow**: `.github/workflows/deploy-staging.yml`
+  - Triggers on pushes to `main` branch
+  - Uses `bin/deploy-staging.sh` for deployment logic
+  - Provides detailed error reporting and diagnostics
 
-### 🔄 Automated Deployments with GitHub Actions
+- **Production Workflow**: `.github/workflows/promote-to-production.yml`
+  - Manual trigger only with approval gates
+  - Uses `bin/deploy-production.sh` with enhanced security
+  - Validates staging environment before promotion
 
-**NEW**: Automatic deployment to staging environment on every push to `main` branch!
+### Deployment Scripts
 
-#### Setup GitHub Actions Deployment
-```bash
-# 1. Set up AWS infrastructure for GitHub Actions
-./scripts/setup_github_actions_deployment.sh
-
-# 2. Validate your setup
-./scripts/validate_github_actions_setup.sh
-
-# 3. Add GitHub repository secrets (shown after running setup script)
-# 4. Push to main branch to trigger deployment
-```
-
-#### Key Features
-- **Automatic Testing**: Runs full test suite before deployment
-- **Secure Deployment**: Uses AWS Systems Manager (no SSH required)
-- **Zero-Downtime**: Preserves data and logs during updates
-- **Rollback Support**: Automatic backups before each deployment
-- **Status Notifications**: Slack integration for deployment status
-- **Environment Management**: Separate staging and production environments
-
-#### Deployment Workflow
-1. **Test Phase**: Runs `python test_runner.py`
-2. **Build Phase**: Creates clean deployment package
-3. **Deploy Phase**: Securely deploys to AWS EC2 via Systems Manager
-4. **Verify Phase**: Confirms service is running correctly
-5. **Notify Phase**: Sends status updates via Slack/GitHub
-
-### Manual Deployment Features
-- **Automated Setup**: Scripts handle all dependencies and configuration
-- **Security First**: AWS Secrets Manager integration, IAM roles, fail2ban
-- **Monitoring**: CloudWatch integration with custom dashboards
-- **Backups**: Automated S3 backups with retention policies
-- **Health Checks**: Automatic recovery from failures
-- **Cost Optimized**: Guidance on instance selection and resource usage
-
-### Documentation
-- **[GitHub Actions Deployment Guide](./docs/GITHUB_ACTIONS_DEPLOYMENT.md)** - Complete CI/CD setup guide
-- [Complete AWS Deployment Guide](./docs/AWS_DEPLOYMENT_GUIDE.md) - Detailed instructions with best practices
-- [Deployment Checklist](./deploy/DEPLOYMENT_CHECKLIST.md) - Step-by-step checklist
-- [Production Setup Script](./deploy/aws_setup_production.sh) - Enhanced security and monitoring
-
-### Instance Recommendations
-- **Development**: t3.micro (free tier eligible)
-- **Testing/Staging**: t3.small (~$15/month)
-- **Production**: t3.medium (~$30/month)
+See [`bin/README.md`](bin/README.md) for detailed information about the deployment scripts.
 
 ## Disclaimer
 
