@@ -160,20 +160,15 @@ jobs:
         # Upload deployment package to S3 for secure transfer
         aws s3 cp ai-trading-bot-staging.tar.gz \
           s3://${{ env.S3_BUCKET }}/deployments/staging/ai-trading-bot-${{ github.sha }}.tar.gz
-        
-        # Upload deployment script to S3 as well
-        aws s3 cp bin/deploy-staging.sh \
-          s3://${{ env.S3_BUCKET }}/scripts/deploy-staging-${{ github.sha }}.sh
-        
-        echo "✅ Deployment package and script uploaded to S3"
+        echo "✅ Deployment package uploaded to S3"
         
     - name: Deploy to staging instance
       run: |
-        # Execute deployment via AWS Systems Manager
+        # Execute deployment via AWS Systems Manager using script from deployment package
         aws ssm send-command \
           --instance-ids ${{ steps.find-instance.outputs.instance-id }} \
           --document-name "AWS-RunShellScript" \
-          --parameters "commands=[\"aws s3 cp s3://${{ env.S3_BUCKET }}/scripts/deploy-staging-${{ github.sha }}.sh /tmp/deploy.sh && chmod +x /tmp/deploy.sh && /tmp/deploy.sh ${{ github.sha }} ${{ env.S3_BUCKET }}\"]" \
+          --parameters "commands=[\"cd /tmp && aws s3 cp s3://${{ env.S3_BUCKET }}/deployments/staging/ai-trading-bot-${{ github.sha }}.tar.gz . && tar -xzf ai-trading-bot-${{ github.sha }}.tar.gz && chmod +x bin/deploy-staging.sh && ./bin/deploy-staging.sh ${{ github.sha }} ${{ env.S3_BUCKET }}\"]" \
           --output text \
           --query 'Command.CommandId' > command-id.txt
           
@@ -282,13 +277,6 @@ jobs:
           aws s3 cp - s3://${{ env.S3_BUCKET }}/deployments/staging/latest-deployment.json
         
         echo "✅ Deployment status recorded"
-
-    - name: Cleanup temporary files
-      if: always()
-      run: |
-        # Clean up temporary script from S3
-        aws s3 rm s3://${{ env.S3_BUCKET }}/scripts/deploy-staging-${{ github.sha }}.sh || echo "Script already cleaned up"
-        echo "🧹 Temporary files cleaned up"
 
     - name: Create GitHub deployment status
       if: always()

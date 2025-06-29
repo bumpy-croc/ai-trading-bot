@@ -180,11 +180,7 @@ jobs:
         aws s3 cp ai-trading-bot-production.tar.gz \
           s3://${{ env.S3_BUCKET }}/deployments/production/ai-trading-bot-${COMMIT_SHA}.tar.gz
         
-        # Upload deployment script to S3 as well
-        aws s3 cp bin/deploy-production.sh \
-          s3://${{ env.S3_BUCKET }}/scripts/deploy-production-${COMMIT_SHA}.sh
-        
-        echo "✅ Production deployment package and script uploaded"
+        echo "✅ Production deployment package uploaded"
 
   deploy-production:
     name: Deploy to Production
@@ -242,11 +238,11 @@ jobs:
       run: |
         COMMIT_SHA="${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}"
         
-        # Execute production deployment via AWS Systems Manager
+        # Execute production deployment via AWS Systems Manager using script from deployment package
         aws ssm send-command \
           --instance-ids ${{ steps.find-production.outputs.instance-id }} \
           --document-name "AWS-RunShellScript" \
-          --parameters "commands=[\"aws s3 cp s3://${{ env.S3_BUCKET }}/scripts/deploy-production-${COMMIT_SHA}.sh /tmp/deploy.sh && chmod +x /tmp/deploy.sh && /tmp/deploy.sh ${COMMIT_SHA} ${{ env.S3_BUCKET }}\"]" \
+          --parameters "commands=[\"cd /tmp && aws s3 cp s3://${{ env.S3_BUCKET }}/deployments/production/ai-trading-bot-${COMMIT_SHA}.tar.gz . && tar -xzf ai-trading-bot-${COMMIT_SHA}.tar.gz && chmod +x bin/deploy-production.sh && ./bin/deploy-production.sh ${COMMIT_SHA} ${{ env.S3_BUCKET }}\"]" \
           --output text \
           --query 'Command.CommandId' > production-command-id.txt
           
@@ -332,14 +328,6 @@ jobs:
           aws s3 cp - s3://${{ env.S3_BUCKET }}/deployments/production/latest-deployment.json
         
         echo "✅ Production deployment status recorded"
-
-    - name: Cleanup temporary files
-      if: always()
-      run: |
-        COMMIT_SHA="${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}"
-        # Clean up temporary script from S3
-        aws s3 rm s3://${{ env.S3_BUCKET }}/scripts/deploy-production-${COMMIT_SHA}.sh || echo "Script already cleaned up"
-        echo "🧹 Temporary files cleaned up"
 
     - name: Create GitHub deployment status
       if: always()
