@@ -37,12 +37,18 @@ log "📋 S3 Bucket: $S3_BUCKET"
 # Check prerequisites
 log "🔍 Checking prerequisites..."
 
+# Update package list and install required packages
+log "📦 Installing system dependencies..."
+sudo apt-get update -qq
+sudo apt-get install -y python3-venv python3-pip unzip curl
+
 # Check if AWS CLI is available
 if ! command -v aws &> /dev/null; then
     log "❌ AWS CLI not found, installing..."
     curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
     unzip awscliv2.zip
     sudo ./aws/install || sudo ./aws/install --update
+    rm -rf aws awscliv2.zip
 fi
 
 # Check AWS credentials
@@ -117,19 +123,44 @@ sudo chown -R ubuntu:ubuntu /opt/ai-trading-bot
 # Set up Python virtual environment if it doesn't exist
 log "🐍 Setting up Python environment..."
 cd /opt/ai-trading-bot
+
 if [ ! -d "venv" ]; then
     log "📚 Creating new virtual environment..."
+    sudo -u ubuntu python3 -m venv venv || {
+        log "❌ Failed to create virtual environment, trying alternative method..."
+        sudo -u ubuntu python3 -m pip install --user virtualenv
+        sudo -u ubuntu python3 -m virtualenv venv
+    }
+else
+    log "ℹ️ Virtual environment already exists"
+fi
+
+# Ensure venv activation works
+if [ ! -f "venv/bin/activate" ]; then
+    log "❌ Virtual environment is corrupted, recreating..."
+    sudo rm -rf venv
     sudo -u ubuntu python3 -m venv venv
 fi
 
 # Update Python dependencies
 log "📚 Updating dependencies..."
-sudo -u ubuntu ./venv/bin/pip install --upgrade pip
+sudo -u ubuntu ./venv/bin/pip install --upgrade pip || {
+    log "❌ Failed to upgrade pip, trying with python -m pip..."
+    sudo -u ubuntu ./venv/bin/python -m pip install --upgrade pip
+}
+
 sudo -u ubuntu ./venv/bin/pip install -r requirements.txt || {
-    log "❌ Failed to install Python dependencies"
-    log "📋 Requirements file content:"
-    head -20 requirements.txt || true
-    exit 1
+    log "❌ Failed to install Python dependencies with pip, trying with python -m pip..."
+    sudo -u ubuntu ./venv/bin/python -m pip install -r requirements.txt || {
+        log "❌ Failed to install Python dependencies"
+        log "📋 Requirements file content:"
+        head -20 requirements.txt || true
+        log "📋 Python version:"
+        sudo -u ubuntu ./venv/bin/python --version || true
+        log "📋 Pip version:"
+        sudo -u ubuntu ./venv/bin/pip --version || true
+        exit 1
+    }
 }
 
 # Create systemd service file
