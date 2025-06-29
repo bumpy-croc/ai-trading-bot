@@ -13,48 +13,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class AdaptiveStrategy(BaseStrategy):
-    def __init__(self, name="AdaptiveStrategy"):
+    def __init__(self, name="AdaptiveStrategy", **config):
         super().__init__(name)
         
         # Set strategy-specific trading pair
         self.trading_pair = 'BTCUSDT'
         
         # Dynamic Risk Management - More adaptive
-        self.base_risk_per_trade = 0.015   # Increased from 1% to 1.5%
-        self.max_risk_per_trade = 0.025    # Increased from 2% to 2.5%
-        self.position_size_atr_multiplier = 1.0  # More aggressive position sizing
-        self.max_position_size = 0.30      # Increased from 25% to 30%
-        self.max_daily_risk = 0.06         # Increased from 5% to 6%
+        self.base_risk_per_trade = config.get('base_risk_per_trade', 0.015)   # Increased from 1% to 1.5%
+        self.max_risk_per_trade = config.get('max_risk_per_trade', 0.025)    # Increased from 2% to 2.5%
+        self.position_size_atr_multiplier = config.get('position_size_atr_multiplier', 1.0)  # More aggressive position sizing
+        self.max_position_size = config.get('max_position_size', 0.30)      # Increased from 25% to 30%
+        self.max_daily_risk = config.get('max_daily_risk', 0.06)         # Increased from 5% to 6%
         
         # Adaptive Stop Loss and Take Profit - More dynamic
-        self.base_stop_loss_atr = 2.0     # Increased from 1.5 to 2.0
-        self.min_stop_loss_pct = 0.012    # Increased from 0.8% to 1.2%
-        self.max_stop_loss_pct = 0.03     # Increased from 2.5% to 3%
-        self.take_profit_levels = [        # Optimized take profit levels
+        self.base_stop_loss_atr = config.get('base_stop_loss_atr', 2.0)     # Increased from 1.5 to 2.0
+        self.min_stop_loss_pct = config.get('min_stop_loss_pct', 0.012)    # Increased from 0.8% to 1.2%
+        self.max_stop_loss_pct = config.get('max_stop_loss_pct', 0.03)     # Increased from 2.5% to 3%
+        self.take_profit_levels = config.get('take_profit_levels', [        # Optimized take profit levels
             {'size': 0.3, 'target': 2.0},  # Exit 30% at 2.0x stop distance
             {'size': 0.4, 'target': 3.0},  # Exit 40% at 3.0x stop distance
             {'size': 0.3, 'target': 5.0}   # Exit 30% at 5.0x stop distance
-        ]
+        ])
         
         # Market Regime Detection - More sensitive
-        self.volatility_lookback = 15      # Reduced from 20 to be more responsive
-        self.trend_lookback = 40           # Reduced from 50 to be more responsive
-        self.regime_threshold = 0.012      # Reduced from 0.015 for earlier trend detection
+        self.volatility_lookback = config.get('volatility_lookback', 15)      # Reduced from 20 to be more responsive
+        self.trend_lookback = config.get('trend_lookback', 40)           # Reduced from 50 to be more responsive
+        self.regime_threshold = config.get('regime_threshold', 0.012)      # Reduced from 0.015 for earlier trend detection
         
         # Technical Indicators - Optimized periods
-        self.fast_ma = 8                   # Reduced from 10 for faster signals
-        self.slow_ma = 21                  # Kept at 21 for stability
-        self.long_ma = 50                  # Kept at 50 for trend confirmation
-        self.rsi_period = 14
-        self.rsi_thresholds = {
+        self.fast_ma = config.get('fast_ma', 8)                   # Reduced from 10 for faster signals
+        self.slow_ma = config.get('slow_ma', 21)                  # Kept at 21 for stability
+        self.long_ma = config.get('long_ma', 50)                  # Kept at 50 for trend confirmation
+        self.rsi_period = config.get('rsi_period', 14)
+        self.rsi_thresholds = config.get('rsi_thresholds', {
             'low_vol': {'oversold': 40, 'overbought': 60},  # More lenient
             'high_vol': {'oversold': 30, 'overbought': 70}  # More lenient
-        }
-        self.volume_ma_period = 20
-        self.min_volume_multiplier = 1.1   # Reduced from 1.2 for more trade opportunities
+        })
+        self.volume_ma_period = config.get('volume_ma_period', 20)
+        self.min_volume_multiplier = config.get('min_volume_multiplier', 1.1)   # Reduced from 1.2 for more trade opportunities
         
         # Machine Learning Features
-        self.feature_periods = [5, 10, 20]
+        self.feature_periods = config.get('feature_periods', [5, 10, 20])
         self.scaler = StandardScaler()
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -102,8 +102,15 @@ class AdaptiveStrategy(BaseStrategy):
         high_close = np.abs(df['high'] - df['close'].shift())
         low_close = np.abs(df['low'] - df['close'].shift())
         ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        return true_range.rolling(window=period).mean()
+        true_range = ranges.max(axis=1)
+        atr = true_range.rolling(window=period).mean()
+        
+        # Only fill NaN values where we have insufficient data but still want reasonable defaults
+        # Keep the initial NaN values from rolling calculation, but handle edge cases
+        mask = atr.isna() & (df.index >= df.index[period-1])  # Only fill after warmup period
+        atr.loc[mask] = df.loc[mask, 'close'] * 0.01  # Use 1% of close price as fallback
+        
+        return atr
 
     def calculate_trend_strength(self, df: pd.DataFrame) -> pd.Series:
         """Calculate trend strength using multiple timeframes"""
@@ -181,6 +188,10 @@ class AdaptiveStrategy(BaseStrategy):
         volume_ma = df['volume_ma'].iloc[index]
         trend_strength = df['trend_strength'].iloc[index]
         
+        # Check for NaN values
+        if pd.isna(regime) or pd.isna(rsi) or pd.isna(volume) or pd.isna(volume_ma) or pd.isna(trend_strength):
+            return False
+        
         # Get RSI thresholds based on volatility
         rsi_thresholds = (
             self.rsi_thresholds['high_vol'] 
@@ -206,14 +217,21 @@ class AdaptiveStrategy(BaseStrategy):
         slow_ma = df[f'ma_{self.slow_ma}'].iloc[index]
         prev_fast_ma = df[f'ma_{self.fast_ma}'].iloc[index-1]
         prev_slow_ma = df[f'ma_{self.slow_ma}'].iloc[index-1]
+        
+        # Check for NaN values in moving averages
+        if pd.isna(fast_ma) or pd.isna(slow_ma) or pd.isna(prev_fast_ma) or pd.isna(prev_slow_ma):
+            return False
+            
         ma_crossover = (prev_fast_ma < prev_slow_ma) and (fast_ma > slow_ma)
         
         # Combined entry conditions based on regime
-        return (
-            trend_conditions.get(regime, False) and
-            volume_condition and
-            (rsi_condition or ma_crossover)
-        )
+        trend_ok = trend_conditions.get(regime, False)
+        
+        # Return True if all conditions are met
+        if trend_ok and volume_condition and (rsi_condition or ma_crossover):
+            return True
+        else:
+            return False
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Check if exit conditions are met at the given index"""

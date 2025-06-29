@@ -86,8 +86,17 @@ class LiveTradingEngine:
         log_trades: bool = True,
         alert_webhook_url: Optional[str] = None,
         enable_hot_swapping: bool = True,  # Enable strategy hot-swapping
-        database_url: Optional[str] = None  # Database connection URL
+        database_url: Optional[str] = None,  # Database connection URL
+        max_consecutive_errors: int = 10  # Maximum consecutive errors before shutdown
     ):
+        # Validate inputs
+        if initial_balance <= 0:
+            raise ValueError("Initial balance must be positive")
+        if max_position_size <= 0 or max_position_size > 1:
+            raise ValueError("Max position size must be between 0 and 1")
+        if check_interval <= 0:
+            raise ValueError("Check interval must be positive")
+            
         self.strategy = strategy
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
@@ -130,7 +139,7 @@ class LiveTradingEngine:
         
         # Error handling
         self.consecutive_errors = 0
-        self.max_consecutive_errors = 10
+        self.max_consecutive_errors = max_consecutive_errors
         self.error_cooldown = 300  # 5 minutes
         
         # Threading
@@ -196,7 +205,13 @@ class LiveTradingEngine:
         if self.positions:
             logger.info(f"Closing {len(self.positions)} open positions...")
             for position in list(self.positions.values()):
-                self._close_position(position, "Engine shutdown")
+                try:
+                    self._close_position(position, "Engine shutdown")
+                except Exception as e:
+                    logger.error(f"Failed to close position {position.order_id}: {e}")
+                    # Force remove from positions dict if close fails
+                    if position.order_id in self.positions:
+                        del self.positions[position.order_id]
         
         # Wait for main thread to finish
         if self.main_thread and self.main_thread.is_alive():
@@ -472,12 +487,18 @@ class LiveTradingEngine:
         """Close an existing position"""
         try:
             # Get current price for closing
-            current_data = self.data_provider.get_live_data(position.symbol, "1h", limit=1)
-            if current_data.empty:
-                logger.error("Cannot get current price for position close")
-                return
-                
-            exit_price = current_data.iloc[-1]['close']
+            exit_price = None
+            try:
+                current_data = self.data_provider.get_live_data(position.symbol, "1h", limit=1)
+                if not current_data.empty:
+                    exit_price = current_data.iloc[-1]['close']
+            except Exception as e:
+                logger.warning(f"Could not get current price for position close: {e}")
+            
+            # Fallback to entry price if we can't get current price (e.g., during shutdown)
+            if exit_price is None:
+                exit_price = position.entry_price
+                logger.warning(f"Using entry price as exit price for position {position.order_id}")
             
             if self.enable_live_trading:
                 # Execute real closing order
@@ -520,28 +541,34 @@ class LiveTradingEngine:
             
             # Log trade to database
             source = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
-            trade_db_id = self.db_manager.log_trade(
-                symbol=position.symbol,
-                side=position.side.value,
-                entry_price=position.entry_price,
-                exit_price=exit_price,
-                size=position.size,
-                entry_time=position.entry_time,
-                exit_time=trade.exit_time,
-                pnl=pnl_dollar,
-                exit_reason=reason,
-                strategy_name=self.strategy.__class__.__name__,
-                source=source,
-                stop_loss=position.stop_loss,
-                take_profit=position.take_profit,
-                order_id=position.order_id,
-                session_id=self.trading_session_id
-            )
+            try:
+                trade_db_id = self.db_manager.log_trade(
+                    symbol=position.symbol,
+                    side=position.side.value,
+                    entry_price=position.entry_price,
+                    exit_price=exit_price,
+                    size=position.size,
+                    entry_time=position.entry_time,
+                    exit_time=trade.exit_time,
+                    pnl=pnl_dollar,
+                    exit_reason=reason,
+                    strategy_name=self.strategy.__class__.__name__,
+                    source=source,
+                    stop_loss=position.stop_loss,
+                    take_profit=position.take_profit,
+                    order_id=position.order_id,
+                    session_id=self.trading_session_id
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log trade to database: {e}")
             
             # Update position status in database
             if position.order_id in self.position_db_ids:
-                self.db_manager.close_position(self.position_db_ids[position.order_id])
-                del self.position_db_ids[position.order_id]
+                try:
+                    self.db_manager.close_position(self.position_db_ids[position.order_id])
+                    del self.position_db_ids[position.order_id]
+                except Exception as e:
+                    logger.warning(f"Failed to update position in database: {e}")
                 
             # Remove from active positions
             if position.order_id in self.positions:
@@ -553,21 +580,30 @@ class LiveTradingEngine:
             
             # Save trade log (file-based for backward compatibility)
             if self.log_trades:
-                self._log_trade(trade)
+                try:
+                    self._log_trade(trade)
+                except Exception as e:
+                    logger.warning(f"Failed to log trade to file: {e}")
             
             # Send alert
-            self._send_alert(f"Position Closed: {position.symbol} {reason} - PnL: {pnl_str}")
+            try:
+                self._send_alert(f"Position Closed: {position.symbol} {reason} - PnL: {pnl_str}")
+            except Exception as e:
+                logger.warning(f"Failed to send alert: {e}")
             
         except Exception as e:
             logger.error(f"Failed to close position: {e}")
-            self.db_manager.log_event(
-                "ERROR",
-                f"Failed to close position: {str(e)}",
-                severity="error",
-                component="LiveTradingEngine",
-                stack_trace=str(e),
-                session_id=self.trading_session_id
-            )
+            try:
+                self.db_manager.log_event(
+                    "ERROR",
+                    f"Failed to close position: {str(e)}",
+                    severity="error",
+                    component="LiveTradingEngine",
+                    stack_trace=str(e),
+                    session_id=self.trading_session_id
+                )
+            except Exception as db_e:
+                logger.error(f"Failed to log error to database: {db_e}")
             
     def _execute_order(self, symbol: str, side: PositionSide, value: float, price: float) -> Optional[str]:
         """Execute a real market order (implement based on your exchange)"""

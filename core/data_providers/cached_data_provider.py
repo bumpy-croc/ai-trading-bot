@@ -26,8 +26,10 @@ class CachedDataProvider(DataProvider):
         """
         super().__init__()
         self.data_provider = data_provider
+        self.provider = data_provider  # Add this alias for backward compatibility
         self.cache_dir = cache_dir
         self.cache_ttl_hours = cache_ttl_hours
+        self.cache = {}  # Add cache attribute for backward compatibility
         
         # Create cache directory if it doesn't exist
         os.makedirs(cache_dir, exist_ok=True)

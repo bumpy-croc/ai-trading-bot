@@ -45,12 +45,20 @@ class RiskManager:
         Returns:
             Position size in base currency
         """
+        # Validate inputs
+        if price <= 0 or balance <= 0:
+            return 0.0
+            
+        # Handle zero or very small ATR
+        if atr <= 0 or atr < price * 0.001:  # Less than 0.1% of price
+            atr = price * 0.01  # Use 1% of price as minimum ATR
+            
         # Adjust risk based on market regime
         base_risk = self.params.base_risk_per_trade
         if regime == 'trending':
-            risk = base_risk * 1.2  # Increase risk in trending markets
+            risk = base_risk * 1.5  # Increase risk in trending markets (more aggressive)
         elif regime == 'volatile':
-            risk = base_risk * 0.7  # Reduce risk in volatile markets
+            risk = base_risk * 0.6  # Reduce risk in volatile markets (more conservative)
         else:
             risk = base_risk
             
@@ -58,6 +66,10 @@ class RiskManager:
         risk = min(risk, self.params.max_risk_per_trade)
         remaining_daily_risk = self.params.max_daily_risk - self.daily_risk_used
         risk = min(risk, remaining_daily_risk)
+        
+        # If no remaining daily risk, return 0
+        if risk <= 0:
+            return 0.0
         
         # Calculate position size based on ATR
         risk_amount = balance * risk
@@ -68,7 +80,8 @@ class RiskManager:
         max_position_value = balance * self.params.max_position_size
         position_size = min(position_size, max_position_value / price)
         
-        return position_size
+        # Ensure position size is positive
+        return max(0.0, position_size)
         
     def calculate_stop_loss(
         self,
@@ -129,4 +142,4 @@ class RiskManager:
             for symbol, pos in self.positions.items()
             if symbol in symbols
         )
-        return exposure 
+        return round(exposure, 2)  # Round to avoid floating point precision issues 

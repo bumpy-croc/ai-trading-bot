@@ -44,6 +44,11 @@ class BaseStrategy(ABC):
         pass
         
     @abstractmethod
+    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = 'long') -> float:
+        """Calculate stop loss level for a position"""
+        pass
+        
+    @abstractmethod
     def get_parameters(self) -> dict:
         """Return strategy parameters for logging"""
         pass

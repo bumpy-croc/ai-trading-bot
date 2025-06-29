@@ -136,6 +136,20 @@ class SentiCryptProvider(SentimentDataProvider):
         if end is None:
             end = datetime.now()
             
+        # Ensure timezone consistency for comparison
+        if self.data.index.tz is not None:
+            # Data index is timezone-aware, make start/end timezone-aware too
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=self.data.index.tz)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=self.data.index.tz)
+        else:
+            # Data index is timezone-naive, make start/end timezone-naive too
+            if start.tzinfo is not None:
+                start = start.replace(tzinfo=None)
+            if end.tzinfo is not None:
+                end = end.replace(tzinfo=None)
+            
         mask = (self.data.index >= start) & (self.data.index <= end)
         filtered_data = self.data.loc[mask].copy()
         
