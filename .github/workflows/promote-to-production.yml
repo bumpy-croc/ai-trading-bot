@@ -1,0 +1,497 @@
+name: Promote to Production
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      staging_commit:
+        description: 'Commit SHA from staging to promote (leave empty for latest)'
+        required: false
+        type: string
+      skip_validation:
+        description: 'Skip staging validation checks'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  AWS_REGION: eu-west-2
+  STAGING_INSTANCE_TAG: ai-trading-bot-staging
+  PRODUCTION_INSTANCE_TAG: ai-trading-bot-production
+  STAGING_SECRETS_NAME: ai-trading-bot/staging
+  PRODUCTION_SECRETS_NAME: ai-trading-bot/production
+  S3_BUCKET: ai-trading-bot-storage
+
+jobs:
+  validate-staging:
+    name: Validate Staging Environment
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_validation }}
+    outputs:
+      staging-healthy: ${{ steps.health-check.outputs.healthy }}
+      staging-commit: ${{ steps.get-commit.outputs.commit }}
+      
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Get staging deployment info
+      id: get-commit
+      run: |
+        if [ -n "${{ inputs.staging_commit }}" ]; then
+          COMMIT_SHA="${{ inputs.staging_commit }}"
+          echo "Using specified commit: $COMMIT_SHA"
+        else
+          # Get latest deployment from S3
+          DEPLOYMENT_INFO=$(aws s3 cp s3://${{ env.S3_BUCKET }}/deployments/staging/latest-deployment.json - 2>/dev/null || echo '{}')
+          COMMIT_SHA=$(echo "$DEPLOYMENT_INFO" | jq -r '.commit // "unknown"')
+          
+          if [ "$COMMIT_SHA" = "unknown" ] || [ "$COMMIT_SHA" = "null" ]; then
+            echo "❌ Cannot determine staging commit. Please specify manually."
+            exit 1
+          fi
+          echo "Latest staging commit: $COMMIT_SHA"
+        fi
+        
+        echo "commit=$COMMIT_SHA" >> $GITHUB_OUTPUT
+        
+    - name: Find staging instance
+      id: find-staging
+      run: |
+        INSTANCE_ID=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=${{ env.STAGING_INSTANCE_TAG }}" \
+                   "Name=instance-state-name,Values=running" \
+          --query 'Reservations[0].Instances[0].InstanceId' \
+          --output text)
+          
+        if [ "$INSTANCE_ID" = "None" ] || [ "$INSTANCE_ID" = "null" ]; then
+          echo "❌ No running staging instance found"
+          exit 1
+        fi
+        
+        echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+        echo "✅ Found staging instance: $INSTANCE_ID"
+        
+    - name: Validate staging health
+      id: health-check
+      run: |
+        echo "🔍 Checking staging environment health..."
+        
+        # Check if service is running
+        aws ssm send-command \
+          --instance-ids ${{ steps.find-staging.outputs.instance-id }} \
+          --document-name "AWS-RunShellScript" \
+          --parameters 'commands=["systemctl is-active ai-trading-bot","journalctl -u ai-trading-bot -n 10 --no-pager"]' \
+          --output text \
+          --query 'Command.CommandId' > health-command-id.txt
+          
+        HEALTH_COMMAND_ID=$(cat health-command-id.txt)
+        
+        # Wait for command to complete
+        aws ssm wait command-executed \
+          --command-id $HEALTH_COMMAND_ID \
+          --instance-id ${{ steps.find-staging.outputs.instance-id }}
+          
+        # Check results
+        COMMAND_STATUS=$(aws ssm get-command-invocation \
+          --command-id $HEALTH_COMMAND_ID \
+          --instance-id ${{ steps.find-staging.outputs.instance-id }} \
+          --query 'Status' \
+          --output text)
+          
+        if [ "$COMMAND_STATUS" = "Success" ]; then
+          echo "✅ Staging environment is healthy"
+          echo "healthy=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Staging environment health check failed"
+          aws ssm get-command-invocation \
+            --command-id $HEALTH_COMMAND_ID \
+            --instance-id ${{ steps.find-staging.outputs.instance-id }} \
+            --query 'StandardOutputContent' \
+            --output text
+          echo "healthy=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+  prepare-production:
+    name: Prepare Production Deployment
+    runs-on: ubuntu-latest
+    needs: [validate-staging]
+    if: ${{ always() && (needs.validate-staging.result == 'success' || inputs.skip_validation) }}
+    environment: production  # Requires manual approval
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Create production deployment package
+      run: |
+        echo "📦 Creating production deployment package..."
+        
+        # Create deployment package (same as staging but with production config)
+        mkdir -p deployment-package
+        
+        rsync -av --exclude-from=.gitignore \
+          --exclude='.git*' \
+          --exclude='*.pyc' \
+          --exclude='__pycache__' \
+          --exclude='.pytest_cache' \
+          --exclude='.coverage' \
+          --exclude='htmlcov' \
+          --exclude='.venv' \
+          --exclude='staging' \
+          --exclude='model_backups' \
+          --exclude='*.log' \
+          --exclude='*.tmp' \
+          --exclude='.DS_Store' \
+          --exclude='Thumbs.db' \
+          . deployment-package/
+          
+        # Create version info
+        echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> deployment-package/VERSION
+        echo "COMMIT_SHA=${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}" >> deployment-package/VERSION
+        echo "BRANCH=${{ github.ref_name }}" >> deployment-package/VERSION
+        echo "ENVIRONMENT=production" >> deployment-package/VERSION
+        echo "PROMOTED_FROM=staging" >> deployment-package/VERSION
+        
+        # Create deployment archive
+        tar -czf ai-trading-bot-production.tar.gz -C deployment-package .
+        
+    - name: Upload production deployment package
+      run: |
+        COMMIT_SHA="${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}"
+        
+        aws s3 cp ai-trading-bot-production.tar.gz \
+          s3://${{ env.S3_BUCKET }}/deployments/production/ai-trading-bot-${COMMIT_SHA}.tar.gz
+        
+        echo "✅ Production deployment package uploaded"
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [validate-staging, prepare-production]
+    environment: production
+    timeout-minutes: 45  # Longer timeout for production
+    
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Find production instance
+      id: find-production
+      run: |
+        INSTANCE_ID=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=${{ env.PRODUCTION_INSTANCE_TAG }}" \
+                   "Name=instance-state-name,Values=running" \
+          --query 'Reservations[0].Instances[0].InstanceId' \
+          --output text)
+          
+        if [ "$INSTANCE_ID" = "None" ] || [ "$INSTANCE_ID" = "null" ]; then
+          echo "❌ No running production instance found with tag: ${{ env.PRODUCTION_INSTANCE_TAG }}"
+          exit 1
+        fi
+        
+        echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+        echo "✅ Found production instance: $INSTANCE_ID"
+        
+    - name: Pre-deployment backup
+      run: |
+        echo "💾 Creating pre-deployment backup..."
+        
+        # Create backup via SSM
+        aws ssm send-command \
+          --instance-ids ${{ steps.find-production.outputs.instance-id }} \
+          --document-name "AWS-RunShellScript" \
+          --parameters 'commands=["cd /opt/ai-trading-bot && sudo tar -czf /opt/ai-trading-bot-pre-deploy-backup-$(date +%Y%m%d_%H%M%S).tar.gz . && echo \"Backup created\""]' \
+          --output text \
+          --query 'Command.CommandId' > backup-command-id.txt
+          
+        BACKUP_COMMAND_ID=$(cat backup-command-id.txt)
+        
+        aws ssm wait command-executed \
+          --command-id $BACKUP_COMMAND_ID \
+          --instance-id ${{ steps.find-production.outputs.instance-id }}
+          
+        echo "✅ Pre-deployment backup completed"
+        
+    - name: Deploy to production
+      run: |
+        COMMIT_SHA="${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}"
+        
+        # Create production deployment script
+        cat > deploy-production-script.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "🚀 Starting PRODUCTION deployment..."
+        echo "⚠️  This is a PRODUCTION deployment - proceeding with extra caution"
+        
+        COMMIT_SHA="$1"
+        
+        # Download deployment package from S3
+        cd /tmp
+        aws s3 cp s3://${{ env.S3_BUCKET }}/deployments/production/ai-trading-bot-${COMMIT_SHA}.tar.gz .
+        
+        # Stop the current service gracefully
+        echo "⏹️ Gracefully stopping production service..."
+        sudo systemctl stop ai-trading-bot || true
+        sleep 5  # Give it time to stop gracefully
+        
+        # Extract new deployment
+        echo "📦 Extracting new deployment..."
+        sudo rm -rf /tmp/ai-trading-bot-new
+        mkdir -p /tmp/ai-trading-bot-new
+        tar -xzf ai-trading-bot-${COMMIT_SHA}.tar.gz -C /tmp/ai-trading-bot-new
+        
+        # Preserve production data and logs
+        echo "🔄 Preserving production data and logs..."
+        mkdir -p /tmp/ai-trading-bot-preserve
+        sudo cp -r /opt/ai-trading-bot/data /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No data directory to preserve"
+        sudo cp -r /opt/ai-trading-bot/logs /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No logs directory to preserve"
+        
+        # Replace application files
+        echo "🔄 Updating application files..."
+        sudo rm -rf /opt/ai-trading-bot/*
+        sudo cp -r /tmp/ai-trading-bot-new/* /opt/ai-trading-bot/
+        
+        # Restore preserved data
+        sudo cp -r /tmp/ai-trading-bot-preserve/data /opt/ai-trading-bot/ 2>/dev/null || echo "No data to restore"
+        sudo cp -r /tmp/ai-trading-bot-preserve/logs /opt/ai-trading-bot/ 2>/dev/null || echo "No logs to restore"
+        
+        # Set permissions
+        sudo chown -R ubuntu:ubuntu /opt/ai-trading-bot
+        
+        # Update Python dependencies
+        echo "📚 Updating dependencies..."
+        cd /opt/ai-trading-bot
+        sudo -u ubuntu ./venv/bin/pip install -r requirements.txt
+        
+        # Test configuration access (CRITICAL for production)
+        echo "🔐 Testing production configuration access..."
+        sudo -u ubuntu ENVIRONMENT=production ./venv/bin/python scripts/test_secrets_access.py
+        
+        # Update systemd service for production
+        echo "⚙️ Updating systemd service for production..."
+        sudo tee /etc/systemd/system/ai-trading-bot.service > /dev/null << 'SYSTEMD_EOF'
+[Unit]
+Description=AI Trading Bot (PRODUCTION)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/ai-trading-bot
+Environment="PATH=/opt/ai-trading-bot/venv/bin"
+Environment="ENVIRONMENT=production"
+
+# Test configuration before starting
+ExecStartPre=/opt/ai-trading-bot/venv/bin/python /opt/ai-trading-bot/scripts/test_secrets_access.py
+
+# Start the bot in LIVE TRADING mode
+ExecStart=/opt/ai-trading-bot/venv/bin/python run_live_trading.py adaptive
+
+# Restart configuration (more conservative for production)
+Restart=on-failure
+RestartSec=30
+StartLimitBurst=3
+StartLimitInterval=300
+
+# Security settings
+PrivateTmp=true
+NoNewPrivileges=true
+ReadOnlyPaths=/
+ReadWritePaths=/opt/ai-trading-bot/data /opt/ai-trading-bot/logs
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD_EOF
+        
+        # Reload and start service
+        echo "🎯 Starting production service..."
+        sudo systemctl daemon-reload
+        sudo systemctl start ai-trading-bot
+        
+        # Wait longer for production service to start
+        echo "⏳ Waiting for production service to start..."
+        sleep 30
+        
+        # Verify service is running
+        if sudo systemctl is-active --quiet ai-trading-bot; then
+          echo "✅ PRODUCTION deployment successful! Service is running."
+          echo "📊 Service status:"
+          sudo systemctl status ai-trading-bot --no-pager
+        else
+          echo "❌ PRODUCTION deployment failed! Service is not running."
+          echo "📋 Service logs:"
+          sudo journalctl -u ai-trading-bot -n 20 --no-pager
+          exit 1
+        fi
+        
+        # Cleanup
+        rm -rf /tmp/ai-trading-bot-new /tmp/ai-trading-bot-preserve
+        rm /tmp/ai-trading-bot-${COMMIT_SHA}.tar.gz
+        
+        echo "🎉 PRODUCTION deployment completed successfully!"
+        echo "⚠️  Monitor the service closely for the next hour"
+        EOF
+        
+        # Execute production deployment
+        aws ssm send-command \
+          --instance-ids ${{ steps.find-production.outputs.instance-id }} \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"bash /dev/stdin $COMMIT_SHA << 'EOF'\",\"$(cat deploy-production-script.sh)\",\"EOF\"]" \
+          --output text \
+          --query 'Command.CommandId' > production-command-id.txt
+          
+        PRODUCTION_COMMAND_ID=$(cat production-command-id.txt)
+        echo "📡 Production deployment command sent: $PRODUCTION_COMMAND_ID"
+        
+        # Wait for deployment to complete (longer timeout for production)
+        echo "⏳ Waiting for production deployment to complete..."
+        timeout 1800 aws ssm wait command-executed \
+          --command-id $PRODUCTION_COMMAND_ID \
+          --instance-id ${{ steps.find-production.outputs.instance-id }} || {
+          echo "❌ Production deployment timed out after 30 minutes"
+          exit 1
+        }
+        
+        # Check deployment result
+        COMMAND_STATUS=$(aws ssm get-command-invocation \
+          --command-id $PRODUCTION_COMMAND_ID \
+          --instance-id ${{ steps.find-production.outputs.instance-id }} \
+          --query 'Status' \
+          --output text)
+          
+        if [ "$COMMAND_STATUS" = "Success" ]; then
+          echo "✅ Production deployment completed successfully"
+        else
+          echo "❌ Production deployment failed with status: $COMMAND_STATUS"
+          echo "📋 Error output:"
+          aws ssm get-command-invocation \
+            --command-id $PRODUCTION_COMMAND_ID \
+            --instance-id ${{ steps.find-production.outputs.instance-id }} \
+            --query 'StandardErrorContent' \
+            --output text
+          echo "📋 Standard output:"
+          aws ssm get-command-invocation \
+            --command-id $PRODUCTION_COMMAND_ID \
+            --instance-id ${{ steps.find-production.outputs.instance-id }} \
+            --query 'StandardOutputContent' \
+            --output text
+          exit 1
+        fi
+        
+    - name: Post-deployment verification
+      run: |
+        echo "🔍 Performing post-deployment verification..."
+        
+        # Extended health check for production
+        aws ssm send-command \
+          --instance-ids ${{ steps.find-production.outputs.instance-id }} \
+          --document-name "AWS-RunShellScript" \
+          --parameters 'commands=["systemctl is-active ai-trading-bot","systemctl status ai-trading-bot --no-pager","journalctl -u ai-trading-bot -n 10 --no-pager"]' \
+          --output text \
+          --query 'Command.CommandId' > verify-command-id.txt
+          
+        VERIFY_COMMAND_ID=$(cat verify-command-id.txt)
+        
+        aws ssm wait command-executed \
+          --command-id $VERIFY_COMMAND_ID \
+          --instance-id ${{ steps.find-production.outputs.instance-id }}
+          
+        echo "📋 Production service status:"
+        aws ssm get-command-invocation \
+          --command-id $VERIFY_COMMAND_ID \
+          --instance-id ${{ steps.find-production.outputs.instance-id }} \
+          --query 'StandardOutputContent' \
+          --output text
+          
+    - name: Record production deployment
+      if: always()
+      run: |
+        COMMIT_SHA="${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}"
+        DEPLOYMENT_STATUS="${{ job.status }}"
+        
+        if [ "$DEPLOYMENT_STATUS" = "success" ]; then
+          echo "📝 Recording successful production deployment"
+          STATUS_MESSAGE="success"
+        else
+          echo "📝 Recording failed production deployment"
+          STATUS_MESSAGE="failed"
+        fi
+        
+        # Record deployment in S3
+        echo "{\"status\":\"$STATUS_MESSAGE\",\"commit\":\"$COMMIT_SHA\",\"timestamp\":\"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\",\"branch\":\"${{ github.ref_name }}\",\"author\":\"${{ github.actor }}\",\"promoted_from\":\"staging\"}" | \
+          aws s3 cp - s3://${{ env.S3_BUCKET }}/deployments/production/latest-deployment.json
+        
+        echo "✅ Production deployment status recorded"
+
+    - name: Create GitHub deployment status
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const commitSha = '${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}';
+          
+          const deployment = await github.rest.repos.createDeployment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            ref: commitSha,
+            environment: 'production',
+            description: 'Production deployment via promotion from staging',
+            auto_merge: false
+          });
+          
+          const deploymentStatus = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+          const description = '${{ job.status }}' === 'success' ? 'Production deployment successful' : 'Production deployment failed';
+          
+          await github.rest.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment.data.id,
+            state: deploymentStatus,
+            description: description,
+            environment_url: 'https://console.aws.amazon.com/ec2/v2/home?region=${{ env.AWS_REGION }}#Instances:tag:Name=${{ env.PRODUCTION_INSTANCE_TAG }}'
+          });
+
+  notify-completion:
+    name: Notify Deployment Completion
+    runs-on: ubuntu-latest
+    needs: [validate-staging, deploy-production]
+    if: always()
+    
+    steps:
+    - name: Deployment Summary
+      run: |
+        echo "🎯 Production Promotion Summary"
+        echo "=============================="
+        echo "Staging Validation: ${{ needs.validate-staging.result }}"
+        echo "Production Deployment: ${{ needs.deploy-production.result }}"
+        echo "Commit: ${{ needs.validate-staging.outputs.staging-commit || inputs.staging_commit || github.sha }}"
+        echo "Triggered by: ${{ github.actor }}"
+        echo "Timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        
+        if [ "${{ needs.deploy-production.result }}" = "success" ]; then
+          echo "✅ Production promotion completed successfully!"
+          echo "⚠️  Please monitor the production environment closely"
+        else
+          echo "❌ Production promotion failed!"
+          echo "🔧 Check the logs and consider rollback if necessary"
+        fi
+``` 

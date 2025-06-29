@@ -1,0 +1,364 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  AWS_REGION: eu-west-2
+  EC2_INSTANCE_TAG: ai-trading-bot-staging
+  SECRETS_NAME: ai-trading-bot/staging
+  S3_BUCKET: ai-trading-bot-storage
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+        
+    - name: Lint code
+      run: |
+        # Install flake8 for linting
+        pip install flake8
+        # Run linting (but don't fail the build for now)
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+        
+    - name: Run tests
+      run: |
+        python test_runner.py
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: |
+          .coverage
+          htmlcov/
+          
+  build:
+    name: Build and Package
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Create deployment package
+      run: |
+        # Create a clean deployment package
+        mkdir -p deployment-package
+        
+        # Copy application files (exclude development files)
+        rsync -av --exclude-from=.gitignore \
+          --exclude='.git*' \
+          --exclude='*.pyc' \
+          --exclude='__pycache__' \
+          --exclude='.pytest_cache' \
+          --exclude='.coverage' \
+          --exclude='htmlcov' \
+          --exclude='.venv' \
+          --exclude='staging' \
+          --exclude='model_backups' \
+          --exclude='*.log' \
+          --exclude='*.tmp' \
+          --exclude='.DS_Store' \
+          --exclude='Thumbs.db' \
+          . deployment-package/
+          
+        # Create version info
+        echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> deployment-package/VERSION
+        echo "COMMIT_SHA=${{ github.sha }}" >> deployment-package/VERSION
+        echo "BRANCH=${{ github.ref_name }}" >> deployment-package/VERSION
+        
+        # Create deployment archive
+        tar -czf ai-trading-bot-staging.tar.gz -C deployment-package .
+        
+    - name: Upload deployment package
+      uses: actions/upload-artifact@v3
+      with:
+        name: deployment-package
+        path: ai-trading-bot-staging.tar.gz
+        retention-days: 30
+
+  deploy:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    environment: staging  # Requires environment approval if configured
+    timeout-minutes: 30  # Prevent hanging deployments
+    
+    steps:
+    - name: Download deployment package
+      uses: actions/download-artifact@v3
+      with:
+        name: deployment-package
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Find staging instance
+      id: find-instance
+      run: |
+        INSTANCE_ID=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=${{ env.EC2_INSTANCE_TAG }}" \
+                   "Name=instance-state-name,Values=running" \
+          --query 'Reservations[0].Instances[0].InstanceId' \
+          --output text)
+          
+        if [ "$INSTANCE_ID" = "None" ] || [ "$INSTANCE_ID" = "null" ]; then
+          echo "❌ No running staging instance found with tag: ${{ env.EC2_INSTANCE_TAG }}"
+          exit 1
+        fi
+        
+        PUBLIC_IP=$(aws ec2 describe-instances \
+          --instance-ids $INSTANCE_ID \
+          --query 'Reservations[0].Instances[0].PublicIpAddress' \
+          --output text)
+          
+        echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+        echo "public-ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+        echo "✅ Found staging instance: $INSTANCE_ID ($PUBLIC_IP)"
+        
+    - name: Wait for instance to be ready
+      run: |
+        echo "🔄 Waiting for instance to be ready..."
+        aws ec2 wait instance-status-ok --instance-ids ${{ steps.find-instance.outputs.instance-id }}
+        echo "✅ Instance is ready"
+        
+    - name: Upload deployment package to S3
+      run: |
+        # Upload to S3 for secure transfer
+        aws s3 cp ai-trading-bot-staging.tar.gz \
+          s3://${{ env.S3_BUCKET }}/deployments/staging/ai-trading-bot-${{ github.sha }}.tar.gz
+        echo "✅ Deployment package uploaded to S3"
+        
+    - name: Deploy to staging instance
+      run: |
+        # Create deployment script
+        cat > deploy-script.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "🚀 Starting deployment to staging..."
+        
+        # Download deployment package from S3
+        cd /tmp
+        aws s3 cp s3://${{ env.S3_BUCKET }}/deployments/staging/ai-trading-bot-${{ github.sha }}.tar.gz .
+        
+        # Stop the current service
+        echo "⏹️ Stopping current service..."
+        sudo systemctl stop ai-trading-bot || true
+        
+        # Backup current deployment
+        echo "💾 Creating backup..."
+        sudo tar -czf /opt/ai-trading-bot-backup-$(date +%Y%m%d_%H%M%S).tar.gz -C /opt/ai-trading-bot . || true
+        
+        # Extract new deployment
+        echo "📦 Extracting new deployment..."
+        sudo rm -rf /tmp/ai-trading-bot-new
+        mkdir -p /tmp/ai-trading-bot-new
+        tar -xzf ai-trading-bot-${{ github.sha }}.tar.gz -C /tmp/ai-trading-bot-new
+        
+        # Preserve data and logs
+        echo "🔄 Preserving data and logs..."
+        mkdir -p /tmp/ai-trading-bot-preserve
+        sudo cp -r /opt/ai-trading-bot/data /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No data directory to preserve"
+        sudo cp -r /opt/ai-trading-bot/logs /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No logs directory to preserve"
+        sudo cp /opt/ai-trading-bot/.env /tmp/ai-trading-bot-preserve/ 2>/dev/null || echo "No .env file to preserve"
+        
+        # Replace application files
+        echo "🔄 Updating application files..."
+        sudo rm -rf /opt/ai-trading-bot/*
+        sudo cp -r /tmp/ai-trading-bot-new/* /opt/ai-trading-bot/
+        
+        # Restore preserved data
+        sudo cp -r /tmp/ai-trading-bot-preserve/data /opt/ai-trading-bot/ 2>/dev/null || echo "No data to restore"
+        sudo cp -r /tmp/ai-trading-bot-preserve/logs /opt/ai-trading-bot/ 2>/dev/null || echo "No logs to restore"
+        sudo cp /tmp/ai-trading-bot-preserve/.env /opt/ai-trading-bot/ 2>/dev/null || echo "No .env to restore"
+        
+        # Set permissions
+        sudo chown -R ubuntu:ubuntu /opt/ai-trading-bot
+        
+        # Update Python dependencies
+        echo "📚 Updating dependencies..."
+        cd /opt/ai-trading-bot
+        sudo -u ubuntu ./venv/bin/pip install -r requirements.txt
+        
+        # Test configuration access
+        echo "🔐 Testing configuration access..."
+        sudo -u ubuntu ENVIRONMENT=staging ./venv/bin/python scripts/test_secrets_access.py
+        
+        # Update data cache
+        echo "📊 Updating data cache..."
+        sudo -u ubuntu ./venv/bin/python scripts/download_binance_data.py || true
+        
+        # Restart service
+        echo "🎯 Starting service..."
+        sudo systemctl daemon-reload
+        sudo systemctl start ai-trading-bot
+        
+        # Wait for service to be ready
+        echo "⏳ Waiting for service to start..."
+        sleep 10
+        
+        # Check service status
+        if sudo systemctl is-active --quiet ai-trading-bot; then
+          echo "✅ Deployment successful! Service is running."
+        else
+          echo "❌ Deployment failed! Service is not running."
+          sudo journalctl -u ai-trading-bot -n 20
+          exit 1
+        fi
+        
+        # Cleanup
+        rm -rf /tmp/ai-trading-bot-new /tmp/ai-trading-bot-preserve
+        rm /tmp/ai-trading-bot-${{ github.sha }}.tar.gz
+        
+        echo "🎉 Staging deployment completed successfully!"
+        EOF
+        
+        # Execute deployment via AWS Systems Manager (more secure than SSH)
+        aws ssm send-command \
+          --instance-ids ${{ steps.find-instance.outputs.instance-id }} \
+          --document-name "AWS-RunShellScript" \
+          --parameters 'commands=["bash /dev/stdin << '\''EOF'\''","$(cat deploy-script.sh)","EOF"]' \
+          --output text \
+          --query 'Command.CommandId' > command-id.txt
+          
+        COMMAND_ID=$(cat command-id.txt)
+        echo "📡 Deployment command sent: $COMMAND_ID"
+        
+        # Wait for command to complete (with timeout)
+        echo "⏳ Waiting for deployment to complete..."
+        timeout 1200 aws ssm wait command-executed \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ steps.find-instance.outputs.instance-id }} || {
+          echo "❌ Deployment timed out after 20 minutes"
+          exit 1
+        }
+          
+        # Check command result
+        COMMAND_STATUS=$(aws ssm get-command-invocation \
+          --command-id $COMMAND_ID \
+          --instance-id ${{ steps.find-instance.outputs.instance-id }} \
+          --query 'Status' \
+          --output text)
+          
+        if [ "$COMMAND_STATUS" = "Success" ]; then
+          echo "✅ Deployment completed successfully"
+        else
+          echo "❌ Deployment failed with status: $COMMAND_STATUS"
+          echo "📋 Error output:"
+          aws ssm get-command-invocation \
+            --command-id $COMMAND_ID \
+            --instance-id ${{ steps.find-instance.outputs.instance-id }} \
+            --query 'StandardErrorContent' \
+            --output text
+          echo "📋 Standard output:"
+          aws ssm get-command-invocation \
+            --command-id $COMMAND_ID \
+            --instance-id ${{ steps.find-instance.outputs.instance-id }} \
+            --query 'StandardOutputContent' \
+            --output text
+          exit 1
+        fi
+        
+    - name: Verify deployment
+      run: |
+        echo "🔍 Verifying deployment..."
+        
+        # Check service status via SSM
+        aws ssm send-command \
+          --instance-ids ${{ steps.find-instance.outputs.instance-id }} \
+          --document-name "AWS-RunShellScript" \
+          --parameters 'commands=["systemctl is-active ai-trading-bot","journalctl -u ai-trading-bot -n 5 --no-pager"]' \
+          --output text \
+          --query 'Command.CommandId' > verify-command-id.txt
+          
+        VERIFY_COMMAND_ID=$(cat verify-command-id.txt)
+        
+        # Wait and get results
+        aws ssm wait command-executed \
+          --command-id $VERIFY_COMMAND_ID \
+          --instance-id ${{ steps.find-instance.outputs.instance-id }}
+          
+        echo "📋 Service status:"
+        aws ssm get-command-invocation \
+          --command-id $VERIFY_COMMAND_ID \
+          --instance-id ${{ steps.find-instance.outputs.instance-id }} \
+          --query 'StandardOutputContent' \
+          --output text
+          
+    - name: Record deployment status
+      if: always()
+      run: |
+        # Record deployment status for monitoring/tracking
+        DEPLOYMENT_STATUS="${{ job.status }}"
+        if [ "$DEPLOYMENT_STATUS" = "success" ]; then
+          echo "📝 Recording successful deployment"
+          STATUS_MESSAGE="success"
+        else
+          echo "📝 Recording failed deployment"
+          STATUS_MESSAGE="failed"
+        fi
+        
+        # Update deployment record in S3
+        echo "{\"status\":\"$STATUS_MESSAGE\",\"commit\":\"${{ github.sha }}\",\"timestamp\":\"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\",\"branch\":\"${{ github.ref_name }}\",\"author\":\"${{ github.actor }}\"}" | \
+          aws s3 cp - s3://${{ env.S3_BUCKET }}/deployments/staging/latest-deployment.json
+        
+        echo "✅ Deployment status recorded"
+
+    - name: Create GitHub deployment status
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const deployment = await github.rest.repos.createDeployment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            ref: context.sha,
+            environment: 'staging',
+            description: 'Automated staging deployment',
+            auto_merge: false
+          });
+          
+          const deploymentStatus = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+          const description = '${{ job.status }}' === 'success' ? 'Deployment successful' : 'Deployment failed';
+          
+          await github.rest.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment.data.id,
+            state: deploymentStatus,
+            description: description,
+            environment_url: 'https://console.aws.amazon.com/ec2/v2/home?region=${{ env.AWS_REGION }}#Instances:tag:Name=${{ env.EC2_INSTANCE_TAG }}'
+          }); 
