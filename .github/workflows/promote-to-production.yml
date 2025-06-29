@@ -1,5 +1,8 @@
 name: Promote to Production
 
+# NOTE: Tests are currently skipped in the staging deployment workflow
+# Production deployments inherit from staging builds without test validation
+
 on:
   workflow_dispatch:  # Manual trigger only
     inputs:
