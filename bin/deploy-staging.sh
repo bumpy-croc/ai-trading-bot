@@ -10,16 +10,25 @@ log() {
 handle_error() {
     log "❌ Error occurred at line $1"
     log "📋 Last few lines of system log:"
-    tail -20 /var/log/syslog || true
+    sudo tail -20 /var/log/syslog 2>/dev/null || log "ℹ️ Could not access system log"
     log "📋 Current user and permissions:"
     whoami
     id
     log "📋 Available disk space:"
     df -h
+    log "📋 Recent deployment logs:"
+    sudo journalctl -u ai-trading-bot -n 10 --no-pager 2>/dev/null || true
     exit 1
 }
 
+cleanup_on_exit() {
+    # Clean up temporary files on exit
+    sudo rm -rf /tmp/ai-trading-bot-new /tmp/ai-trading-bot-preserve 2>/dev/null || true
+    rm -f /tmp/ai-trading-bot-*.tar.gz 2>/dev/null || true
+}
+
 trap 'handle_error $LINENO' ERR
+trap 'cleanup_on_exit' EXIT
 
 # Get parameters
 COMMIT_SHA="$1"
@@ -37,10 +46,13 @@ log "📋 S3 Bucket: $S3_BUCKET"
 # Check prerequisites
 log "🔍 Checking prerequisites..."
 
-# Update package list and install required packages
+# Update package list and install required packages (suppress verbose output)
 log "📦 Installing system dependencies..."
-sudo apt-get update -qq
-sudo apt-get install -y python3-venv python3-pip unzip curl
+sudo apt-get update -qq 2>/dev/null || log "⚠️ APT update had warnings (continuing)"
+sudo apt-get install -y python3-venv python3-pip unzip curl >/dev/null 2>&1 || {
+    log "❌ Failed to install system dependencies"
+    exit 1
+}
 
 # Check if AWS CLI is available
 if ! command -v aws &> /dev/null; then
@@ -53,10 +65,13 @@ fi
 
 # Check AWS credentials
 log "🔐 Testing AWS credentials..."
-aws sts get-caller-identity || {
+if aws sts get-caller-identity >/dev/null 2>&1; then
+    log "✅ AWS credentials configured"
+else
     log "❌ AWS credentials not configured properly"
+    aws sts get-caller-identity || true  # Show error for debugging
     exit 1
-}
+fi
 
 # Check if directories exist and create if needed
 log "📁 Setting up directories..."
@@ -94,7 +109,7 @@ tar -xzf ai-trading-bot-${COMMIT_SHA}.tar.gz -C /tmp/ai-trading-bot-new || {
 
 # Preserve data and logs
 log "🔄 Preserving data and logs..."
-mkdir -p /tmp/ai-trading-bot-preserve
+sudo mkdir -p /tmp/ai-trading-bot-preserve
 sudo cp -r /opt/ai-trading-bot/data /tmp/ai-trading-bot-preserve/ 2>/dev/null || log "ℹ️ No data directory to preserve"
 sudo cp -r /opt/ai-trading-bot/logs /tmp/ai-trading-bot-preserve/ 2>/dev/null || log "ℹ️ No logs directory to preserve"
 sudo cp /opt/ai-trading-bot/.env /tmp/ai-trading-bot-preserve/ 2>/dev/null || log "ℹ️ No .env file to preserve"
@@ -135,16 +150,16 @@ if [ ! -f "venv/bin/activate" ]; then
     sudo -u ubuntu python3 -m venv venv
 fi
 
-# Update Python dependencies
+# Update Python dependencies (suppress verbose output)
 log "📚 Updating dependencies..."
-sudo -u ubuntu ./venv/bin/pip install --upgrade pip || {
+sudo -u ubuntu ./venv/bin/pip install --upgrade pip --quiet || {
     log "❌ Failed to upgrade pip, trying with python -m pip..."
-    sudo -u ubuntu ./venv/bin/python -m pip install --upgrade pip
+    sudo -u ubuntu ./venv/bin/python -m pip install --upgrade pip --quiet
 }
 
-sudo -u ubuntu ./venv/bin/pip install -r requirements.txt || {
+sudo -u ubuntu ./venv/bin/pip install -r requirements.txt --quiet || {
     log "❌ Failed to install Python dependencies with pip, trying with python -m pip..."
-    sudo -u ubuntu ./venv/bin/python -m pip install -r requirements.txt || {
+    sudo -u ubuntu ./venv/bin/python -m pip install -r requirements.txt --quiet || {
         log "❌ Failed to install Python dependencies"
         log "📋 Requirements file content:"
         head -20 requirements.txt || true
@@ -190,20 +205,24 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# Test configuration access
+# Test configuration access (suppress verbose output in deployment)
 log "🔐 Testing configuration access..."
-sudo -u ubuntu ENVIRONMENT=staging ./venv/bin/python scripts/test_secrets_access.py || {
-    log "❌ Configuration access test failed"
-    log "📋 Available environment variables:"
-    env | grep -E "(AWS|ENVIRONMENT)" || true
-    log "📋 Script exists check:"
-    ls -la scripts/test_secrets_access.py || true
-    exit 1
-}
+if sudo -u ubuntu ENVIRONMENT=staging ./venv/bin/python scripts/test_secrets_access.py >/dev/null 2>&1; then
+    log "✅ Configuration access test passed"
+else
+    log "❌ Configuration access test failed, running with verbose output for debugging..."
+    sudo -u ubuntu ENVIRONMENT=staging ./venv/bin/python scripts/test_secrets_access.py || {
+        log "📋 Available environment variables:"
+        env | grep -E "(AWS|ENVIRONMENT)" || true
+        log "📋 Script exists check:"
+        ls -la scripts/test_secrets_access.py || true
+        exit 1
+    }
+fi
 
 # Update data cache (non-critical)
 log "📊 Updating data cache..."
-sudo -u ubuntu ./venv/bin/python scripts/download_binance_data.py || {
+sudo -u ubuntu ./venv/bin/python scripts/download_binance_data.py BTCUSDT >/dev/null 2>&1 || {
     log "⚠️ Data cache update failed, but continuing..."
 }
 
@@ -215,7 +234,16 @@ sudo systemctl start ai-trading-bot
 
 # Wait for service to be ready
 log "⏳ Waiting for service to start..."
-sleep 15
+for i in {1..15}; do
+    if sudo systemctl is-active --quiet ai-trading-bot; then
+        log "✅ Service started after ${i} seconds"
+        break
+    fi
+    if [ $i -eq 15 ]; then
+        log "⚠️ Service taking longer than expected to start..."
+    fi
+    sleep 1
+done
 
 # Check service status with more detailed output
 log "🔍 Checking service status..."
@@ -234,9 +262,6 @@ else
     exit 1
 fi
 
-# Cleanup
-log "🧹 Cleaning up..."
-rm -rf /tmp/ai-trading-bot-new /tmp/ai-trading-bot-preserve
-rm /tmp/ai-trading-bot-${COMMIT_SHA}.tar.gz
-
-log "🎉 Staging deployment completed successfully!" 
+log "🎉 Staging deployment completed successfully!"
+log "🧹 Cleaning up temporary files..."
+# Cleanup will happen automatically via EXIT trap 
