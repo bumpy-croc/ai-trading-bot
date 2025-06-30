@@ -781,35 +781,124 @@ launch_instance_for_environment() {
     
     log_info "Launching $env instance..."
     
-    # Create user data script for cost-optimized setup
-    local user_data=$(cat << 'EOF'
+    # Create user data script for cost-optimized setup with disk validation
+    local user_data=$(cat << EOF
 #!/bin/bash
-# Cost-optimized setup for AI Trading Bot instance
+# Cost-optimized setup for AI Trading Bot instance with 16GB volume
+set -e
+
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] \$1" | tee -a /var/log/ai-trading-bot-setup.log
+}
+
+log "🚀 Starting AI Trading Bot instance setup..."
+
+# Update system
+log "📦 Updating system packages..."
 apt-get update
-apt-get install -y awscli python3.11 python3.11-venv git htop
+apt-get install -y awscli python3.11 python3.11-venv git htop curl wget unzip
 
 # Install SSM agent (should be pre-installed but ensure it's running)
+log "🔧 Configuring SSM agent..."
 systemctl enable amazon-ssm-agent
 systemctl start amazon-ssm-agent
 
-# Create swap file (helpful for t3.micro instances)
-fallocate -l 1G /swapfile
-chmod 600 /swapfile
-mkswap /swapfile
-swapon /swapfile
-echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
+# Validate disk space (should be 16GB)
+log "💾 Validating disk space..."
+TOTAL_DISK=\$(df -BG / | tail -1 | awk '{print \$2}' | sed 's/G//')
+AVAILABLE_DISK=\$(df -BG / | tail -1 | awk '{print \$4}' | sed 's/G//')
 
-# Create initial directory structure
-mkdir -p /opt/ai-trading-bot/{data,logs}
+log "📊 Total disk space: \${TOTAL_DISK}GB"
+log "📊 Available disk space: \${AVAILABLE_DISK}GB"
+
+if [ "\$TOTAL_DISK" -lt 15 ]; then
+    log "❌ ERROR: Disk space is only \${TOTAL_DISK}GB, expected at least 15GB"
+    exit 1
+fi
+
+if [ "\$AVAILABLE_DISK" -lt 10 ]; then
+    log "⚠️ WARNING: Only \${AVAILABLE_DISK}GB available, this may not be sufficient"
+fi
+
+log "✅ Disk space validation passed"
+
+# Create swap file (helpful for t3.micro instances)
+log "🔄 Creating swap file..."
+if [ ! -f /swapfile ]; then
+    fallocate -l 1G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
+    log "✅ Swap file created (1GB)"
+else
+    log "ℹ️ Swap file already exists"
+fi
+
+# Create initial directory structure with proper permissions
+log "📁 Creating directory structure..."
+mkdir -p /opt/ai-trading-bot/{data,logs,backups}
 chown ubuntu:ubuntu /opt/ai-trading-bot -R
 
+# Set up log rotation for application logs
+log "📝 Setting up log rotation..."
+cat > /etc/logrotate.d/ai-trading-bot << 'LOGROTATE_EOF'
+/opt/ai-trading-bot/logs/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 ubuntu ubuntu
+}
+LOGROTATE_EOF
+
 # Set up auto-shutdown for staging instances (cost saving)
-if [ "${env}" = "staging" ]; then
+if [ "$env" = "staging" ]; then
+    log "💰 Setting up auto-shutdown for staging (cost optimization)..."
     # Auto-shutdown at 10 PM UTC (6 PM EST) on weekdays
     echo "0 22 * * 1-5 root /sbin/shutdown -h now" >> /etc/crontab
+    log "✅ Auto-shutdown scheduled for weekdays at 10 PM UTC"
 fi
+
+# Create disk monitoring script
+log "📊 Setting up disk monitoring..."
+cat > /opt/ai-trading-bot/check_disk_space.sh << 'DISK_CHECK_EOF'
+#!/bin/bash
+# Disk space monitoring script
+THRESHOLD=85
+USAGE=\$(df / | tail -1 | awk '{print \$5}' | sed 's/%//')
+
+if [ "\$USAGE" -gt "\$THRESHOLD" ]; then
+    echo "WARNING: Disk usage is \${USAGE}% (threshold: \${THRESHOLD}%)"
+    # Clean up old logs if disk space is low
+    find /opt/ai-trading-bot/logs -name "*.log" -mtime +3 -delete
+    find /opt/ai-trading-bot/data -name "*.csv.backup" -mtime +7 -delete
+fi
+DISK_CHECK_EOF
+
+chmod +x /opt/ai-trading-bot/check_disk_space.sh
+chown ubuntu:ubuntu /opt/ai-trading-bot/check_disk_space.sh
+
+# Add disk check to crontab (run every hour)
+echo "0 * * * * ubuntu /opt/ai-trading-bot/check_disk_space.sh" >> /etc/crontab
+
+log "🎉 AI Trading Bot instance setup completed successfully!"
+log "📊 Final disk usage: \$(df -h / | tail -1)"
 EOF
 )
+    
+    # Create block device mapping for 16GB root volume
+    local block_device_mapping='[{
+        "DeviceName": "/dev/sda1",
+        "Ebs": {
+            "VolumeSize": 16,
+            "VolumeType": "gp3",
+            "DeleteOnTermination": true,
+            "Encrypted": true
+        }
+    }]'
     
     local instance_id=$(aws_cmd ec2 run-instances \
         --image-id "$ami_id" \
@@ -817,6 +906,7 @@ EOF
         --security-group-ids "$sg_id" \
         --iam-instance-profile Name="$profile_name" \
         --user-data "$user_data" \
+        --block-device-mappings "$block_device_mapping" \
         --tag-specifications "ResourceType=instance,Tags=[
             {Key=Name,Value=$instance_name},
             {Key=Environment,Value=$env},
@@ -901,14 +991,17 @@ main() {
     echo -e "${BLUE}💰 Cost Estimate Summary:${NC}"
     echo -e "   ${GREEN}Cost-Optimized Configuration:${NC}"
     echo "   • EC2 Instances: t3.micro (Free Tier eligible) - \$0-8/month"
+    echo "   • EBS Volumes: 16GB gp3 encrypted per instance - \$1.60/month per instance"
     echo "   • S3 Storage: Single bucket with lifecycle policies - \$0.50-2/month"
     echo "   • Secrets Manager: 2 secrets - \$0.80/month"
     echo "   • CloudWatch: Basic monitoring - \$0.50/month"
     echo "   • Data Transfer: Minimal - \$0.50/month"
-    echo -e "   ${GREEN}Total Estimated Cost: \$2-12/month${NC}"
+    echo -e "   ${GREEN}Total Estimated Cost: \$4-15/month${NC}"
     echo
     echo -e "   ${YELLOW}Cost Saving Features Enabled:${NC}"
     echo "   • t3.micro instances (Free Tier eligible for first year)"
+    echo "   • 16GB gp3 volumes with encryption (optimal size for trading bot)"
+    echo "   • Automated disk space monitoring and cleanup"
     echo "   • Consolidated S3 bucket (reduced storage costs)"
     echo "   • Aggressive lifecycle policies (auto-delete old files)"
     echo "   • Auto-shutdown for staging instances (evenings/weekends)"

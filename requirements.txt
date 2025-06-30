@@ -13,3 +13,5 @@ tf2onnx==1.16.1
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
 psutil==5.9.6
+boto3==1.35.36
+botocore==1.35.36

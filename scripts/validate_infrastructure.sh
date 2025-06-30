@@ -256,9 +256,9 @@ validate_security_groups() {
     fi
 }
 
-# 6. Validate EC2 instances
+# 6. Validate EC2 instances and EBS volumes
 validate_ec2_instances() {
-    log_info "Validating EC2 instances..."
+    log_info "Validating EC2 instances and EBS volumes..."
     
     for env in "${ENVIRONMENTS[@]}"; do
         local instance_tag="${PROJECT_NAME}-${env}"
@@ -267,10 +267,10 @@ validate_ec2_instances() {
         # Check if instance exists and is running
         local instance_info=$(aws ec2 describe-instances \
             --filters "Name=tag:Name,Values=$instance_tag" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
-            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,IamInstanceProfile.Arn]' \
-            --output text 2>/dev/null || echo "None None None")
+            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,IamInstanceProfile.Arn,BlockDeviceMappings[0].Ebs.VolumeId]' \
+            --output text 2>/dev/null || echo "None None None None")
         
-        read -r instance_id instance_state instance_profile_arn <<< "$instance_info"
+        read -r instance_id instance_state instance_profile_arn volume_id <<< "$instance_info"
         
         if [ "$instance_id" = "None" ] || [ "$instance_id" = "null" ]; then
             log_warning "No EC2 instance found for $env environment"
@@ -290,16 +290,116 @@ validate_ec2_instances() {
                 log_info "Expected: $profile_name, Found: $instance_profile_arn"
             fi
             
+            # Validate EBS volume size and type
+            if [ "$volume_id" != "None" ] && [ "$volume_id" != "null" ]; then
+                local volume_info=$(aws ec2 describe-volumes \
+                    --volume-ids "$volume_id" \
+                    --query 'Volumes[0].[Size,VolumeType,Encrypted]' \
+                    --output text 2>/dev/null || echo "None None None")
+                
+                read -r volume_size volume_type encrypted <<< "$volume_info"
+                
+                if [ "$volume_size" = "16" ]; then
+                    log_success "$env instance has 16GB root volume"
+                elif [ "$volume_size" != "None" ]; then
+                    log_error "$env instance has ${volume_size}GB root volume (expected 16GB)"
+                    log_info "To resize: aws ec2 modify-volume --volume-id $volume_id --size 16"
+                else
+                    log_error "Could not determine $env instance volume size"
+                fi
+                
+                if [ "$volume_type" = "gp3" ]; then
+                    log_success "$env instance uses gp3 volume type (cost optimized)"
+                elif [ "$volume_type" != "None" ]; then
+                    log_warning "$env instance uses $volume_type volume type (consider gp3 for cost optimization)"
+                fi
+                
+                if [ "$encrypted" = "True" ]; then
+                    log_success "$env instance volume is encrypted"
+                else
+                    log_warning "$env instance volume is not encrypted"
+                fi
+            else
+                log_error "Could not find EBS volume for $env instance"
+            fi
+            
             # Check if SSM agent is working (if instance is running)
             if [ "$instance_state" = "running" ]; then
                 if aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$instance_id" --query 'InstanceInformationList[0].InstanceId' --output text >/dev/null 2>&1; then
                     log_success "$env instance SSM agent is working"
+                    
+                    # Check disk space via SSM if available
+                    validate_disk_space_via_ssm "$env" "$instance_id"
                 else
                     log_error "$env instance SSM agent not responding"
                 fi
             fi
         fi
     done
+}
+
+# Helper function to validate disk space via SSM
+validate_disk_space_via_ssm() {
+    local env=$1
+    local instance_id=$2
+    
+    log_info "Checking disk space for $env instance via SSM..."
+    
+    # Send SSM command to check disk space
+    local command_id=$(aws ssm send-command \
+        --instance-ids "$instance_id" \
+        --document-name "AWS-RunShellScript" \
+        --parameters 'commands=["df -h / | tail -1 | awk '\''{ print $2 \" \" $4 \" \" $5 }'\''"]' \
+        --query 'Command.CommandId' \
+        --output text 2>/dev/null || echo "None")
+    
+    if [ "$command_id" != "None" ]; then
+        # Wait for command to complete
+        sleep 3
+        
+        local disk_info=$(aws ssm get-command-invocation \
+            --command-id "$command_id" \
+            --instance-id "$instance_id" \
+            --query 'StandardOutputContent' \
+            --output text 2>/dev/null || echo "None")
+        
+        if [ "$disk_info" != "None" ] && [ -n "$disk_info" ]; then
+            read -r total_size available_size usage_percent <<< "$disk_info"
+            
+            # Remove trailing characters and convert to numbers for comparison
+            local total_gb=$(echo "$total_size" | sed 's/[^0-9]//g')
+            local available_gb=$(echo "$available_size" | sed 's/[^0-9]//g')
+            local usage_num=$(echo "$usage_percent" | sed 's/%//')
+            
+            log_info "$env instance disk usage: $disk_info"
+            
+            if [ "$total_gb" -ge 15 ]; then
+                log_success "$env instance has adequate total disk space ($total_size)"
+            else
+                log_error "$env instance has insufficient total disk space ($total_size, expected ≥15GB)"
+            fi
+            
+            if [ "$available_gb" -ge 8 ]; then
+                log_success "$env instance has adequate free disk space ($available_size)"
+            elif [ "$available_gb" -ge 5 ]; then
+                log_warning "$env instance has limited free disk space ($available_size)"
+            else
+                log_error "$env instance has insufficient free disk space ($available_size, expected ≥5GB)"
+            fi
+            
+            if [ "$usage_num" -le 80 ]; then
+                log_success "$env instance disk usage is acceptable ($usage_percent)"
+            elif [ "$usage_num" -le 90 ]; then
+                log_warning "$env instance disk usage is high ($usage_percent)"
+            else
+                log_error "$env instance disk usage is critical ($usage_percent)"
+            fi
+        else
+            log_warning "Could not retrieve disk space information for $env instance"
+        fi
+    else
+        log_warning "Could not send SSM command to check disk space for $env instance"
+    fi
 }
 
 # 7. Validate GitHub Actions setup
