@@ -4,3 +4,5 @@ globs:
 alwaysApply: true
 ---
 - Don't create MD files for each change. Update existing readme's and only create README files within each folder if necessary to explain how each portion of the project works.
+- Important: Never commit unless specifically asked to!
+- 
