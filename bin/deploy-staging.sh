@@ -80,15 +80,8 @@ sudo systemctl stop ai-trading-bot || {
     log "⚠️ Service was not running or failed to stop"
 }
 
-# Backup current deployment
-log "💾 Creating backup..."
-if [ -d "/opt/ai-trading-bot" ] && [ "$(ls -A /opt/ai-trading-bot)" ]; then
-    sudo tar -czf /opt/ai-trading-bot-backup-$(date +%Y%m%d_%H%M%S).tar.gz -C /opt/ai-trading-bot . || {
-        log "⚠️ Backup failed, but continuing..."
-    }
-else
-    log "ℹ️ No existing deployment to backup"
-fi
+# Skip backup for staging (saves disk space)
+log "ℹ️ Skipping backup for staging deployment (saves disk space)"
 
 # Extract new deployment
 log "📦 Extracting new deployment..."
