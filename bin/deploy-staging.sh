@@ -189,7 +189,7 @@ Environment="ENVIRONMENT=staging"
 ExecStartPre=/opt/ai-trading-bot/venv/bin/python /opt/ai-trading-bot/scripts/test_secrets_access.py
 
 # Start with a simple strategy for staging
-ExecStart=/opt/ai-trading-bot/venv/bin/python run_live_trading.py adaptive
+ExecStart=/opt/ai-trading-bot/venv/bin/python run_live_trading.py ml_basic_strategy
 
 # Restart configuration
 Restart=on-failure
