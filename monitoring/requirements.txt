@@ -1,0 +1,4 @@
+Flask==2.3.3
+Flask-SocketIO==5.3.6
+pandas==2.1.1
+psutil==5.9.5
