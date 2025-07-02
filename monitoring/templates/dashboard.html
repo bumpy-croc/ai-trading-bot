@@ -623,10 +623,11 @@
 
                 // Define metric display order and grouping
                 const metricGroups = {
-                    performance: ['current_balance', 'total_pnl', 'win_rate', 'total_trades'],
-                    risk: ['active_positions', 'current_exposure', 'max_drawdown', 'sharpe_ratio'],
-                    market: ['current_price', 'price_change_24h', 'rsi', 'ema_trend'],
-                    strategy: ['current_strategy', 'strategy_confidence', 'signals_today']
+                    systemHealth: ['api_connection_status', 'data_feed_status', 'error_rate_hourly', 'api_latency'],
+                    risk: ['current_drawdown', 'daily_pnl', 'weekly_pnl', 'max_drawdown'],
+                    execution: ['fill_rate', 'avg_slippage', 'failed_orders', 'execution_quality'],
+                    balance: ['current_balance', 'active_positions_count', 'total_position_value', 'unrealized_pnl'],
+                    strategy: ['win_rate', 'sharpe_ratio', 'recent_trade_outcomes', 'profit_factor']
                 };
 
                 Object.entries(metricGroups).forEach(([group, metricKeys]) => {
@@ -694,10 +695,12 @@
             updateSystemHealth(metrics) {
                 const container = document.getElementById('systemHealth');
                 const healthMetrics = [
-                    { key: 'system_status', label: 'System Status', value: metrics.system_status },
-                    { key: 'api_status', label: 'API Status', value: metrics.api_status },
-                    { key: 'error_count', label: 'Errors (24h)', value: metrics.error_count },
-                    { key: 'last_update', label: 'Last Update', value: metrics.last_update }
+                    { key: 'api_connection_status', label: 'API Connection', value: metrics.api_connection_status },
+                    { key: 'data_feed_status', label: 'Data Feed', value: metrics.data_feed_status },
+                    { key: 'error_rate_hourly', label: 'Error Rate (1h)', value: metrics.error_rate_hourly },
+                    { key: 'api_latency', label: 'API Latency (ms)', value: metrics.api_latency },
+                    { key: 'system_uptime', label: 'Uptime', value: metrics.system_uptime },
+                    { key: 'last_data_update', label: 'Last Update', value: metrics.last_data_update }
                 ];
 
                 container.innerHTML = healthMetrics.map(metric => `

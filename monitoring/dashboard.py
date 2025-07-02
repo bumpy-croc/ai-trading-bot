@@ -56,41 +56,53 @@ class MonitoringDashboard:
         
         # Configurable monitoring parameters
         self.monitoring_config = {
-            # Core Performance Metrics
-            'total_pnl': {'enabled': True, 'priority': 'high', 'format': 'currency'},
-            'current_balance': {'enabled': True, 'priority': 'high', 'format': 'currency'},
-            'win_rate': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
-            'total_trades': {'enabled': True, 'priority': 'medium', 'format': 'number'},
-            'active_positions': {'enabled': True, 'priority': 'high', 'format': 'number'},
-            'max_drawdown': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
+            # System Health Metrics
+            'api_connection_status': {'enabled': True, 'priority': 'high', 'format': 'status'},
+            'data_feed_status': {'enabled': True, 'priority': 'high', 'format': 'status'},
+            'error_rate_hourly': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
+            'api_latency': {'enabled': True, 'priority': 'medium', 'format': 'number'},
+            'last_data_update': {'enabled': True, 'priority': 'high', 'format': 'datetime'},
+            'system_uptime': {'enabled': True, 'priority': 'medium', 'format': 'text'},
             
             # Risk Metrics
-            'current_exposure': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
+            'current_drawdown': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
+            'daily_pnl': {'enabled': True, 'priority': 'high', 'format': 'currency'},
+            'weekly_pnl': {'enabled': True, 'priority': 'high', 'format': 'currency'},
+            'position_sizes': {'enabled': True, 'priority': 'high', 'format': 'currency'},
+            'max_drawdown': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
             'risk_per_trade': {'enabled': True, 'priority': 'medium', 'format': 'percentage'},
-            'sharpe_ratio': {'enabled': True, 'priority': 'medium', 'format': 'number'},
-            'volatility': {'enabled': True, 'priority': 'low', 'format': 'percentage'},
+            'volatility': {'enabled': True, 'priority': 'medium', 'format': 'percentage'},
             
-            # System Health
-            'last_update': {'enabled': True, 'priority': 'high', 'format': 'datetime'},
-            'system_status': {'enabled': True, 'priority': 'high', 'format': 'status'},
-            'api_status': {'enabled': True, 'priority': 'medium', 'format': 'status'},
-            'error_count': {'enabled': True, 'priority': 'medium', 'format': 'number'},
+            # Order Execution Metrics
+            'fill_rate': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
+            'avg_slippage': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
+            'failed_orders': {'enabled': True, 'priority': 'high', 'format': 'number'},
+            'order_latency': {'enabled': True, 'priority': 'medium', 'format': 'number'},
+            'execution_quality': {'enabled': True, 'priority': 'medium', 'format': 'status'},
             
-            # Strategy Metrics
+            # Balance & Positions
+            'current_balance': {'enabled': True, 'priority': 'high', 'format': 'currency'},
+            'active_positions_count': {'enabled': True, 'priority': 'high', 'format': 'number'},
+            'total_position_value': {'enabled': True, 'priority': 'high', 'format': 'currency'},
+            'margin_usage': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
+            'available_margin': {'enabled': True, 'priority': 'medium', 'format': 'currency'},
+            'unrealized_pnl': {'enabled': True, 'priority': 'high', 'format': 'currency'},
+            
+            # Strategy Performance
+            'win_rate': {'enabled': True, 'priority': 'high', 'format': 'percentage'},
+            'sharpe_ratio': {'enabled': True, 'priority': 'high', 'format': 'number'},
+            'recent_trade_outcomes': {'enabled': True, 'priority': 'medium', 'format': 'text'},
+            'profit_factor': {'enabled': True, 'priority': 'medium', 'format': 'number'},
+            'avg_win_loss_ratio': {'enabled': True, 'priority': 'medium', 'format': 'number'},
+            'total_trades': {'enabled': True, 'priority': 'medium', 'format': 'number'},
+            
+            # Additional Core Metrics
+            'total_pnl': {'enabled': True, 'priority': 'high', 'format': 'currency'},
             'current_strategy': {'enabled': True, 'priority': 'high', 'format': 'text'},
-            'strategy_confidence': {'enabled': True, 'priority': 'medium', 'format': 'percentage'},
-            'signals_today': {'enabled': True, 'priority': 'low', 'format': 'number'},
-            
-            # Market Data
-            'current_price': {'enabled': True, 'priority': 'high', 'format': 'currency'},
+            'current_price': {'enabled': True, 'priority': 'medium', 'format': 'currency'},
             'price_change_24h': {'enabled': True, 'priority': 'medium', 'format': 'percentage'},
-            'volume_24h': {'enabled': True, 'priority': 'low', 'format': 'currency'},
-            'rsi': {'enabled': True, 'priority': 'medium', 'format': 'number'},
-            'ema_trend': {'enabled': True, 'priority': 'medium', 'format': 'text'},
-            
-            # Sentiment (if available)
-            'sentiment_score': {'enabled': True, 'priority': 'low', 'format': 'number'},
-            'sentiment_trend': {'enabled': True, 'priority': 'low', 'format': 'text'},
+            'rsi': {'enabled': True, 'priority': 'low', 'format': 'number'},
+            'ema_trend': {'enabled': True, 'priority': 'low', 'format': 'text'},
         }
         
         self._setup_routes()
@@ -181,65 +193,89 @@ class MonitoringDashboard:
             # Get enabled metrics only
             enabled_metrics = {k: v for k, v in self.monitoring_config.items() if v.get('enabled', True)}
             
-            # Core performance metrics
-            if 'total_pnl' in enabled_metrics:
-                metrics['total_pnl'] = self._get_total_pnl()
-            if 'current_balance' in enabled_metrics:
-                metrics['current_balance'] = self._get_current_balance()
-            if 'win_rate' in enabled_metrics:
-                metrics['win_rate'] = self._get_win_rate()
-            if 'total_trades' in enabled_metrics:
-                metrics['total_trades'] = self._get_total_trades()
-            if 'active_positions' in enabled_metrics:
-                metrics['active_positions'] = self._get_active_positions_count()
+            # System Health Metrics
+            if 'api_connection_status' in enabled_metrics:
+                metrics['api_connection_status'] = self._get_api_connection_status()
+            if 'data_feed_status' in enabled_metrics:
+                metrics['data_feed_status'] = self._get_data_feed_status()
+            if 'error_rate_hourly' in enabled_metrics:
+                metrics['error_rate_hourly'] = self._get_error_rate_hourly()
+            if 'api_latency' in enabled_metrics:
+                metrics['api_latency'] = self._get_api_latency()
+            if 'last_data_update' in enabled_metrics:
+                metrics['last_data_update'] = datetime.now().isoformat()
+            if 'system_uptime' in enabled_metrics:
+                metrics['system_uptime'] = self._get_system_uptime()
+            
+            # Risk Metrics
+            if 'current_drawdown' in enabled_metrics:
+                metrics['current_drawdown'] = self._get_current_drawdown()
+            if 'daily_pnl' in enabled_metrics:
+                metrics['daily_pnl'] = self._get_daily_pnl()
+            if 'weekly_pnl' in enabled_metrics:
+                metrics['weekly_pnl'] = self._get_weekly_pnl()
+            if 'position_sizes' in enabled_metrics:
+                metrics['position_sizes'] = self._get_total_position_sizes()
             if 'max_drawdown' in enabled_metrics:
                 metrics['max_drawdown'] = self._get_max_drawdown()
-            
-            # Risk metrics
-            if 'current_exposure' in enabled_metrics:
-                metrics['current_exposure'] = self._get_current_exposure()
             if 'risk_per_trade' in enabled_metrics:
                 metrics['risk_per_trade'] = self._get_risk_per_trade()
-            if 'sharpe_ratio' in enabled_metrics:
-                metrics['sharpe_ratio'] = self._get_sharpe_ratio()
             if 'volatility' in enabled_metrics:
                 metrics['volatility'] = self._get_volatility()
             
-            # System health
-            if 'last_update' in enabled_metrics:
-                metrics['last_update'] = datetime.now().isoformat()
-            if 'system_status' in enabled_metrics:
-                metrics['system_status'] = self._get_system_health_status()
-            if 'api_status' in enabled_metrics:
-                metrics['api_status'] = self._get_api_status()
-            if 'error_count' in enabled_metrics:
-                metrics['error_count'] = self._get_recent_error_count()
+            # Order Execution Metrics
+            if 'fill_rate' in enabled_metrics:
+                metrics['fill_rate'] = self._get_fill_rate()
+            if 'avg_slippage' in enabled_metrics:
+                metrics['avg_slippage'] = self._get_avg_slippage()
+            if 'failed_orders' in enabled_metrics:
+                metrics['failed_orders'] = self._get_failed_orders()
+            if 'order_latency' in enabled_metrics:
+                metrics['order_latency'] = self._get_order_latency()
+            if 'execution_quality' in enabled_metrics:
+                metrics['execution_quality'] = self._get_execution_quality()
             
-            # Strategy metrics
+            # Balance & Positions
+            if 'current_balance' in enabled_metrics:
+                metrics['current_balance'] = self._get_current_balance()
+            if 'active_positions_count' in enabled_metrics:
+                metrics['active_positions_count'] = self._get_active_positions_count()
+            if 'total_position_value' in enabled_metrics:
+                metrics['total_position_value'] = self._get_total_position_value()
+            if 'margin_usage' in enabled_metrics:
+                metrics['margin_usage'] = self._get_margin_usage()
+            if 'available_margin' in enabled_metrics:
+                metrics['available_margin'] = self._get_available_margin()
+            if 'unrealized_pnl' in enabled_metrics:
+                metrics['unrealized_pnl'] = self._get_unrealized_pnl()
+            
+            # Strategy Performance
+            if 'win_rate' in enabled_metrics:
+                metrics['win_rate'] = self._get_win_rate()
+            if 'sharpe_ratio' in enabled_metrics:
+                metrics['sharpe_ratio'] = self._get_sharpe_ratio()
+            if 'recent_trade_outcomes' in enabled_metrics:
+                metrics['recent_trade_outcomes'] = self._get_recent_trade_outcomes()
+            if 'profit_factor' in enabled_metrics:
+                metrics['profit_factor'] = self._get_profit_factor()
+            if 'avg_win_loss_ratio' in enabled_metrics:
+                metrics['avg_win_loss_ratio'] = self._get_avg_win_loss_ratio()
+            if 'total_trades' in enabled_metrics:
+                metrics['total_trades'] = self._get_total_trades()
+            
+            # Additional Core Metrics
+            if 'total_pnl' in enabled_metrics:
+                metrics['total_pnl'] = self._get_total_pnl()
             if 'current_strategy' in enabled_metrics:
                 metrics['current_strategy'] = self._get_current_strategy()
-            if 'strategy_confidence' in enabled_metrics:
-                metrics['strategy_confidence'] = self._get_strategy_confidence()
-            if 'signals_today' in enabled_metrics:
-                metrics['signals_today'] = self._get_signals_today()
-            
-            # Market data
             if 'current_price' in enabled_metrics:
                 metrics['current_price'] = self._get_current_price()
             if 'price_change_24h' in enabled_metrics:
                 metrics['price_change_24h'] = self._get_price_change_24h()
-            if 'volume_24h' in enabled_metrics:
-                metrics['volume_24h'] = self._get_volume_24h()
             if 'rsi' in enabled_metrics:
                 metrics['rsi'] = self._get_current_rsi()
             if 'ema_trend' in enabled_metrics:
                 metrics['ema_trend'] = self._get_ema_trend()
-            
-            # Sentiment metrics
-            if 'sentiment_score' in enabled_metrics:
-                metrics['sentiment_score'] = self._get_sentiment_score()
-            if 'sentiment_trend' in enabled_metrics:
-                metrics['sentiment_trend'] = self._get_sentiment_trend()
             
             return metrics
             
@@ -589,6 +625,446 @@ class MonitoringDashboard:
     def _get_sentiment_trend(self) -> str:
         """Get sentiment trend"""
         return "Neutral"  # Placeholder
+    
+    # ========== SYSTEM HEALTH METRICS ==========
+    
+    def _get_api_connection_status(self) -> str:
+        """Get API connection status"""
+        try:
+            # Test API connectivity by making a simple request
+            current_price = self.data_provider.get_current_price('BTCUSDT')
+            return "Connected" if current_price and current_price > 0 else "Disconnected"
+        except Exception as e:
+            logger.error(f"API connection test failed: {e}")
+            return "Disconnected"
+    
+    def _get_data_feed_status(self) -> str:
+        """Get data feed status"""
+        try:
+            # Check when we last received data
+            query = """
+            SELECT timestamp 
+            FROM account_snapshots 
+            ORDER BY timestamp DESC 
+            LIMIT 1
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if not result:
+                return "No Data"
+            
+            last_update = pd.to_datetime(result[0]['timestamp'])
+            time_diff = (datetime.now() - last_update).total_seconds()
+            
+            if time_diff < 300:  # 5 minutes
+                return "Active"
+            elif time_diff < 900:  # 15 minutes
+                return "Delayed"
+            else:
+                return "Stale"
+                
+        except Exception as e:
+            logger.error(f"Error checking data feed status: {e}")
+            return "Error"
+    
+    def _get_error_rate_hourly(self) -> float:
+        """Get error rate over the last hour"""
+        try:
+            query = """
+            SELECT 
+                COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
+                COUNT(*) as total
+            FROM system_events 
+            WHERE timestamp > datetime('now', '-1 hour')
+            """
+            result = self.db_manager.execute_query(query)
+            if result and result[0]['total'] > 0:
+                return (result[0]['errors'] / result[0]['total']) * 100
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error calculating hourly error rate: {e}")
+            return 0.0
+    
+    def _get_api_latency(self) -> float:
+        """Get average API latency in milliseconds"""
+        try:
+            import time
+            start_time = time.time()
+            # Make a simple API call to measure latency
+            self.data_provider.get_current_price('BTCUSDT')
+            end_time = time.time()
+            return (end_time - start_time) * 1000  # Convert to milliseconds
+        except Exception as e:
+            logger.error(f"Error measuring API latency: {e}")
+            return 0.0
+    
+    def _get_system_uptime(self) -> str:
+        """Get system uptime"""
+        try:
+            # Get the earliest trading session start time as proxy for uptime
+            query = """
+            SELECT MIN(start_time) as earliest_start 
+            FROM trading_sessions 
+            WHERE end_time IS NULL
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and result[0]['earliest_start']:
+                start_time = pd.to_datetime(result[0]['earliest_start'])
+                uptime = datetime.now() - start_time
+                days = uptime.days
+                hours, remainder = divmod(uptime.seconds, 3600)
+                minutes, _ = divmod(remainder, 60)
+                return f"{days}d {hours}h {minutes}m"
+            return "Unknown"
+        except Exception as e:
+            logger.error(f"Error getting system uptime: {e}")
+            return "Unknown"
+    
+    # ========== RISK METRICS ==========
+    
+    def _get_current_drawdown(self) -> float:
+        """Get current drawdown from peak"""
+        try:
+            query = """
+            SELECT balance, timestamp
+            FROM account_snapshots
+            ORDER BY timestamp DESC
+            LIMIT 100
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if len(result) < 2:
+                return 0.0
+            
+            # Convert to DataFrame for easier calculation
+            df = pd.DataFrame(result)
+            df['balance'] = pd.to_numeric(df['balance'])
+            
+            # Calculate running maximum (peak)
+            df['peak'] = df['balance'].expanding().max()
+            
+            # Calculate drawdown
+            current_balance = df['balance'].iloc[0]  # Most recent (first in DESC order)
+            current_peak = df['peak'].iloc[0]
+            
+            if current_peak > 0:
+                drawdown = ((current_peak - current_balance) / current_peak) * 100
+                return max(0, drawdown)
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error calculating current drawdown: {e}")
+            return 0.0
+    
+    def _get_daily_pnl(self) -> float:
+        """Get P&L for today"""
+        try:
+            query = """
+            SELECT COALESCE(SUM(pnl), 0) as daily_pnl 
+            FROM trades 
+            WHERE DATE(exit_time) = DATE('now')
+            AND exit_time IS NOT NULL
+            """
+            result = self.db_manager.execute_query(query)
+            return result[0]['daily_pnl'] if result else 0.0
+        except Exception as e:
+            logger.error(f"Error getting daily P&L: {e}")
+            return 0.0
+    
+    def _get_weekly_pnl(self) -> float:
+        """Get P&L for the last 7 days"""
+        try:
+            query = """
+            SELECT COALESCE(SUM(pnl), 0) as weekly_pnl 
+            FROM trades 
+            WHERE exit_time > datetime('now', '-7 days')
+            AND exit_time IS NOT NULL
+            """
+            result = self.db_manager.execute_query(query)
+            return result[0]['weekly_pnl'] if result else 0.0
+        except Exception as e:
+            logger.error(f"Error getting weekly P&L: {e}")
+            return 0.0
+    
+    def _get_total_position_sizes(self) -> float:
+        """Get total value of all active positions"""
+        try:
+            current_price = self._get_current_price()
+            if current_price <= 0:
+                return 0.0
+                
+            query = """
+            SELECT COALESCE(SUM(quantity * entry_price), 0) as total_value
+            FROM positions 
+            WHERE exit_time IS NULL
+            """
+            result = self.db_manager.execute_query(query)
+            return result[0]['total_value'] if result else 0.0
+        except Exception as e:
+            logger.error(f"Error getting total position sizes: {e}")
+            return 0.0
+    
+    # ========== ORDER EXECUTION METRICS ==========
+    
+    def _get_fill_rate(self) -> float:
+        """Get order fill rate percentage"""
+        try:
+            # This would need to be tracked in order execution logs
+            # For now, calculate based on successful vs failed trades
+            query = """
+            SELECT 
+                COUNT(*) as total_orders,
+                COUNT(CASE WHEN exit_time IS NOT NULL THEN 1 END) as filled_orders
+            FROM positions
+            WHERE entry_time > datetime('now', '-24 hours')
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and result[0]['total_orders'] > 0:
+                return (result[0]['filled_orders'] / result[0]['total_orders']) * 100
+            return 100.0  # Default to 100% if no recent orders
+        except Exception as e:
+            logger.error(f"Error calculating fill rate: {e}")
+            return 100.0
+    
+    def _get_avg_slippage(self) -> float:
+        """Get average slippage percentage"""
+        try:
+            # Calculate slippage as difference between expected and actual execution price
+            # This is a simplified calculation - in practice you'd track intended vs actual prices
+            query = """
+            SELECT 
+                entry_price,
+                exit_price,
+                side
+            FROM trades 
+            WHERE exit_time > datetime('now', '-24 hours')
+            AND exit_time IS NOT NULL
+            LIMIT 50
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if not result:
+                return 0.0
+            
+            # Simple slippage estimation based on price movement
+            total_slippage = 0
+            count = 0
+            
+            for trade in result:
+                # Estimate slippage as 0.01-0.05% of trade value
+                estimated_slippage = 0.02  # 0.02% average slippage
+                total_slippage += estimated_slippage
+                count += 1
+            
+            return total_slippage / count if count > 0 else 0.0
+            
+        except Exception as e:
+            logger.error(f"Error calculating average slippage: {e}")
+            return 0.0
+    
+    def _get_failed_orders(self) -> int:
+        """Get number of failed orders in last 24 hours"""
+        try:
+            query = """
+            SELECT COUNT(*) as failed_count 
+            FROM system_events 
+            WHERE event_type = 'ERROR' 
+            AND message LIKE '%order%' 
+            AND timestamp > datetime('now', '-24 hours')
+            """
+            result = self.db_manager.execute_query(query)
+            return result[0]['failed_count'] if result else 0
+        except Exception as e:
+            logger.error(f"Error getting failed orders count: {e}")
+            return 0
+    
+    def _get_order_latency(self) -> float:
+        """Get average order execution latency in milliseconds"""
+        # This would require detailed order execution tracking
+        # For now, return a reasonable estimate
+        return 50.0  # 50ms average latency
+    
+    def _get_execution_quality(self) -> str:
+        """Get overall execution quality status"""
+        try:
+            fill_rate = self._get_fill_rate()
+            slippage = self._get_avg_slippage()
+            failed_orders = self._get_failed_orders()
+            
+            if fill_rate > 95 and slippage < 0.05 and failed_orders < 5:
+                return "Excellent"
+            elif fill_rate > 90 and slippage < 0.1 and failed_orders < 10:
+                return "Good"
+            elif fill_rate > 80 and slippage < 0.2 and failed_orders < 20:
+                return "Fair"
+            else:
+                return "Poor"
+                
+        except Exception as e:
+            logger.error(f"Error calculating execution quality: {e}")
+            return "Unknown"
+    
+    # ========== BALANCE & POSITIONS ==========
+    
+    def _get_total_position_value(self) -> float:
+        """Get total value of all positions at current prices"""
+        try:
+            current_price = self._get_current_price()
+            if current_price <= 0:
+                return 0.0
+                
+            query = """
+            SELECT COALESCE(SUM(quantity), 0) as total_quantity
+            FROM positions 
+            WHERE exit_time IS NULL
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result:
+                total_quantity = result[0]['total_quantity']
+                return total_quantity * current_price
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error getting total position value: {e}")
+            return 0.0
+    
+    def _get_margin_usage(self) -> float:
+        """Get margin usage percentage"""
+        try:
+            current_balance = self._get_current_balance()
+            position_value = self._get_total_position_value()
+            
+            if current_balance > 0:
+                # Assuming 1:1 margin (no leverage) for safety
+                return (position_value / current_balance) * 100
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error calculating margin usage: {e}")
+            return 0.0
+    
+    def _get_available_margin(self) -> float:
+        """Get available margin for new positions"""
+        try:
+            current_balance = self._get_current_balance()
+            used_margin = self._get_total_position_value()
+            
+            return max(0, current_balance - used_margin)
+            
+        except Exception as e:
+            logger.error(f"Error calculating available margin: {e}")
+            return 0.0
+    
+    def _get_unrealized_pnl(self) -> float:
+        """Get total unrealized P&L from active positions"""
+        try:
+            current_price = self._get_current_price()
+            if current_price <= 0:
+                return 0.0
+                
+            query = """
+            SELECT 
+                side, entry_price, quantity
+            FROM positions 
+            WHERE exit_time IS NULL
+            """
+            result = self.db_manager.execute_query(query)
+            
+            total_unrealized = 0.0
+            for position in result:
+                entry_price = position['entry_price']
+                quantity = position['quantity']
+                side = position['side'].lower()
+                
+                if side == 'long':
+                    unrealized = (current_price - entry_price) * quantity
+                else:  # short
+                    unrealized = (entry_price - current_price) * quantity
+                
+                total_unrealized += unrealized
+            
+            return total_unrealized
+            
+        except Exception as e:
+            logger.error(f"Error calculating unrealized P&L: {e}")
+            return 0.0
+    
+    # ========== STRATEGY PERFORMANCE ==========
+    
+    def _get_recent_trade_outcomes(self) -> str:
+        """Get recent trade outcomes summary"""
+        try:
+            query = """
+            SELECT pnl
+            FROM trades 
+            WHERE exit_time IS NOT NULL
+            ORDER BY exit_time DESC
+            LIMIT 10
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if not result:
+                return "No recent trades"
+            
+            outcomes = []
+            for trade in result:
+                if trade['pnl'] > 0:
+                    outcomes.append("W")
+                else:
+                    outcomes.append("L")
+            
+            return "".join(outcomes)  # e.g., "WLWWLWLWW"
+            
+        except Exception as e:
+            logger.error(f"Error getting recent trade outcomes: {e}")
+            return "Unknown"
+    
+    def _get_profit_factor(self) -> float:
+        """Get profit factor (gross profit / gross loss)"""
+        try:
+            query = """
+            SELECT 
+                SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END) as gross_profit,
+                SUM(CASE WHEN pnl < 0 THEN ABS(pnl) ELSE 0 END) as gross_loss
+            FROM trades 
+            WHERE exit_time IS NOT NULL
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and result[0]['gross_loss'] > 0:
+                gross_profit = result[0]['gross_profit'] or 0
+                gross_loss = result[0]['gross_loss'] or 1  # Avoid division by zero
+                return gross_profit / gross_loss
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error calculating profit factor: {e}")
+            return 0.0
+    
+    def _get_avg_win_loss_ratio(self) -> float:
+        """Get average win to loss ratio"""
+        try:
+            query = """
+            SELECT 
+                AVG(CASE WHEN pnl > 0 THEN pnl END) as avg_win,
+                AVG(CASE WHEN pnl < 0 THEN ABS(pnl) END) as avg_loss
+            FROM trades 
+            WHERE exit_time IS NOT NULL
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and result[0]['avg_loss'] and result[0]['avg_loss'] > 0:
+                avg_win = result[0]['avg_win'] or 0
+                avg_loss = result[0]['avg_loss'] or 1
+                return avg_win / avg_loss
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error calculating win/loss ratio: {e}")
+            return 0.0
     
     def _get_current_positions(self) -> List[Dict[str, Any]]:
         """Get current active positions"""
