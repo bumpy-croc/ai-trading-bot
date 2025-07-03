@@ -9,10 +9,11 @@ This provides quick access to common testing scenarios.
 import sys
 import subprocess
 import os
+import argparse
 from pathlib import Path
 
 # Ensure we can import from the project
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 class Colors:
@@ -133,7 +134,7 @@ def run_coverage_analysis():
     
     cmd = [
         sys.executable, '-m', 'pytest',
-                    '--cov=ai-trading-bot',
+        '--cov=ai-trading-bot',
         '--cov-report=term-missing',
         '--cov-report=html',
         'tests/'
@@ -150,9 +151,13 @@ def run_specific_test_file(test_file):
     """Run a specific test file"""
     print_header(f"Running {test_file}")
     
+    # Handle both with and without tests/ prefix
+    if not test_file.startswith('tests/'):
+        test_file = f'tests/{test_file}'
+    
     cmd = [
         sys.executable, '-m', 'pytest',
-        f'tests/{test_file}',
+        test_file,
         '-v', '--tb=short'
     ]
     
@@ -183,12 +188,6 @@ def validate_test_environment():
     """Validate the test environment"""
     print_header("Validating Test Environment")
     
-    # Check if we're in the right directory
-    if not (Path.cwd() / 'ai-trading-bot').exists():
-        print_error("Not in the correct project directory")
-        print_warning("Please run this script from the project root directory")
-        return False
-    
     # Check if tests directory exists
     if not Path('tests').exists():
         print_error("Tests directory not found")
@@ -207,39 +206,169 @@ def validate_test_environment():
     print_success("Test environment validation passed")
     return True
 
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Trading Bot Test Runner",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python run_tests.py smoke                    # Quick smoke test
+  python run_tests.py unit                     # Run unit tests
+  python run_tests.py critical                 # Run critical tests
+  python run_tests.py all                      # Run all tests
+  python run_tests.py test_strategies.py       # Run specific test file
+  python run_tests.py --file test_data_providers.py  # Run specific file
+  python run_tests.py --markers "not integration"    # Run tests with specific markers
+  python run_tests.py --coverage               # Run with coverage
+        """
+    )
+    
+    # Main test command
+    parser.add_argument(
+        'command',
+        nargs='?',
+        choices=['smoke', 'critical', 'unit', 'integration', 'coverage', 'all', 'validate'],
+        help='Test command to run'
+    )
+    
+    # Alternative ways to specify tests
+    parser.add_argument(
+        '--file', '-f',
+        help='Run specific test file (e.g., test_strategies.py)'
+    )
+    
+    parser.add_argument(
+        '--markers', '-m',
+        help='Run tests with specific pytest markers (e.g., "not integration")'
+    )
+    
+    parser.add_argument(
+        '--coverage', '-c',
+        action='store_true',
+        help='Run tests with coverage analysis'
+    )
+    
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Verbose output'
+    )
+    
+    parser.add_argument(
+        '--quiet', '-q',
+        action='store_true',
+        help='Quiet output (less verbose)'
+    )
+    
+    parser.add_argument(
+        '--no-deps-check',
+        action='store_true',
+        help='Skip dependency checking'
+    )
+    
+    parser.add_argument(
+        '--interactive', '-i',
+        action='store_true',
+        help='Force interactive mode (ignore command line args)'
+    )
+    
+    return parser.parse_args()
+
+def run_custom_pytest_command(markers=None, coverage=False, verbose=False, quiet=False):
+    """Run custom pytest command with specified options"""
+    print_header("Running Custom Tests")
+    
+    cmd = [sys.executable, '-m', 'pytest', 'tests/']
+    
+    if markers:
+        cmd.extend(['-m', markers])
+    
+    if coverage:
+        cmd.extend([
+            '--cov=ai-trading-bot',
+            '--cov-report=term-missing',
+            '--cov-report=html'
+        ])
+    
+    if verbose:
+        cmd.append('-v')
+    elif quiet:
+        cmd.append('-q')
+    else:
+        cmd.append('-v')  # Default to verbose
+    
+    cmd.append('--tb=short')
+    
+    description = "Custom Tests"
+    if markers:
+        description += f" (markers: {markers})"
+    if coverage:
+        description += " with Coverage"
+    
+    success = run_command(cmd, description)
+    
+    if success and coverage:
+        print_success("Coverage report generated in htmlcov/index.html")
+    
+    return success
+
+def interactive_mode():
+    """Run in interactive mode"""
+    print_header("Trading Bot Test Runner - Interactive Mode")
+    
+    print("Available test commands:")
+    print("1. smoke    - Quick smoke test")
+    print("2. critical - Critical tests (live trading + risk)")
+    print("3. unit     - All unit tests")
+    print("4. integration - Integration tests")
+    print("5. coverage - Tests with coverage analysis")
+    print("6. all      - All tests")
+    print("7. validate - Validate test environment")
+    print()
+    
+    command = input("Enter command (or test file name): ").strip().lower()
+    return command
+
 def main():
     """Main test runner function"""
-    print_header("Trading Bot Test Runner")
+    args = parse_arguments()
     
-    if len(sys.argv) > 1:
-        command = sys.argv[1].lower()
+    # Handle interactive mode
+    if args.interactive or (not args.command and not args.file and not args.markers and not args.coverage):
+        command = interactive_mode()
     else:
-        # Interactive mode
-        print("Available test commands:")
-        print("1. smoke    - Quick smoke test")
-        print("2. critical - Critical tests (live trading + risk)")
-        print("3. unit     - All unit tests")
-        print("4. integration - Integration tests")
-        print("5. coverage - Tests with coverage analysis")
-        print("6. all      - All tests")
-        print("7. validate - Validate test environment")
-        print()
-        
-        command = input("Enter command (or test file name): ").strip().lower()
+        command = args.command
     
     # Validate environment first
     if not validate_test_environment():
         sys.exit(1)
     
-    # Check dependencies for most commands
-    if command not in ['smoke', 'validate']:
+    # Check dependencies for most commands (unless explicitly skipped)
+    if not args.no_deps_check and command not in ['smoke', 'validate']:
         if not check_dependencies():
             print_error("Missing dependencies. Please install them first.")
+            print_warning("Use --no-deps-check to skip this check")
             sys.exit(1)
     
     success = True
     
-    if command == 'smoke':
+    # Handle specific file argument
+    if args.file:
+        success = run_specific_test_file(args.file)
+    # Handle coverage flag
+    elif args.coverage:
+        success = run_coverage_analysis()
+    # Handle custom markers
+    elif args.markers:
+        success = run_custom_pytest_command(
+            markers=args.markers,
+            coverage=args.coverage,
+            verbose=args.verbose,
+            quiet=args.quiet
+        )
+    # Handle main commands
+    elif command == 'smoke':
         success = run_quick_smoke_test()
     elif command == 'critical':
         success = run_critical_tests()
@@ -258,11 +387,16 @@ def main():
         )
     elif command == 'validate':
         success = validate_test_environment()
-    elif command.endswith('.py'):
+    elif command and command.endswith('.py'):
         success = run_specific_test_file(command)
-    else:
+    elif command:
         print_error(f"Unknown command: {command}")
         print("Available commands: smoke, critical, unit, integration, coverage, all, validate")
+        print("Or use --help for more options")
+        sys.exit(1)
+    else:
+        print_error("No command specified")
+        print("Use --help for available options")
         sys.exit(1)
     
     # Summary

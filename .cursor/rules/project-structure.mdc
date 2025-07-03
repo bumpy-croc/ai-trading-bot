@@ -165,6 +165,120 @@ except SpecificException as e:
 - Validate ML models with out-of-sample data
 - Paper trade before real money
 
+## Testing Commands & Workflows
+
+### Quick Test Commands (Natural Language)
+When user says "run smoke tests" → `python tests/run_tests.py smoke`
+When user says "run unit tests" → `python tests/run_tests.py unit`
+When user says "run critical tests" → `python tests/run_tests.py critical`
+When user says "run all tests" → `python tests/run_tests.py all`
+When user says "test strategies" → `python tests/run_tests.py --file test_strategies.py`
+When user says "test with coverage" → `python tests/run_tests.py --coverage`
+
+### Test Categories
+```bash
+# Smoke Tests - Quick validation (fastest)
+python tests/run_tests.py smoke
+
+# Unit Tests - Individual components
+python tests/run_tests.py unit
+
+# Integration Tests - Component interactions
+python tests/run_tests.py integration
+
+# Critical Tests - Live trading + risk management
+python tests/run_tests.py critical
+
+# All Tests - Complete test suite
+python tests/run_tests.py all
+
+# Validate Environment - Check test setup
+python tests/run_tests.py validate
+```
+
+### Specific Test Files
+```bash
+# Test specific components
+python tests/run_tests.py --file test_strategies.py
+python tests/run_tests.py --file test_data_providers.py
+python tests/run_tests.py --file test_risk_management.py
+python tests/run_tests.py --file test_live_trading.py
+python tests/run_tests.py --file test_config_system.py
+python tests/run_tests.py --file test_integration.py
+
+# Short form
+python tests/run_tests.py -f test_strategies.py
+```
+
+### Custom Test Selection
+```bash
+# Run tests with markers
+python tests/run_tests.py --markers "not integration"
+python tests/run_tests.py -m "live_trading or risk_management"
+python tests/run_tests.py -m "strategy and not slow"
+
+# Exclude slow tests
+python tests/run_tests.py -m "not slow"
+```
+
+### Coverage Analysis
+```bash
+# Generate coverage reports
+python tests/run_tests.py --coverage
+python tests/run_tests.py -c
+
+# Coverage for specific files
+python tests/run_tests.py --file test_strategies.py --coverage
+```
+
+### Output Control
+```bash
+# Verbose output (default)
+python tests/run_tests.py unit --verbose
+python tests/run_tests.py unit -v
+
+# Quiet output
+python tests/run_tests.py unit --quiet
+python tests/run_tests.py unit -q
+```
+
+### Advanced Testing Options
+```bash
+# Skip dependency checks (for CI/CD)
+python tests/run_tests.py smoke --no-deps-check
+
+# Force interactive mode
+python tests/run_tests.py --interactive
+python tests/run_tests.py -i
+
+# Get help
+python tests/run_tests.py --help
+```
+
+### Direct pytest Commands (for debugging)
+```bash
+# Run specific test method
+python -m pytest tests/test_strategies.py::TestAdaptiveStrategy::test_entry_conditions -v
+
+# Debug mode
+python -m pytest tests/test_strategies.py --pdb
+
+# Show print statements
+python -m pytest tests/test_strategies.py -s
+```
+
+### CI/CD Testing Commands
+```bash
+# Fast feedback loop
+python tests/run_tests.py smoke --no-deps-check
+
+# Full test suite with coverage
+python tests/run_tests.py all --coverage
+
+# Critical tests only (for production checks)
+python tests/run_tests.py critical --quiet
+```
+
 ## Common Patterns
 
 ### Getting Market Data
