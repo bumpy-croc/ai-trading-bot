@@ -49,7 +49,6 @@ class MyStrategy(BaseStrategy):
 |----------|---------------------|
 | `adaptive` | BTCUSDT |
 | `enhanced` | BTCUSDT |
-| `adaptive2` | BTCUSDT |
 | `high_risk_high_reward` | ETHUSDT |
 | `ml_model_strategy` | ETHUSDT |
 

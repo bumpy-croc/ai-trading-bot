@@ -64,7 +64,7 @@ class YourStrategy(BaseStrategy):
 ```
 
 **Strategy Types**:
-- `adaptive.py` / `adaptive2.py` - Adjusts to market conditions
+- `adaptive.py` - Adjusts to market conditions
 - `enhanced.py` - Combines multiple indicators
 - `high_risk_high_reward.py` - Aggressive trading
 - `ml_basic_strategy.py` - Uses ML price predictions

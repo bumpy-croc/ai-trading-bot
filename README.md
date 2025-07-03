@@ -186,7 +186,6 @@ python -m core.risk.risk_manager --symbol BTCUSDT --qty 0.05
 | File                               | Description                                             |
 |------------------------------------|---------------------------------------------------------|
 | `adaptive.py`                      | EMA-based adaptive trend-follower                       |
-| `adaptive2.py`                     | Alternative adaptive logic with volatility filter       |
 | `enhanced.py`                      | Combines multiple indicators for stronger confirmation |
 | `high_risk_high_reward.py`         | Aggressive breakout strategy (for small allocations)    |
 | `ml_basic_strategy.py`             | Utilises ML price predictions for entry/exit            |

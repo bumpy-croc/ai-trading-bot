@@ -32,7 +32,6 @@ from live.trading_engine import LiveTradingEngine
 
 # Import strategies
 from strategies.adaptive import AdaptiveStrategy
-from strategies.adaptive2 import AdaptiveStrategy2
 from strategies.enhanced import EnhancedStrategy
 from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
 from strategies.ml_basic_strategy import MlBasicStrategy
@@ -53,7 +52,6 @@ def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
         'adaptive': AdaptiveStrategy,
-        'adaptive2': AdaptiveStrategy2,
         'enhanced': EnhancedStrategy,
         'high_risk_high_reward': HighRiskHighRewardStrategy,
         'ml_basic_strategy': MlBasicStrategy,
