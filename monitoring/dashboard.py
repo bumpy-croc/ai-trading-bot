@@ -1259,7 +1259,7 @@ def main():
     parser.add_argument('--port', type=int, default=8080, help='Port to bind to')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--db-url', help='Database URL')
-    parser.add_argument('--update-interval', type=int, default=5, help='Update interval in seconds')
+    parser.add_argument('--update-interval', type=int, default=3600, help='Update interval in seconds')
     
     args = parser.parse_args()
     

@@ -21,14 +21,14 @@ def main():
         print("🚀 Starting Trading Bot Monitoring Dashboard...")
         print("📊 Dashboard will be available at: http://localhost:8080")
         print("⚙️  Configuration panel accessible via the gear icon")
-        print("🔄 Real-time updates every 5 seconds")
+        print("🔄 Updates every 1 hour")
         print("❌ Press Ctrl+C to stop")
         print("-" * 60)
         
         # Create and run dashboard
         dashboard = MonitoringDashboard(
             db_url=None,  # Will use default SQLite database
-            update_interval=5  # 5 second updates
+            update_interval=3600  # 1 hour updates
         )
         
         dashboard.run(

@@ -5,7 +5,7 @@ A comprehensive real-time monitoring dashboard for the cryptocurrency trading bo
 ## 🎯 Key Features
 
 ### Real-Time Monitoring
-- **Live Updates**: WebSocket-based real-time data updates every 5 seconds
+- **Live Updates**: WebSocket-based data updates every 1 hour
 - **Configurable Metrics**: Enable/disable specific metrics based on your needs
 - **Priority-Based Display**: High, medium, and low priority metrics with visual indicators
 
@@ -96,7 +96,7 @@ python monitoring/dashboard.py \
     --port 8080 \              # Port number (default: 8080)
     --debug \                  # Enable debug mode
     --db-url "sqlite:///..." \ # Database URL
-    --update-interval 5        # Update interval in seconds
+    --update-interval 3600     # Update interval in seconds
 ```
 
 ### Metric Configuration
