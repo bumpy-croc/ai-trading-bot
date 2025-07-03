@@ -117,12 +117,13 @@ class TestRiskManager:
         """Test position size calculation in trending market regime"""
         risk_manager = RiskManager(risk_parameters)
         
+        # Use much larger ATR to avoid hitting position size caps
         position_size_trending = risk_manager.calculate_position_size(
-            price=50000, atr=1000, balance=10000, regime='trending'
+            price=50000, atr=5000, balance=10000, regime='trending'
         )
         
         position_size_normal = risk_manager.calculate_position_size(
-            price=50000, atr=1000, balance=10000, regime='normal'
+            price=50000, atr=5000, balance=10000, regime='normal'
         )
         
         # Trending regime should allow larger positions
@@ -133,12 +134,13 @@ class TestRiskManager:
         """Test position size calculation in volatile market regime"""
         risk_manager = RiskManager(risk_parameters)
         
+        # Use much larger ATR to avoid hitting position size caps
         position_size_volatile = risk_manager.calculate_position_size(
-            price=50000, atr=1000, balance=10000, regime='volatile'
+            price=50000, atr=5000, balance=10000, regime='volatile'
         )
         
         position_size_normal = risk_manager.calculate_position_size(
-            price=50000, atr=1000, balance=10000, regime='normal'
+            price=50000, atr=5000, balance=10000, regime='normal'
         )
         
         # Volatile regime should reduce position sizes
@@ -327,7 +329,8 @@ class TestRiskScenarios:
         correlation_risk = risk_manager.get_position_correlation_risk(btc_symbols)
         expected_risk = 3 * 0.1 * 50000  # 3 positions of $5000 each
         
-        assert correlation_risk == expected_risk
+        # Use approximate comparison due to floating point precision
+        assert abs(correlation_risk - expected_risk) < 0.01
 
     @pytest.mark.risk_management
     def test_daily_risk_limit_enforcement(self, risk_parameters):

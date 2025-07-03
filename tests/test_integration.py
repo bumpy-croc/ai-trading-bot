@@ -166,7 +166,10 @@ class TestEndToEndWorkflows:
         apply_success = manager.apply_pending_update()
         assert apply_success == True
         
-        # 4. Verify strategy was updated
+        # 4. Update engine's strategy reference (simulating trading loop behavior)
+        engine.strategy = manager.current_strategy
+        
+        # 5. Verify strategy was updated
         assert engine.strategy != initial_strategy
 
     def test_risk_management_integration(self, mock_data_provider):

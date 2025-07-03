@@ -426,6 +426,11 @@ class LiveTradingEngine:
                       stop_loss: Optional[float] = None, take_profit: Optional[float] = None):
         """Open a new trading position"""
         try:
+            # Enforce maximum position size limit
+            if size > self.max_position_size:
+                logger.warning(f"Position size {size:.2%} exceeds maximum {self.max_position_size:.2%}. Capping at maximum.")
+                size = self.max_position_size
+            
             position_value = size * self.current_balance
             
             if self.enable_live_trading:
@@ -731,12 +736,13 @@ class LiveTradingEngine:
         except Exception as e:
             logger.error(f"Failed to send alert: {e}")
             
-    def _sleep_with_interrupt(self, seconds: int):
-        """Sleep with ability to interrupt"""
-        for _ in range(seconds):
-            if self.stop_event.is_set() or not self.is_running:
+    def _sleep_with_interrupt(self, seconds: float):
+        """Sleep in small increments to allow for interrupt and float seconds"""
+        end_time = time.time() + seconds
+        while time.time() < end_time:
+            if self.stop_event.is_set():
                 break
-            time.sleep(1)
+            time.sleep(min(0.1, end_time - time.time()))
             
     def _print_final_stats(self):
         """Print final trading statistics"""
@@ -766,15 +772,19 @@ class LiveTradingEngine:
         """Get current performance summary"""
         total_return = ((self.current_balance - self.initial_balance) / self.initial_balance) * 100
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
+        current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance * 100 if self.peak_balance > 0 else 0
         
         return {
             'initial_balance': self.initial_balance,
             'current_balance': self.current_balance,
+            'total_return': total_return,  # Keep both for backward compatibility
             'total_return_pct': total_return,
             'total_pnl': self.total_pnl,
+            'current_drawdown': current_drawdown,  # Add current drawdown
             'max_drawdown_pct': self.max_drawdown * 100,
             'total_trades': self.total_trades,
             'winning_trades': self.winning_trades,
+            'win_rate': win_rate,  # Keep both for backward compatibility
             'win_rate_pct': win_rate,
             'active_positions': len(self.positions),
             'last_update': self.last_data_update.isoformat() if self.last_data_update else None,

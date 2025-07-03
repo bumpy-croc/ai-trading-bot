@@ -126,4 +126,13 @@ class MlBasic(BaseStrategy):
         if side == 'long':
             return price * (1 - self.stop_loss_pct)
         else:  # short
-            return price * (1 + self.stop_loss_pct) 
+            return price * (1 + self.stop_loss_pct)
+    
+    def _load_model(self):
+        """Load or reload the ONNX model"""
+        try:
+            self.ort_session = ort.InferenceSession(self.model_path)
+            self.input_name = self.ort_session.get_inputs()[0].name
+        except Exception as e:
+            print(f"Failed to load model {self.model_path}: {e}")
+            raise 

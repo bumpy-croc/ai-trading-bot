@@ -132,6 +132,11 @@ class StrategyManager:
         
         with self.update_lock:
             try:
+                # Check if there's already a pending update
+                if self.pending_update is not None:
+                    logger.warning(f"❌ Hot-swap blocked: There's already a pending update")
+                    return False
+                
                 logger.info(f"🔄 Starting hot-swap to strategy: {new_strategy_name}")
                 
                 # Load new strategy in staging
@@ -181,6 +186,11 @@ class StrategyManager:
         
         with self.update_lock:
             try:
+                # Check if there's already a pending update
+                if self.pending_update is not None:
+                    logger.warning(f"❌ Model update blocked: There's already a pending update")
+                    return False
+                
                 logger.info(f"🔄 Updating model for strategy: {strategy_name}")
                 
                 # Validate new model exists

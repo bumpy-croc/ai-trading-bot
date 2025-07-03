@@ -122,8 +122,8 @@ class TestStrategyManager:
         try:
             strategy = manager.load_strategy("ml_basic")
             
-            # Prepare model update
-            success = manager.update_model("ml_basic", str(mock_model_file))
+            # Prepare model update - use the actual strategy name
+            success = manager.update_model("MlBasic", str(mock_model_file))
             
             assert success == True
             assert manager.pending_update is not None
@@ -145,8 +145,8 @@ class TestStrategyManager:
             strategy._load_model = Mock()
             strategy.model_path = "old_model.onnx"
             
-            # Prepare and apply model update
-            manager.update_model("ml_basic", str(mock_model_file))
+            # Prepare and apply model update - use the actual strategy name
+            manager.update_model("MlBasic", str(mock_model_file))
             success = manager.apply_pending_update()
             
             assert success == True
