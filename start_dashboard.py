@@ -19,7 +19,7 @@ def main():
         from monitoring.dashboard import MonitoringDashboard
         
         print("🚀 Starting Trading Bot Monitoring Dashboard...")
-        print("📊 Dashboard will be available at: http://localhost:5000")
+        print("📊 Dashboard will be available at: http://localhost:8080")
         print("⚙️  Configuration panel accessible via the gear icon")
         print("🔄 Real-time updates every 5 seconds")
         print("❌ Press Ctrl+C to stop")
@@ -33,7 +33,7 @@ def main():
         
         dashboard.run(
             host='0.0.0.0',
-            port=5000,
+            port=8080,
             debug=False
         )
         

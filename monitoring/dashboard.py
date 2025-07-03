@@ -38,7 +38,7 @@ class MonitoringDashboard:
     Real-time monitoring dashboard for the trading bot
     """
     
-    def __init__(self, db_url: Optional[str] = None, update_interval: int = 5):
+    def __init__(self, db_url: Optional[str] = None, update_interval: int = 3600):
         self.app = Flask(__name__, template_folder='templates', static_folder='static')
         self.app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
         self.socketio = SocketIO(self.app, cors_allowed_origins="*")
@@ -1241,7 +1241,7 @@ class MonitoringDashboard:
                 logger.error(f"Error in monitoring loop: {e}")
                 time.sleep(self.update_interval)
     
-    def run(self, host='0.0.0.0', port=5000, debug=False):
+    def run(self, host='0.0.0.0', port=8080, debug=False):
         """Run the dashboard server"""
         logger.info(f"Starting monitoring dashboard on {host}:{port}")
         self.start_monitoring()
@@ -1256,7 +1256,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Trading Bot Monitoring Dashboard')
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
-    parser.add_argument('--port', type=int, default=5000, help='Port to bind to')
+    parser.add_argument('--port', type=int, default=8080, help='Port to bind to')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--db-url', help='Database URL')
     parser.add_argument('--update-interval', type=int, default=5, help='Update interval in seconds')

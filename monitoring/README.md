@@ -57,11 +57,11 @@ pip install -r monitoring/requirements.txt
 python start_dashboard.py
 
 # Or direct launch with options
-python monitoring/dashboard.py --host 0.0.0.0 --port 5000
+python monitoring/dashboard.py --host 0.0.0.0 --port 8080
 ```
 
 ### Access Dashboard
-Open your browser and navigate to: `http://localhost:5000`
+Open your browser and navigate to: `http://localhost:8080`
 
 ## 📊 Dashboard Interface
 
@@ -93,7 +93,7 @@ export FLASK_SECRET_KEY="your-secret-key-here"
 ```bash
 python monitoring/dashboard.py \
     --host 0.0.0.0 \           # Bind address (default: 0.0.0.0)
-    --port 5000 \              # Port number (default: 5000)
+    --port 8080 \              # Port number (default: 8080)
     --debug \                  # Enable debug mode
     --db-url "sqlite:///..." \ # Database URL
     --update-interval 5        # Update interval in seconds
@@ -226,7 +226,7 @@ python -c "from core.database.manager import DatabaseManager; print('DB OK')"
 
 **WebSocket connection fails**
 - Check firewall settings
-- Verify port 5000 is available
+- Verify port 8080 is available
 - Try different browser or clear cache
 
 **Performance issues**

@@ -41,7 +41,7 @@ python start_dashboard.py
 ```
 
 ### Access
-- **URL**: http://localhost:5000
+- **URL**: http://localhost:8080
 - **Updates**: Real-time via WebSocket (5-second default)
 - **Mobile**: Responsive design works on all devices
 
