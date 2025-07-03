@@ -162,7 +162,11 @@ class DemoDataGenerator:
         print(f"✅ Generated demo session {session_id}")
         print(f"   Strategy: {strategy}")
         print(f"   Duration: {duration_hours} hours")
-        print(f"   Trades: {trade_count} (Win rate: {winning_trades/trade_count*100:.1f}%)")
+        if trade_count == 0:
+            win_rate = 0.0
+        else:
+            win_rate = (winning_trades / trade_count) * 100
+        print(f"   Trades: {trade_count} (Win rate: {win_rate:.1f}%)")
         print(f"   Final balance: ${current_balance:.2f}")
         
         return session_id
