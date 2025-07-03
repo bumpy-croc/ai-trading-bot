@@ -177,7 +177,7 @@ class SentiCryptProvider(SentimentDataProvider):
         result = filtered_data[sentiment_columns].copy()
         
         # Forward fill missing values
-        result = result.fillna(method='ffill').fillna(0)
+        result = result.ffill().fillna(0)
         
         logger.info(f"Retrieved {len(result)} sentiment records for {symbol} from {start} to {end}")
         return result

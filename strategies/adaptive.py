@@ -141,7 +141,7 @@ class AdaptiveStrategy(BaseStrategy):
             return 0.0
             
         # Adjust risk based on market regime
-        regime = df['regime'].iloc[index]
+        regime = df['regime'].iloc[index] if 'regime' in df.columns else 'trending'
         base_risk = self.base_risk_per_trade
         
         if regime == 'trending':
@@ -155,7 +155,7 @@ class AdaptiveStrategy(BaseStrategy):
         risk = min(risk, self.max_risk_per_trade)
         
         # Calculate position size based on ATR
-        atr = df['atr'].iloc[index]
+        atr = df['atr'].iloc[index] if 'atr' in df.columns and index < len(df) else df['close'].iloc[index] * 0.01
         price = df['close'].iloc[index]
         position_size = (risk * balance) / (atr * self.position_size_atr_multiplier)
         

@@ -13,6 +13,27 @@ class RiskParameters:
     max_correlated_risk: float = 0.10  # 10% maximum risk for correlated positions
     max_drawdown: float = 0.20         # 20% maximum drawdown
     position_size_atr_multiplier: float = 1.0
+    
+    def __post_init__(self):
+        """Validate risk parameters after initialization"""
+        if self.base_risk_per_trade <= 0:
+            raise ValueError("base_risk_per_trade must be positive")
+        if self.max_risk_per_trade <= 0:
+            raise ValueError("max_risk_per_trade must be positive")
+        if self.max_position_size <= 0 or self.max_position_size > 1:
+            raise ValueError("max_position_size must be between 0 and 1")
+        if self.max_daily_risk <= 0:
+            raise ValueError("max_daily_risk must be positive")
+        if self.max_correlated_risk <= 0:
+            raise ValueError("max_correlated_risk must be positive")
+        if self.max_drawdown <= 0 or self.max_drawdown > 1:
+            raise ValueError("max_drawdown must be between 0 and 1")
+        if self.position_size_atr_multiplier <= 0:
+            raise ValueError("position_size_atr_multiplier must be positive")
+        
+        # Logical consistency checks
+        if self.base_risk_per_trade > self.max_risk_per_trade:
+            raise ValueError("base_risk_per_trade cannot be greater than max_risk_per_trade")
 
 class RiskManager:
     """Handles position sizing and risk management"""
