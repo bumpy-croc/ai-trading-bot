@@ -4,7 +4,7 @@ from multiple sources with fallback support
 """
 import os
 from typing import List, Optional, Any, Dict
-from .providers import ConfigProvider, EnvVarProvider, DotEnvProvider, AWSSecretsProvider
+from .providers import ConfigProvider, EnvVarProvider, DotEnvProvider, AWSSecretsProvider, RailwayProvider
 
 
 class ConfigManager:
@@ -26,8 +26,9 @@ class ConfigManager:
                       If None, uses default providers.
         """
         if providers is None:
-            # Default provider chain
+            # Default provider chain - Railway provider first for Railway deployments
             self.providers = [
+                RailwayProvider(),
                 AWSSecretsProvider(),
                 EnvVarProvider(),
                 DotEnvProvider()
