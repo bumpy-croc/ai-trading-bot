@@ -73,6 +73,7 @@ def parse_args():
     parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis in backtest')
     parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
     parser.add_argument('--cache-ttl', type=int, default=24, help='Cache TTL in hours (default: 24)')
+    parser.add_argument('--no-db', action='store_true', help='Disable database logging for this backtest')
     return parser.parse_args()
 
 def get_date_range(args):
@@ -135,7 +136,8 @@ def main():
             data_provider=data_provider,
             sentiment_provider=sentiment_provider,
             risk_parameters=risk_params,
-            initial_balance=args.initial_balance
+            initial_balance=args.initial_balance,
+            log_to_database=not args.no_db  # Disable DB logging if --no-db is passed
         )
         
         # Use strategy-specific trading pair if not overridden by command line
@@ -162,6 +164,7 @@ def main():
         print(f"Timeframe: {args.timeframe}")
         print(f"Using Sentiment: {args.use_sentiment}")
         print(f"Using Cache: {not args.no_cache}")
+        print(f"Database Logging: {not args.no_db}")
         print("-" * 50)
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
@@ -171,6 +174,11 @@ def main():
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print("=" * 50)
+
+        # Print session ID if database logging was enabled
+        if not args.no_db and 'session_id' in results and results['session_id']:
+            print(f"Database Session ID: {results['session_id']}")
+            print("=" * 50)
 
         # Print yearly returns if available
         if 'yearly_returns' in results and results['yearly_returns']:

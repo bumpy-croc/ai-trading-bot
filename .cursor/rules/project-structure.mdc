@@ -94,12 +94,25 @@ class YourStrategy(BaseStrategy):
 
 ### 2. Running Backtests
 ```bash
-# Standard backtest
+# Standard backtest (for development - no database logging)
+python scripts/run_backtest.py <strategy_name> --days <num_days> --no-db
+
+# Production backtest (with database logging for analysis)
 python scripts/run_backtest.py <strategy_name> --days <num_days>
 
-# Example
-python scripts/run_backtest.py adaptive --days 100
+# Examples
+python scripts/run_backtest.py adaptive --days 100 --no-db      # Development
+python scripts/run_backtest.py adaptive --days 100              # Production
+python scripts/run_backtest.py ml_with_sentiment --days 365     # Full year with DB
+
+# With custom parameters
+python scripts/run_backtest.py enhanced --days 30 --no-db --initial-balance 50000
 ```
+
+#### Natural Language Commands (for local development)
+When user says "run backtest" or "run the backtest" → `python scripts/run_backtest.py adaptive --days 30 --no-db`
+When user says "run backtest for [strategy]" → `python scripts/run_backtest.py [strategy] --days 30 --no-db`
+When user says "run production backtest" → `python scripts/run_backtest.py adaptive --days 30` (with DB logging)
 
 ### 3. Training ML Models
 ```bash
