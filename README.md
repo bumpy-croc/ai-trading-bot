@@ -1,184 +1,221 @@
-# Binance Trading Bot
+# Crypto Trend-Following Trading Bot
 
-A comprehensive cryptocurrency trading bot with backtesting capabilities, machine learning integration, and live trading support.
+A modular, production-ready cryptocurrency trading system inspired by Ray Dalio's risk-balanced approach and built around long-term trend-following with strict risk containment.
 
-## 📚 Documentation
+The codebase supports **backtesting**, **live trading**, **machine-learning price & sentiment models**, multi-exchange data providers, and AWS-based CI/CD deployments.
 
-- **[Project Architecture & Development Guide](./CURSOR_RULES.md)** - Detailed system architecture, workflows, and conventions
-- **[AI Assistant Rules](./.cursorrules)** - Quick reference for Cursor AI integration
-- **[Live Trading Guide](./LIVE_TRADING_GUIDE.md)** - Setup and usage for live trading
-- **[Live Sentiment Analysis](./LIVE_SENTIMENT_ANALYSIS.md)** - Sentiment data integration guide
-- **[AWS Deployment Guide](./docs/AWS_DEPLOYMENT_GUIDE.md)** - Complete guide for deploying to AWS EC2
-- **[AWS Secrets Manager Guide](./docs/AWS_SECRETS_MANAGER_GUIDE.md)** - Secure credential management
-- **[AWS VPC Setup Guide](./docs/AWS_VPC_SETUP_GUIDE.md)** - Network isolation setup
-- **[Configuration Migration Guide](./docs/CONFIG_MIGRATION_GUIDE.md)** - Migrating to the new config system
-- **[Deployment Checklist](./deploy/DEPLOYMENT_CHECKLIST.md)** - Step-by-step deployment checklist
+---
+
+## � Table of Contents
+
+1. [Features](#features)
+2. [Architecture Overview](#architecture-overview)
+3. [Directory Structure](#directory-structure)
+4. [Installation](#installation)
+5. [Configuration](#configuration)
+6. [Quick Usage](#quick-usage)
+    1. [Backtesting](#backtesting)
+    2. [Live Trading](#live-trading)
+    3. [Training ML Models](#training-ml-models)
+    4. [Cache Management](#cache-management)
+    5. [Risk Management Utilities](#risk-management-utilities)
+7. [Built-in Strategies](#built-in-strategies)
+8. [Deployment](#deployment)
+9. [Testing](#testing)
+10. [Sentiment Analysis Integration](#sentiment-analysis-integration)
+11. [Disclaimer](#disclaimer)
+
+---
 
 ## Features
 
-- Moving Average Crossover Strategy (10 and 20 period)
-- Real-time trading on Binance
-- Configurable trading parameters
-- Error handling and logging
+- 🔌 **Pluggable Architecture** – Separate Data, Indicator, ML, Risk, Strategy, and Execution layers.
+- 🎯 **Multiple Trading Strategies** – Adaptive EMA, ML-driven, sentiment-enhanced, and high-risk-high-reward templates (see below).
+- ♻️ **Fast Backtesting Engine** – Vectorised simulation with intelligent on-disk caching of historical data.
+- 🤖 **Live Trading Engine** – Robust real-time execution on Binance with position sizing, trailing stops, and exposure limits.
+- 🧠 **Machine-Learning Integration** – Keras & ONNX models for price prediction with optional sentiment features.
+- 💬 **Sentiment Data Providers** – SentiCrypt, Augmento, CryptoCompare, and custom providers via a simple interface.
+- 🛡 **Centralised Risk Manager** – Enforces max 1-2 % capital risk per trade and validates all position sizes.
+- 🚀 **One-Click AWS Deployment** – Hardened CI/CD pipelines and bash scripts for staging & production environments.
+- 📈 **Rich Analytics** – Automatic metric tracking (Sharpe, max-drawdown, MAPE, etc.) and interactive reports.
 
-## Setup
+---
 
-1. Install the required dependencies:
+## Architecture Overview
+
+```text
+        ┌──────────────────┐
+        │   Data Layer     │  →  Binance, Senticrypt, CryptoCompare …
+        └────────┬─────────┘
+                 │ pandas.DataFrame
+                 ▼
+        ┌──────────────────┐
+        │ Indicator Layer  │  →  EMA, RSI, Bollinger, …
+        └────────┬─────────┘
+                 │ enriched DataFrame
+                 ▼
+        ┌──────────────────┐
+        │  Strategy Layer  │  →  signal, confidence, meta
+        └────────┬─────────┘
+                 │
+        ┌────────▼─────────┐
+        │  Risk Manager    │  →  validated position size
+        └────────┬─────────┘
+                 │
+        ┌────────▼─────────┐
+        │ Execution Layer  │  →  Backtesting Engine / Live Trading Engine
+        └──────────────────┘
+```
+
+Each component is completely decoupled and can be swapped out or extended without touching the rest of the system.
+
+---
+
+## Directory Structure
+
+```text
+.
+├── backtesting/          # Vectorised historical simulation engine
+├── core/
+│   ├── data_providers/   # Market & sentiment data adapters (+ caching wrapper)
+│   ├── indicators/       # Pure functions for technical indicators
+│   ├── risk/             # Central risk-management utilities
+│   └── config/           # Typed configuration objects & loaders
+├── live/                # Real-time trading engine & strategy manager
+├── ml/                  # Trained models (.h5 / .keras / .onnx) + metadata
+├── strategies/          # All built-in trading strategies
+├── scripts/             # CLI utilities (model training, cache tools, etc.)
+├── data/                # Cached market & sentiment datasets
+├── bin/                 # Deployment scripts used by GitHub Actions
+└── docs/                # Additional guides (AWS, sentiment, etc.)
+```
+
+---
+
+## Installation
+
 ```bash
+# Clone & install python dependencies
 pip install -r requirements.txt
 ```
 
-2. Configure your credentials using one of these methods:
+> Python 3.9+ is recommended.  GPU acceleration is optional for model training.
 
-### Method A: .env File (Local Development)
-Create a `.env` file in the project root:
-```
-BINANCE_API_KEY=your_api_key_here
-BINANCE_API_SECRET=your_api_secret_here
-DATABASE_URL=sqlite:///data/trading_bot.db
-TRADING_MODE=paper
+---
+
+## Configuration
+
+The bot automatically reads settings in the following priority order:
+
+1. **AWS Secrets Manager** (production)
+2. **Environment Variables** (Docker / CI)
+3. **.env file** (local development)
+
+Minimal `.env` example:
+
+```env
+BINANCE_API_KEY=YOUR_KEY
+BINANCE_API_SECRET=YOUR_SECRET
+TRADING_MODE=paper  # or live
 INITIAL_BALANCE=1000
 ```
 
-### Method B: Environment Variables (Docker/CI)
-```bash
-export BINANCE_API_KEY=your_api_key_here
-export BINANCE_API_SECRET=your_api_secret_here
-export DATABASE_URL=sqlite:///data/trading_bot.db
-export TRADING_MODE=paper
-```
+Test the configuration loader:
 
-### Method C: AWS Secrets Manager (Production)
-The bot automatically uses AWS Secrets Manager when deployed to AWS EC2. See the [AWS Deployment Guide](./docs/AWS_DEPLOYMENT_GUIDE.md) for details.
-
-3. Get your API keys from Binance:
-   - Log in to your Binance account
-   - Go to API Management
-   - Create a new API key
-   - Make sure to enable trading permissions
-
-## Configuration System
-
-The trading bot uses a flexible configuration system that automatically loads settings from multiple sources in priority order:
-
-1. **AWS Secrets Manager** (if available) - Secure storage for production
-2. **Environment Variables** - Good for Docker and CI/CD
-3. **.env File** - Convenient for local development
-
-The bot will automatically use the first available source for each configuration value. This means:
-- On AWS EC2: Secrets are read directly from AWS Secrets Manager (no .env file needed)
-- In Docker: Use environment variables
-- Local development: Use .env file
-
-Test the configuration system:
 ```bash
 python scripts/test_config_system.py
 ```
 
-## Usage
+---
 
-Run the trading bot:
+## Quick Usage
+
+### Backtesting
+
 ```bash
-python trading_bot.py
+# Generic backtest (most recent 90 days)
+python run_backtest.py adaptive --days 90
+
+# Full-history backtest with cache disabled and a custom start date
+python run_backtest.py ml_premium_strategy \
+  --start-date 2020-01-01 --no-cache
 ```
 
-The bot will:
-- Monitor the specified trading pair
-- Calculate moving averages
-- Execute trades when crossover signals are detected
-- Log all activities and errors
-
-## Strategy
-
-The bot uses a simple moving average crossover strategy:
-- Buy signal: When the short-term MA (10 periods) crosses above the long-term MA (20 periods)
-- Sell signal: When the short-term MA crosses below the long-term MA
-
-## Data Caching
-
-The trading bot includes an intelligent data caching system that significantly speeds up backtesting by avoiding redundant API calls to data providers.
-
-### How It Works
-
-- **Automatic Caching**: Historical data is automatically cached after being fetched from exchanges
-- **Smart Cache Keys**: Each data request (symbol, timeframe, date range) gets a unique cache key
-- **TTL Management**: Cache files have a configurable time-to-live (default: 24 hours)
-- **Transparent Operation**: The caching layer is completely transparent to strategies
-
-### Benefits
-
-- **Faster Backtests**: Subsequent runs with the same parameters use cached data
-- **Reduced API Usage**: Fewer calls to exchange APIs, avoiding rate limits
-- **Offline Testing**: Run backtests without internet connection using cached data
-- **Development Efficiency**: Iterate on strategies without waiting for data downloads
-
-### Usage
-
-Caching is enabled by default. To disable it:
+### Live Trading
 
 ```bash
-python run_backtest.py my_strategy --no-cache
+# Start live trading (paper-mode by default)
+python run_live_trading.py adaptive
+
+# Switch to a different strategy on the fly
+python live_trading_control.py switch ml_basic_strategy
 ```
 
-To set custom cache TTL (in hours):
+### Training ML Models
 
 ```bash
-python run_backtest.py my_strategy --cache-ttl 48
+# Price-only model
+python scripts/train_model.py BTCUSDT --epochs 50
+
+# Price + sentiment features (recommended)
+python scripts/train_model_with_sentiment.py BTCUSDT \
+  --start-date 2020-01-01 --end-date 2023-01-01
 ```
 
 ### Cache Management
 
-Use the cache management utility to monitor and manage cached data:
-
 ```bash
-# Show cache information
+# Inspect cache
 python scripts/cache_manager.py info
 
-# List all cache files
-python scripts/cache_manager.py list
-
-# List cache files with detailed information
-python scripts/cache_manager.py list --detailed
-
-# Clear all cache files
-python scripts/cache_manager.py clear
-
-# Clear cache files older than 48 hours
-python scripts/cache_manager.py clear-old --hours 48
+# Purge files older than 24 h
+python scripts/cache_manager.py clear-old --hours 24
 ```
 
-### Cache Location
+### Risk Management Utilities
 
-Cache files are stored in `data/cache/` directory as pickle files. Each file contains a pandas DataFrame with OHLCV data for a specific request.
+```bash
+# Validate a hypothetical order of 0.05 BTC given current exposure
+python -m core.risk.risk_manager --symbol BTCUSDT --qty 0.05
+```
 
-## 🚀 Deployment
+---
 
-### Current Status
-- **Tests**: Currently skipped in CI/CD pipeline (temporary)
-- **Staging**: Auto-deploys from `main` branch to AWS EC2
-- **Production**: Manual promotion from staging with approval gates
+## Built-in Strategies
 
-### GitHub Actions Workflows
+| File                               | Description                                             |
+|------------------------------------|---------------------------------------------------------|
+| `adaptive.py`                      | EMA-based adaptive trend-follower                       |
+| `adaptive2.py`                     | Alternative adaptive logic with volatility filter       |
+| `enhanced.py`                      | Combines multiple indicators for stronger confirmation |
+| `high_risk_high_reward.py`         | Aggressive breakout strategy (for small allocations)    |
+| `ml_basic_strategy.py`             | Utilises ML price predictions for entry/exit            |
+| `ml_premium_strategy.py`           | ML + sentiment, confidence-weighted sizing             |
 
-The deployment process uses clean, external bash scripts located in the `bin/` directory:
+Add your own by subclassing `strategies.base.BaseStrategy` and implementing `generate_signals()` & `calculate_position_size()`.
 
-- **Staging Workflow**: `.github/workflows/deploy-staging.yml`
-  - Triggers on pushes to `main` branch
-  - Uses `bin/deploy-staging.sh` for deployment logic
-  - Provides detailed error reporting and diagnostics
+---
 
-- **Production Workflow**: `.github/workflows/promote-to-production.yml`
-  - Manual trigger only with approval gates
-  - Uses `bin/deploy-production.sh` with enhanced security
-  - Validates staging environment before promotion
+## Deployment
 
-### Deployment Scripts
+GitHub Actions orchestrates deployments using hardened bash scripts under `bin/`.
 
-See [`bin/README.md`](bin/README.md) for detailed information about the deployment scripts.
+```text
+main →  staging EC2  (auto)  →  production EC2  (manual promotion)
+```
 
-## Disclaimer
+Read `docs/AWS_DEPLOYMENT_GUIDE.md` for a step-by-step walkthrough.
 
-This is a basic trading bot for educational purposes. Always test thoroughly with small amounts before using real funds. The creator is not responsible for any financial losses incurred while using this bot.
+---
+
+## Testing
+
+```bash
+pytest -q          # unit tests
+python -m strategies.adaptive --test   # quick strategy smoke-test
+```
+
+---
 
 ## Sentiment Analysis Integration
 
@@ -337,4 +374,10 @@ The system provides comprehensive analysis tools:
 - **Efficient Feature Engineering**: Optimized sentiment calculations
 - **Memory Management**: Proper handling of large datasets
 
-This sentiment analysis integration represents a significant advancement in the trading system's capabilities, providing traders with powerful tools to understand and capitalize on market sentiment dynamics. 
+This sentiment analysis integration represents a significant advancement in the trading system's capabilities, providing traders with powerful tools to understand and capitalize on market sentiment dynamics.
+
+---
+
+## Disclaimer
+
+This project is provided **for educational purposes only**.  Trading cryptocurrencies carries significant risk.  Test extensively with paper accounts and never risk capital you cannot afford to lose. 
