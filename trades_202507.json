@@ -1,0 +1,2 @@
+{"timestamp": "2025-07-03T23:32:59.460937", "symbol": "BTCUSDT", "side": "long", "size": 0.1, "entry_price": 50000, "exit_price": 51000, "pnl": 20.0, "exit_reason": "Engine shutdown", "duration_minutes": 1.6333333333333333e-06}
+{"timestamp": "2025-07-03T23:32:59.489573", "symbol": "BTCUSDT", "side": "long", "size": 0.1, "entry_price": 50000, "exit_price": 51000, "pnl": 20.0, "exit_reason": "Test closure", "duration_minutes": 1.2833333333333333e-06}
