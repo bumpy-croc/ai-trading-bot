@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot Monitor</title>
+    
+    <!-- CSS Libraries -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --dark-bg: #1f2937;
+            --darker-bg: #111827;
+            --card-bg: #374151;
+            --text-primary: #f9fafb;
+            --text-secondary: #d1d5db;
+            --border-color: #4b5563;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, var(--dark-bg) 0%, var(--darker-bg) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        .navbar {
+            background: rgba(31, 41, 55, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .navbar-brand {
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: var(--primary-color) !important;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.healthy { background-color: var(--success-color); }
+        .status-indicator.warning { background-color: var(--warning-color); }
+        .status-indicator.error { background-color: var(--danger-color); }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .metric-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary-color), var(--success-color));
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-change {
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .metric-change.positive { color: var(--success-color); }
+        .metric-change.negative { color: var(--danger-color); }
+        .metric-change.neutral { color: var(--text-secondary); }
+
+        .chart-container {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            height: 400px;
+        }
+
+        .positions-table {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .positions-table table {
+            margin-bottom: 0;
+        }
+
+        .positions-table th {
+            background: var(--darker-bg);
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+
+        .positions-table td {
+            border-color: var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+
+        .config-panel {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 350px;
+            max-height: 80vh;
+            overflow-y: auto;
+            z-index: 1050;
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+        }
+
+        .config-panel.show {
+            transform: translateX(0);
+        }
+
+        .config-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1051;
+            background: var(--primary-color);
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            color: white;
+            font-size: 1.2rem;
+            box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .config-toggle:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+        }
+
+        .priority-high { border-left: 4px solid var(--danger-color); }
+        .priority-medium { border-left: 4px solid var(--warning-color); }
+        .priority-low { border-left: 4px solid var(--success-color); }
+
+        .connection-status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 15px;
+            font-size: 0.9rem;
+            z-index: 1000;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(17, 24, 39, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            backdrop-filter: blur(5px);
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid var(--border-color);
+            border-top: 3px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .alert-custom {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+        }
+
+        .btn-custom {
+            background: var(--primary-color);
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            color: white;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .btn-custom:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+        }
+
+        .form-control-custom {
+            background: var(--darker-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+        }
+
+        .form-control-custom:focus {
+            background: var(--darker-bg);
+            border-color: var(--primary-color);
+            color: var(--text-primary);
+            box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.25);
+        }
+
+        .form-check-input:checked {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        @media (max-width: 768px) {
+            .config-panel {
+                width: 90%;
+                right: 5%;
+            }
+            
+            .metric-value {
+                font-size: 2rem;
+            }
+            
+            .chart-container {
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark sticky-top">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-robot me-2"></i>Trading Bot Monitor
+            </a>
+            <div class="navbar-nav ms-auto">
+                <span id="connectionStatus" class="navbar-text">
+                    <span class="status-indicator healthy"></span>
+                    Connected
+                </span>
+                <span class="navbar-text ms-3">
+                    Last Update: <span id="lastUpdate">--</span>
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Configuration Toggle Button -->
+    <button id="configToggle" class="config-toggle">
+        <i class="fas fa-cog"></i>
+    </button>
+
+    <!-- Configuration Panel -->
+    <div id="configPanel" class="config-panel">
+        <h5 class="mb-3">
+            <i class="fas fa-sliders-h me-2"></i>
+            Dashboard Configuration
+        </h5>
+        
+        <div class="mb-3">
+            <label class="form-label">Update Interval (seconds)</label>
+            <input type="number" id="updateInterval" class="form-control form-control-custom" value="5" min="1" max="60">
+        </div>
+
+        <div class="mb-3">
+            <h6>Metrics Visibility</h6>
+            <div id="metricsConfig"></div>
+        </div>
+
+        <div class="d-grid gap-2">
+            <button id="saveConfig" class="btn btn-custom">
+                <i class="fas fa-save me-2"></i>Save Configuration
+            </button>
+            <button id="resetConfig" class="btn btn-outline-secondary">
+                <i class="fas fa-undo me-2"></i>Reset to Default
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container-fluid mt-4">
+        <!-- Key Metrics Row -->
+        <div class="row" id="keyMetrics">
+            <!-- Metrics will be dynamically populated here -->
+        </div>
+
+        <!-- Charts and Tables Row -->
+        <div class="row">
+            <!-- Performance Chart -->
+            <div class="col-lg-8">
+                <div class="chart-container">
+                    <h5 class="mb-3">
+                        <i class="fas fa-chart-line me-2"></i>
+                        Portfolio Performance
+                    </h5>
+                    <canvas id="performanceChart"></canvas>
+                </div>
+            </div>
+
+            <!-- System Status -->
+            <div class="col-lg-4">
+                <div class="metric-card">
+                    <h5 class="mb-3">
+                        <i class="fas fa-heartbeat me-2"></i>
+                        System Health
+                    </h5>
+                    <div id="systemHealth">
+                        <!-- System health metrics will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Positions and Trades -->
+        <div class="row">
+            <!-- Active Positions -->
+            <div class="col-lg-6">
+                <div class="positions-table">
+                    <div class="p-3 border-bottom" style="background: var(--darker-bg);">
+                        <h5 class="mb-0">
+                            <i class="fas fa-coins me-2"></i>
+                            Active Positions
+                        </h5>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-dark table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Entry</th>
+                                    <th>Current</th>
+                                    <th>P&L</th>
+                                    <th>Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="positionsTable">
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted py-4">
+                                        No active positions
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Trades -->
+            <div class="col-lg-6">
+                <div class="positions-table">
+                    <div class="p-3 border-bottom" style="background: var(--darker-bg);">
+                        <h5 class="mb-0">
+                            <i class="fas fa-history me-2"></i>
+                            Recent Trades
+                        </h5>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-dark table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Entry</th>
+                                    <th>Exit</th>
+                                    <th>P&L</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tradesTable">
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted py-4">
+                                        No recent trades
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div id="connectionIndicator" class="connection-status">
+        <span class="status-indicator healthy"></span>
+        WebSocket Connected
+    </div>
+
+    <!-- JavaScript Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+
+    <script>
+        class TradingDashboard {
+            constructor() {
+                this.socket = io();
+                this.config = {};
+                this.updateInterval = 5000;
+                this.chart = null;
+                this.lastMetrics = {};
+                
+                this.init();
+            }
+
+            init() {
+                this.setupSocketHandlers();
+                this.setupEventListeners();
+                this.loadConfiguration();
+                this.initializeChart();
+                this.hideLoading();
+            }
+
+            setupSocketHandlers() {
+                this.socket.on('connect', () => {
+                    console.log('Connected to monitoring server');
+                    this.updateConnectionStatus('connected');
+                });
+
+                this.socket.on('disconnect', () => {
+                    console.log('Disconnected from monitoring server');
+                    this.updateConnectionStatus('disconnected');
+                });
+
+                this.socket.on('metrics_update', (metrics) => {
+                    this.updateMetrics(metrics);
+                });
+
+                this.socket.on('connected', (data) => {
+                    console.log('Dashboard connected:', data.status);
+                });
+            }
+
+            setupEventListeners() {
+                // Configuration panel toggle
+                document.getElementById('configToggle').addEventListener('click', () => {
+                    const panel = document.getElementById('configPanel');
+                    panel.classList.toggle('show');
+                });
+
+                // Save configuration
+                document.getElementById('saveConfig').addEventListener('click', () => {
+                    this.saveConfiguration();
+                });
+
+                // Reset configuration
+                document.getElementById('resetConfig').addEventListener('click', () => {
+                    this.resetConfiguration();
+                });
+
+                // Update interval change
+                document.getElementById('updateInterval').addEventListener('change', (e) => {
+                    this.updateInterval = parseInt(e.target.value) * 1000;
+                });
+            }
+
+            async loadConfiguration() {
+                try {
+                    const response = await fetch('/api/config');
+                    this.config = await response.json();
+                    this.renderConfigurationPanel();
+                } catch (error) {
+                    console.error('Failed to load configuration:', error);
+                }
+            }
+
+            renderConfigurationPanel() {
+                const container = document.getElementById('metricsConfig');
+                container.innerHTML = '';
+
+                Object.entries(this.config).forEach(([key, config]) => {
+                    const div = document.createElement('div');
+                    div.className = 'form-check mb-2';
+                    
+                    div.innerHTML = `
+                        <input class="form-check-input" type="checkbox" 
+                               id="metric_${key}" ${config.enabled ? 'checked' : ''}>
+                        <label class="form-check-label" for="metric_${key}">
+                            ${this.formatMetricName(key)}
+                            <small class="text-muted d-block">${config.priority} priority</small>
+                        </label>
+                    `;
+                    
+                    container.appendChild(div);
+                });
+            }
+
+            formatMetricName(key) {
+                return key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            }
+
+            async saveConfiguration() {
+                const newConfig = {};
+                
+                Object.keys(this.config).forEach(key => {
+                    const checkbox = document.getElementById(`metric_${key}`);
+                    newConfig[key] = {
+                        ...this.config[key],
+                        enabled: checkbox.checked
+                    };
+                });
+
+                try {
+                    const response = await fetch('/api/config', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(newConfig)
+                    });
+
+                    if (response.ok) {
+                        this.config = newConfig;
+                        this.showAlert('Configuration saved successfully!', 'success');
+                        this.socket.emit('request_update'); // Request immediate update
+                    } else {
+                        this.showAlert('Failed to save configuration', 'error');
+                    }
+                } catch (error) {
+                    console.error('Failed to save configuration:', error);
+                    this.showAlert('Failed to save configuration', 'error');
+                }
+            }
+
+            resetConfiguration() {
+                Object.keys(this.config).forEach(key => {
+                    this.config[key].enabled = true;
+                    const checkbox = document.getElementById(`metric_${key}`);
+                    if (checkbox) checkbox.checked = true;
+                });
+                
+                this.showAlert('Configuration reset to defaults', 'info');
+            }
+
+            updateMetrics(metrics) {
+                this.lastMetrics = metrics;
+                this.renderKeyMetrics(metrics);
+                this.updateSystemHealth(metrics);
+                this.updateLastUpdateTime();
+                this.loadPositions();
+                this.loadTrades();
+                this.updatePerformanceChart();
+            }
+
+            renderKeyMetrics(metrics) {
+                const container = document.getElementById('keyMetrics');
+                container.innerHTML = '';
+
+                // Define metric display order and grouping
+                const metricGroups = {
+                    systemHealth: ['api_connection_status', 'data_feed_status', 'error_rate_hourly', 'api_latency'],
+                    risk: ['current_drawdown', 'daily_pnl', 'weekly_pnl', 'max_drawdown'],
+                    execution: ['fill_rate', 'avg_slippage', 'failed_orders', 'execution_quality'],
+                    balance: ['current_balance', 'active_positions_count', 'total_position_value', 'unrealized_pnl'],
+                    strategy: ['win_rate', 'sharpe_ratio', 'recent_trade_outcomes', 'profit_factor']
+                };
+
+                Object.entries(metricGroups).forEach(([group, metricKeys]) => {
+                    metricKeys.forEach(key => {
+                        if (this.config[key]?.enabled && metrics[key] !== undefined) {
+                            const col = document.createElement('div');
+                            col.className = 'col-lg-3 col-md-6';
+                            col.innerHTML = this.createMetricCard(key, metrics[key]);
+                            container.appendChild(col);
+                        }
+                    });
+                });
+            }
+
+            createMetricCard(key, value) {
+                const config = this.config[key] || {};
+                const priorityClass = `priority-${config.priority || 'medium'}`;
+                const formattedValue = this.formatValue(value, config.format);
+                const change = this.calculateChange(key, value);
+
+                return `
+                    <div class="metric-card ${priorityClass}">
+                        <div class="metric-label">${this.formatMetricName(key)}</div>
+                        <div class="metric-value">${formattedValue}</div>
+                        ${change ? `<div class="metric-change ${change.class}">${change.text}</div>` : ''}
+                    </div>
+                `;
+            }
+
+            formatValue(value, format) {
+                if (value === null || value === undefined) return '--';
+
+                switch (format) {
+                    case 'currency':
+                        return new Intl.NumberFormat('en-US', {
+                            style: 'currency',
+                            currency: 'USD',
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2
+                        }).format(value);
+                    
+                    case 'percentage':
+                        return `${value.toFixed(2)}%`;
+                    
+                    case 'number':
+                        return new Intl.NumberFormat('en-US').format(value);
+                    
+                    case 'datetime':
+                        return new Date(value).toLocaleTimeString();
+                    
+                    case 'status':
+                        return `<span class="status-indicator ${value.toLowerCase()}"></span>${value}`;
+                    
+                    default:
+                        return value.toString();
+                }
+            }
+
+            calculateChange(key, currentValue) {
+                // This would compare with previous values to show trends
+                // For now, return null (no change indicator)
+                return null;
+            }
+
+            updateSystemHealth(metrics) {
+                const container = document.getElementById('systemHealth');
+                const healthMetrics = [
+                    { key: 'api_connection_status', label: 'API Connection', value: metrics.api_connection_status },
+                    { key: 'data_feed_status', label: 'Data Feed', value: metrics.data_feed_status },
+                    { key: 'error_rate_hourly', label: 'Error Rate (1h)', value: metrics.error_rate_hourly },
+                    { key: 'api_latency', label: 'API Latency (ms)', value: metrics.api_latency },
+                    { key: 'system_uptime', label: 'Uptime', value: metrics.system_uptime },
+                    { key: 'last_data_update', label: 'Last Update', value: metrics.last_data_update }
+                ];
+
+                container.innerHTML = healthMetrics.map(metric => `
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted">${metric.label}:</span>
+                        <span>${this.formatValue(metric.value, this.config[metric.key]?.format)}</span>
+                    </div>
+                `).join('');
+            }
+
+            async loadPositions() {
+                try {
+                    const response = await fetch('/api/positions');
+                    const positions = await response.json();
+                    this.renderPositions(positions);
+                } catch (error) {
+                    console.error('Failed to load positions:', error);
+                }
+            }
+
+            renderPositions(positions) {
+                const tbody = document.getElementById('positionsTable');
+                
+                if (positions.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">
+                                No active positions
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                tbody.innerHTML = positions.map(pos => `
+                    <tr>
+                        <td>${pos.symbol}</td>
+                        <td>
+                            <span class="badge ${pos.side === 'long' ? 'bg-success' : 'bg-danger'}">
+                                ${pos.side.toUpperCase()}
+                            </span>
+                        </td>
+                        <td>$${pos.entry_price.toFixed(2)}</td>
+                        <td>$${pos.current_price.toFixed(2)}</td>
+                        <td class="${pos.unrealized_pnl >= 0 ? 'text-success' : 'text-danger'}">
+                            $${pos.unrealized_pnl.toFixed(2)}
+                        </td>
+                        <td>${new Date(pos.entry_time).toLocaleString()}</td>
+                    </tr>
+                `).join('');
+            }
+
+            async loadTrades() {
+                try {
+                    const response = await fetch('/api/trades?limit=10');
+                    const trades = await response.json();
+                    this.renderTrades(trades);
+                } catch (error) {
+                    console.error('Failed to load trades:', error);
+                }
+            }
+
+            renderTrades(trades) {
+                const tbody = document.getElementById('tradesTable');
+                
+                if (trades.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">
+                                No recent trades
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                tbody.innerHTML = trades.map(trade => `
+                    <tr>
+                        <td>${trade.symbol}</td>
+                        <td>
+                            <span class="badge ${trade.side === 'long' ? 'bg-success' : 'bg-danger'}">
+                                ${trade.side.toUpperCase()}
+                            </span>
+                        </td>
+                        <td>$${trade.entry_price.toFixed(2)}</td>
+                        <td>$${trade.exit_price.toFixed(2)}</td>
+                        <td class="${trade.pnl >= 0 ? 'text-success' : 'text-danger'}">
+                            $${trade.pnl.toFixed(2)}
+                        </td>
+                        <td>
+                            <small>${trade.exit_reason}</small>
+                        </td>
+                    </tr>
+                `).join('');
+            }
+
+            initializeChart() {
+                const ctx = document.getElementById('performanceChart').getContext('2d');
+                this.chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Portfolio Value',
+                            data: [],
+                            borderColor: '#2563eb',
+                            backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                labels: {
+                                    color: '#d1d5db'
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: {
+                                    color: '#d1d5db'
+                                },
+                                grid: {
+                                    color: '#4b5563'
+                                }
+                            },
+                            y: {
+                                ticks: {
+                                    color: '#d1d5db',
+                                    callback: function(value) {
+                                        return '$' + value.toLocaleString();
+                                    }
+                                },
+                                grid: {
+                                    color: '#4b5563'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            async updatePerformanceChart() {
+                try {
+                    const response = await fetch('/api/performance?days=7');
+                    const data = await response.json();
+                    
+                    this.chart.data.labels = data.timestamps.map(ts => 
+                        new Date(ts).toLocaleDateString()
+                    );
+                    this.chart.data.datasets[0].data = data.balances;
+                    this.chart.update('none');
+                } catch (error) {
+                    console.error('Failed to update chart:', error);
+                }
+            }
+
+            updateConnectionStatus(status) {
+                const indicator = document.getElementById('connectionIndicator');
+                const statusSpan = document.getElementById('connectionStatus');
+                
+                if (status === 'connected') {
+                    indicator.innerHTML = '<span class="status-indicator healthy"></span>WebSocket Connected';
+                    statusSpan.innerHTML = '<span class="status-indicator healthy"></span>Connected';
+                } else {
+                    indicator.innerHTML = '<span class="status-indicator error"></span>WebSocket Disconnected';
+                    statusSpan.innerHTML = '<span class="status-indicator error"></span>Disconnected';
+                }
+            }
+
+            updateLastUpdateTime() {
+                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+            }
+
+            showAlert(message, type) {
+                // Normalize the type to ensure valid Bootstrap classes
+                const normalizedType = type === 'error' ? 'danger' : type;
+                
+                // Create and show a temporary alert
+                const alert = document.createElement('div');
+                alert.className = `alert alert-${normalizedType} alert-custom position-fixed`;
+                alert.style.cssText = 'top: 80px; right: 20px; z-index: 1060; min-width: 300px;';
+                alert.textContent = message;
+                
+                document.body.appendChild(alert);
+                
+                setTimeout(() => {
+                    alert.remove();
+                }, 3000);
+            }
+
+            hideLoading() {
+                document.getElementById('loadingOverlay').style.display = 'none';
+            }
+        }
+
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new TradingDashboard();
+        });
+    </script>
+</body>
+</html>
