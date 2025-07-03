@@ -56,11 +56,11 @@ class MyStrategy(BaseStrategy):
 
 ```bash
 # Uses strategy's default trading pair
-python run_backtest.py adaptive --days 100          # Uses BTCUSDT
-python run_backtest.py high_risk_high_reward --days 100  # Uses ETHUSDT
+python scripts/run_backtest.py adaptive --days 100          # Uses BTCUSDT
+python scripts/run_backtest.py high_risk_high_reward --days 100  # Uses ETHUSDT
 
 # Override with specific symbol
-python run_backtest.py adaptive --symbol SOLUSDT --days 100
+python scripts/run_backtest.py adaptive --symbol SOLUSDT --days 100
 ```
 
 ## Benefits
@@ -74,7 +74,7 @@ python run_backtest.py adaptive --symbol SOLUSDT --days 100
 ## Files Modified
 
 - **UPDATED**: All strategy files - Added trading pair definitions
-- **UPDATED**: `run_backtest.py` - Uses strategy-specific trading pairs
+- **UPDATED**: `scripts/run_backtest.py` - Uses strategy-specific trading pairs
 - **UPDATED**: Data providers - Load API keys directly from environment
 - **REMOVED**: Old `config.py` and `config/settings.py` files - No longer needed
 
@@ -85,7 +85,7 @@ When creating new strategies:
 1. **Inherit from BaseStrategy**
 2. **Set trading pair** in constructor: `self.trading_pair = 'SYMBOL'`
 3. **Define parameters** directly in the class
-4. **Add to strategy map** in `run_backtest.py`
+4. **Add to strategy map** in `scripts/run_backtest.py`
 
 Example:
 ```python

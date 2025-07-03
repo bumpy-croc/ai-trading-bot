@@ -77,20 +77,20 @@ export BINANCE_API_SECRET="your_api_secret"
 
 ```bash
 # Safe paper trading - no real money
-python run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
+python scripts/run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
 
 # With sentiment analysis
-python run_live_trading.py ml_sentiment_strategy --symbol BTCUSDT --paper-trading --use-sentiment
+python scripts/run_live_trading.py ml_sentiment_strategy --symbol BTCUSDT --paper-trading --use-sentiment
 
 # Custom configuration
-python run_live_trading.py adaptive --balance 5000 --max-position 0.05 --check-interval 30
+python scripts/run_live_trading.py adaptive --balance 5000 --max-position 0.05 --check-interval 30
 ```
 
 ### **3. Live Trading (Advanced)**
 
 ```bash
 # DANGER: Real money trading
-python run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
+python scripts/run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
 
 # The system will ask for additional confirmation
 ```
@@ -294,14 +294,14 @@ risk_params = RiskParameters(
 ### **Local Development:**
 ```bash
 # Run on your local machine
-python run_live_trading.py adaptive --paper-trading
+python scripts/run_live_trading.py adaptive --paper-trading
 ```
 
 ### **VPS Deployment:**
 ```bash
 # Install on VPS for 24/7 operation
 screen -S trading
-python run_live_trading.py adaptive --live-trading --i-understand-the-risks
+python scripts/run_live_trading.py adaptive --live-trading --i-understand-the-risks
 # Ctrl+A, D to detach
 ```
 
@@ -311,7 +311,7 @@ FROM python:3.9
 COPY . /app
 WORKDIR /app
 RUN pip install -r requirements.txt
-CMD ["python", "run_live_trading.py", "adaptive", "--paper-trading"]
+CMD ["python", "scripts/run_live_trading.py", "adaptive", "--paper-trading"]
 ```
 
 ---
@@ -339,7 +339,7 @@ cat trades_202501.json | jq '.'
 ```bash
 # Enable debug logging
 export LOG_LEVEL=DEBUG
-python run_live_trading.py adaptive --paper-trading
+python scripts/run_live_trading.py adaptive --paper-trading
 ```
 
 ---

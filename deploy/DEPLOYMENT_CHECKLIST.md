@@ -10,7 +10,7 @@
 
 ### 1. Prepare Code
 - [ ] Commit all changes to git
-- [ ] Run tests locally: `python test_runner.py`
+- [ ] Run tests locally: `python test/run_tests.py`
 - [ ] Update requirements.txt if needed
 
 ### 2. Launch Instance

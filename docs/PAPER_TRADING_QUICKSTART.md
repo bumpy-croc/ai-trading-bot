@@ -54,7 +54,7 @@ print(f'✅ Connection successful! BTC Price: \${price:,.2f}')
 
 #### Option A: Conservative Adaptive Strategy
 ```bash
-python run_live_trading.py adaptive \
+python scripts/run_live_trading.py adaptive \
     --symbol BTCUSDT \
     --paper-trading \
     --balance 10000 \
@@ -64,7 +64,7 @@ python run_live_trading.py adaptive \
 
 #### Option B: Enhanced Strategy with Small Positions
 ```bash
-python run_live_trading.py enhanced \
+python scripts/run_live_trading.py enhanced \
     --symbol BTCUSDT \
     --paper-trading \
     --balance 10000 \
@@ -74,7 +74,7 @@ python run_live_trading.py enhanced \
 
 #### Option C: ML Strategy with Sentiment (if models are trained)
 ```bash
-python run_live_trading.py ml_with_sentiment \
+python scripts/run_live_trading.py ml_with_sentiment \
     --symbol BTCUSDT \
     --paper-trading \
     --use-sentiment \
@@ -165,7 +165,7 @@ After successful paper trading:
 python -c "from core.data_providers.binance_data_provider import BinanceDataProvider; print('API OK')"
 
 # 2. Start paper trading
-python run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
+python scripts/run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
 
 # 3. In another terminal, monitor progress
 python scripts/inspect_database.py

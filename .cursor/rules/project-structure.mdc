@@ -95,10 +95,10 @@ class YourStrategy(BaseStrategy):
 ### 2. Running Backtests
 ```bash
 # Standard backtest
-python run_backtest.py <strategy_name> --days <num_days>
+python scripts/run_backtest.py <strategy_name> --days <num_days>
 
 # Example
-python run_backtest.py adaptive --days 100
+python scripts/run_backtest.py adaptive --days 100
 ```
 
 ### 3. Training ML Models
@@ -113,7 +113,7 @@ python scripts/safe_model_trainer.py
 ### 4. Live Trading
 ```bash
 # Start live trading with specific strategy
-python run_live_trading.py <strategy_name>
+python scripts/run_live_trading.py <strategy_name>
 
 # Control panel for monitoring
 python live_trading_control.py

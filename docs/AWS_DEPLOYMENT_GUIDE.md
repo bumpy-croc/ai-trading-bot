@@ -359,7 +359,7 @@ ps aux | grep python | grep trading
 htop
 
 # Check for memory leaks
-sudo -u ai-trading-bot /opt/ai-trading-bot/venv/bin/python -m memory_profiler run_live_trading.py
+sudo -u ai-trading-bot /opt/ai-trading-bot/venv/bin/python -m memory_profiler scripts/run_live_trading.py
 ```
 
 ### Emergency Procedures

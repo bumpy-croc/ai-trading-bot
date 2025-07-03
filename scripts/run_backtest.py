@@ -6,6 +6,9 @@ import importlib
 import sys
 from pathlib import Path
 
+# Add parent directory to path for imports
+sys.path.append(str(Path(__file__).parent.parent))
+
 from core.config import get_config
 
 from core.data_providers import BinanceDataProvider
@@ -193,7 +196,7 @@ def main():
                 print(f"Shape of aligned DataFrame: {aligned_df.shape}")
                 if aligned_df.empty:
                     print("Warning: aligned DataFrame is empty. No file will be written.")
-                output_path = 'data/sentiment_aligned_output.csv'
+                output_path = '../data/sentiment_aligned_output.csv'
                 try:
                     aligned_df.to_csv(output_path)
                     print(f'Aligned sentiment and price data saved to {output_path}')

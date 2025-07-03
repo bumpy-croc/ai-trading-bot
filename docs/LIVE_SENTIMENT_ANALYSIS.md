@@ -251,7 +251,7 @@ Hybrid system that automatically switches between historical data (backtesting) 
 
 ## 🚀 **Next Steps**
 
-1. **Test the demo**: Run `python live_sentiment_demo.py`
+1. **Test the demo**: Run `python examples/live_sentiment_demo.py`
 2. **Configure for your needs**: Adjust cache duration
 3. **Monitor API usage**: Track costs and performance
 4. **Optimize thresholds**: Fine-tune confidence levels

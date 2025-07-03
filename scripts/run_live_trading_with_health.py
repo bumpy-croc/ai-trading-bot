@@ -10,10 +10,10 @@ import time
 from datetime import datetime
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import health check server
-from health_check import run_health_server
+from scripts.health_check import run_health_server
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
@@ -50,7 +50,7 @@ def main():
         print(f"[{datetime.now()}] Starting live trading with {strategy} strategy...")
         
         # Import here to avoid circular imports
-        from run_live_trading import main as run_trading
+        from scripts.run_live_trading import main as run_trading
         
         # Preserve original sys.argv and create clean arguments for trading script
         original_argv = sys.argv.copy()

@@ -3,6 +3,6 @@ description:
 globs: 
 alwaysApply: true
 ---
-- Don't create documentation unless specifically asked.
+- Don't create excess documentation. When you do, it should live in the `docs` folder.
 - Important: Never commit unless specifically asked to!
 - 

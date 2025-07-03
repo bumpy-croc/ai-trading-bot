@@ -99,7 +99,7 @@ Environment="ENVIRONMENT=$ENVIRONMENT"
 ExecStartPre=$APP_DIR/venv/bin/python $APP_DIR/scripts/test_secrets_access.py
 
 # Start the application
-ExecStart=$APP_DIR/venv/bin/python run_live_trading.py adaptive $([ "$ENVIRONMENT" = "production" ] || echo "--paper-trading")
+ExecStart=$APP_DIR/venv/bin/python scripts/run_live_trading.py adaptive $([ "$ENVIRONMENT" = "production" ] || echo "--paper-trading")
 
 # Restart configuration
 Restart=always

@@ -134,10 +134,10 @@ python scripts/test_config_system.py
 
 ```bash
 # Generic backtest (most recent 90 days)
-python run_backtest.py adaptive --days 90
+python scripts/run_backtest.py adaptive --days 90
 
 # Full-history backtest with cache disabled and a custom start date
-python run_backtest.py ml_with_sentiment \
+python scripts/run_backtest.py ml_with_sentiment \
   --start-date 2020-01-01 --no-cache
 ```
 
@@ -145,7 +145,7 @@ python run_backtest.py ml_with_sentiment \
 
 ```bash
 # Start live trading (paper-mode by default)
-python run_live_trading.py adaptive
+python scripts/run_live_trading.py adaptive
 
 # Switch to a different strategy on the fly
 python live_trading_control.py switch ml_basic
@@ -286,10 +286,10 @@ python scripts/train_model_with_sentiment.py BTCUSDT --no-sentiment --start-date
 #### **Running Sentiment-Enhanced Backtests**
 ```bash
 # Use sentiment-enhanced ML strategy
-python run_backtest.py ml_sentiment_strategy --days 365
+python scripts/run_backtest.py ml_sentiment_strategy --days 365
 
 # Compare with price-only ML strategy
-python run_backtest.py ml_model_strategy --days 365
+python scripts/run_backtest.py ml_model_strategy --days 365
 ```
 
 #### **Downloading Fresh Sentiment Data**

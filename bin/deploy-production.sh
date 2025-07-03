@@ -165,7 +165,7 @@ Environment="ENVIRONMENT=production"
 ExecStartPre=/opt/ai-trading-bot/venv/bin/python /opt/ai-trading-bot/scripts/test_secrets_access.py
 
 # Start the bot in LIVE TRADING mode
-ExecStart=/opt/ai-trading-bot/venv/bin/python run_live_trading.py adaptive
+ExecStart=/opt/ai-trading-bot/venv/bin/python scripts/run_live_trading.py adaptive
 
 # Restart configuration (more conservative for production)
 Restart=on-failure

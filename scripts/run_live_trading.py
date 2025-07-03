@@ -22,6 +22,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Add parent directory to path for imports
+sys.path.append(str(Path(__file__).parent.parent))
+
 from core.config import get_config
 
 from core.data_providers.binance_data_provider import BinanceDataProvider
@@ -43,7 +46,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(f'live_trading_{datetime.now().strftime("%Y%m%d")}.log')
+        logging.FileHandler(f'../logs/live_trading_{datetime.now().strftime("%Y%m%d")}.log')
     ]
 )
 logger = logging.getLogger('live_trading')

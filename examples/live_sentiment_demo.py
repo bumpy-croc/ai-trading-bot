@@ -7,7 +7,7 @@ It shows the difference between historical and live sentiment data and how tradi
 decisions are made with fresh sentiment information.
 
 Usage:
-    python live_sentiment_demo.py
+    python examples/live_sentiment_demo.py
 """
 
 import pandas as pd
