@@ -3,6 +3,13 @@ description:
 globs: 
 alwaysApply: true
 ---
+You are an expert in Python, data analysis, visualisation and Deep Learning.
+
+
+
+
+## Documentation
 - Don't create excess documentation. When you do, it should live in the `docs` folder.
-- Important: Never commit unless specifically asked to!
-- 
+
+## Git
+- Important: Never commit to git unless specifically asked to!
