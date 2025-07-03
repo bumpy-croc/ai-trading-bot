@@ -13,7 +13,7 @@ Usage:
     python run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
     
     # With custom settings
-    python run_live_trading.py ml_premium_strategy --symbol BTCUSDT --balance 5000 --max-position 0.05
+    python run_live_trading.py ml_with_sentiment --symbol BTCUSDT --balance 5000 --max-position 0.05
 """
 
 import argparse
@@ -34,8 +34,8 @@ from live.trading_engine import LiveTradingEngine
 from strategies.adaptive import AdaptiveStrategy
 from strategies.enhanced import EnhancedStrategy
 from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
-from strategies.ml_basic_strategy import MlBasicStrategy
-from strategies.ml_premium_strategy import MlPremiumStrategy
+from strategies.ml_basic import MlBasic
+from strategies.ml_with_sentiment import MlWithSentiment
 
 # Set up logging
 logging.basicConfig(
@@ -54,8 +54,8 @@ def load_strategy(strategy_name: str):
         'adaptive': AdaptiveStrategy,
         'enhanced': EnhancedStrategy,
         'high_risk_high_reward': HighRiskHighRewardStrategy,
-        'ml_basic_strategy': MlBasicStrategy,
-        'ml_premium_strategy': lambda: MlPremiumStrategy(use_sentiment=True)
+        'ml_basic': MlBasic,
+        'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True)
     }
     
     if strategy_name not in strategies:
@@ -76,7 +76,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Run live trading bot')
     
     # Strategy selection
-    parser.add_argument('strategy', help='Strategy name (e.g., adaptive, ml_premium_strategy)')
+    parser.add_argument('strategy', help='Strategy name (e.g., adaptive, ml_with_sentiment)')
     
     # Trading parameters
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')

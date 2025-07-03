@@ -74,7 +74,7 @@ python run_live_trading.py enhanced \
 
 #### Option C: ML Strategy with Sentiment (if models are trained)
 ```bash
-python run_live_trading.py ml_premium_strategy \
+python run_live_trading.py ml_with_sentiment \
     --symbol BTCUSDT \
     --paper-trading \
     --use-sentiment \

@@ -120,10 +120,10 @@ class TestStrategyManager:
         
         # Load ML-based strategy
         try:
-            strategy = manager.load_strategy("ml_basic_strategy")
+            strategy = manager.load_strategy("ml_basic")
             
             # Prepare model update
-            success = manager.update_model("ml_basic_strategy", str(mock_model_file))
+            success = manager.update_model("ml_basic", str(mock_model_file))
             
             assert success == True
             assert manager.pending_update is not None
@@ -139,14 +139,14 @@ class TestStrategyManager:
         
         try:
             # Load ML strategy
-            strategy = manager.load_strategy("ml_basic_strategy")
+            strategy = manager.load_strategy("ml_basic")
             
             # Mock the strategy to have model loading capability
             strategy._load_model = Mock()
             strategy.model_path = "old_model.onnx"
             
             # Prepare and apply model update
-            manager.update_model("ml_basic_strategy", str(mock_model_file))
+            manager.update_model("ml_basic", str(mock_model_file))
             success = manager.apply_pending_update()
             
             assert success == True
@@ -305,8 +305,8 @@ class TestStrategyManagerErrorHandling:
             f.write("not a valid model")
         
         try:
-            manager.load_strategy("ml_basic_strategy")
-            success = manager.update_model("ml_basic_strategy", str(invalid_model), validate_model=True)
+            manager.load_strategy("ml_basic")
+            success = manager.update_model("ml_basic", str(invalid_model), validate_model=True)
             assert success == False
         except (ValueError, ImportError):
             pytest.skip("ML strategy not available")
@@ -334,8 +334,8 @@ class TestStrategyManagerErrorHandling:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         try:
-            manager.load_strategy("ml_basic_strategy")
-            success = manager.update_model("ml_basic_strategy", "/nonexistent/model.onnx")
+            manager.load_strategy("ml_basic")
+            success = manager.update_model("ml_basic", "/nonexistent/model.onnx")
             assert success == False
         except (ValueError, ImportError):
             pytest.skip("ML strategy not available")

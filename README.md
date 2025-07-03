@@ -137,7 +137,7 @@ python scripts/test_config_system.py
 python run_backtest.py adaptive --days 90
 
 # Full-history backtest with cache disabled and a custom start date
-python run_backtest.py ml_premium_strategy \
+python run_backtest.py ml_with_sentiment \
   --start-date 2020-01-01 --no-cache
 ```
 
@@ -148,7 +148,7 @@ python run_backtest.py ml_premium_strategy \
 python run_live_trading.py adaptive
 
 # Switch to a different strategy on the fly
-python live_trading_control.py switch ml_basic_strategy
+python live_trading_control.py switch ml_basic
 ```
 
 ### Training ML Models
@@ -188,8 +188,8 @@ python -m core.risk.risk_manager --symbol BTCUSDT --qty 0.05
 | `adaptive.py`                      | EMA-based adaptive trend-follower                       |
 | `enhanced.py`                      | Combines multiple indicators for stronger confirmation |
 | `high_risk_high_reward.py`         | Aggressive breakout strategy (for small allocations)    |
-| `ml_basic_strategy.py`             | Utilises ML price predictions for entry/exit            |
-| `ml_premium_strategy.py`           | ML + sentiment, confidence-weighted sizing             |
+| `ml_basic.py`                      | Utilises ML price predictions for entry/exit            |
+| `ml_with_sentiment.py`             | ML + sentiment, confidence-weighted sizing             |
 
 Add your own by subclassing `strategies.base.BaseStrategy` and implementing `generate_signals()` & `calculate_position_size()`.
 

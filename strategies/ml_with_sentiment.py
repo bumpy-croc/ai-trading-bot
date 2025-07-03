@@ -36,8 +36,8 @@ from datetime import datetime, timedelta
 from strategies.base import BaseStrategy
 from core.data_providers.senticrypt_provider import SentiCryptProvider
 
-class MlPremiumStrategy(BaseStrategy):
-    def __init__(self, name="MlPremiumStrategy", model_path=None, sequence_length=120, 
+class MlWithSentiment(BaseStrategy):
+    def __init__(self, name="MlWithSentiment", model_path=None, sequence_length=120, 
                  use_sentiment=True, sentiment_csv_path=None):
         super().__init__(name)
         

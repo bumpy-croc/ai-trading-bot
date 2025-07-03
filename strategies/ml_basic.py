@@ -24,8 +24,8 @@ import onnx
 import onnxruntime as ort
 from strategies.base import BaseStrategy
 
-class MlBasicStrategy(BaseStrategy):
-    def __init__(self, name="MlBasicStrategy", model_path="ml/btcusdt_price.onnx", sequence_length=120):
+class MlBasic(BaseStrategy):
+    def __init__(self, name="MlBasic", model_path="ml/btcusdt_price.onnx", sequence_length=120):
         super().__init__(name)
         
         # Set strategy-specific trading pair - ML model trained on BTC

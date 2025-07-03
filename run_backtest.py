@@ -14,7 +14,7 @@ from core.data_providers.cryptocompare_sentiment import CryptoCompareSentimentPr
 from core.risk import RiskParameters
 from backtesting import Backtester
 
-from strategies import AdaptiveStrategy, EnhancedStrategy, HighRiskHighRewardStrategy, MlBasicStrategy  # Direct imports
+from strategies import AdaptiveStrategy, EnhancedStrategy, HighRiskHighRewardStrategy, MlBasic  # Direct imports
 
 # Set up logging
 logging.basicConfig(
@@ -37,15 +37,15 @@ def load_strategy(strategy_name: str):
         elif strategy_name == 'high_risk_high_reward':
             from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
             strategy = HighRiskHighRewardStrategy()
-        elif strategy_name == 'ml_basic_strategy':
-            from strategies.ml_basic_strategy import MlBasicStrategy
-            strategy = MlBasicStrategy()
-        elif strategy_name == 'ml_premium_strategy':
-            from strategies.ml_premium_strategy import MlPremiumStrategy
-            strategy = MlPremiumStrategy(use_sentiment=True)
+        elif strategy_name == 'ml_basic':
+            from strategies.ml_basic import MlBasic
+            strategy = MlBasic()
+        elif strategy_name == 'ml_with_sentiment':
+            from strategies.ml_with_sentiment import MlWithSentiment
+            strategy = MlWithSentiment(use_sentiment=True)
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ['adaptive', 'enhanced', 'high_risk_high_reward', 'ml_basic_strategy', 'ml_premium_strategy']
+            available_strategies = ['adaptive', 'enhanced', 'high_risk_high_reward', 'ml_basic', 'ml_with_sentiment']
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
         
