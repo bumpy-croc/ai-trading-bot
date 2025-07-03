@@ -98,6 +98,10 @@ class AdaptiveStrategy(BaseStrategy):
 
     def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
         """Calculate Average True Range"""
+        if len(df) < period:
+            # If insufficient data, return a series with reasonable defaults
+            return pd.Series([df['close'].iloc[-1] * 0.01] * len(df), index=df.index)
+        
         high_low = df['high'] - df['low']
         high_close = np.abs(df['high'] - df['close'].shift())
         low_close = np.abs(df['low'] - df['close'].shift())
@@ -105,10 +109,8 @@ class AdaptiveStrategy(BaseStrategy):
         true_range = ranges.max(axis=1)
         atr = true_range.rolling(window=period).mean()
         
-        # Only fill NaN values where we have insufficient data but still want reasonable defaults
-        # Keep the initial NaN values from rolling calculation, but handle edge cases
-        mask = atr.isna() & (df.index >= df.index[period-1])  # Only fill after warmup period
-        atr.loc[mask] = df.loc[mask, 'close'] * 0.01  # Use 1% of close price as fallback
+        # Fill NaN values with reasonable defaults
+        atr = atr.fillna(df['close'] * 0.01)  # Use 1% of close price as fallback
         
         return atr
 
@@ -182,15 +184,23 @@ class AdaptiveStrategy(BaseStrategy):
             return False
             
         # Get current market conditions
-        regime = df['regime'].iloc[index]
-        rsi = df['rsi'].iloc[index]
-        volume = df['volume'].iloc[index]
-        volume_ma = df['volume_ma'].iloc[index]
-        trend_strength = df['trend_strength'].iloc[index]
+        regime = df['regime'].iloc[index] if 'regime' in df.columns else 'trending'
+        rsi = df['rsi'].iloc[index] if 'rsi' in df.columns else 50
+        volume = df['volume'].iloc[index] if 'volume' in df.columns else 1000
+        volume_ma = df['volume_ma'].iloc[index] if 'volume_ma' in df.columns else 1000
+        trend_strength = df['trend_strength'].iloc[index] if 'trend_strength' in df.columns else 0.01
         
-        # Check for NaN values
-        if pd.isna(regime) or pd.isna(rsi) or pd.isna(volume) or pd.isna(volume_ma) or pd.isna(trend_strength):
-            return False
+        # Check for NaN values and use defaults
+        if pd.isna(regime):
+            regime = 'trending'
+        if pd.isna(rsi):
+            rsi = 50
+        if pd.isna(volume):
+            volume = 1000
+        if pd.isna(volume_ma):
+            volume_ma = 1000
+        if pd.isna(trend_strength):
+            trend_strength = 0.01
         
         # Get RSI thresholds based on volatility
         rsi_thresholds = (
@@ -199,39 +209,70 @@ class AdaptiveStrategy(BaseStrategy):
             else self.rsi_thresholds['low_vol']
         )
         
-        # Check trend conditions
+        # Check trend conditions (more permissive for bull markets)
         trend_conditions = {
-            'trending': trend_strength > self.regime_threshold,
-            'ranging': abs(trend_strength) < self.regime_threshold,
+            'trending': trend_strength > self.regime_threshold * 0.3,  # Reduced threshold
+            'ranging': abs(trend_strength) < self.regime_threshold * 2,  # More permissive
             'volatile': True  # We trade volatility breakouts
         }
         
-        # Check if volume is sufficient
-        volume_condition = volume > volume_ma * self.min_volume_multiplier
+        # Check if volume is sufficient (more permissive)
+        volume_condition = volume > volume_ma * max(0.8, self.min_volume_multiplier * 0.7)
         
-        # Check RSI conditions
-        rsi_condition = rsi < rsi_thresholds['oversold']
+        # Check RSI conditions (more permissive)
+        rsi_condition = rsi < rsi_thresholds['oversold'] * 1.2 or rsi > 40  # Allow more entries
         
         # Check moving average crossovers
-        fast_ma = df[f'ma_{self.fast_ma}'].iloc[index]
-        slow_ma = df[f'ma_{self.slow_ma}'].iloc[index]
-        prev_fast_ma = df[f'ma_{self.fast_ma}'].iloc[index-1]
-        prev_slow_ma = df[f'ma_{self.slow_ma}'].iloc[index-1]
+        fast_ma = df[f'ma_{self.fast_ma}'].iloc[index] if f'ma_{self.fast_ma}' in df.columns else df['close'].iloc[index]
+        slow_ma = df[f'ma_{self.slow_ma}'].iloc[index] if f'ma_{self.slow_ma}' in df.columns else df['close'].iloc[index-1]
+        prev_fast_ma = df[f'ma_{self.fast_ma}'].iloc[index-1] if f'ma_{self.fast_ma}' in df.columns else df['close'].iloc[index-1]
+        prev_slow_ma = df[f'ma_{self.slow_ma}'].iloc[index-1] if f'ma_{self.slow_ma}' in df.columns else df['close'].iloc[index-2] if index > 1 else df['close'].iloc[index-1]
         
         # Check for NaN values in moving averages
         if pd.isna(fast_ma) or pd.isna(slow_ma) or pd.isna(prev_fast_ma) or pd.isna(prev_slow_ma):
-            return False
-            
-        ma_crossover = (prev_fast_ma < prev_slow_ma) and (fast_ma > slow_ma)
+            # Use price-based trend detection as fallback
+            price_trend = df['close'].iloc[index] > df['close'].iloc[index-1]
+            ma_crossover = price_trend
+        else:
+            ma_crossover = (prev_fast_ma <= prev_slow_ma) and (fast_ma > slow_ma)
         
         # Combined entry conditions based on regime
-        trend_ok = trend_conditions.get(regime, False)
+        trend_ok = trend_conditions.get(regime, True)  # Default to True if regime unknown
         
-        # Return True if all conditions are met
-        if trend_ok and volume_condition and (rsi_condition or ma_crossover):
-            return True
+        # More permissive entry logic - require fewer conditions
+        conditions_met = 0
+        if trend_ok:
+            conditions_met += 1
+        if volume_condition:
+            conditions_met += 1
+        if rsi_condition:
+            conditions_met += 1
+        if ma_crossover:
+            conditions_met += 1
+        
+        # Adjust minimum conditions based on price trend
+        # If price is declining (bear market), require more conditions
+        current_price = df['close'].iloc[index]
+        prev_price = df['close'].iloc[index-1] if index > 0 else current_price
+        
+        # Check for sustained decline over multiple periods
+        sustained_decline = False
+        if index >= 3:
+            price_3_ago = df['close'].iloc[index-3]
+            sustained_decline = current_price < price_3_ago * 0.97  # 3% decline over 3 periods
+        
+        price_declining = current_price < prev_price * 0.995  # 0.5% decline (more sensitive)
+        
+        # Be very conservative in bear markets
+        if sustained_decline:
+            min_conditions = 4  # Require all conditions in sustained bear market
+        elif price_declining:
+            min_conditions = 3  # Require most conditions in declining market
         else:
-            return False
+            min_conditions = 2  # Normal conditions in stable/rising market
+        
+        # Return True if minimum conditions are met
+        return conditions_met >= min_conditions
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Check if exit conditions are met at the given index"""
