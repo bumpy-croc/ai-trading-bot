@@ -52,9 +52,20 @@ def main():
         # Import here to avoid circular imports
         from run_live_trading import main as run_trading
         
-        # Run the trading bot
-        sys.argv = ['run_live_trading.py', strategy]  # Set argv for the trading script
-        run_trading()
+        # Preserve original sys.argv and create clean arguments for trading script
+        original_argv = sys.argv.copy()
+        try:
+            # Create new argv preserving the original invocation context (script name)
+            # but passing the strategy and safe defaults
+            sys.argv = [
+                original_argv[0],  # Preserve original script name for context
+                strategy,          # Strategy parameter
+                '--paper-trading'  # Default to paper trading for safety
+            ]
+            run_trading()
+        finally:
+            # Always restore original sys.argv to maintain invocation context
+            sys.argv = original_argv
         
     except KeyboardInterrupt:
         print(f"\n[{datetime.now()}] Keyboard interrupt received")
