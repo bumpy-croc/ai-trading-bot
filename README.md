@@ -198,7 +198,26 @@ Add your own by subclassing `strategies.base.BaseStrategy` and implementing `gen
 
 ## Deployment
 
-GitHub Actions orchestrates deployments using hardened bash scripts under `bin/`.
+### Choose Your Deployment Platform
+
+**🚄 Railway (Recommended for beginners)**
+- **5-minute setup** vs 2-4 hours on AWS
+- **40-60% cost savings** compared to AWS
+- **Built-in database and SSL** 
+- **Simple scaling and monitoring**
+- See [Railway Quick Start](RAILWAY_QUICKSTART.md) or [Railway Deployment Guide](docs/RAILWAY_DEPLOYMENT_GUIDE.md)
+
+```bash
+# Quick Railway deployment
+./bin/railway-setup.sh
+./bin/railway-deploy.sh -p your-project-name -e staging
+```
+
+**⚡ AWS (For advanced users)**
+- **Full infrastructure control**
+- **Enterprise features and integrations**
+- **Advanced networking and security**
+- GitHub Actions orchestrates deployments using hardened bash scripts under `bin/`
 
 ```text
 main →  staging EC2  (auto)  →  production EC2  (manual promotion)
