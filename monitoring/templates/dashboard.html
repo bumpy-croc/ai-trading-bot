@@ -881,9 +881,12 @@
             }
 
             showAlert(message, type) {
+                // Normalize the type to ensure valid Bootstrap classes
+                const normalizedType = type === 'error' ? 'danger' : type;
+                
                 // Create and show a temporary alert
                 const alert = document.createElement('div');
-                alert.className = `alert alert-${type} alert-custom position-fixed`;
+                alert.className = `alert alert-${normalizedType} alert-custom position-fixed`;
                 alert.style.cssText = 'top: 80px; right: 20px; z-index: 1060; min-width: 300px;';
                 alert.textContent = message;
                 
