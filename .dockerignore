@@ -89,8 +89,7 @@ model_backups/
 # Staging directory
 staging/
 
-# Deployment scripts (not needed in container)
-bin/
+# AWS deployment scripts (not needed in Railway container)
 deploy/
 
 # AWS specific files

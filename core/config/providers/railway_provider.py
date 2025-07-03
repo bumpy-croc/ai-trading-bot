@@ -38,10 +38,12 @@ class RailwayProvider(ConfigProvider):
         Returns:
             True if Railway environment variables are detected
         """
+        # Railway sets these environment variables automatically
         railway_indicators = [
-            'RAILWAY_ENVIRONMENT_NAME',
-            'RAILWAY_PROJECT_NAME',
-            'RAILWAY_SERVICE_NAME'
+            'RAILWAY_DEPLOYMENT_ID',
+            'RAILWAY_PROJECT_ID',
+            'RAILWAY_SERVICE_ID',
+            'RAILWAY_ENVIRONMENT_ID'
         ]
         
         return any(key in self._env_vars for key in railway_indicators)
@@ -96,10 +98,11 @@ class RailwayProvider(ConfigProvider):
             Dictionary with Railway deployment details
         """
         return {
-            'environment': self.get('RAILWAY_ENVIRONMENT_NAME'),
-            'project': self.get('RAILWAY_PROJECT_NAME'),
-            'service': self.get('RAILWAY_SERVICE_NAME'),
+            'project_id': self.get('RAILWAY_PROJECT_ID'),
+            'service_id': self.get('RAILWAY_SERVICE_ID'),
+            'environment_id': self.get('RAILWAY_ENVIRONMENT_ID'),
             'deployment_id': self.get('RAILWAY_DEPLOYMENT_ID'),
             'replica_id': self.get('RAILWAY_REPLICA_ID'),
-            'region': self.get('RAILWAY_REGION')
+            'public_domain': self.get('RAILWAY_PUBLIC_DOMAIN'),
+            'private_domain': self.get('RAILWAY_PRIVATE_DOMAIN')
         }

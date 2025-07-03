@@ -45,20 +45,24 @@ cd ai-trading-bot
 ./bin/railway-setup.sh
 
 # Follow the prompts:
-# - Enter project name (or create new)
-# - Choose environment (staging recommended first)
+# - Create new project or link existing
 # - Add PostgreSQL database (recommended: yes)
 ```
 
 ### 4. Configure API Keys 🔑
 
-The setup script provides a URL to your Railway dashboard. Set these variables:
+Open Railway dashboard and set your API keys:
 
-**Required:**
+```bash
+# Open Railway dashboard
+railway open
+```
+
+**Required variables to set:**
 - `BINANCE_API_KEY` - Your Binance API key
 - `BINANCE_SECRET_KEY` - Your Binance secret key
 
-**Optional:**
+**Optional variables:**
 - `SENTICRYPT_API_KEY` - For sentiment analysis
 - `CRYPTOCOMPARE_API_KEY` - Additional sentiment data
 - `AUGMENTO_API_KEY` - Alternative sentiment provider
@@ -66,8 +70,8 @@ The setup script provides a URL to your Railway dashboard. Set these variables:
 ### 5. Deploy 🎯
 
 ```bash
-# Deploy to staging environment
-./bin/railway-deploy.sh -p your-project-name -e staging
+# Deploy to Railway
+./bin/railway-deploy.sh
 
 # Monitor the deployment
 railway logs

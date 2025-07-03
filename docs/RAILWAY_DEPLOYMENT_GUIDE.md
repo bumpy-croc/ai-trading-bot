@@ -155,20 +155,20 @@ No manual database setup required!
 ### Using the Deploy Script
 
 ```bash
-# Deploy to staging
-./bin/railway-deploy.sh -p your-project-name -e staging
+# Deploy to staging (default)
+./bin/railway-deploy.sh
 
 # Deploy to production (requires confirmation)
-./bin/railway-deploy.sh -p your-project-name -e production
+./bin/railway-deploy.sh -e production
 ```
 
 ### Manual Deployment
 
 ```bash
-# Link to your project
-railway link your-project-name
+# Make sure you're linked to a project
+railway status
 
-# Deploy
+# Deploy directly
 railway up
 ```
 
