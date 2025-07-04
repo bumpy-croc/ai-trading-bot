@@ -6,7 +6,7 @@ The codebase supports **backtesting**, **live trading**, **machine-learning pric
 
 ---
 
-## � Table of Contents
+## Table of Contents
 
 1. [Features](#features)
 2. [Architecture Overview](#architecture-overview)
@@ -209,8 +209,12 @@ Add your own by subclassing `strategies.base.BaseStrategy` and implementing `gen
 ```bash
 # Quick Railway deployment
 ./bin/railway-setup.sh
-./bin/railway-deploy.sh -p your-project-name -e staging
+
+# Deploy – reads railway.json, starts the trading engine **and** monitoring dashboard
+railway up
 ```
+
+> The monitoring dashboard is served automatically at your Railway domain (root path).
 
 **⚡ AWS (For advanced users)**
 - **Full infrastructure control**
