@@ -1,0 +1,14 @@
+---
+description: railway deployments, infrastructure
+alwaysApply: false
+---
+
+Project name: innovative-transformation
+Service: ai-trading-bot
+Environment: production
+
+This app is hosted on Railway (https://railway.com/)
+
+Railway can be accessed via the CLI. Documentation can be found at https://docs.railway.com/reference/cli-api
+
+
