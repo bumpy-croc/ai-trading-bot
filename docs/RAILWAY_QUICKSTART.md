@@ -60,7 +60,7 @@ railway open
 
 **Required variables to set:**
 - `BINANCE_API_KEY` - Your Binance API key
-- `BINANCE_SECRET_KEY` - Your Binance secret key
+- `BINANCE_API_SECRET` - Your Binance API secret
 
 **Optional variables:**
 - `SENTICRYPT_API_KEY` - For sentiment analysis

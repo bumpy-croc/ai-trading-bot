@@ -36,7 +36,7 @@ def main():
     print(f"[{datetime.now()}] Starting AI Trading Bot with strategy: {strategy}")
     
     # Start health check server in background thread
-    health_port = int(os.getenv('HEALTH_CHECK_PORT', '8000'))
+    health_port = int(os.getenv('PORT', os.getenv('HEALTH_CHECK_PORT', '8000')))
     health_thread = threading.Thread(
         target=run_health_server, 
         args=(health_port,),
@@ -44,7 +44,7 @@ def main():
     )
     health_thread.start()
     
-    print(f"[{datetime.now()}] Health check server started on port {health_port}")
+    print(f"[{datetime.now()}] Health check server started on port {health_port} (env PORT) ")
     
     # Give health server a moment to start
     time.sleep(2)

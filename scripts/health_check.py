@@ -158,7 +158,7 @@ if __name__ == '__main__':
     import time
     
     # Run health server in background
-    port = int(os.getenv('HEALTH_CHECK_PORT', '8000'))
+    port = int(os.getenv('PORT', os.getenv('HEALTH_CHECK_PORT', '8000')))
     health_thread = threading.Thread(target=run_health_server, args=(port,))
     health_thread.daemon = True
     health_thread.start()

@@ -86,7 +86,7 @@ railway variables set PYTHONUNBUFFERED=1
 
 # Trading API keys (required)
 railway variables set BINANCE_API_KEY=your_binance_api_key
-railway variables set BINANCE_SECRET_KEY=your_binance_secret_key
+railway variables set BINANCE_API_SECRET=your_binance_secret_key
 
 # Optional sentiment API keys
 railway variables set SENTICRYPT_API_KEY=your_senticrypt_key
@@ -102,7 +102,7 @@ railway variables set AUGMENTO_API_KEY=your_augmento_key
 |----------|-------------|---------|
 | `ENVIRONMENT` | Deployment environment | `staging` or `production` |
 | `BINANCE_API_KEY` | Binance API key for trading | `your_api_key` |
-| `BINANCE_SECRET_KEY` | Binance API secret | `your_secret_key` |
+| `BINANCE_API_SECRET` | Binance API secret | `your_secret_key` |
 
 ### Optional Variables
 

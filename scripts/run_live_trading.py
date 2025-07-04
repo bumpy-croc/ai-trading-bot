@@ -40,7 +40,11 @@ from live.trading_engine import LiveTradingEngine
 # Import strategies
 from strategies.adaptive import AdaptiveStrategy
 from strategies.enhanced import EnhancedStrategy
-from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
+# Optional high-risk strategy depends on TA-Lib
+try:
+    from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
+except ModuleNotFoundError:
+    HighRiskHighRewardStrategy = None
 from strategies.ml_basic import MlBasic
 from strategies.ml_with_sentiment import MlWithSentiment
 
@@ -65,10 +69,12 @@ def load_strategy(strategy_name: str):
     strategies = {
         'adaptive': AdaptiveStrategy,
         'enhanced': EnhancedStrategy,
-        'high_risk_high_reward': HighRiskHighRewardStrategy,
         'ml_basic': MlBasic,
         'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True)
     }
+    # Register high-risk strategy only if available
+    if HighRiskHighRewardStrategy is not None:
+        strategies['high_risk_high_reward'] = HighRiskHighRewardStrategy
     
     if strategy_name not in strategies:
         logger.error(f"Unknown strategy: {strategy_name}")
@@ -122,17 +128,26 @@ def validate_configuration(args):
     """Validate trading configuration and safety checks"""
     logger.info("Validating configuration...")
     
-    # Check API credentials
-    config = get_config()
-    try:
-        config.get_required('BINANCE_API_KEY')
-        config.get_required('BINANCE_API_SECRET')
-        logger.info("✅ API credentials found")
-    except ValueError as e:
-        logger.error("Binance API credentials not found!")
-        logger.error("Please ensure BINANCE_API_KEY and BINANCE_API_SECRET are configured")
-        logger.error("They can be set in AWS Secrets Manager, environment variables, or .env file")
-        return False
+    # Skip API credential checks when running in paper trading mode
+    if args.paper_trading and not args.live_trading:
+        logger.info("Paper trading mode detected – skipping API credential validation")
+    else:
+        # Check API credentials
+        config = get_config()
+        try:
+            api_key = config.get('BINANCE_API_KEY')
+            secret = config.get('BINANCE_API_SECRET')
+
+            if not api_key or not secret:
+                raise ValueError("Missing key or secret")
+
+            logger.info("✅ Binance API credentials detected")
+        except ValueError:
+            logger.error("❌ Binance API credentials not found!")
+            logger.error("Please ensure BOTH variables are set in Railway (or other providers):")
+            logger.error("  - BINANCE_API_KEY")
+            logger.error("  - BINANCE_API_SECRET")
+            return False
     
     # Validate trading mode
     if args.live_trading:

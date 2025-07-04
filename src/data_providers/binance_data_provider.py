@@ -25,13 +25,15 @@ class BinanceDataProvider(DataProvider):
         config = get_config()
         
         try:
-            api_key = config.get_required('BINANCE_API_KEY')
-            api_secret = config.get_required('BINANCE_API_SECRET')
+            api_key = config.get('BINANCE_API_KEY')
+            api_secret = config.get('BINANCE_API_SECRET')
+
+            if not api_key or not api_secret:
+                raise ValueError("Missing key/secret")
         except ValueError as e:
             raise ValueError(
-                "Binance API credentials not found. Please ensure BINANCE_API_KEY and "
-                "BINANCE_API_SECRET are set in AWS Secrets Manager, environment variables, "
-                "or .env file."
+                "Binance API credentials not found. Please ensure BINANCE_API_KEY and BINANCE_API_SECRET are set "
+                "in Railway environment variables (or other providers)."
             ) from e
         
         self.client = Client(api_key, api_secret)

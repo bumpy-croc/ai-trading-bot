@@ -353,7 +353,7 @@ def validate_live_config():
     
     # Validate API keys are set
     assert os.getenv('BINANCE_API_KEY')
-    assert os.getenv('BINANCE_SECRET_KEY')
+    assert os.getenv('BINANCE_API_SECRET')
 ```
 
 ## Test Data Management
