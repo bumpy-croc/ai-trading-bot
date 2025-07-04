@@ -19,7 +19,8 @@ def main():
         from monitoring.dashboard import MonitoringDashboard
         
         print("🚀 Starting Trading Bot Monitoring Dashboard...")
-        print("📊 Dashboard will be available at: http://localhost:8080")
+        port = int(os.environ.get("PORT", 8080))
+        print(f"📊 Dashboard will be available at: http://localhost:{port}")
         print("⚙️  Configuration panel accessible via the gear icon")
         print("🔄 Updates every 1 hour")
         print("❌ Press Ctrl+C to stop")
@@ -31,9 +32,10 @@ def main():
             update_interval=3600  # 1 hour updates
         )
         
+        # Respect Railway (and other PaaS) dynamic port assignment (see assignment above)
         dashboard.run(
-            host='0.0.0.0',
-            port=8080,
+            host="0.0.0.0",
+            port=port,
             debug=False
         )
         
