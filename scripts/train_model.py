@@ -32,7 +32,7 @@ from download_binance_data import download_data as download_binance_data
 
 # Import sentiment provider
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.data_providers.senticrypt_provider import SentiCryptProvider
+from data_providers.senticrypt_provider import SentiCryptProvider
 
 # Get project root directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

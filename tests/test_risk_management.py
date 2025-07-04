@@ -15,7 +15,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-from core.risk.risk_manager import RiskManager, RiskParameters
+from risk.risk_manager import RiskManager, RiskParameters
 
 
 class TestRiskParameters:

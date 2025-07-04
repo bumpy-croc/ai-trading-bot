@@ -15,9 +15,9 @@ import os
 from pathlib import Path
 
 # Import core components for fixture creation
-from core.data_providers.data_provider import DataProvider
-from core.data_providers.binance_data_provider import BinanceDataProvider
-from core.risk.risk_manager import RiskManager, RiskParameters
+from data_providers.data_provider import DataProvider
+from data_providers.binance_data_provider import BinanceDataProvider
+from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
 from strategies.adaptive import AdaptiveStrategy
 

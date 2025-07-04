@@ -25,12 +25,12 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
-from core.config import get_config
+from config import get_config
 
-from core.data_providers.binance_data_provider import BinanceDataProvider
-from core.data_providers.cached_data_provider import CachedDataProvider
-from core.data_providers.senticrypt_provider import SentiCryptProvider
-from core.risk.risk_manager import RiskParameters
+from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.cached_data_provider import CachedDataProvider
+from data_providers.senticrypt_provider import SentiCryptProvider
+from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
 
 # Import strategies

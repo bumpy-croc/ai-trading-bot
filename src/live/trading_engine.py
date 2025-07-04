@@ -11,14 +11,14 @@ from enum import Enum
 import signal
 import sys
 
-from core.data_providers.data_provider import DataProvider
-from core.data_providers.binance_data_provider import BinanceDataProvider
-from core.data_providers.sentiment_provider import SentimentDataProvider
+from data_providers.data_provider import DataProvider
+from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.sentiment_provider import SentimentDataProvider
 from strategies.base import BaseStrategy
-from core.risk.risk_manager import RiskManager, RiskParameters
+from risk.risk_manager import RiskManager, RiskParameters
 from live.strategy_manager import StrategyManager
-from core.database.manager import DatabaseManager
-from core.database.models import TradeSource
+from database.manager import DatabaseManager
+from database.models import TradeSource
 
 logger = logging.getLogger(__name__)
 
@@ -701,7 +701,10 @@ class LiveTradingEngine:
     def _log_trade(self, trade: Trade):
         """Log trade to file"""
         try:
-            log_file = f"trades_{datetime.now().strftime('%Y%m')}.json"
+            # Create logs/trades directory if it doesn't exist
+            os.makedirs("logs/trades", exist_ok=True)
+            
+            log_file = f"logs/trades/trades_{datetime.now().strftime('%Y%m')}.json"
             trade_data = {
                 'timestamp': trade.exit_time.isoformat(),
                 'symbol': trade.symbol,

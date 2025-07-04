@@ -12,9 +12,11 @@ import sys
 
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from core.data_providers.binance_data_provider import BinanceDataProvider
-from core.data_providers.cached_data_provider import CachedDataProvider
+from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.cached_data_provider import CachedDataProvider
+from config.paths import get_cache_dir
 
 def format_file_size(size_bytes):
     """Format file size in human readable format"""
@@ -27,8 +29,10 @@ def format_file_size(size_bytes):
         i += 1
     return f"{size_bytes:.1f} {size_names[i]}"
 
-def show_cache_info(cache_dir="data/cache"):
+def show_cache_info(cache_dir=None):
     """Show cache information"""
+    if cache_dir is None:
+        cache_dir = str(get_cache_dir())
     provider = CachedDataProvider(BinanceDataProvider(), cache_dir=cache_dir)
     info = provider.get_cache_info()
     
@@ -45,8 +49,11 @@ def show_cache_info(cache_dir="data/cache"):
     
     return info
 
-def list_cache_files(cache_dir="data/cache", detailed=False):
+def list_cache_files(cache_dir=None, detailed=False):
     """List all cache files"""
+    if cache_dir is None:
+        cache_dir = str(get_cache_dir())
+    
     if not os.path.exists(cache_dir):
         print(f"Cache directory {cache_dir} does not exist.")
         return
@@ -97,8 +104,11 @@ def list_cache_files(cache_dir="data/cache", detailed=False):
         else:
             print(f"{info['name'][:20]:<20} {format_file_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')}")
 
-def clear_cache(cache_dir="data/cache", confirm=True):
+def clear_cache(cache_dir=None, confirm=True):
     """Clear all cache files"""
+    if cache_dir is None:
+        cache_dir = str(get_cache_dir())
+    
     if not os.path.exists(cache_dir):
         print(f"Cache directory {cache_dir} does not exist.")
         return
@@ -130,8 +140,11 @@ def clear_cache(cache_dir="data/cache", confirm=True):
     
     print(f"Deleted {deleted_count} cache files, freed {format_file_size(total_size)}")
 
-def clear_old_cache(cache_dir="data/cache", hours=24):
+def clear_old_cache(cache_dir=None, hours=24):
     """Clear cache files older than specified hours"""
+    if cache_dir is None:
+        cache_dir = str(get_cache_dir())
+    
     if not os.path.exists(cache_dir):
         print(f"Cache directory {cache_dir} does not exist.")
         return
@@ -165,7 +178,7 @@ def clear_old_cache(cache_dir="data/cache", hours=24):
 
 def main():
     parser = argparse.ArgumentParser(description='Manage data cache')
-    parser.add_argument('--cache-dir', default='data/cache', help='Cache directory path')
+    parser.add_argument('--cache-dir', default=None, help='Cache directory path')
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     

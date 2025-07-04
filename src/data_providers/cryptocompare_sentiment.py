@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import logging
 from .sentiment_provider import SentimentDataProvider
+from config.paths import resolve_data_path
 from textblob import TextBlob
 import nltk
 from nltk.tokenize import word_tokenize
@@ -48,7 +49,7 @@ class CryptoCompareSentimentProvider(SentimentDataProvider):
             print(f"Fetching sentiment data for {base_currency} from {start} to {end or datetime.now()}")
             
             # Define cache file path for each year
-            cache_file = f"data/sentiment_cache_{base_currency}_{start.year}.csv"
+            cache_file = resolve_data_path(f"sentiment_cache_{base_currency}_{start.year}.csv")
             
             # Check if cache file exists
             if os.path.exists(cache_file):

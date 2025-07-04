@@ -11,8 +11,15 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 
-def inspect_database(db_path="data/trading_bot.db"):
+# Add src to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src'))
+from config.paths import get_data_dir
+
+def inspect_database(db_path=None):
     """Inspect the trading database and display summary information"""
+    
+    if db_path is None:
+        db_path = get_data_dir() / "trading_bot.db"
     
     if not os.path.exists(db_path):
         print(f"❌ Database not found at: {db_path}")
@@ -54,7 +61,9 @@ def inspect_database(db_path="data/trading_bot.db"):
             print(f"    Started: {session['start_time']} | Duration: {duration}")
             print(f"    Balance: ${session['initial_balance']:,.2f} → ${session['final_balance'] or session['initial_balance']:,.2f}")
             if session['total_trades']:
-                print(f"    Trades: {session['total_trades']} | Win Rate: {session['win_rate']:.1f}% | Max DD: {session['max_drawdown']:.1f}%")
+                win_rate = session['win_rate'] or 0
+                max_dd = session['max_drawdown'] or 0
+                print(f"    Trades: {session['total_trades']} | Win Rate: {win_rate:.1f}% | Max DD: {max_dd:.1f}%")
     else:
         print("  No sessions found")
     
@@ -151,7 +160,7 @@ def inspect_database(db_path="data/trading_bot.db"):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Inspect trading database")
-    parser.add_argument("--db", default="data/trading_bot.db", help="Database path")
+    parser.add_argument("--db", default=None, help="Database path")
     args = parser.parse_args()
     
     inspect_database(args.db) 

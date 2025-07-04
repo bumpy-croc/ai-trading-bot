@@ -4,7 +4,7 @@ from binance.client import Client
 from typing import Optional
 import logging
 from .data_provider import DataProvider
-from core.config import get_config
+from config import get_config
 
 logger = logging.getLogger(__name__)
 

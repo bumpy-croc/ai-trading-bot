@@ -60,7 +60,7 @@ except ImportError:
     STRATEGY_MANAGER_AVAILABLE = False
     StrategyManager = Mock
 
-from core.risk.risk_manager import RiskManager, RiskParameters
+from risk.risk_manager import RiskManager, RiskParameters
 from strategies.adaptive import AdaptiveStrategy
 
 
