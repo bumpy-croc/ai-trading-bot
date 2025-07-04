@@ -1,0 +1,103 @@
+"""
+Path utilities for the AI Trading Bot project.
+
+This module provides utilities to resolve paths relative to the project structure,
+regardless of whether the code is running from the project root or from within
+subdirectories.
+"""
+
+import os
+from pathlib import Path
+
+
+def get_project_root() -> Path:
+    """
+    Get the project root directory.
+    
+    Returns:
+        Path: The project root directory
+    """
+    # Start from this file's directory and work up to find the project root
+    current = Path(__file__).resolve().parent
+    
+    # Look for project indicators (pyproject.toml, requirements.txt, etc.)
+    while current != current.parent:
+        if any((current / indicator).exists() for indicator in [
+            'requirements.txt', 'pyproject.toml', 'setup.py', '.git'
+        ]):
+            return current
+        current = current.parent
+    
+    # Fallback: assume we're in src/config and go up two levels
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def get_data_dir() -> Path:
+    """
+    Get the data directory path.
+    
+    Returns:
+        Path: The data directory path
+    """
+    return get_project_root() / "src" / "data"
+
+
+def get_cache_dir() -> Path:
+    """
+    Get the cache directory path.
+    
+    Returns:
+        Path: The cache directory path
+    """
+    return get_data_dir() / "cache"
+
+
+def get_database_path(filename: str = "trading_bot.db") -> str:
+    """
+    Get the database file path.
+    
+    Args:
+        filename: Database filename (default: trading_bot.db)
+        
+    Returns:
+        str: SQLite connection string
+    """
+    db_path = get_data_dir() / filename
+    return f"sqlite:///{db_path}"
+
+
+def get_sentiment_data_path() -> Path:
+    """
+    Get the sentiment data CSV path.
+    
+    Returns:
+        Path: The sentiment data CSV path
+    """
+    return get_data_dir() / "senticrypt_sentiment_data.csv"
+
+
+def resolve_data_path(relative_path: str) -> Path:
+    """
+    Resolve a path relative to the data directory.
+    
+    Args:
+        relative_path: Path relative to the data directory
+        
+    Returns:
+        Path: Absolute path to the file
+    """
+    return get_data_dir() / relative_path
+
+
+def ensure_dir_exists(path: Path) -> Path:
+    """
+    Ensure a directory exists, creating it if necessary.
+    
+    Args:
+        path: Directory path to ensure exists
+        
+    Returns:
+        Path: The directory path
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    return path 

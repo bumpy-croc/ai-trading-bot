@@ -9,12 +9,12 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
-from core.config import get_config
+from config import get_config
 
-from core.data_providers import BinanceDataProvider
-from core.data_providers.cached_data_provider import CachedDataProvider
-from core.data_providers.cryptocompare_sentiment import CryptoCompareSentimentProvider
-from core.risk import RiskParameters
+from data_providers import BinanceDataProvider
+from data_providers.cached_data_provider import CachedDataProvider
+from data_providers.cryptocompare_sentiment import CryptoCompareSentimentProvider
+from risk import RiskParameters
 from backtesting import Backtester
 
 from strategies import AdaptiveStrategy, EnhancedStrategy, HighRiskHighRewardStrategy, MlBasic  # Direct imports

@@ -34,7 +34,7 @@ import os
 import json
 from datetime import datetime, timedelta
 from strategies.base import BaseStrategy
-from core.data_providers.senticrypt_provider import SentiCryptProvider
+from data_providers.senticrypt_provider import SentiCryptProvider
 
 class MlWithSentiment(BaseStrategy):
     def __init__(self, name="MlWithSentiment", model_path=None, sequence_length=120, 

@@ -9,8 +9,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import logging
 from datetime import datetime, timedelta
-from core.database.manager import DatabaseManager
-from core.database.models import TradeSource, PositionSide
+from database.manager import DatabaseManager
+from database.models import TradeSource, PositionSide
 
 # Setup logging
 logging.basicConfig(

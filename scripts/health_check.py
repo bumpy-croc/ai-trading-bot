@@ -12,9 +12,9 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from core.config.config_manager import get_config
-    from core.data_providers import BinanceDataProvider
-    from core.database.manager import DatabaseManager
+    from config.config_manager import get_config
+    from data_providers import BinanceDataProvider
+    from database.manager import DatabaseManager
 except ImportError as e:
     print(f"Import error: {e}")
     # Fallback for minimal health check

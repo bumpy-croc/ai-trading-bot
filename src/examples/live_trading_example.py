@@ -15,9 +15,9 @@ from datetime import datetime
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.data_providers.binance_data_provider import BinanceDataProvider
-from core.data_providers.senticrypt_provider import SentiCryptProvider
-from core.risk.risk_manager import RiskParameters
+from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.senticrypt_provider import SentiCryptProvider
+from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
 from strategies.adaptive import AdaptiveStrategy
 

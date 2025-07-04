@@ -15,7 +15,7 @@ import pandas as pd
 from live.trading_engine import LiveTradingEngine
 from live.strategy_manager import StrategyManager
 from strategies.adaptive import AdaptiveStrategy
-from core.risk.risk_manager import RiskManager, RiskParameters
+from risk.risk_manager import RiskManager, RiskParameters
 from backtesting.engine import Backtester
 
 
