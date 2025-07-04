@@ -1,10 +1,9 @@
+# syntax=docker/dockerfile:1.4
 FROM python:3.11-slim
 
-# syntax=docker/dockerfile:1.4
-
 # Install system dependencies with build cache for APT
-RUN --mount=type=cache,target=/var/cache/apt \
-    --mount=type=cache,target=/var/lib/apt \
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt \
+    --mount=type=cache,id=apt-lib-cache,target=/var/lib/apt \
     apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
@@ -17,7 +16,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Leverage BuildKit cache for pip wheels – this dramatically speeds up rebuilds
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install -r requirements.txt
 
