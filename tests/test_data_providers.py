@@ -18,25 +18,25 @@ from unittest.mock import Mock, patch, MagicMock
 import requests
 from requests.exceptions import RequestException, Timeout, ConnectionError
 
-from core.data_providers.data_provider import DataProvider
+from data_providers.data_provider import DataProvider
 
 # Import data providers conditionally to handle missing dependencies
 try:
-    from core.data_providers.binance_data_provider import BinanceDataProvider
+    from data_providers.binance_data_provider import BinanceDataProvider
     BINANCE_AVAILABLE = True
 except ImportError:
     BINANCE_AVAILABLE = False
     BinanceDataProvider = Mock
 
 try:
-    from core.data_providers.cached_data_provider import CachedDataProvider
+    from data_providers.cached_data_provider import CachedDataProvider
     CACHE_AVAILABLE = True
 except ImportError:
     CACHE_AVAILABLE = False
     CachedDataProvider = Mock
 
 try:
-    from core.data_providers.senticrypt_provider import SentiCryptProvider
+    from data_providers.senticrypt_provider import SentiCryptProvider
     SENTICRYPT_AVAILABLE = True
 except ImportError:
     SENTICRYPT_AVAILABLE = False
@@ -72,7 +72,7 @@ class TestBinanceDataProvider:
     def test_binance_provider_initialization(self):
         """Test Binance provider initialization"""
         # Mock config to avoid requiring real API keys
-        with patch('core.data_providers.binance_data_provider.get_config') as mock_config:
+        with patch('data_providers.binance_data_provider.get_config') as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
             mock_config.return_value = mock_config_obj
@@ -81,7 +81,7 @@ class TestBinanceDataProvider:
             assert provider is not None
 
     @pytest.mark.data_provider
-    @patch('core.data_providers.binance_data_provider.Client')
+    @patch('data_providers.binance_data_provider.Client')
     def test_binance_historical_data_success(self, mock_client_class):
         """Test successful historical data retrieval"""
         # Mock the Binance client
@@ -95,7 +95,7 @@ class TestBinanceDataProvider:
         ]
         
         # Mock config to avoid credentials requirement
-        with patch('core.data_providers.binance_data_provider.get_config') as mock_config:
+        with patch('data_providers.binance_data_provider.get_config') as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
             mock_config.return_value = mock_config_obj
@@ -116,7 +116,7 @@ class TestBinanceDataProvider:
             assert pd.api.types.is_numeric_dtype(df[col])
 
     @pytest.mark.data_provider
-    @patch('core.data_providers.binance_data_provider.Client')
+    @patch('data_providers.binance_data_provider.Client')
     def test_binance_api_error_handling(self, mock_client_class):
         """Test Binance API error handling"""
         # Mock the Binance client to raise an exception
@@ -125,7 +125,7 @@ class TestBinanceDataProvider:
         mock_client.get_historical_klines.side_effect = Exception("API Error")
         
         # Mock config
-        with patch('core.data_providers.binance_data_provider.get_config') as mock_config:
+        with patch('data_providers.binance_data_provider.get_config') as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
             mock_config.return_value = mock_config_obj
@@ -144,7 +144,7 @@ class TestBinanceDataProvider:
                 assert "API Error" in str(e) or "error" in str(e).lower()
 
     @pytest.mark.data_provider
-    @patch('core.data_providers.binance_data_provider.Client')
+    @patch('data_providers.binance_data_provider.Client')
     def test_binance_rate_limit_handling(self, mock_client_class):
         """Test rate limit handling"""
         # Mock the Binance client to simulate rate limit
@@ -165,7 +165,7 @@ class TestBinanceDataProvider:
         mock_client.get_historical_klines.side_effect = exception_to_raise
         
         # Mock config
-        with patch('core.data_providers.binance_data_provider.get_config') as mock_config:
+        with patch('data_providers.binance_data_provider.get_config') as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
             mock_config.return_value = mock_config_obj
@@ -184,7 +184,7 @@ class TestBinanceDataProvider:
                 assert "rate limit" in str(e).lower() or "exceeded" in str(e).lower() or "error" in str(e).lower()
 
     @pytest.mark.data_provider
-    @patch('core.data_providers.binance_data_provider.Client')
+    @patch('data_providers.binance_data_provider.Client')
     def test_binance_data_validation(self, mock_client_class):
         """Test data validation for Binance provider"""
         # Mock the Binance client
@@ -192,7 +192,7 @@ class TestBinanceDataProvider:
         mock_client_class.return_value = mock_client
         
         # Mock config
-        with patch('core.data_providers.binance_data_provider.get_config') as mock_config:
+        with patch('data_providers.binance_data_provider.get_config') as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
             mock_config.return_value = mock_config_obj

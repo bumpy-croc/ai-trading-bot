@@ -14,7 +14,15 @@ from pathlib import Path
 
 # Ensure we can import from the project
 project_root = Path(__file__).parent.parent
+src_path = project_root / "src"
+sys.path.insert(0, str(src_path))
 sys.path.insert(0, str(project_root))
+
+# Set PYTHONPATH for subprocess calls
+if 'PYTHONPATH' in os.environ:
+    os.environ['PYTHONPATH'] = str(src_path) + ':' + os.environ['PYTHONPATH']
+else:
+    os.environ['PYTHONPATH'] = str(src_path)
 
 class Colors:
     """ANSI color codes for terminal output"""
@@ -170,7 +178,7 @@ def run_quick_smoke_test():
     # Test basic imports
     try:
         from strategies.adaptive import AdaptiveStrategy
-        from core.risk.risk_manager import RiskManager
+        from risk.risk_manager import RiskManager
         from live.trading_engine import LiveTradingEngine
         print_success("All core modules import successfully")
         

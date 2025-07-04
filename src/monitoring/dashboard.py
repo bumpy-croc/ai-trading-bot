@@ -25,9 +25,9 @@ import sys
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-from core.database.manager import DatabaseManager
-from core.data_providers.binance_data_provider import BinanceDataProvider
-from core.data_providers.cached_data_provider import CachedDataProvider
+from database.manager import DatabaseManager
+from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.cached_data_provider import CachedDataProvider
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -584,7 +584,7 @@ class MonitoringDashboard:
     def _get_current_rsi(self) -> float:
         """Get current RSI value"""
         try:
-            from core.indicators.technical import calculate_rsi
+            from indicators.technical import calculate_rsi
             df = self.data_provider.get_historical_data('BTCUSDT', 
                                                        datetime.now() - timedelta(days=30), 
                                                        datetime.now())
@@ -599,7 +599,7 @@ class MonitoringDashboard:
     def _get_ema_trend(self) -> str:
         """Get EMA trend direction"""
         try:
-            from core.indicators.technical import calculate_ema
+            from indicators.technical import calculate_ema
             df = self.data_provider.get_historical_data('BTCUSDT', 
                                                        datetime.now() - timedelta(days=30), 
                                                        datetime.now())

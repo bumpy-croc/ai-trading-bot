@@ -17,7 +17,7 @@ import time
 import logging
 from typing import Dict, Any
 
-from core.data_providers.senticrypt_provider import SentiCryptProvider
+from data_providers.senticrypt_provider import SentiCryptProvider
 from strategies.ml_with_sentiment import MlWithSentiment
 
 # Configure logging

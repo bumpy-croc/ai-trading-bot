@@ -6,6 +6,7 @@ from typing import Optional, List, Tuple
 import pandas as pd
 import logging
 from .data_provider import DataProvider
+from config.paths import get_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class CachedDataProvider(DataProvider):
     Each year of data is cached separately, allowing efficient reuse for overlapping date ranges.
     """
     
-    def __init__(self, data_provider: DataProvider, cache_dir: str = "data/cache", cache_ttl_hours: int = 24):
+    def __init__(self, data_provider: DataProvider, cache_dir: Optional[str] = None, cache_ttl_hours: int = 24):
         """
         Initialize the cached data provider.
         
@@ -27,12 +28,12 @@ class CachedDataProvider(DataProvider):
         super().__init__()
         self.data_provider = data_provider
         self.provider = data_provider  # Add this alias for backward compatibility
-        self.cache_dir = cache_dir
+        self.cache_dir = cache_dir or str(get_cache_dir())
         self.cache_ttl_hours = cache_ttl_hours
         self.cache = {}  # Add cache attribute for backward compatibility
         
         # Create cache directory if it doesn't exist
-        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(self.cache_dir, exist_ok=True)
         
     def _generate_year_cache_key(self, symbol: str, timeframe: str, year: int) -> str:
         """

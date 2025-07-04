@@ -3,15 +3,15 @@ import os
 import tempfile
 import json
 from unittest.mock import Mock, patch, MagicMock
-from core.config.config_manager import ConfigManager
-from core.config.providers.env_provider import EnvVarProvider
-from core.config.providers.dotenv_provider import DotEnvProvider
+from config.config_manager import ConfigManager
+from config.providers.env_provider import EnvVarProvider
+from config.providers.dotenv_provider import DotEnvProvider
 
 # Skip AWS tests if boto3 is not available
 boto3_available = True
 try:
     import boto3
-    from core.config.providers.aws_secrets_provider import AWSSecretsProvider
+    from config.providers.aws_secrets_provider import AWSSecretsProvider
 except ImportError:
     boto3_available = False
 
@@ -219,8 +219,8 @@ class TestConfigManager:
             # Set up environment where AWS fails, env var exists, and .env exists
             with patch.dict(os.environ, {'FALLBACK_TEST': 'env_value'}):
                 # Create config manager with only env and dotenv providers (skip AWS)
-                from core.config.providers.env_provider import EnvVarProvider
-                from core.config.providers.dotenv_provider import DotEnvProvider
+                from config.providers.env_provider import EnvVarProvider
+                from config.providers.dotenv_provider import DotEnvProvider
                 
                 providers = [
                     EnvVarProvider(),
@@ -341,7 +341,7 @@ class TestConfigSystemIntegration:
             'BINANCE_TESTNET': 'false'
         }):
             # Import here to ensure clean environment
-            from core.data_providers.binance_data_provider import BinanceDataProvider
+            from data_providers.binance_data_provider import BinanceDataProvider
             
             # Should not raise exception during initialization
             try:
@@ -376,7 +376,7 @@ class TestConfigSystemIntegration:
     
     def test_global_config_functions(self):
         """Test the global configuration functions."""
-        from core.config.config_manager import get_config, set_config
+        from config.config_manager import get_config, set_config
         
         # Test getting global config
         config1 = get_config()

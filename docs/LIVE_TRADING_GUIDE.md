@@ -156,7 +156,7 @@ python scripts/run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-
 
 ### **Log Files:**
 - **`live_trading_YYYYMMDD.log`** - Detailed trading logs
-- **`trades_YYYYMM.json`** - Trade history in JSON format
+- **`logs/trades/trades_YYYYMM.json`** - Trade history in JSON format
 
 ### **Webhook Alerts:**
 ```json
@@ -332,7 +332,7 @@ tail -f live_trading_20250127.log
 
 **Check trade history:**
 ```bash
-cat trades_202501.json | jq '.'
+cat logs/trades/trades_202501.json | jq '.'
 ```
 
 ### **Debug Mode:**

@@ -19,6 +19,7 @@ from .models import (
     TradingSession, SystemEvent, StrategyExecution,
     PositionSide, OrderStatus, TradeSource, EventType
 )
+from config.paths import get_database_path
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class DatabaseManager:
         if database_url is None:
             database_url = os.getenv(
                 'DATABASE_URL',
-                'sqlite:///data/trading_bot.db'  # Default to SQLite for development
+                get_database_path()  # Default to SQLite for development
             )
         
         # Create engine with appropriate settings
