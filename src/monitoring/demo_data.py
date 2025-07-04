@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Dict
 from pathlib import Path
+from config.constants import DEFAULT_INITIAL_BALANCE
 
 class DemoDataGenerator:
     """
@@ -109,13 +110,13 @@ class DemoDataGenerator:
         INSERT INTO trading_sessions 
         (strategy_name, symbol, timeframe, mode, initial_balance, start_time)
         VALUES (?, ?, ?, ?, ?, ?)
-        """, (strategy, 'BTCUSDT', '1h', 'PAPER', 10000.0, 
+        """, (strategy, 'BTCUSDT', '1h', 'PAPER', DEFAULT_INITIAL_BALANCE, 
               datetime.now() - timedelta(hours=duration_hours)))
         
         session_id = cursor.lastrowid
         
         # Generate trades and account snapshots
-        current_balance = 10000.0
+        current_balance = float(DEFAULT_INITIAL_BALANCE)
         current_time = datetime.now() - timedelta(hours=duration_hours)
         end_time = datetime.now()
         

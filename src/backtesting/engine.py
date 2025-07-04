@@ -9,6 +9,7 @@ import numpy as np
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource, PositionSide
+from config.constants import DEFAULT_INITIAL_BALANCE
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class Backtester:
         data_provider: DataProvider,
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[RiskParameters] = None,
-        initial_balance: float = 10000,
+        initial_balance: float = DEFAULT_INITIAL_BALANCE,
         database_url: Optional[str] = None,
         log_to_database: bool = True
     ):

@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config import get_config
+from config.constants import DEFAULT_INITIAL_BALANCE
 
 from data_providers import BinanceDataProvider
 from data_providers.cached_data_provider import CachedDataProvider
@@ -67,7 +68,7 @@ def parse_args():
     parser.add_argument('--days', type=int, default=30, help='Number of days to backtest')
     parser.add_argument('--start', help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end', help='End date (YYYY-MM-DD)')
-    parser.add_argument('--initial-balance', type=float, default=10000, help='Initial balance')
+    parser.add_argument('--initial-balance', type=float, default=DEFAULT_INITIAL_BALANCE, help='Initial balance')
     parser.add_argument('--risk-per-trade', type=float, default=0.01, help='Risk per trade (1% = 0.01)')
     parser.add_argument('--max-risk-per-trade', type=float, default=0.02, help='Maximum risk per trade')
     parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis in backtest')

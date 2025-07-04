@@ -19,6 +19,7 @@ from risk.risk_manager import RiskManager, RiskParameters
 from live.strategy_manager import StrategyManager
 from database.manager import DatabaseManager
 from database.models import TradeSource
+from config.constants import DEFAULT_INITIAL_BALANCE
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ class LiveTradingEngine:
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[RiskParameters] = None,
         check_interval: int = 60,  # seconds
-        initial_balance: float = 10000,
+        initial_balance: float = DEFAULT_INITIAL_BALANCE,
         max_position_size: float = 0.1,  # 10% of balance per position
         enable_live_trading: bool = False,  # Safety flag - must be explicitly enabled
         log_trades: bool = True,

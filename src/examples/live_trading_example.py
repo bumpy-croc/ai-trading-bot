@@ -20,6 +20,7 @@ from data_providers.senticrypt_provider import SentiCryptProvider
 from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
 from strategies.adaptive import AdaptiveStrategy
+from config.constants import DEFAULT_INITIAL_BALANCE
 
 def setup_paper_trading():
     """Example: Safe paper trading setup"""
@@ -59,7 +60,7 @@ def setup_paper_trading():
         sentiment_provider=sentiment_provider,
         risk_parameters=risk_params,
         check_interval=60,           # Check every minute
-        initial_balance=10000,       # $10,000 virtual balance
+        initial_balance=DEFAULT_INITIAL_BALANCE,       # Virtual balance
         max_position_size=0.1,       # Max 10% per position
         enable_live_trading=False,   # PAPER TRADING ONLY
         log_trades=True
@@ -70,7 +71,7 @@ def setup_paper_trading():
     print("="*60)
     print("- Strategy: Adaptive")
     print("- Symbol: BTCUSDT")
-    print("- Balance: $10,000 (virtual)")
+    print(f"- Balance: ${DEFAULT_INITIAL_BALANCE:,.0f} (virtual)")
     print("- Risk per trade: 1%")
     print("- Max position: 10%")
     print("- Check interval: 60 seconds")
@@ -117,7 +118,7 @@ def setup_live_trading():
         data_provider=data_provider,
         risk_parameters=risk_params,
         check_interval=300,          # Check every 5 minutes (less frequent)
-        initial_balance=1000,        # Start with small balance
+        initial_balance=DEFAULT_INITIAL_BALANCE,        # Start with defined balance
         max_position_size=0.05,      # Max 5% per position (conservative)
         enable_live_trading=True,    # REAL TRADING ENABLED
         log_trades=True,
@@ -129,7 +130,7 @@ def setup_live_trading():
     print("="*60)
     print("- Strategy: Adaptive")
     print("- Symbol: BTCUSDT")
-    print("- Balance: $1,000 (REAL MONEY)")
+    print(f"- Balance: ${DEFAULT_INITIAL_BALANCE:,.0f} (REAL MONEY)")
     print("- Risk per trade: 0.5%")
     print("- Max position: 5%")
     print("- Check interval: 300 seconds")
