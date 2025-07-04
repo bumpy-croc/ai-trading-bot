@@ -10,6 +10,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Ensure the 'src' directory is also on the path so nested packages resolve correctly
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+src_path = os.path.join(project_root, 'src')
+sys.path.insert(0, src_path)
 
 try:
     from config.config_manager import get_config

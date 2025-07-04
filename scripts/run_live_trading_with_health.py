@@ -11,6 +11,10 @@ from datetime import datetime
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Also add the 'src' directory to ensure internal packages resolve
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+src_path = os.path.join(project_root, 'src')
+sys.path.insert(0, src_path)
 
 # Import health check server
 from scripts.health_check import run_health_server

@@ -24,6 +24,10 @@ from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
+# Also add the 'src' directory to PYTHONPATH so that modules like 'config', 'data_providers', etc. can be imported correctly when this script is executed directly.
+root_dir = Path(__file__).parent.parent
+src_dir = root_dir / "src"
+sys.path.append(str(src_dir))
 
 from config import get_config
 
@@ -40,13 +44,18 @@ from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
 from strategies.ml_basic import MlBasic
 from strategies.ml_with_sentiment import MlWithSentiment
 
-# Set up logging
+# Configure logging - ensure the logs directory exists at project root
+project_root = Path(__file__).parent.parent  # ai-trading-bot/
+logs_dir = project_root / "logs"
+logs_dir.mkdir(exist_ok=True)
+log_file_path = logs_dir / f"live_trading_{datetime.now().strftime('%Y%m%d')}.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(f'../logs/live_trading_{datetime.now().strftime("%Y%m%d")}.log')
+        logging.FileHandler(str(log_file_path))
     ]
 )
 logger = logging.getLogger('live_trading')
