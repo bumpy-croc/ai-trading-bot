@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1.4
 FROM python:3.11-slim
 
-# Install system dependencies with build cache for APT
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt \
-    --mount=type=cache,id=apt-lib-cache,target=/var/lib/apt \
-    apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies with Railway-compatible cache mounts (service-id-prefixed)
+RUN --mount=type=cache,id=f032a62c-d98d-4fa7-9302-359249be154b-apt-cache,target=/var/cache/apt \
+    --mount=type=cache,id=f032a62c-d98d-4fa7-9302-359249be154b-apt-lib,target=/var/lib/apt \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
         build-essential \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
+        curl && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -15,8 +16,8 @@ WORKDIR /app
 # Copy requirements and install dependencies
 COPY requirements.txt .
 
-# Leverage BuildKit cache for pip wheels – this dramatically speeds up rebuilds
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
+# Install Python dependencies with cached pip wheels
+RUN --mount=type=cache,id=f032a62c-d98d-4fa7-9302-359249be154b-pip-cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install -r requirements.txt
 
