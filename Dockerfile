@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p data logs ml
+# Removed: data directory moved to src/data, logs and ml already exist
 
 # Make scripts executable
 RUN chmod +x scripts/health_check.py scripts/run_live_trading_with_health.py
