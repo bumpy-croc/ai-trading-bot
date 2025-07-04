@@ -1,11 +1,8 @@
 # syntax=docker/dockerfile:1.4
 FROM python:3.11-slim
-ARG RAILWAY_SERVICE_ID
 
-# Install system dependencies with Railway-compatible cache mounts (service-id-prefixed)
-RUN --mount=type=cache,id=s/${RAILWAY_SERVICE_ID}-apt-cache,target=/var/cache/apt \
-    --mount=type=cache,id=s/${RAILWAY_SERVICE_ID}-apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && \
+# Install system dependencies (no cache mounts for now)
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
         curl && \
@@ -17,9 +14,8 @@ WORKDIR /app
 # Copy requirements and install dependencies
 COPY requirements.txt .
 
-# Install Python dependencies with cached pip wheels
-RUN --mount=type=cache,id=s/${RAILWAY_SERVICE_ID}-pip-cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
+# Install Python dependencies (no cache mounts)
+RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
 # Copy application code
