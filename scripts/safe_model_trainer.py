@@ -39,11 +39,11 @@ class SafeModelTrainer:
     def __init__(self):
         self.project_root = Path(__file__).parent.parent
         self.models_dir = self.project_root / "ml"
-        self.staging_dir = self.project_root / "staging"
+        self.staging_dir = Path("/tmp/ai-trading-bot-staging")
         self.backup_dir = self.project_root / "model_backups"
         
         # Create directories
-        self.staging_dir.mkdir(exist_ok=True)
+        self.staging_dir.mkdir(exist_ok=True, parents=True)
         self.backup_dir.mkdir(exist_ok=True)
         
         # Initialize strategy manager for deployment

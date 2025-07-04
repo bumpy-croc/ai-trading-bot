@@ -43,14 +43,14 @@ class StrategyManager:
     def __init__(self, 
                  strategies_dir: str = "strategies",
                  models_dir: str = "ml",
-                 staging_dir: str = "staging"):
+                 staging_dir: str = "/tmp/ai-trading-bot-staging"):
         
         self.strategies_dir = Path(strategies_dir)
         self.models_dir = Path(models_dir)
         self.staging_dir = Path(staging_dir)
         
-        # Create staging directory for safe updates
-        self.staging_dir.mkdir(exist_ok=True)
+        # Create staging directory for safe updates in /tmp
+        self.staging_dir.mkdir(exist_ok=True, parents=True)
         
         # Current active strategy
         self.current_strategy: Optional[BaseStrategy] = None

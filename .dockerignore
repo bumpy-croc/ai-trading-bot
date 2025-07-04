@@ -86,7 +86,7 @@ data/*.sqlite3
 # Model backups
 model_backups/
 
-# Staging directory
+# Staging directory (now in /tmp)
 staging/
 
 # AWS deployment scripts (not needed in Railway container)

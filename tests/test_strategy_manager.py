@@ -28,15 +28,16 @@ class TestStrategyManager:
 
     def test_strategy_manager_initialization(self, temp_directory):
         """Test strategy manager initialization"""
+        temp_staging = str(temp_directory / "staging")
         manager = StrategyManager(
             strategies_dir=str(temp_directory / "strategies"),
             models_dir=str(temp_directory / "models"),
-            staging_dir=str(temp_directory / "staging")
+            staging_dir=temp_staging
         )
         
         assert manager.strategies_dir == temp_directory / "strategies"
         assert manager.models_dir == temp_directory / "models"
-        assert manager.staging_dir == temp_directory / "staging"
+        assert manager.staging_dir == Path(temp_staging)
         assert manager.staging_dir.exists()
         assert manager.current_strategy is None
         assert manager.pending_update is None

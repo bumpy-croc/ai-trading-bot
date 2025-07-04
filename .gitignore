@@ -5,3 +5,7 @@ data/cache
 .coverage
 .pytest_cache
 logs/
+
+# Staging directories (now using /tmp but keeping this for safety)
+staging/
+/tmp/ai-trading-bot-staging/
