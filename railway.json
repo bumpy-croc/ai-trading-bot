@@ -3,7 +3,7 @@
     "builder": "dockerfile"
   },
   "deploy": {
-    "startCommand": "python run_live_trading_with_health.py ml_basic",
+    "startCommand": "python scripts/run_live_trading_with_health.py ml_basic",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 10,
     "restartPolicyType": "ON_FAILURE",
