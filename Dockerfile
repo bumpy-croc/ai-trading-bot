@@ -2,8 +2,8 @@
 FROM python:3.11-slim
 
 # Install system dependencies with Railway-compatible cache mounts (service-id-prefixed)
-RUN --mount=type=cache,id=f032a62c-d98d-4fa7-9302-359249be154b-apt-cache,target=/var/cache/apt \
-    --mount=type=cache,id=f032a62c-d98d-4fa7-9302-359249be154b-apt-lib,target=/var/lib/apt \
+RUN --mount=type=cache,id=s/f032a62c-d98d-4fa7-9302-359249be154b-apt-cache,target=/var/cache/apt \
+    --mount=type=cache,id=s/f032a62c-d98d-4fa7-9302-359249be154b-apt-lib,target=/var/lib/apt \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -17,7 +17,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies with cached pip wheels
-RUN --mount=type=cache,id=f032a62c-d98d-4fa7-9302-359249be154b-pip-cache,target=/root/.cache/pip \
+RUN --mount=type=cache,id=s/f032a62c-d98d-4fa7-9302-359249be154b-pip-cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install -r requirements.txt
 
