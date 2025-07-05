@@ -12,7 +12,7 @@ import json
 from sqlalchemy import create_engine, func, and_, or_
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, QueuePool
 
 from .models import (
     Base, Trade, Position, AccountHistory, PerformanceMetrics,
@@ -20,6 +20,7 @@ from .models import (
     PositionSide, OrderStatus, TradeSource, EventType
 )
 from config.paths import get_database_path
+from config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class DatabaseManager:
     - Performance metrics calculation
     - Account history tracking
     - System event logging
+    - Support for both SQLite (local) and PostgreSQL (production)
     """
     
     def __init__(self, database_url: Optional[str] = None):
@@ -41,61 +43,158 @@ class DatabaseManager:
         Initialize database manager.
         
         Args:
-            database_url: SQLAlchemy database URL. If not provided, uses environment variable
-                        or defaults to SQLite for development.
+            database_url: Optional database URL. If None, uses configuration.
         """
-        if database_url is None:
-            database_url = os.getenv(
-                'DATABASE_URL',
-                get_database_path()  # Default to SQLite for development
-            )
-        
-        # Create engine with appropriate settings
-        if 'sqlite' in database_url:
-            # SQLite specific settings
-            self.engine = create_engine(
-                database_url,
-                connect_args={'check_same_thread': False},
-                poolclass=NullPool  # Disable pooling for SQLite
-            )
-        else:
-            # PostgreSQL/MySQL settings
-            self.engine = create_engine(
-                database_url,
-                pool_size=10,
-                max_overflow=20,
-                pool_pre_ping=True,  # Verify connections before using
-                pool_recycle=3600    # Recycle connections after 1 hour
-            )
-        
-        # Create session factory
-        self.SessionLocal = sessionmaker(
-            autocommit=False,
-            autoflush=False,
-            bind=self.engine
-        )
-        
-        # Create tables if they don't exist
-        Base.metadata.create_all(bind=self.engine)
-        
-        # Cache for current session
+        self.database_url = database_url
+        self.engine = None
+        self.session_factory = None
         self._current_session_id: Optional[int] = None
         
-        logger.info(f"Database manager initialized with {database_url.split('://')[0]} database")
+        # Initialize database connection
+        self._init_database()
+        
+        # Create tables if they don't exist
+        self._create_tables()
+    
+    def _init_database(self):
+        """Initialize database connection and session factory"""
+        
+        # Get database URL from configuration if not provided
+        if self.database_url is None:
+            config = get_config()
+            self.database_url = config.get('DATABASE_URL')
+            
+            # Fallback to default SQLite if no DATABASE_URL
+            if self.database_url is None:
+                self.database_url = get_database_path()
+                logger.info("Using default SQLite database for local development")
+            else:
+                logger.info("Using PostgreSQL database from configuration")
+        
+        # Ensure database_url is not None at this point
+        if self.database_url is None:
+            raise ValueError("Database URL could not be determined")
+        
+        # Create engine with appropriate configuration
+        engine_kwargs = self._get_engine_config()
+        
+        try:
+            self.engine = create_engine(self.database_url, **engine_kwargs)
+            self.session_factory = sessionmaker(bind=self.engine)
+            
+            # Test connection
+            with self.engine.connect() as conn:
+                # Simple test query
+                if self.database_url.startswith('postgresql'):
+                    conn.execute("SELECT 1")
+                    logger.info("✅ PostgreSQL connection established")
+                else:
+                    conn.execute("SELECT 1")
+                    logger.info("✅ SQLite connection established")
+                    
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            raise
+    
+    def _get_engine_config(self) -> Dict[str, Any]:
+        """Get engine configuration based on database type"""
+        
+        config = {}
+        
+        # At this point, database_url should never be None due to _init_database check
+        if self.database_url and self.database_url.startswith('postgresql'):
+            # PostgreSQL configuration
+            config.update({
+                'poolclass': QueuePool,
+                'pool_size': 5,
+                'max_overflow': 10,
+                'pool_pre_ping': True,
+                'pool_recycle': 3600,  # 1 hour
+                'echo': False,  # Set to True for SQL debugging
+                'connect_args': {
+                    'sslmode': 'prefer',
+                    'connect_timeout': 10,
+                    'application_name': 'ai-trading-bot'
+                }
+            })
+        else:
+            # SQLite configuration
+            config.update({
+                'poolclass': NullPool,
+                'echo': False,
+                'connect_args': {
+                    'check_same_thread': False,
+                    'timeout': 20
+                }
+            })
+        
+        return config
+    
+    def _create_tables(self):
+        """Create database tables if they don't exist"""
+        try:
+            if self.engine is None:
+                raise ValueError("Database engine not initialized")
+            Base.metadata.create_all(self.engine)
+            logger.info("Database tables created/verified")
+        except Exception as e:
+            logger.error(f"Error creating database tables: {e}")
+            raise
     
     @contextmanager
     def get_session(self) -> Session:
-        """Get a database session with automatic cleanup."""
-        session = self.SessionLocal()
+        """
+        Get a database session with automatic cleanup.
+        
+        Yields:
+            SQLAlchemy session
+        """
+        if self.session_factory is None:
+            raise ValueError("Session factory not initialized")
+        
+        session = self.session_factory()
         try:
             yield session
-            session.commit()
         except Exception as e:
             session.rollback()
             logger.error(f"Database session error: {e}")
             raise
         finally:
             session.close()
+    
+    def test_connection(self) -> bool:
+        """
+        Test database connection.
+        
+        Returns:
+            True if connection is successful
+        """
+        try:
+            with self.get_session() as session:
+                # Test query
+                session.execute("SELECT 1")
+                return True
+        except Exception as e:
+            logger.error(f"Database connection test failed: {e}")
+            return False
+    
+    def get_database_info(self) -> Dict[str, Any]:
+        """
+        Get database information.
+        
+        Returns:
+            Dictionary with database details
+        """
+        info = {
+            'database_url': self.database_url,
+            'is_postgresql': self.database_url.startswith('postgresql') if self.database_url else False,
+            'is_sqlite': self.database_url.startswith('sqlite') if self.database_url else False,
+            'connection_pool_size': getattr(self.engine.pool, 'size', 0) if self.engine else 0,
+            'checked_in_connections': getattr(self.engine.pool, 'checkedin', 0) if self.engine else 0,
+            'checked_out_connections': getattr(self.engine.pool, 'checkedout', 0) if self.engine else 0,
+        }
+        
+        return info
     
     def create_trading_session(
         self,
@@ -111,34 +210,40 @@ class DatabaseManager:
         Create a new trading session.
         
         Returns:
-            Session ID
+            Trading session ID
         """
         with self.get_session() as session:
-            # Convert string mode to enum if necessary
+            # Convert string enum if necessary
             if isinstance(mode, str):
                 mode = TradeSource[mode.upper()]
             
+            # Generate session name if not provided
+            if session_name is None:
+                session_name = f"{strategy_name}_{symbol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
             trading_session = TradingSession(
-                session_name=session_name or f"{strategy_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                start_time=datetime.utcnow(),
+                session_name=session_name,
+                strategy_name=strategy_name,
+                symbol=symbol,
+                timeframe=timeframe,
                 mode=mode,
                 initial_balance=initial_balance,
-                strategy_name=strategy_name,
-                strategy_config=strategy_config or {},
-                symbol=symbol,
-                timeframe=timeframe
+                strategy_config=strategy_config,
+                start_time=datetime.utcnow()
             )
             
             session.add(trading_session)
             session.commit()
             
+            # Set as current session
             self._current_session_id = trading_session.id
             
-            # Log session start event
+            # Log session creation
             self.log_event(
                 EventType.ENGINE_START,
-                f"Trading session started: {trading_session.session_name}",
+                f"Trading session created: {session_name}",
                 details={
+                    'session_id': trading_session.id,
                     'strategy': strategy_name,
                     'symbol': symbol,
                     'mode': mode.value,
@@ -146,7 +251,7 @@ class DatabaseManager:
                 }
             )
             
-            logger.info(f"Created trading session #{trading_session.id}: {trading_session.session_name}")
+            logger.info(f"Created trading session #{trading_session.id}: {session_name}")
             return trading_session.id
     
     def end_trading_session(self, session_id: Optional[int] = None, final_balance: Optional[float] = None):
@@ -417,32 +522,35 @@ class DatabaseManager:
         event_type: Union[str, EventType],
         message: str,
         severity: str = 'info',
-        details: Optional[Dict] = None,
         component: Optional[str] = None,
-        error_code: Optional[str] = None,
-        stack_trace: Optional[str] = None,
+        details: Optional[Dict] = None,
         session_id: Optional[int] = None
-    ):
-        """Log a system event."""
+    ) -> int:
+        """
+        Log a system event.
+        
+        Returns:
+            Event ID
+        """
         with self.get_session() as session:
             # Convert string enum if necessary
             if isinstance(event_type, str):
                 event_type = EventType[event_type.upper()]
             
             event = SystemEvent(
-                timestamp=datetime.utcnow(),
                 event_type=event_type,
-                severity=severity,
                 message=message,
-                details=details,
+                severity=severity,
                 component=component,
-                error_code=error_code,
-                stack_trace=stack_trace,
-                session_id=session_id or self._current_session_id
+                details=details,
+                session_id=session_id or self._current_session_id,
+                timestamp=datetime.utcnow()
             )
             
             session.add(event)
             session.commit()
+            
+            return event.id
     
     def log_strategy_execution(
         self,
@@ -741,4 +849,22 @@ class DatabaseManager:
                 return rows
         except SQLAlchemyError as e:
             logger.error(f"Raw query error: {e}")
-            return [] 
+            return []
+    
+    def get_connection_stats(self) -> Dict[str, Any]:
+        """Get database connection statistics"""
+        if hasattr(self.engine.pool, 'status'):
+            return {
+                'pool_status': self.engine.pool.status(),
+                'checked_in': getattr(self.engine.pool, 'checkedin', 0),
+                'checked_out': getattr(self.engine.pool, 'checkedout', 0),
+                'overflow': getattr(self.engine.pool, 'overflow', 0),
+                'invalid': getattr(self.engine.pool, 'invalid', 0)
+            }
+        return {'status': 'No connection pool statistics available'}
+    
+    def cleanup_connection_pool(self):
+        """Cleanup database connection pool"""
+        if hasattr(self.engine.pool, 'dispose'):
+            self.engine.pool.dispose()
+            logger.info("Database connection pool disposed") 
