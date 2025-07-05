@@ -9,15 +9,23 @@ def calculate_moving_averages(df: pd.DataFrame, periods: list) -> pd.DataFrame:
         df[f'ma_{period}'] = df['close'].rolling(window=period).mean()
     return df
 
-def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """Calculate Relative Strength Index"""
-    df = df.copy()
-    delta = df['close'].diff()
+def calculate_rsi(data, period: int = 14):
+    """Calculate Relative Strength Index.
+
+    Accepts either a DataFrame with a 'close' column or a Series of closing prices.
+    Returns a pandas Series of RSI values.
+    """
+    if isinstance(data, pd.DataFrame):
+        close = data['close']
+    else:
+        close = pd.Series(data)
+
+    delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    return df
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     """Calculate Average True Range"""
@@ -100,4 +108,8 @@ def calculate_support_resistance(
     resistance_levels = df[df['high'] == df['high_roll']]['high'].tail(num_points)
     support_levels = df[df['low'] == df['low_roll']]['low'].tail(num_points)
     
-    return support_levels, resistance_levels 
+    return support_levels, resistance_levels
+
+def calculate_ema(series: pd.Series, period: int = 9) -> pd.Series:
+    """Calculate Exponential Moving Average of a series"""
+    return series.ewm(span=period, adjust=False).mean() 

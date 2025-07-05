@@ -190,8 +190,8 @@ class CachedDataProvider(DataProvider):
     def get_historical_data(
         self,
         symbol: str,
-        timeframe: str,
-        start: datetime,
+        timeframe,
+        start: Optional[datetime] = None,
         end: Optional[datetime] = None
     ) -> pd.DataFrame:
         """
@@ -206,6 +206,12 @@ class CachedDataProvider(DataProvider):
         Returns:
             DataFrame with OHLCV data
         """
+        # Detect if caller swapped parameters (timeframe passed as datetime)
+        if isinstance(timeframe, datetime):
+            # Shift parameters
+            end = start if end is not None else datetime.now()
+            start = timeframe
+            timeframe = '1d'  # default to daily
         if end is None:
             end = datetime.now()
             
@@ -363,4 +369,10 @@ class CachedDataProvider(DataProvider):
             'oldest_file': datetime.fromtimestamp(file_times[0][1]).isoformat(),
             'newest_file': datetime.fromtimestamp(file_times[-1][1]).isoformat(),
             'cache_strategy': 'year-based'
-        } 
+        }
+        
+    def get_current_price(self, symbol: str) -> float:
+        """Get current price by delegating to underlying provider"""
+        if hasattr(self.data_provider, 'get_current_price'):
+            return self.data_provider.get_current_price(symbol)
+        raise AttributeError("Underlying data provider does not implement get_current_price") 

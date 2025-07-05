@@ -714,4 +714,31 @@ class DatabaseManager:
             
             session.commit()
             
-            logger.info(f"Cleaned up {len(old_sessions)} old trading sessions") 
+            logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
+    
+    def execute_query(self, query: str, params=None):  # type: ignore[override]
+        """Run a raw SQL query and return list of dict rows.
+
+        Uses SQLAlchemy 2.x ``exec_driver_sql`` API so plain SQL strings work
+        without needing to wrap them in ``text()``. Falls back gracefully for
+        older versions.
+        """
+        params = params or ()
+        try:
+            with self.engine.connect() as connection:
+                # SQLAlchemy 2.0
+                try:
+                    result = connection.exec_driver_sql(query, params)
+                except AttributeError:
+                    # Older SQLAlchemy (<1.4) fallback
+                    from sqlalchemy import text
+                    result = connection.execute(text(query), params)
+                # Convert to list of dictionaries
+                try:
+                    rows = [dict(row) for row in result.mappings()]
+                except AttributeError:
+                    rows = [dict(row.items()) for row in result]
+                return rows
+        except SQLAlchemyError as e:
+            logger.error(f"Raw query error: {e}")
+            return [] 

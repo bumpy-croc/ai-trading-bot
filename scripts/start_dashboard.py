@@ -13,6 +13,10 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
+# Also add 'src' directory to ensure internal packages resolve
+src_path = project_root / 'src'
+sys.path.append(str(src_path))
+
 def main():
     """Launch the monitoring dashboard"""
     try:

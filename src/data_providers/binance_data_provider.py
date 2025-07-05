@@ -140,4 +140,13 @@ class BinanceDataProvider(DataProvider):
             
         except Exception as e:
             logger.error(f"Error updating live data: {str(e)}")
-            raise 
+            raise
+
+    def get_current_price(self, symbol: str) -> float:
+        """Get latest price for a symbol"""
+        try:
+            ticker = self.client.get_symbol_ticker(symbol=symbol)
+            return float(ticker['price'])
+        except Exception as e:
+            logger.error(f"Error fetching current price: {e}")
+            return 0.0 
