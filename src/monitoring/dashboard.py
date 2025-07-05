@@ -16,6 +16,11 @@ from pathlib import Path
 import pandas as pd
 
 from flask import Flask, render_template, jsonify, request
+# Use eventlet everywhere (production & development)
+import eventlet  # type: ignore
+eventlet.monkey_patch()
+_ASYNC_MODE = 'eventlet'
+
 from flask_socketio import SocketIO, emit
 import threading
 import time
@@ -41,7 +46,7 @@ class MonitoringDashboard:
     def __init__(self, db_url: Optional[str] = None, update_interval: int = 3600):
         self.app = Flask(__name__, template_folder='templates', static_folder='static')
         self.app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*")
+        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='eventlet')
         
         # Initialize database manager
         self.db_manager = DatabaseManager(db_url)
@@ -1248,10 +1253,15 @@ class MonitoringDashboard:
     
     def run(self, host='0.0.0.0', port=8080, debug=False):
         """Run the dashboard server"""
-        logger.info(f"Starting monitoring dashboard on {host}:{port}")
+        logger.info(f"Starting monitoring dashboard on {host}:{port} using eventlet")
         self.start_monitoring()
         try:
-            self.socketio.run(self.app, host=host, port=port, debug=debug)
+            self.socketio.run(
+                self.app,
+                host=host,
+                port=port,
+                debug=debug
+            )
         finally:
             self.stop_monitoring()
 
