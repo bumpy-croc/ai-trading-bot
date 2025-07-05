@@ -1277,8 +1277,16 @@ class MonitoringDashboard:
                 logger.error(f"Error in monitoring loop: {e}")
                 time.sleep(self.update_interval)
     
-    def run(self, host='0.0.0.0', port=8080, debug=False):
-        """Run the dashboard server"""
+    def run(self, host='0.0.0.0', port: Optional[int] = None, debug=False):
+        """Run the dashboard server (honours $PORT if provided)"""
+        # Allow platform (Railway, Heroku, etc.) to inject port
+        if port is None:
+            env_port = os.getenv("PORT")
+            if env_port and env_port.isdigit():
+                port = int(env_port)
+            else:
+                port = 8080
+
         logger.info(f"Starting monitoring dashboard on {host}:{port} using eventlet")
         self.start_monitoring()
         try:
@@ -1297,7 +1305,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Trading Bot Monitoring Dashboard')
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
-    parser.add_argument('--port', type=int, default=8080, help='Port to bind to')
+    parser.add_argument('--port', type=int, default=None, help='Port to bind to')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--db-url', help='Database URL')
     parser.add_argument('--update-interval', type=int, default=3600, help='Update interval in seconds')
