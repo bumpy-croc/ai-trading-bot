@@ -109,3 +109,7 @@ temp/
 *.zip
 *.tar
 *.rar
+
+# ML models - shipped ONNX runtime models only
+ml/*
+!ml/*.onnx

@@ -1,16 +1,13 @@
-# Use locally - includes heavy libraries for training models
+# Server requirements - lighter build without heavy libraries for training models
 python-binance==1.0.19
 pandas==2.1.4
 python-dotenv==1.0.0
 numpy==1.26.2
-matplotlib==3.8.2
 scikit-learn==1.3.2
 requests==2.31.0
 textblob==0.17.1
 nltk==3.8.1
 ccxt==4.4.85
-tensorflow==2.19.0
-tf2onnx==1.16.1
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
 psutil==5.9.6
@@ -18,4 +15,4 @@ boto3==1.35.36
 botocore==1.35.36
 onnxruntime==1.17.0
 Flask==2.3.3
-Flask-SocketIO==5.3.6
+Flask-SocketIO==5.3.6 

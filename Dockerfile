@@ -11,12 +11,12 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY requirements.txt .
+# Copy production requirements and install dependencies
+COPY requirements-server.txt ./requirements-server.txt
 
-# Install Python dependencies (no cache mounts)
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+# Install Python dependencies (production only, without heavy training libs)
+RUN pip install --upgrade pip --no-cache-dir && \
+    pip install --no-cache-dir -r requirements-server.txt
 
 # Copy application code
 COPY . .
