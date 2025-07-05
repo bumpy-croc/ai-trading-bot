@@ -19,7 +19,7 @@ def main():
         from monitoring.dashboard import MonitoringDashboard
         
         print("🚀 Starting Trading Bot Monitoring Dashboard...")
-        port = int(os.environ.get("PORT", 8080))
+        port = int(os.environ.get("PORT", 8000))
         print(f"📊 Dashboard will be available at: http://localhost:{port}")
         print("⚙️  Configuration panel accessible via the gear icon")
         print("🔄 Updates every 1 hour")
