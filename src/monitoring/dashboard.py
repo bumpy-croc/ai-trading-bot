@@ -116,6 +116,11 @@ class MonitoringDashboard:
             """Main dashboard page"""
             return render_template('dashboard.html')
         
+        @self.app.route('/health')
+        def health():
+            """Simple health check endpoint"""
+            return jsonify({'status': 'ok'})
+        
         @self.app.route('/api/metrics')
         def get_metrics():
             """Get current metrics as JSON"""
