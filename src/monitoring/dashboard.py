@@ -6,6 +6,11 @@ A real-time web dashboard for monitoring the trading bot performance,
 positions, risk metrics, and system health.
 """
 
+# --- eventlet must be patched BEFORE importing networking libraries like Flask/requests
+import eventlet  # type: ignore
+eventlet.monkey_patch()
+_ASYNC_MODE = 'eventlet'
+
 import os
 import json
 import logging
@@ -16,11 +21,6 @@ from pathlib import Path
 import pandas as pd
 
 from flask import Flask, render_template, jsonify, request
-# Use eventlet everywhere (production & development)
-import eventlet  # type: ignore
-eventlet.monkey_patch()
-_ASYNC_MODE = 'eventlet'
-
 from flask_socketio import SocketIO, emit
 import threading
 import time
@@ -52,8 +52,25 @@ class MonitoringDashboard:
         self.db_manager = DatabaseManager(db_url)
         
         # Initialize data provider for live price data
-        binance_provider = BinanceDataProvider()
-        self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=0.1)  # 6 min cache
+        # Gracefully degrade if Binance is unreachable (e.g. no outbound DNS in the env)
+        try:
+            binance_provider = BinanceDataProvider()
+            self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=0.1)  # 6-min cache
+        except Exception as e:
+            logger.warning(f"Binance provider unavailable: {e}. Starting dashboard in offline mode.")
+
+            class _OfflineProvider:  # minimal stub implementation
+                """Fallback provider that returns empty data so the UI still loads."""
+
+                @staticmethod
+                def get_current_price(symbol: str):
+                    return 0.0
+
+                @staticmethod
+                def get_historical_data(symbol: str, start, end):
+                    return pd.DataFrame()
+
+            self.data_provider = _OfflineProvider()
         
         self.update_interval = update_interval
         self.is_running = False
