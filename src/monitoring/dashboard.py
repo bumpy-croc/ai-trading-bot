@@ -1287,17 +1287,25 @@ class MonitoringDashboard:
             else:
                 port = 8080
 
-        logger.info(f"Starting monitoring dashboard on {host}:{port} using eventlet")
+        logger.info("-----------------------------------------------")
+        logger.info("MONITORING DASHBOARD STARTUP")
+        logger.info(f"Binding to {host}:{port} (debug={debug})")
+        logger.info(f"Async mode: {_ASYNC_MODE}")
+        logger.info("-----------------------------------------------")
         self.start_monitoring()
         try:
             self.socketio.run(
                 self.app,
                 host=host,
                 port=port,
-                debug=debug
+                debug=debug,
+                log_output=True
             )
+            # If we ever return from run(), log why
+            logger.warning("Flask-SocketIO server exited normally (this usually means shutdown was requested).")
         finally:
             self.stop_monitoring()
+            logger.info("Monitoring dashboard stopped")
 
 def main():
     """Main entry point"""
