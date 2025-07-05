@@ -308,7 +308,7 @@ class MonitoringDashboard:
             # Get latest account snapshot
             query = """
             SELECT balance 
-            FROM account_snapshots 
+            FROM account_history 
             ORDER BY timestamp DESC 
             LIMIT 1
             """
@@ -349,7 +349,7 @@ class MonitoringDashboard:
     def _get_active_positions_count(self) -> int:
         """Get number of active positions"""
         try:
-            query = "SELECT COUNT(*) as count FROM positions WHERE exit_time IS NULL"
+            query = "SELECT COUNT(*) as count FROM positions WHERE status = 'filled'"
             result = self.db_manager.execute_query(query)
             return result[0]['count'] if result else 0
         except Exception as e:
@@ -363,7 +363,7 @@ class MonitoringDashboard:
             SELECT 
                 MAX(balance) as peak_balance,
                 MIN(balance) as min_balance
-            FROM account_snapshots
+            FROM account_history
             """
             result = self.db_manager.execute_query(query)
             if result and result[0]['peak_balance']:
@@ -386,7 +386,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_exposure
             FROM positions 
-            WHERE exit_time IS NULL
+            WHERE status = 'filled'
             """
             result = self.db_manager.execute_query(query)
             exposure = result[0]['total_exposure'] if result else 0.0
@@ -406,7 +406,7 @@ class MonitoringDashboard:
             # Get daily returns from account snapshots
             query = """
             SELECT balance, DATE(timestamp) as date
-            FROM account_snapshots
+            FROM account_history
             ORDER BY timestamp
             """
             result = self.db_manager.execute_query(query)
@@ -440,7 +440,7 @@ class MonitoringDashboard:
             # Similar to Sharpe ratio calculation but return std dev
             query = """
             SELECT balance, DATE(timestamp) as date
-            FROM account_snapshots
+            FROM account_history
             ORDER BY timestamp
             """
             result = self.db_manager.execute_query(query)
@@ -467,7 +467,7 @@ class MonitoringDashboard:
             # Check recent activity
             query = """
             SELECT timestamp 
-            FROM account_snapshots 
+            FROM account_history 
             ORDER BY timestamp DESC 
             LIMIT 1
             """
@@ -649,7 +649,7 @@ class MonitoringDashboard:
             # Check when we last received data
             query = """
             SELECT timestamp 
-            FROM account_snapshots 
+            FROM account_history 
             ORDER BY timestamp DESC 
             LIMIT 1
             """
@@ -733,7 +733,7 @@ class MonitoringDashboard:
         try:
             query = """
             SELECT balance, timestamp
-            FROM account_snapshots
+            FROM account_history
             ORDER BY timestamp DESC
             LIMIT 100
             """
@@ -802,7 +802,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_value
             FROM positions 
-            WHERE exit_time IS NULL
+            WHERE status = 'filled'
             """
             result = self.db_manager.execute_query(query)
             return result[0]['total_value'] if result else 0.0
@@ -820,7 +820,7 @@ class MonitoringDashboard:
             query = """
             SELECT 
                 COUNT(*) as total_orders,
-                COUNT(CASE WHEN exit_time IS NOT NULL THEN 1 END) as filled_orders
+                COUNT(CASE WHEN status = 'filled' THEN 1 END) as filled_orders
             FROM positions
             WHERE entry_time > datetime('now', '-24 hours')
             """
@@ -923,7 +923,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity), 0) as total_quantity
             FROM positions 
-            WHERE exit_time IS NULL
+            WHERE status = 'filled'
             """
             result = self.db_manager.execute_query(query)
             
@@ -974,7 +974,7 @@ class MonitoringDashboard:
             SELECT 
                 side, entry_price, quantity
             FROM positions 
-            WHERE exit_time IS NULL
+            WHERE status = 'filled'
             """
             result = self.db_manager.execute_query(query)
             
@@ -1079,7 +1079,7 @@ class MonitoringDashboard:
                 symbol, side, entry_price, quantity, entry_time,
                 stop_loss, take_profit, order_id
             FROM positions 
-            WHERE exit_time IS NULL
+            WHERE status = 'filled'
             ORDER BY entry_time DESC
             """
             result = self.db_manager.execute_query(query)
@@ -1139,7 +1139,7 @@ class MonitoringDashboard:
         try:
             query = """
             SELECT balance, timestamp
-            FROM account_snapshots
+            FROM account_history
             WHERE timestamp > datetime('now', '-{} days')
             ORDER BY timestamp
             """.format(days)

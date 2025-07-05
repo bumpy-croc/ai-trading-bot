@@ -1,7 +1,7 @@
 .env
 .venv
 __pycache__
-data/cache
+src/data/cache
 .coverage
 .pytest_cache
 logs/
