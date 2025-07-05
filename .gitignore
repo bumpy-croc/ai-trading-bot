@@ -6,6 +6,8 @@ src/data/cache
 .pytest_cache
 logs/
 
+# database
+src/data/trading_bot.db
 # Staging directories (now using /tmp but keeping this for safety)
 staging/
 /tmp/ai-trading-bot-staging/
