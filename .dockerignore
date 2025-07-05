@@ -113,3 +113,11 @@ temp/
 # ML models - shipped ONNX runtime models only
 ml/*
 !ml/*.onnx
+
+# Exclude test suite
+tests/
+
+# Exclude large local data used only for development/backtesting
+src/data/*.csv
+src/data/*.db
+src/data/cache/

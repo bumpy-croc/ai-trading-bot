@@ -3,9 +3,7 @@ FROM python:3.11-slim
 
 # Install system dependencies (no cache mounts for now)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        build-essential \
-        curl && \
+    apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Set working directory
