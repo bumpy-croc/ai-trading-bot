@@ -24,18 +24,13 @@ class BinanceDataProvider(DataProvider):
         super().__init__()
         config = get_config()
         
-        try:
-            api_key = config.get('BINANCE_API_KEY')
-            api_secret = config.get('BINANCE_API_SECRET')
+        api_key = config.get('BINANCE_API_KEY')
+        api_secret = config.get('BINANCE_API_SECRET')
 
-            if not api_key or not api_secret:
-                raise ValueError("Missing key/secret")
-        except ValueError as e:
-            raise ValueError(
-                "Binance API credentials not found. Please ensure BINANCE_API_KEY and BINANCE_API_SECRET are set "
-                "in Railway environment variables (or other providers)."
-            ) from e
-        
+        if not api_key or not api_secret:
+            logger.warning("Binance API credentials not found – running in public-endpoint mode (read-only).")
+            api_key = api_secret = None
+
         self.client = Client(api_key, api_secret)
         
     def _convert_timeframe(self, timeframe: str) -> str:
