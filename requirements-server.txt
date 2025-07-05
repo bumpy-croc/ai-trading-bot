@@ -15,4 +15,5 @@ boto3==1.35.36
 botocore==1.35.36
 onnxruntime==1.17.0
 Flask==2.3.3
-Flask-SocketIO==5.3.6 
+Flask-SocketIO==5.3.6
+onnx==1.14.0 
