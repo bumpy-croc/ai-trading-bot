@@ -191,6 +191,49 @@ class MonitoringDashboard:
             """Get system health status"""
             status = self._get_system_status()
             return jsonify(status)
+        
+        @self.app.route('/api/balance')
+        def get_balance():
+            """Get current balance and balance history"""
+            balance_info = self._get_balance_info()
+            return jsonify(balance_info)
+        
+        @self.app.route('/api/balance', methods=['POST'])
+        def update_balance():
+            """Manually update balance"""
+            data = request.json
+            new_balance = data.get('balance')
+            reason = data.get('reason', 'Manual adjustment via dashboard')
+            updated_by = data.get('updated_by', 'dashboard_user')
+            
+            if new_balance is None:
+                return jsonify({'success': False, 'error': 'Balance not provided'})
+            
+            try:
+                new_balance = float(new_balance)
+                if new_balance < 0:
+                    return jsonify({'success': False, 'error': 'Balance cannot be negative'})
+                
+                success = self.db_manager.manual_balance_adjustment(new_balance, reason, updated_by)
+                
+                if success:
+                    return jsonify({
+                        'success': True, 
+                        'new_balance': new_balance,
+                        'message': f'Balance updated to ${new_balance:,.2f}'
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Failed to update balance'})
+                    
+            except (ValueError, TypeError):
+                return jsonify({'success': False, 'error': 'Invalid balance value'})
+        
+        @self.app.route('/api/balance/history')
+        def get_balance_history():
+            """Get balance change history"""
+            limit = request.args.get('limit', 50, type=int)
+            history = self.db_manager.get_balance_history(limit=limit)
+            return jsonify(history)
     
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""
@@ -1247,6 +1290,44 @@ class MonitoringDashboard:
         except Exception as e:
             logger.error(f"Error getting error rate: {e}")
             return 0.0
+    
+    def _get_balance_info(self) -> Dict[str, Any]:
+        """Get comprehensive balance information"""
+        try:
+            current_balance = self.db_manager.get_current_balance()
+            balance_history = self.db_manager.get_balance_history(limit=10)
+            
+            # Calculate balance change over time
+            balance_change_24h = 0.0
+            if len(balance_history) >= 2:
+                try:
+                    recent_balance = balance_history[0]['balance']
+                    older_balance = next(
+                        (h['balance'] for h in balance_history 
+                         if (datetime.now() - h['timestamp']).days >= 1), 
+                        recent_balance
+                    )
+                    if older_balance > 0:
+                        balance_change_24h = ((recent_balance - older_balance) / older_balance) * 100
+                except (KeyError, TypeError, ZeroDivisionError):
+                    pass
+            
+            return {
+                'current_balance': current_balance,
+                'balance_change_24h': balance_change_24h,
+                'last_updated': balance_history[0]['timestamp'] if balance_history else None,
+                'last_update_reason': balance_history[0]['reason'] if balance_history else None,
+                'recent_history': balance_history[:5]  # Last 5 balance changes
+            }
+        except Exception as e:
+            logger.error(f"Error getting balance info: {e}")
+            return {
+                'current_balance': 0.0,
+                'balance_change_24h': 0.0,
+                'last_updated': None,
+                'last_update_reason': 'Error retrieving balance',
+                'recent_history': []
+            }
     
     def start_monitoring(self):
         """Start the monitoring update thread"""

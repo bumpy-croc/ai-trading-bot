@@ -16,7 +16,7 @@ from sqlalchemy.pool import NullPool
 
 from .models import (
     Base, Trade, Position, AccountHistory, PerformanceMetrics,
-    TradingSession, SystemEvent, StrategyExecution,
+    TradingSession, SystemEvent, StrategyExecution, AccountBalance,
     PositionSide, OrderStatus, TradeSource, EventType
 )
 from config.paths import get_database_path
@@ -741,4 +741,129 @@ class DatabaseManager:
                 return rows
         except SQLAlchemyError as e:
             logger.error(f"Raw query error: {e}")
-            return [] 
+            return []
+
+    # ========== BALANCE MANAGEMENT ==========
+    
+    def get_current_balance(self, session_id: Optional[int] = None) -> float:
+        """Get the current balance for a session"""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return 0.0
+        
+        with self.get_session() as session:
+            return AccountBalance.get_current_balance(session_id, session)
+    
+    def update_balance(self, new_balance: float, update_reason: str, 
+                      updated_by: str = 'system', session_id: Optional[int] = None) -> bool:
+        """Update the current balance"""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            logger.error("No active session for balance update")
+            return False
+        
+        try:
+            with self.get_session() as session:
+                AccountBalance.update_balance(
+                    session_id, new_balance, update_reason, updated_by, session
+                )
+                logger.info(f"Updated balance to ${new_balance:.2f} - {update_reason}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to update balance: {e}")
+            return False
+    
+    def get_balance_history(self, session_id: Optional[int] = None, 
+                          limit: int = 100) -> List[Dict]:
+        """Get balance change history"""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return []
+        
+        with self.get_session() as session:
+            balances = session.query(AccountBalance).filter(
+                AccountBalance.session_id == session_id
+            ).order_by(AccountBalance.last_updated.desc()).limit(limit).all()
+            
+            return [
+                {
+                    'id': b.id,
+                    'balance': b.total_balance,
+                    'available': b.available_balance,
+                    'reserved': b.reserved_balance,
+                    'timestamp': b.last_updated,
+                    'updated_by': b.updated_by,
+                    'reason': b.update_reason,
+                    'base_currency': b.base_currency
+                }
+                for b in balances
+            ]
+    
+    def recover_last_balance(self, session_id: Optional[int] = None) -> Optional[float]:
+        """Recover the last known balance for a session"""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return None
+        
+        # First try to get from account_balances table
+        balance = self.get_current_balance(session_id)
+        if balance > 0:
+            return balance
+        
+        # Fallback: calculate from trading session and trades
+        with self.get_session() as session:
+            trading_session = session.query(TradingSession).filter(
+                TradingSession.id == session_id
+            ).first()
+            
+            if not trading_session:
+                return None
+            
+            # Get all trades for this session
+            trades = session.query(Trade).filter(
+                Trade.session_id == session_id
+            ).all()
+            
+            # Calculate current balance from initial balance + total PnL
+            total_pnl = sum(trade.pnl for trade in trades)
+            current_balance = trading_session.initial_balance + total_pnl
+            
+            # Update the balance tracking
+            self.update_balance(current_balance, 'recovered_from_trades', 'system', session_id)
+            
+            return current_balance
+    
+    def get_active_session_id(self) -> Optional[int]:
+        """Get the current active session ID"""
+        with self.get_session() as session:
+            active_session = session.query(TradingSession).filter(
+                TradingSession.is_active == True
+            ).order_by(TradingSession.start_time.desc()).first()
+            
+            return active_session.id if active_session else None
+    
+    def manual_balance_adjustment(self, new_balance: float, reason: str, 
+                                updated_by: str = 'user') -> bool:
+        """Manual balance adjustment (for user-initiated changes)"""
+        current_balance = self.get_current_balance()
+        
+        if current_balance == 0:
+            logger.error("Cannot adjust balance - no current balance found")
+            return False
+        
+        success = self.update_balance(new_balance, f"Manual adjustment: {reason}", updated_by)
+        
+        if success:
+            # Log the adjustment as a system event
+            self.log_event(
+                EventType.BALANCE_ADJUSTMENT,
+                f"Balance manually adjusted from ${current_balance:.2f} to ${new_balance:.2f}",
+                details={
+                    'old_balance': current_balance,
+                    'new_balance': new_balance,
+                    'reason': reason,
+                    'adjusted_by': updated_by
+                }
+            )
+        
+        return success 
