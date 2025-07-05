@@ -1038,10 +1038,10 @@ class MonitoringDashboard:
             
             outcomes = []
             for trade in result:
-                if trade['pnl'] > 0:
-                    outcomes.append("W")
-                else:
-                    outcomes.append("L")
+                pnl_val = trade.get('pnl')
+                if pnl_val is None:
+                    continue
+                outcomes.append("W" if pnl_val > 0 else "L")
             
             return "".join(outcomes)  # e.g., "WLWWLWLWW"
             
@@ -1061,12 +1061,17 @@ class MonitoringDashboard:
             """
             result = self.db_manager.execute_query(query)
             
-            if result and result[0]['gross_loss'] > 0:
-                gross_profit = result[0]['gross_profit'] or 0
-                gross_loss = result[0]['gross_loss'] or 1  # Avoid division by zero
-                return gross_profit / gross_loss
-            return 0.0
-            
+            if not result:
+                return 0.0
+
+            gross_profit = result[0].get('gross_profit') or 0.0
+            gross_loss = result[0].get('gross_loss') or 0.0
+
+            if gross_loss == 0:
+                # Avoid division by zero; if no losses yet, profit factor is undefined -> return 0
+                return 0.0
+
+            return gross_profit / gross_loss
         except Exception as e:
             logger.error(f"Error calculating profit factor: {e}")
             return 0.0
@@ -1083,12 +1088,16 @@ class MonitoringDashboard:
             """
             result = self.db_manager.execute_query(query)
             
-            if result and result[0]['avg_loss'] and result[0]['avg_loss'] > 0:
-                avg_win = result[0]['avg_win'] or 0
-                avg_loss = result[0]['avg_loss'] or 1
-                return avg_win / avg_loss
-            return 0.0
-            
+            if not result:
+                return 0.0
+
+            avg_win = result[0].get('avg_win') or 0.0
+            avg_loss = result[0].get('avg_loss') or 0.0
+
+            if avg_loss == 0:
+                return 0.0
+
+            return avg_win / avg_loss
         except Exception as e:
             logger.error(f"Error calculating win/loss ratio: {e}")
             return 0.0
