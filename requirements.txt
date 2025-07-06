@@ -20,3 +20,4 @@ onnxruntime==1.17.0
 Flask==2.3.3
 Flask-SocketIO==5.3.6
 eventlet==0.35.1
+Flask-Admin==1.6.1
