@@ -359,7 +359,7 @@ class AccountBalance(Base):
     reserved_balance = Column(Float, default=0.0)  # Reserved in open positions
     
     # Balance breakdown by asset (for multi-asset support)
-    asset_balances = Column(JSON, default=dict)  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
+    asset_balances = Column(JSON, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
     
     # Metadata
     last_updated = Column(DateTime, nullable=False, default=datetime.utcnow)
