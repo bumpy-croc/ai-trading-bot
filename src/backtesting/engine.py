@@ -1,4 +1,5 @@
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Iterator
+from pandas import DataFrame  # type: ignore
 import pandas as pd  # type: ignore
 import logging
 from datetime import datetime
@@ -101,7 +102,7 @@ class Backtester:
                 )
             
             # Fetch price data
-            df = self.data_provider.get_historical_data(symbol, timeframe, start, end)
+            df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
             if df.empty:
                 raise ValueError("No price data available for the specified period")
                 
@@ -174,8 +175,8 @@ class Backtester:
                         # Close the trade
                         self.current_trade.close(candle['close'], candle.name, "Strategy exit")
                         
-                        # Update balance
-                        trade_pnl = self.current_trade.pnl * self.balance
+                        # Update balance (guard against None PnL)
+                        trade_pnl: float = float(self.current_trade.pnl or 0.0)
                         self.balance += trade_pnl
                         
                         # Update metrics
@@ -187,7 +188,10 @@ class Backtester:
                         logger.info(f"Exited position at {candle['close']}, Balance: {self.balance:.2f}")
                         
                         # Log to database if enabled
-                        if self.log_to_database and self.db_manager:
+                        if (self.log_to_database and self.db_manager and
+                                self.current_trade.exit_price is not None and
+                                self.current_trade.exit_time is not None and
+                                self.current_trade.exit_reason is not None):
                             self.db_manager.log_trade(
                                 symbol=symbol,
                                 side="long",  # Backtester only does long trades currently
