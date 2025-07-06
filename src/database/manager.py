@@ -1,5 +1,5 @@
 """
-Database manager for handling all database operations
+PostgreSQL database manager for handling all database operations
 """
 
 import logging
@@ -12,14 +12,13 @@ import json
 from sqlalchemy import create_engine, func, and_, or_
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import QueuePool
 
 from .models import (
     Base, Trade, Position, AccountHistory, PerformanceMetrics,
     TradingSession, SystemEvent, StrategyExecution,
     PositionSide, OrderStatus, TradeSource, EventType
 )
-from config.paths import get_database_path
 from config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
@@ -27,23 +26,23 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     """
-    Manages all database operations for the trading system.
+    Manages all PostgreSQL database operations for the trading system.
     
     Features:
-    - Connection pooling and session management
+    - PostgreSQL connection pooling and session management
     - Trade and position logging
     - Performance metrics calculation
     - Account history tracking
     - System event logging
-    - Support for both SQLite (local) and PostgreSQL (production)
+    - Centralized database for shared access across services
     """
     
     def __init__(self, database_url: Optional[str] = None):
         """
-        Initialize database manager.
+        Initialize PostgreSQL database manager.
         
         Args:
-            database_url: Optional database URL. If None, uses configuration.
+            database_url: Optional PostgreSQL database URL. If None, uses DATABASE_URL from environment.
         """
         self.database_url = database_url
         self.engine = None
@@ -57,25 +56,27 @@ class DatabaseManager:
         self._create_tables()
     
     def _init_database(self):
-        """Initialize database connection and session factory"""
+        """Initialize PostgreSQL database connection and session factory"""
         
         # Get database URL from configuration if not provided
         if self.database_url is None:
             config = get_config()
             self.database_url = config.get('DATABASE_URL')
             
-            # Fallback to default SQLite if no DATABASE_URL
             if self.database_url is None:
-                self.database_url = get_database_path()
-                logger.info("Using default SQLite database for local development")
-            else:
-                logger.info("Using PostgreSQL database from configuration")
+                raise ValueError(
+                    "DATABASE_URL environment variable is required for PostgreSQL connection. "
+                    "Please set DATABASE_URL in your environment or Railway configuration."
+                )
         
-        # Ensure database_url is not None at this point
-        if self.database_url is None:
-            raise ValueError("Database URL could not be determined")
+        # Validate PostgreSQL URL
+        if not self.database_url.startswith('postgresql'):
+            raise ValueError(
+                f"Only PostgreSQL databases are supported. "
+                f"Expected URL to start with 'postgresql://', got: {self.database_url[:20]}..."
+            )
         
-        # Create engine with appropriate configuration
+        # Create engine with PostgreSQL configuration
         engine_kwargs = self._get_engine_config()
         
         try:
@@ -84,51 +85,29 @@ class DatabaseManager:
             
             # Test connection
             with self.engine.connect() as conn:
-                # Simple test query
-                if self.database_url.startswith('postgresql'):
-                    conn.execute("SELECT 1")
-                    logger.info("✅ PostgreSQL connection established")
-                else:
-                    conn.execute("SELECT 1")
-                    logger.info("✅ SQLite connection established")
-                    
+                conn.execute("SELECT 1")
+                logger.info("✅ PostgreSQL database connection established")
+                
         except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
+            logger.error(f"Failed to initialize PostgreSQL database: {e}")
             raise
     
     def _get_engine_config(self) -> Dict[str, Any]:
-        """Get engine configuration based on database type"""
+        """Get PostgreSQL engine configuration"""
         
-        config = {}
-        
-        # At this point, database_url should never be None due to _init_database check
-        if self.database_url and self.database_url.startswith('postgresql'):
-            # PostgreSQL configuration
-            config.update({
-                'poolclass': QueuePool,
-                'pool_size': 5,
-                'max_overflow': 10,
-                'pool_pre_ping': True,
-                'pool_recycle': 3600,  # 1 hour
-                'echo': False,  # Set to True for SQL debugging
-                'connect_args': {
-                    'sslmode': 'prefer',
-                    'connect_timeout': 10,
-                    'application_name': 'ai-trading-bot'
-                }
-            })
-        else:
-            # SQLite configuration
-            config.update({
-                'poolclass': NullPool,
-                'echo': False,
-                'connect_args': {
-                    'check_same_thread': False,
-                    'timeout': 20
-                }
-            })
-        
-        return config
+        return {
+            'poolclass': QueuePool,
+            'pool_size': 5,
+            'max_overflow': 10,
+            'pool_pre_ping': True,
+            'pool_recycle': 3600,  # 1 hour
+            'echo': False,  # Set to True for SQL debugging
+            'connect_args': {
+                'sslmode': 'prefer',
+                'connect_timeout': 10,
+                'application_name': 'ai-trading-bot'
+            }
+        }
     
     def _create_tables(self):
         """Create database tables if they don't exist"""
@@ -180,15 +159,14 @@ class DatabaseManager:
     
     def get_database_info(self) -> Dict[str, Any]:
         """
-        Get database information.
+        Get PostgreSQL database information.
         
         Returns:
-            Dictionary with database details
+            Dictionary with database connection details
         """
         info = {
             'database_url': self.database_url,
-            'is_postgresql': self.database_url.startswith('postgresql') if self.database_url else False,
-            'is_sqlite': self.database_url.startswith('sqlite') if self.database_url else False,
+            'database_type': 'postgresql',
             'connection_pool_size': getattr(self.engine.pool, 'size', 0) if self.engine else 0,
             'checked_in_connections': getattr(self.engine.pool, 'checkedin', 0) if self.engine else 0,
             'checked_out_connections': getattr(self.engine.pool, 'checkedout', 0) if self.engine else 0,
@@ -852,7 +830,7 @@ class DatabaseManager:
             return []
     
     def get_connection_stats(self) -> Dict[str, Any]:
-        """Get database connection statistics"""
+        """Get PostgreSQL connection pool statistics"""
         if hasattr(self.engine.pool, 'status'):
             return {
                 'pool_status': self.engine.pool.status(),
@@ -861,10 +839,10 @@ class DatabaseManager:
                 'overflow': getattr(self.engine.pool, 'overflow', 0),
                 'invalid': getattr(self.engine.pool, 'invalid', 0)
             }
-        return {'status': 'No connection pool statistics available'}
+        return {'status': 'Connection pool statistics not available'}
     
     def cleanup_connection_pool(self):
-        """Cleanup database connection pool"""
+        """Cleanup PostgreSQL connection pool"""
         if hasattr(self.engine.pool, 'dispose'):
             self.engine.pool.dispose()
-            logger.info("Database connection pool disposed") 
+            logger.info("PostgreSQL connection pool disposed") 

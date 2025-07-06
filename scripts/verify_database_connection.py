@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verify database connection for both local and Railway deployments
+Verify PostgreSQL database connection for both local and Railway deployments
 """
 
 import sys
@@ -15,9 +15,9 @@ from config.config_manager import get_config
 
 
 def verify_database_connection():
-    """Verify database connection and display information"""
+    """Verify PostgreSQL database connection and display information"""
     
-    print("🔍 Verifying Database Connection")
+    print("🔍 Verifying PostgreSQL Database Connection")
     print("=" * 50)
     
     try:
@@ -29,16 +29,15 @@ def verify_database_connection():
         
         print(f"📊 Database Information:")
         print(f"  - Database URL: {db_info['database_url']}")
-        print(f"  - Is PostgreSQL: {db_info['is_postgresql']}")
-        print(f"  - Is SQLite: {db_info['is_sqlite']}")
+        print(f"  - Database Type: {db_info['database_type']}")
         print(f"  - Connection Pool Size: {db_info['connection_pool_size']}")
         
         # Test connection
         print(f"\n🔗 Testing Connection...")
         if db_manager.test_connection():
-            print("✅ Database connection successful!")
+            print("✅ PostgreSQL database connection successful!")
         else:
-            print("❌ Database connection failed!")
+            print("❌ PostgreSQL database connection failed!")
             return False
         
         # Test session creation
@@ -57,7 +56,7 @@ def verify_database_connection():
         print(f"\n📝 Testing Event Logging...")
         event_id = db_manager.log_event(
             event_type="TEST",
-            message="Database verification test",
+            message="PostgreSQL database verification test",
             severity="info",
             session_id=session_id
         )
@@ -73,10 +72,21 @@ def verify_database_connection():
         print(f"  - DATABASE_URL: {'Set' if config.get('DATABASE_URL') else 'Not set'}")
         print(f"  - Railway Environment: {'Yes' if config.get('RAILWAY_PROJECT_ID') else 'No'}")
         
+        # Connection pool statistics
+        stats = db_manager.get_connection_stats()
+        print(f"\n📊 Connection Pool Statistics:")
+        for key, value in stats.items():
+            print(f"  - {key}: {value}")
+        
         return True
         
     except Exception as e:
         print(f"❌ Database verification failed: {e}")
+        print("\nTroubleshooting:")
+        print("  1. Ensure DATABASE_URL environment variable is set")
+        print("  2. Verify PostgreSQL database is running and accessible")
+        print("  3. Check that DATABASE_URL starts with 'postgresql://'")
+        print("  4. For Railway: ensure PostgreSQL service is deployed")
         import traceback
         traceback.print_exc()
         return False
@@ -87,9 +97,15 @@ def main():
     success = verify_database_connection()
     
     if success:
-        print(f"\n✅ Database verification completed successfully!")
+        print(f"\n✅ PostgreSQL database verification completed successfully!")
+        print("\n📈 Your database is ready for:")
+        print("  - Trading bot operations")
+        print("  - Dashboard data sharing")
+        print("  - Performance analytics")
+        print("  - Historical data storage")
     else:
-        print(f"\n❌ Database verification failed!")
+        print(f"\n❌ PostgreSQL database verification failed!")
+        print("Please check the troubleshooting steps above.")
         sys.exit(1)
 
 
