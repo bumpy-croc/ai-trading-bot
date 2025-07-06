@@ -1,11 +1,18 @@
 import os
+import sys
+from pathlib import Path
 import logging
-from typing import List
+from typing import List, Dict, Any, Optional
 
-from flask import Flask, jsonify
-from flask_admin import Admin
-from flask_admin.contrib.sqla import ModelView
-from sqlalchemy.orm import scoped_session
+# Ensure project src directory is on the path when executed directly (`python src/.../app.py`)
+_SRC_ROOT = Path(__file__).resolve().parent.parent
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
+
+from flask import Flask, jsonify, Response  # type: ignore
+from flask_admin import Admin  # type: ignore
+from flask_admin.contrib.sqla import ModelView  # type: ignore
+from sqlalchemy.orm import scoped_session  # type: ignore
 
 # Re-use existing database layer
 from database.manager import DatabaseManager  # type: ignore
@@ -39,10 +46,29 @@ class CustomModelView(ModelView):
 
 
 def create_app() -> Flask:
-    """Factory to create Flask application for the database manager."""
+    """Factory to create and configure the Flask application.
+
+    The function attempts to establish a database connection via
+    :class:`database.manager.DatabaseManager`. If the connection fails, the
+    application will still start but only expose a generic error endpoint so
+    that deployment health checks can continue to function while signalling a
+    500 status to callers.
+    """
 
     # Initialise database manager (re-uses existing connection settings)
-    db_manager = DatabaseManager()
+    try:
+        db_manager = DatabaseManager()
+    except Exception as exc:  # pragma: no cover – we want to surface the error in logs
+        logger.exception("❌ Failed to initialise DatabaseManager: %s", exc)
+        app = Flask(__name__)
+
+        @app.route("/db_error")
+        def db_error() -> tuple[Dict[str, str], int]:
+            """Endpoint returned when the database is unavailable."""
+            return {"status": "error", "message": "Database connection failed."}, 500
+
+        return app
+
     engine = db_manager.engine
     if engine is None or db_manager.session_factory is None:
         raise RuntimeError("DatabaseManager failed to initialise engine/session factory.")
@@ -64,12 +90,14 @@ def create_app() -> Flask:
 
     # Basic health route
     @app.route("/health")
-    def health_check():
+    def health_check() -> Dict[str, str]:
+        """Simple health-check endpoint used by load-balancers and uptime monitors."""
         return {"status": "ok"}
 
     # Database info route (helpful for debugging)
     @app.route("/db_info")
-    def db_info():
+    def db_info() -> Response:
+        """Return live connection-pool statistics and configuration details."""
         return jsonify(db_manager.get_database_info())
 
     # Simple schema "migration" route to ensure new tables are created
@@ -85,7 +113,8 @@ def create_app() -> Flask:
 
     # Clean up DB sessions after each request
     @app.teardown_appcontext
-    def shutdown_session(exception=None):  # noqa: D401, pylint: disable=unused-argument
+    def shutdown_session(exception: Optional[Exception] = None) -> None:  # noqa: D401, pylint: disable=unused-argument
+        """Remove the scoped SQLAlchemy session to avoid connection leaks."""
         db_session.remove()
 
     return app
