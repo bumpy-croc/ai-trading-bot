@@ -14,7 +14,6 @@ _ASYNC_MODE = 'eventlet'
 import os
 import json
 import logging
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from pathlib import Path

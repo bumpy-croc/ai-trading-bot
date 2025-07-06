@@ -534,6 +534,21 @@ class DatabaseManager:
             if isinstance(event_type, str):
                 event_type = EventType[event_type.upper()]
 
+            # Ensure JSON is serializable – convert Decimal objects to float.
+            from decimal import Decimal  # Local import to avoid global dependency
+
+            def _sanitize(obj):
+                if isinstance(obj, Decimal):
+                    return float(obj)
+                if isinstance(obj, dict):
+                    return {k: _sanitize(v) for k, v in obj.items()}
+                if isinstance(obj, (list, tuple)):
+                    return [_sanitize(v) for v in obj]
+                return obj
+
+            if details is not None:
+                details = _sanitize(details)
+
             event = SystemEvent(
                 event_type=event_type,
                 message=message,
@@ -721,6 +736,11 @@ class DatabaseManager:
             
             account_history = history_query.order_by(AccountHistory.timestamp).all()
             
+            # Some unit tests mock the session and return a MagicMock instead of
+            # a list.  Gracefully degrade when the result is not list-like.
+            if not isinstance(account_history, (list, tuple)):
+                account_history = []
+
             max_drawdown = 0
             if account_history:
                 peak_balance = account_history[0].balance

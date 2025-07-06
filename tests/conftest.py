@@ -314,26 +314,3 @@ pytest_plugins = [
     "tests.test_strategies",
     "tests.test_data_providers"
 ]
-
-# If a Postgres container is running, ensure any DatabaseManager instantiated with a
-# SQLite file URL transparently redirects to the container connection so persistence
-# tests work without modification.
-if _POSTGRES_CONTAINER is not None:
-    import database.manager as _db_manager_mod
-    _orig_db_init = _db_manager_mod.DatabaseManager.__init__
-
-    def _new_init(self, database_url=None):  # type: ignore[override]
-        if database_url and str(database_url).startswith("sqlite"):
-            database_url = os.environ["DATABASE_URL"]
-        _orig_db_init(self, database_url)
-
-    _db_manager_mod.DatabaseManager.__init__ = _new_init  # type: ignore[attr-defined]
-
-    _orig_init_db = _db_manager_mod.DatabaseManager._init_database
-
-    def _init_db_redirect(self):  # type: ignore[override]
-        if self.database_url and str(self.database_url).startswith("sqlite"):
-            self.database_url = os.environ["DATABASE_URL"]
-        _orig_init_db(self)
-
-    _db_manager_mod.DatabaseManager._init_database = _init_db_redirect  # type: ignore[attr-defined]

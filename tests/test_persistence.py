@@ -1,6 +1,6 @@
-# Persistence tests now use the same PostgreSQL instance provided by the
+# Persistence tests use the temporary PostgreSQL instance provided by the
 # Testcontainers fixture in ``tests/conftest.py``.  This guarantees the real
-# schema is exercised and avoids any SQLite divergence.
+# schema is exercised and avoids any divergence from production.
 
 from datetime import datetime
 import os
@@ -58,7 +58,6 @@ def test_balance_and_position_persistence(temp_db: DatabaseManager):
     assert len(pre_positions) == 1
 
     # 2️⃣  SIMULATE RESTART (new DatabaseManager instance bound to same DB)
-    # We need to point to the same sqlite file used in fixture
     new_db = _create_db_manager()
 
     # 3️⃣  RECOVER STATE IN NEW INSTANCE

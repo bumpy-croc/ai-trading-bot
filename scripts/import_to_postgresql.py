@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Import SQLite data from JSON export into PostgreSQL database
+Import JSON export data into a PostgreSQL database.
+
+This utility can restore data that was previously exported (e.g. from an
+older SQLite deployment) into the current PostgreSQL schema.  The tool
+expects the JSON structure produced by the now-deprecated
+``export_sqlite_data.py`` script.
 """
 
 import sys
@@ -191,7 +196,7 @@ def main():
     """Main function"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Import SQLite data to PostgreSQL")
+    parser = argparse.ArgumentParser(description="Import JSON data into PostgreSQL")
     parser.add_argument("--import-file", help="Path to JSON export file")
     parser.add_argument("--database-url", help="PostgreSQL database URL")
     

@@ -32,7 +32,7 @@ def main():
         
         # Create and run dashboard
         dashboard = MonitoringDashboard(
-            db_url=None,  # Will use default SQLite database
+            db_url=None,  # Uses DATABASE_URL from environment (PostgreSQL)
             update_interval=3600  # 1 hour updates
         )
         
