@@ -9,10 +9,10 @@ from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
 
-from sqlalchemy import create_engine, func, and_, or_, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import QueuePool
+from sqlalchemy import create_engine, func, and_, or_, text  # type: ignore
+from sqlalchemy.orm import sessionmaker, Session  # type: ignore
+from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+from sqlalchemy.pool import QueuePool  # type: ignore
 from decimal import Decimal, InvalidOperation
 
 from .models import (

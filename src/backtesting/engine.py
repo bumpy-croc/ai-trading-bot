@@ -1,4 +1,4 @@
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 import pandas as pd
 import logging
 from datetime import datetime
@@ -57,7 +57,7 @@ class Backtester:
         strategy: BaseStrategy,
         data_provider: DataProvider,
         sentiment_provider: Optional[SentimentDataProvider] = None,
-        risk_parameters: Optional[RiskParameters] = None,
+        risk_parameters: Optional[Any] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
         database_url: Optional[str] = None,
         log_to_database: bool = True

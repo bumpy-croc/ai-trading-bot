@@ -4,6 +4,7 @@ from datetime import datetime
 from src.data_providers.data_provider import DataProvider
 from src.strategies.base import BaseStrategy
 from src.backtesting.engine import Backtester
+from typing import Optional
 
 
 class DummyDataProvider(DataProvider):
@@ -13,7 +14,7 @@ class DummyDataProvider(DataProvider):
         super().__init__()
         self._df = df
 
-    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None):
+    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None):
         # Ignore params and just return the stored frame
         return self._df.copy()
 

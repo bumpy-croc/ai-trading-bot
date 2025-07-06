@@ -17,10 +17,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from pathlib import Path
-import pandas as pd
+import pandas as pd  # type: ignore
 
-from flask import Flask, render_template, jsonify, request
-from flask_socketio import SocketIO, emit
+from flask import Flask, render_template, jsonify, request  # type: ignore
+from flask_socketio import SocketIO, emit  # type: ignore
 import threading
 import time
 
