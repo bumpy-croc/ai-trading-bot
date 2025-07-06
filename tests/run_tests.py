@@ -236,7 +236,7 @@ Examples:
     parser.add_argument(
         'command',
         nargs='?',
-        choices=['smoke', 'critical', 'unit', 'integration', 'coverage', 'all', 'validate'],
+        choices=['smoke', 'critical', 'unit', 'integration', 'database', 'coverage', 'all', 'validate'],
         help='Test command to run'
     )
     
@@ -330,9 +330,10 @@ def interactive_mode():
     print("2. critical - Critical tests (live trading + risk)")
     print("3. unit     - All unit tests")
     print("4. integration - Integration tests")
-    print("5. coverage - Tests with coverage analysis")
-    print("6. all      - All tests")
-    print("7. validate - Validate test environment")
+    print("5. database - Database tests only")
+    print("6. coverage - Tests with coverage analysis")
+    print("7. all      - All tests")
+    print("8. validate - Validate test environment")
     print()
     
     command = input("Enter command (or test file name): ").strip().lower()
@@ -346,6 +347,18 @@ def run_all_tests(coverage=False, verbose=False, quiet=False):
         verbose=verbose,
         quiet=quiet,
     )
+
+def run_database_tests():
+    """Run database-specific tests only."""
+    print_header("Running Database Tests")
+
+    cmd = [
+        sys.executable, '-m', 'pytest',
+        'tests/test_database.py',
+        '-v', '--tb=short'
+    ]
+
+    return run_command(cmd, "Database Tests")
 
 def main():
     """Main test runner function"""
@@ -393,6 +406,8 @@ def main():
         success = run_unit_tests()
     elif command == 'integration':
         success = run_integration_tests()
+    elif command == 'database':
+        success = run_database_tests()
     elif command == 'coverage':
         success = run_coverage_analysis()
     elif command == 'all':
@@ -407,7 +422,7 @@ def main():
         success = run_specific_test_file(command)
     elif command:
         print_error(f"Unknown command: {command}")
-        print("Available commands: smoke, critical, unit, integration, coverage, all, validate")
+        print("Available commands: smoke, critical, unit, integration, database, coverage, all, validate")
         print("Or use --help for more options")
         sys.exit(1)
     else:
