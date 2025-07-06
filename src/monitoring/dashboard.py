@@ -1315,7 +1315,7 @@ class MonitoringDashboard:
             return {
                 'current_balance': current_balance,
                 'balance_change_24h': balance_change_24h,
-                'last_updated': balance_history[0]['timestamp'] if balance_history else None,
+                'last_updated': balance_history[0]['timestamp'].isoformat() if balance_history and isinstance(balance_history[0]['timestamp'], datetime) else balance_history[0]['timestamp'] if balance_history else None,
                 'last_update_reason': balance_history[0]['reason'] if balance_history else None,
                 'recent_history': balance_history[:5]  # Last 5 balance changes
             }
