@@ -869,29 +869,35 @@ class DatabaseManager:
         older versions.
         """
         params = params or ()
+        if self.engine is None:
+            logger.error("Database engine not initialised – cannot execute query")
+            return []
+
+        # Local import to avoid top-level circular dependencies and keep stubs optional
+        from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+        from sqlalchemy import text as _sql_text  # type: ignore
+
+        engine_typed: "_Engine" = self.engine  # type: ignore[assignment]
+        connection_raw = engine_typed.connect()
+        conn: "_Connection" = connection_raw  # type: ignore[assignment]
+
         try:
-            assert self.engine is not None, "Engine not initialised"
-            # Extra null-safety guard for type checkers
-            engine_obj: "_Engine" = self.engine  # type: ignore[assignment]
-            connection_raw = engine_obj.connect()
-            conn_typed: "_Connection" = connection_raw  # type: ignore[assignment]
-            with conn_typed as connection:
-                # SQLAlchemy 2.0
+            with conn as connection:
+                # Prefer SQLAlchemy 2.x driver-level exec
                 try:
                     result: "_Result" = connection.exec_driver_sql(query, params)  # type: ignore[arg-type]
                 except AttributeError:
-                    # Older SQLAlchemy (<1.4) fallback
-                    from sqlalchemy import text  # type: ignore
-                    result = connection.execute(text(query), params)  # type: ignore[arg-type]
+                    # Fallback for <1.4
+                    result = connection.execute(_sql_text(query), params)  # type: ignore[arg-type]
 
-                # Convert to list of dictionaries
+                # Map rows to plain dictionaries
                 try:
                     rows: List[Dict[str, Any]] = [dict(row) for row in result.mappings()]  # type: ignore[attr-defined]
                 except AttributeError:
                     rows = [dict(row.items()) for row in result]  # type: ignore[attr-defined]
                 return rows
-        except SQLAlchemyError as e:
-            logger.error(f"Raw query error: {e}")
+        except SQLAlchemyError as exc:
+            logger.error(f"Raw query error: {exc}")
             return []
 
     # ========== BALANCE MANAGEMENT ==========
