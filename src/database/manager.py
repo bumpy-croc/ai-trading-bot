@@ -4,7 +4,7 @@ PostgreSQL database manager for handling all database operations
 
 import logging
 import os
-from typing import Optional, Dict, List, Any, Union, TYPE_CHECKING
+from typing import Optional, Dict, List, Any, Union, TYPE_CHECKING, Iterable
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
     # SQLAlchemy runtime imports lack stubs; import for type checkers only
-    from sqlalchemy.engine import Engine as _Engine, Connection as _Connection, Result as _Result  # type: ignore
+    from sqlalchemy.engine.base import Connection as _Connection, Engine as _Engine  # type: ignore
+    from sqlalchemy.engine import Result as _Result  # type: ignore
     from sqlalchemy.sql.elements import TextClause as _TextClause  # type: ignore
 
 class DatabaseManager:
@@ -863,9 +864,8 @@ class DatabaseManager:
         params = params or ()
         try:
             assert self.engine is not None, "Engine not initialised"
-            connection = self.engine.connect()
-            # Cast for type checkers
-            conn_typed: "_Connection" = connection  # type: ignore[assignment]
+            connection_raw = self.engine.connect()
+            conn_typed: "_Connection" = connection_raw  # type: ignore[assignment]
             with conn_typed as connection:
                 # SQLAlchemy 2.0
                 try:
