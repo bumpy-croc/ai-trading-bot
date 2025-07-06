@@ -3,10 +3,11 @@ Database models for trade logging and performance tracking
 """
 
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, Boolean, Text, 
-    Enum, ForeignKey, Index, JSON, UniqueConstraint
+    Column, Integer, String, Numeric, DateTime, Boolean, Text, 
+    Enum, ForeignKey, Index, UniqueConstraint
 )
 from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
 from datetime import datetime
 import enum
 
@@ -43,6 +44,7 @@ class EventType(enum.Enum):
     ERROR = "error"
     WARNING = "warning"
     ALERT = "alert"
+    BALANCE_ADJUSTMENT = "balance_adjustment"
     TEST = "test"  # Added for verification scripts and development diagnostics
 
 
@@ -56,29 +58,29 @@ class Trade(Base):
     source = Column(Enum(TradeSource), nullable=False, default=TradeSource.LIVE)
     
     # Trade details
-    entry_price = Column(Float, nullable=False)
-    exit_price = Column(Float, nullable=False)
-    size = Column(Float, nullable=False)  # Position size as % of balance
-    quantity = Column(Float)  # Actual quantity traded
+    entry_price = Column(Numeric(18, 8), nullable=False)
+    exit_price = Column(Numeric(18, 8), nullable=False)
+    size = Column(Numeric(18, 8), nullable=False)  # Position size as % of balance
+    quantity = Column(Numeric(18, 8))  # Actual quantity traded
     
     # Timestamps
     entry_time = Column(DateTime, nullable=False, index=True)
     exit_time = Column(DateTime, nullable=False, index=True)
     
     # Performance
-    pnl = Column(Float, nullable=False)  # Dollar P&L
-    pnl_percent = Column(Float, nullable=False)  # Percentage P&L
-    commission = Column(Float, default=0.0)
+    pnl = Column(Numeric(18, 8), nullable=False)  # Dollar P&L
+    pnl_percent = Column(Numeric(18, 8), nullable=False)  # Percentage P&L
+    commission = Column(Numeric(18, 8), default=0.0)
     
     # Risk management
-    stop_loss = Column(Float)
-    take_profit = Column(Float)
+    stop_loss = Column(Numeric(18, 8))
+    take_profit = Column(Numeric(18, 8))
     exit_reason = Column(String(100))
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False, index=True)
-    strategy_config = Column(JSON)  # Store strategy parameters
-    confidence_score = Column(Float)  # ML model confidence if applicable
+    strategy_config = Column(JSONB)  # Store strategy parameters
+    confidence_score = Column(Numeric(18, 8))  # ML model confidence if applicable
     
     # Additional metadata
     order_id = Column(String(100), unique=True)
@@ -109,13 +111,13 @@ class Position(Base):
     status = Column(Enum(OrderStatus), nullable=False, default=OrderStatus.PENDING)
     
     # Position details
-    entry_price = Column(Float, nullable=False)
-    size = Column(Float, nullable=False)
-    quantity = Column(Float)
+    entry_price = Column(Numeric(18, 8), nullable=False)
+    size = Column(Numeric(18, 8), nullable=False)
+    quantity = Column(Numeric(18, 8))
     
     # Risk management
-    stop_loss = Column(Float)
-    take_profit = Column(Float)
+    stop_loss = Column(Numeric(18, 8))
+    take_profit = Column(Numeric(18, 8))
     trailing_stop = Column(Boolean, default=False)
     
     # Timestamps
@@ -123,13 +125,13 @@ class Position(Base):
     last_update = Column(DateTime, default=datetime.utcnow)
     
     # Current state
-    current_price = Column(Float)
-    unrealized_pnl = Column(Float, default=0.0)
-    unrealized_pnl_percent = Column(Float, default=0.0)
+    current_price = Column(Numeric(18, 8))
+    unrealized_pnl = Column(Numeric(18, 8), default=0.0)
+    unrealized_pnl_percent = Column(Numeric(18, 8), default=0.0)
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
-    confidence_score = Column(Float)
+    confidence_score = Column(Numeric(18, 8))
     
     # Order information
     order_id = Column(String(100), unique=True)
@@ -151,19 +153,19 @@ class AccountHistory(Base):
     timestamp = Column(DateTime, nullable=False, index=True)
     
     # Balances
-    balance = Column(Float, nullable=False)
-    equity = Column(Float, nullable=False)  # Balance + unrealized P&L
-    margin_used = Column(Float, default=0.0)
-    margin_available = Column(Float)
+    balance = Column(Numeric(18, 8), nullable=False)
+    equity = Column(Numeric(18, 8), nullable=False)  # Balance + unrealized P&L
+    margin_used = Column(Numeric(18, 8), default=0.0)
+    margin_available = Column(Numeric(18, 8))
     
     # Performance metrics at this point
-    total_pnl = Column(Float, default=0.0)
-    daily_pnl = Column(Float, default=0.0)
-    drawdown = Column(Float, default=0.0)
+    total_pnl = Column(Numeric(18, 8), default=0.0)
+    daily_pnl = Column(Numeric(18, 8), default=0.0)
+    drawdown = Column(Numeric(18, 8), default=0.0)
     
     # Position summary
     open_positions = Column(Integer, default=0)
-    total_exposure = Column(Float, default=0.0)
+    total_exposure = Column(Numeric(18, 8), default=0.0)
     
     # Session reference
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
@@ -189,33 +191,33 @@ class PerformanceMetrics(Base):
     total_trades = Column(Integer, default=0)
     winning_trades = Column(Integer, default=0)
     losing_trades = Column(Integer, default=0)
-    win_rate = Column(Float, default=0.0)
+    win_rate = Column(Numeric(18, 8), default=0.0)
     
     # Returns
-    total_return = Column(Float, default=0.0)
-    total_return_percent = Column(Float, default=0.0)
+    total_return = Column(Numeric(18, 8), default=0.0)
+    total_return_percent = Column(Numeric(18, 8), default=0.0)
     
     # Risk metrics
-    max_drawdown = Column(Float, default=0.0)
+    max_drawdown = Column(Numeric(18, 8), default=0.0)
     max_drawdown_duration = Column(Integer)  # In hours
-    sharpe_ratio = Column(Float)
-    sortino_ratio = Column(Float)
-    calmar_ratio = Column(Float)
+    sharpe_ratio = Column(Numeric(18, 8))
+    sortino_ratio = Column(Numeric(18, 8))
+    calmar_ratio = Column(Numeric(18, 8))
     
     # Trade analysis
-    avg_win = Column(Float, default=0.0)
-    avg_loss = Column(Float, default=0.0)
-    profit_factor = Column(Float, default=0.0)
-    expectancy = Column(Float, default=0.0)
+    avg_win = Column(Numeric(18, 8), default=0.0)
+    avg_loss = Column(Numeric(18, 8), default=0.0)
+    profit_factor = Column(Numeric(18, 8), default=0.0)
+    expectancy = Column(Numeric(18, 8), default=0.0)
     
     # Best/worst trades
-    best_trade_pnl = Column(Float)
-    worst_trade_pnl = Column(Float)
+    best_trade_pnl = Column(Numeric(18, 8))
+    worst_trade_pnl = Column(Numeric(18, 8))
     largest_win_streak = Column(Integer, default=0)
     largest_loss_streak = Column(Integer, default=0)
     
     # By strategy breakdown
-    strategy_breakdown = Column(JSON)  # Dict of strategy_name: metrics
+    strategy_breakdown = Column(JSONB)  # Dict of strategy_name: metrics
     
     # Session reference
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
@@ -244,12 +246,12 @@ class TradingSession(Base):
     
     # Configuration
     mode = Column(Enum(TradeSource), nullable=False)
-    initial_balance = Column(Float, nullable=False)
-    final_balance = Column(Float)
+    initial_balance = Column(Numeric(18, 8), nullable=False)
+    final_balance = Column(Numeric(18, 8))
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
-    strategy_config = Column(JSON)
+    strategy_config = Column(JSONB)
     
     # Environment
     symbol = Column(String(20), nullable=False)
@@ -257,10 +259,10 @@ class TradingSession(Base):
     exchange = Column(String(50), default='binance')
     
     # Performance summary
-    total_pnl = Column(Float)
+    total_pnl = Column(Numeric(18, 8))
     total_trades = Column(Integer, default=0)
-    win_rate = Column(Float)
-    max_drawdown = Column(Float)
+    win_rate = Column(Numeric(18, 8))
+    max_drawdown = Column(Numeric(18, 8))
     
     # Relationships
     trades = relationship("Trade", backref="session")
@@ -284,7 +286,7 @@ class SystemEvent(Base):
     
     # Event details
     message = Column(Text, nullable=False)
-    details = Column(JSON)  # Additional structured data
+    details = Column(JSONB)  # Additional structured data
     
     # Context
     component = Column(String(100))  # Which part of the system
@@ -321,26 +323,84 @@ class StrategyExecution(Base):
     
     # Signal information
     signal_type = Column(String(20))  # 'entry', 'exit', 'hold'
-    signal_strength = Column(Float)
-    confidence_score = Column(Float)
+    signal_strength = Column(Numeric(18, 8))
+    confidence_score = Column(Numeric(18, 8))
     
     # Decision factors
-    indicators = Column(JSON)  # Dict of indicator values
-    sentiment_data = Column(JSON)  # Sentiment scores if used
-    ml_predictions = Column(JSON)  # ML model outputs if used
+    indicators = Column(JSONB)  # Dict of indicator values
+    sentiment_data = Column(JSONB)  # Sentiment scores if used
+    ml_predictions = Column(JSONB)  # ML model outputs if used
     
     # Execution result
     action_taken = Column(String(50))  # 'opened_long', 'closed_position', 'no_action'
-    position_size = Column(Float)
-    reasons = Column(JSON)  # List of reasons for the decision
+    position_size = Column(Numeric(18, 8))
+    reasons = Column(JSONB)  # List of reasons for the decision
     
     # Market context
-    price = Column(Float)
-    volume = Column(Float)
-    volatility = Column(Float)
+    price = Column(Numeric(18, 8))
+    volume = Column(Numeric(18, 8))
+    volatility = Column(Numeric(18, 8))
     
     # Session reference
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
     trade_id = Column(Integer, ForeignKey('trades.id'))
     
-    created_at = Column(DateTime, default=datetime.utcnow) 
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AccountBalance(Base):
+    """Current account balance tracking table"""
+    __tablename__ = 'account_balances'
+    
+    id = Column(Integer, primary_key=True)
+    
+    # Balance information
+    base_currency = Column(String(10), nullable=False, default='USD')  # USD, BTC, ETH, etc.
+    total_balance = Column(Float, nullable=False)  # Total balance in base currency
+    available_balance = Column(Float, nullable=False)  # Available for trading
+    reserved_balance = Column(Float, default=0.0)  # Reserved in open positions
+    
+    # Balance breakdown by asset (for multi-asset support)
+    asset_balances = Column(JSON, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
+    
+    # Metadata
+    last_updated = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_by = Column(String(50), default='system')  # 'system', 'user', 'admin'
+    update_reason = Column(String(200))  # 'trade_pnl', 'manual_adjustment', 'deposit', etc.
+    
+    # Session reference
+    session_id = Column(Integer, ForeignKey('trading_sessions.id'))
+    
+    # Ensure we have one current balance per session
+    __table_args__ = (
+        Index('idx_balance_session_updated', 'session_id', 'last_updated'),
+    )
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    @classmethod
+    def get_current_balance(cls, session_id: int, db_session) -> float:
+        """Get the current balance for a session"""
+        latest_balance = db_session.query(cls).filter(
+            cls.session_id == session_id
+        ).order_by(cls.last_updated.desc()).first()
+        
+        return latest_balance.total_balance if latest_balance else 0.0
+    
+    @classmethod
+    def update_balance(cls, session_id: int, new_balance: float, 
+                      update_reason: str, updated_by: str, db_session) -> 'AccountBalance':
+        """Update the current balance for a session"""
+        balance_record = cls(
+            session_id=session_id,
+            base_currency='USD',
+            total_balance=new_balance,
+            available_balance=new_balance,  # Simplified for now
+            last_updated=datetime.utcnow(),
+            updated_by=updated_by,
+            update_reason=update_reason
+        )
+        
+        db_session.add(balance_record)
+        db_session.commit()
+        return balance_record 
