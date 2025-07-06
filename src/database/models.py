@@ -43,6 +43,7 @@ class EventType(enum.Enum):
     ERROR = "error"
     WARNING = "warning"
     ALERT = "alert"
+    BALANCE_ADJUSTMENT = "balance_adjustment"
     TEST = "test"  # Added for verification scripts and development diagnostics
 
 
@@ -343,4 +344,62 @@ class StrategyExecution(Base):
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
     trade_id = Column(Integer, ForeignKey('trades.id'))
     
-    created_at = Column(DateTime, default=datetime.utcnow) 
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AccountBalance(Base):
+    """Current account balance tracking table"""
+    __tablename__ = 'account_balances'
+    
+    id = Column(Integer, primary_key=True)
+    
+    # Balance information
+    base_currency = Column(String(10), nullable=False, default='USD')  # USD, BTC, ETH, etc.
+    total_balance = Column(Float, nullable=False)  # Total balance in base currency
+    available_balance = Column(Float, nullable=False)  # Available for trading
+    reserved_balance = Column(Float, default=0.0)  # Reserved in open positions
+    
+    # Balance breakdown by asset (for multi-asset support)
+    asset_balances = Column(JSON, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
+    
+    # Metadata
+    last_updated = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_by = Column(String(50), default='system')  # 'system', 'user', 'admin'
+    update_reason = Column(String(200))  # 'trade_pnl', 'manual_adjustment', 'deposit', etc.
+    
+    # Session reference
+    session_id = Column(Integer, ForeignKey('trading_sessions.id'))
+    
+    # Ensure we have one current balance per session
+    __table_args__ = (
+        Index('idx_balance_session_updated', 'session_id', 'last_updated'),
+    )
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    @classmethod
+    def get_current_balance(cls, session_id: int, db_session) -> float:
+        """Get the current balance for a session"""
+        latest_balance = db_session.query(cls).filter(
+            cls.session_id == session_id
+        ).order_by(cls.last_updated.desc()).first()
+        
+        return latest_balance.total_balance if latest_balance else 0.0
+    
+    @classmethod
+    def update_balance(cls, session_id: int, new_balance: float, 
+                      update_reason: str, updated_by: str, db_session) -> 'AccountBalance':
+        """Update the current balance for a session"""
+        balance_record = cls(
+            session_id=session_id,
+            base_currency='USD',
+            total_balance=new_balance,
+            available_balance=new_balance,  # Simplified for now
+            last_updated=datetime.utcnow(),
+            updated_by=updated_by,
+            update_reason=update_reason
+        )
+        
+        db_session.add(balance_record)
+        db_session.commit()
+        return balance_record 

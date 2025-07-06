@@ -34,6 +34,7 @@ The codebase supports **backtesting**, **live trading**, **machine-learning pric
 - 🎯 **Multiple Trading Strategies** – Adaptive EMA, ML-driven, sentiment-enhanced, and high-risk-high-reward templates (see below).
 - ♻️ **Fast Backtesting Engine** – Vectorised simulation with intelligent on-disk caching of historical data.
 - 🤖 **Live Trading Engine** – Robust real-time execution on Binance with position sizing, trailing stops, and exposure limits.
+- 💾 **Persistent Balance & Positions** – Never lose progress on restarts; automatic balance recovery and position restoration.
 - 🧠 **Machine-Learning Integration** – Keras & ONNX models for price prediction with optional sentiment features.
 - 💬 **Sentiment Data Providers** – SentiCrypt, Augmento, CryptoCompare, and custom providers via a simple interface.
 - 🛡 **Centralised Risk Manager** – Enforces max 1-2 % capital risk per trade and validates all position sizes.
@@ -98,9 +99,14 @@ Each component is completely decoupled and can be swapped out or extended withou
 ```bash
 # Clone & install python dependencies
 pip install -r requirements.txt
+
+# Run database migration for persistent balance features
+python scripts/migrate_database.py migrate
 ```
 
-> Python 3.9+ is recommended.  GPU acceleration is optional for model training.
+> Python 3.9+ is recommended. GPU acceleration is optional for model training.
+> 
+> **🔄 For existing users**: The database migration adds persistent balance tracking so your trading progress survives restarts.
 
 ---
 
@@ -145,12 +151,23 @@ python scripts/run_backtest.py ml_with_sentiment \
 ### Live Trading
 
 ```bash
-# Start live trading (paper-mode by default)
-python scripts/run_live_trading.py adaptive
+# Start live trading (paper-mode by default) 
+# Balance and positions automatically recovered from last session
+python scripts/run_live_trading.py adaptive --balance 1000
+
+# The bot will display recovery information:
+# 💾 Recovered balance from previous session: $1,250.00
+# 🔄 Recovering 2 active positions...
+# ✅ Recovered position: BTCUSDT long @ $45,000.00
 
 # Switch to a different strategy on the fly
 python live_trading_control.py switch ml_basic
+
+# Manually adjust balance via dashboard at http://localhost:8080
+# Or via API: POST /api/balance {"balance": 5000, "reason": "Added funds"}
 ```
+
+> **💾 Persistent Progress**: Your balance and active positions are automatically saved and recovered on restart, so Railway deployments never lose your trading progress.
 
 ### Training ML Models
 

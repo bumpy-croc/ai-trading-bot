@@ -87,9 +87,23 @@ class LiveTradingEngine:
         log_trades: bool = True,
         alert_webhook_url: Optional[str] = None,
         enable_hot_swapping: bool = True,  # Enable strategy hot-swapping
+        resume_from_last_balance: bool = True,  # Resume balance from last account snapshot
         database_url: Optional[str] = None,  # Database connection URL
         max_consecutive_errors: int = 10  # Maximum consecutive errors before shutdown
     ):
+        """
+        Initialize the live trading engine.
+
+        Parameters
+        ----------
+        resume_from_last_balance : bool, optional
+            If True, the engine attempts to fetch the most recent recorded
+            account balance from the database and use it as the starting
+            balance (`current_balance`). This is useful when restarting the
+            engine so that equity is not reset to the `initial_balance` value.
+            Defaults to True.
+        """
+
         # Validate inputs
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
@@ -104,16 +118,34 @@ class LiveTradingEngine:
         self.risk_manager = RiskManager(risk_parameters)
         self.check_interval = check_interval
         self.initial_balance = initial_balance
-        self.current_balance = initial_balance
+        self.current_balance = initial_balance  # Will be updated during startup
         self.max_position_size = max_position_size
         self.enable_live_trading = enable_live_trading
         self.log_trades = log_trades
         self.alert_webhook_url = alert_webhook_url
         self.enable_hot_swapping = enable_hot_swapping
+        self.resume_from_last_balance = resume_from_last_balance
         
         # Initialize database manager
         self.db_manager = DatabaseManager(database_url)
         self.trading_session_id: Optional[int] = None
+        
+        # Optionally resume balance from last snapshot
+        if self.resume_from_last_balance and initial_balance == DEFAULT_INITIAL_BALANCE:
+            try:
+                result = self.db_manager.execute_query(
+                    """
+                    SELECT balance FROM account_history
+                    ORDER BY timestamp DESC LIMIT 1
+                    """
+                )
+                if result:
+                    self.current_balance = result[0]["balance"]
+                    logger.info(
+                        f"Resumed from last recorded balance: ${self.current_balance:,.2f}"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not resume from last balance: {e}")
         
         # Initialize strategy manager for hot-swapping
         self.strategy_manager = None
@@ -168,16 +200,37 @@ class LiveTradingEngine:
         if not self.enable_live_trading:
             logger.warning("⚠️  PAPER TRADING MODE - No real orders will be executed")
         
-        # Create trading session in database
-        mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
-        self.trading_session_id = self.db_manager.create_trading_session(
-            strategy_name=self.strategy.__class__.__name__,
-            symbol=symbol,
-            timeframe=timeframe,
-            mode=mode,
-            initial_balance=self.initial_balance,
-            strategy_config=getattr(self.strategy, 'config', {})
-        )
+        # Try to recover from existing session first
+        if self.resume_from_last_balance:
+            recovered_balance = self._recover_existing_session()
+            if recovered_balance is not None:
+                self.current_balance = recovered_balance
+                logger.info(f"💾 Recovered balance from previous session: ${recovered_balance:,.2f}")
+                
+                # Also recover active positions
+                self._recover_active_positions()
+            else:
+                logger.info("🆕 No existing session found, starting fresh")
+        
+        # Create new trading session in database if none exists
+        if self.trading_session_id is None:
+            mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
+            self.trading_session_id = self.db_manager.create_trading_session(
+                strategy_name=self.strategy.__class__.__name__,
+                symbol=symbol,
+                timeframe=timeframe,
+                mode=mode,
+                initial_balance=self.current_balance,  # Use current balance (might be recovered)
+                strategy_config=getattr(self.strategy, 'config', {})
+            )
+            
+            # Initialize balance tracking
+            self.db_manager.update_balance(
+                self.current_balance, 
+                'session_start', 
+                'system', 
+                self.trading_session_id
+            )
         
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(target=self._trading_loop, args=(symbol, timeframe))
@@ -527,6 +580,14 @@ class LiveTradingEngine:
             self.current_balance += pnl_dollar
             self.total_pnl += pnl_dollar
             
+            # Update persistent balance tracking
+            self.db_manager.update_balance(
+                self.current_balance, 
+                f'trade_pnl_{reason.lower()}', 
+                'system', 
+                self.trading_session_id
+            )
+            
             # Create trade record
             trade = Trade(
                 symbol=position.symbol,
@@ -795,6 +856,71 @@ class LiveTradingEngine:
             'is_running': self.is_running
         }
     
+    def _recover_existing_session(self) -> Optional[float]:
+        """Try to recover from an existing active session"""
+        try:
+            # Check if there's an active session
+            active_session_id = self.db_manager.get_active_session_id()
+            if active_session_id:
+                logger.info(f"🔍 Found active session #{active_session_id}")
+                
+                # Try to recover balance
+                recovered_balance = self.db_manager.recover_last_balance(active_session_id)
+                if recovered_balance and recovered_balance > 0:
+                    self.trading_session_id = active_session_id
+                    logger.info(f"🎯 Recovered session #{active_session_id} with balance ${recovered_balance:,.2f}")
+                    return recovered_balance
+                else:
+                    logger.warning("⚠️  Active session found but no balance to recover")
+            else:
+                logger.info("🆕 No active session found")
+            
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error recovering session: {e}")
+            return None
+    
+    def _recover_active_positions(self) -> None:
+        """Recover active positions from database"""
+        try:
+            if not self.trading_session_id:
+                return
+            
+            # Get active positions from database
+            db_positions = self.db_manager.get_active_positions(self.trading_session_id)
+            
+            if not db_positions:
+                logger.info("📊 No active positions to recover")
+                return
+            
+            logger.info(f"🔄 Recovering {len(db_positions)} active positions...")
+            
+            for pos_data in db_positions:
+                # Convert database position to Position object
+                position = Position(
+                    symbol=pos_data['symbol'],
+                    side=PositionSide(pos_data['side']),
+                    size=pos_data['size'],
+                    entry_price=pos_data['entry_price'],
+                    entry_time=pos_data['entry_time'],
+                    stop_loss=pos_data.get('stop_loss'),
+                    take_profit=pos_data.get('take_profit'),
+                    unrealized_pnl=pos_data.get('unrealized_pnl', 0.0),
+                    order_id=str(pos_data['id'])  # Use database ID as order_id
+                )
+                
+                # Add to active positions
+                if position.order_id:
+                    self.positions[position.order_id] = position
+                    self.position_db_ids[position.order_id] = pos_data['id']
+                
+                logger.info(f"✅ Recovered position: {pos_data['symbol']} {pos_data['side']} @ ${pos_data['entry_price']:.2f}")
+            
+            logger.info(f"🎯 Successfully recovered {len(db_positions)} positions")
+            
+        except Exception as e:
+            logger.error(f"❌ Error recovering positions: {e}")
+
     def _handle_strategy_change(self, swap_data: Dict[str, Any]):
         """Handle strategy change callback"""
         logger.info(f"🔄 Strategy change requested: {swap_data}")
@@ -841,7 +967,8 @@ class LiveTradingEngine:
         
         if success:
             logger.info(f"✅ Hot-swap initiated successfully - will apply on next cycle")
-            self._send_alert(f"Strategy hot-swap initiated: {self.strategy.name} → {new_strategy_name}")
+            strategy_name = getattr(self.strategy, 'name', self.strategy.__class__.__name__)
+            self._send_alert(f"Strategy hot-swap initiated: {strategy_name} → {new_strategy_name}")
         else:
             logger.error(f"❌ Hot-swap initiation failed")
         
@@ -862,7 +989,7 @@ class LiveTradingEngine:
             logger.error("Strategy manager not initialized - model updates disabled")
             return False
         
-        strategy_name = self.strategy.name.lower()
+        strategy_name = getattr(self.strategy, 'name', self.strategy.__class__.__name__).lower()
         
         logger.info(f"🤖 Initiating model update for strategy: {strategy_name}")
         
