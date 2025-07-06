@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
 
-from sqlalchemy import create_engine, func, and_, or_
+from sqlalchemy import create_engine, func, and_, or_, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import QueuePool
@@ -143,15 +143,15 @@ class DatabaseManager:
     
     def test_connection(self) -> bool:
         """
-        Test database connection.
+        Test PostgreSQL database connection.
         
         Returns:
             True if connection is successful
         """
         try:
             with self.get_session() as session:
-                # Test query
-                session.execute("SELECT 1")
+                # Use SQLAlchemy text() for security
+                session.execute(text("SELECT 1"))
                 return True
         except Exception as e:
             logger.error(f"Database connection test failed: {e}")
@@ -195,9 +195,9 @@ class DatabaseManager:
             if isinstance(mode, str):
                 mode = TradeSource[mode.upper()]
             
-            # Generate session name if not provided
+            # Generate session name if not provided - use UTC for consistency
             if session_name is None:
-                session_name = f"{strategy_name}_{symbol}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                session_name = f"{strategy_name}_{symbol}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
             
             trading_session = TradingSession(
                 session_name=session_name,
@@ -255,7 +255,8 @@ class DatabaseManager:
             
             if trades:
                 winning_trades = [t for t in trades if t.pnl > 0]
-                trading_session.win_rate = len(winning_trades) / len(trades) * 100
+                # Protect against division by zero
+                trading_session.win_rate = (len(winning_trades) / len(trades) * 100) if trades else 0
                 trading_session.total_pnl = sum(t.pnl for t in trades)
                 
                 # Calculate max drawdown from account history
@@ -270,8 +271,10 @@ class DatabaseManager:
                     for record in account_history:
                         if record.balance > peak_balance:
                             peak_balance = record.balance
-                        drawdown = (peak_balance - record.balance) / peak_balance
-                        max_drawdown = max(max_drawdown, drawdown)
+                        # Protect against division by zero
+                        if peak_balance > 0:
+                            drawdown = (peak_balance - record.balance) / peak_balance
+                            max_drawdown = max(max_drawdown, drawdown)
                     
                     trading_session.max_drawdown = max_drawdown * 100
             
@@ -324,11 +327,15 @@ class DatabaseManager:
             if isinstance(source, str):
                 source = TradeSource[source.upper()]
             
-            # Calculate percentage P&L
-            if side == PositionSide.LONG:
-                pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+            # Calculate percentage P&L with division by zero protection
+            if entry_price > 0:
+                if side == PositionSide.LONG:
+                    pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+                else:
+                    pnl_percent = ((entry_price - exit_price) / entry_price) * 100
             else:
-                pnl_percent = ((entry_price - exit_price) / entry_price) * 100
+                logger.warning(f"Invalid entry price {entry_price} for trade calculation")
+                pnl_percent = 0.0
             
             trade = Trade(
                 symbol=symbol,
@@ -356,8 +363,10 @@ class DatabaseManager:
             
             logger.info(f"Logged trade #{trade.id}: {symbol} {side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)")
             
-            # Update performance metrics
-            self._update_performance_metrics(session_id or self._current_session_id)
+            # Update performance metrics - handle None session_id
+            effective_session_id = session_id or self._current_session_id
+            if effective_session_id:
+                self._update_performance_metrics(effective_session_id)
             
             return trade.id
     
@@ -427,14 +436,13 @@ class DatabaseManager:
             position.current_price = current_price
             position.last_update = datetime.utcnow()
             
-            # Calculate unrealized P&L if not provided
-            if unrealized_pnl is None:
+            # Calculate unrealized P&L if not provided - with division by zero protection
+            if unrealized_pnl is None and position.entry_price > 0:
                 if position.side == PositionSide.LONG:
                     unrealized_pnl_percent = ((current_price - position.entry_price) / position.entry_price) * 100
                 else:
                     unrealized_pnl_percent = ((position.entry_price - current_price) / position.entry_price) * 100
                 
-                # Assuming position size is fraction of balance, need actual balance for dollar P&L
                 position.unrealized_pnl_percent = unrealized_pnl_percent
             else:
                 position.unrealized_pnl = unrealized_pnl
@@ -674,19 +682,19 @@ class DatabaseManager:
                     'max_drawdown': 0
                 }
             
-            # Calculate metrics
+            # Calculate metrics with division by zero protection
             winning_trades = [t for t in trades if t.pnl > 0]
             losing_trades = [t for t in trades if t.pnl < 0]
             
             total_pnl = sum(t.pnl for t in trades)
-            win_rate = len(winning_trades) / len(trades) * 100 if trades else 0
+            win_rate = (len(winning_trades) / len(trades) * 100) if trades else 0
             
-            avg_win = sum(t.pnl for t in winning_trades) / len(winning_trades) if winning_trades else 0
-            avg_loss = sum(t.pnl for t in losing_trades) / len(losing_trades) if losing_trades else 0
+            avg_win = (sum(t.pnl for t in winning_trades) / len(winning_trades)) if winning_trades else 0
+            avg_loss = (sum(t.pnl for t in losing_trades) / len(losing_trades)) if losing_trades else 0
             
             gross_profit = sum(t.pnl for t in winning_trades)
             gross_loss = abs(sum(t.pnl for t in losing_trades))
-            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+            profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf')
             
             # Get account history for drawdown calculation
             history_query = session.query(AccountHistory)
@@ -708,8 +716,10 @@ class DatabaseManager:
                 for record in account_history:
                     if record.balance > peak_balance:
                         peak_balance = record.balance
-                    drawdown = (peak_balance - record.balance) / peak_balance * 100
-                    max_drawdown = max(max_drawdown, drawdown)
+                    # Protect against division by zero
+                    if peak_balance > 0:
+                        drawdown = (peak_balance - record.balance) / peak_balance * 100
+                        max_drawdown = max(max_drawdown, drawdown)
             
             return {
                 'total_trades': len(trades),
@@ -731,6 +741,11 @@ class DatabaseManager:
     
     def _update_performance_metrics(self, session_id: int):
         """Update performance metrics after each trade."""
+        # Guard against None session_id
+        if not session_id:
+            logger.warning("Cannot update performance metrics: session_id is None")
+            return
+        
         try:
             # Calculate daily metrics
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -831,7 +846,7 @@ class DatabaseManager:
     
     def get_connection_stats(self) -> Dict[str, Any]:
         """Get PostgreSQL connection pool statistics"""
-        if hasattr(self.engine.pool, 'status'):
+        if self.engine and hasattr(self.engine.pool, 'status'):
             return {
                 'pool_status': self.engine.pool.status(),
                 'checked_in': getattr(self.engine.pool, 'checkedin', 0),
@@ -843,6 +858,6 @@ class DatabaseManager:
     
     def cleanup_connection_pool(self):
         """Cleanup PostgreSQL connection pool"""
-        if hasattr(self.engine.pool, 'dispose'):
+        if self.engine and hasattr(self.engine.pool, 'dispose'):
             self.engine.pool.dispose()
             logger.info("PostgreSQL connection pool disposed") 
