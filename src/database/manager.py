@@ -25,9 +25,10 @@ from config.config_manager import get_config
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
-    # SQLAlchemy runtime type stubs (optional dependency)
-    from sqlalchemy.engine import Engine as _Engine, Result as _Result  # type: ignore
-    from sqlalchemy.engine import Connection as _Connection  # type: ignore
+    # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
+    # Import only for static analysis; guarded to avoid hard runtime dependency.
+    from sqlalchemy.engine.base import Engine as _Engine, Connection as _Connection  # type: ignore
+    from sqlalchemy.engine import Result as _Result  # type: ignore
     from sqlalchemy.sql.elements import TextClause as _TextClause  # type: ignore
 
 class DatabaseManager:
@@ -870,7 +871,9 @@ class DatabaseManager:
         params = params or ()
         try:
             assert self.engine is not None, "Engine not initialised"
-            connection_raw = self.engine.connect()
+            # Extra null-safety guard for type checkers
+            engine_obj: "_Engine" = self.engine  # type: ignore[assignment]
+            connection_raw = engine_obj.connect()
             conn_typed: "_Connection" = connection_raw  # type: ignore[assignment]
             with conn_typed as connection:
                 # SQLAlchemy 2.0
