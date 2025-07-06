@@ -4,7 +4,7 @@ PostgreSQL database manager for handling all database operations
 
 import logging
 import os
-from typing import Optional, Dict, List, Any, Union
+from typing import Optional, Dict, List, Any, Union, TYPE_CHECKING
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
@@ -24,6 +24,9 @@ from config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:  # pragma: no cover
+    # SQLAlchemy runtime imports lack stubs; import for type checkers only
+    from sqlalchemy.engine import Engine as _Engine  # type: ignore
 
 class DatabaseManager:
     """
@@ -46,7 +49,7 @@ class DatabaseManager:
             database_url: Optional PostgreSQL database URL. If None, uses DATABASE_URL from environment.
         """
         self.database_url = database_url
-        self.engine = None
+        self.engine: "_Engine | None" = None
         self.session_factory = None
         self._current_session_id: Optional[int] = None
         
