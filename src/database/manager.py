@@ -849,7 +849,7 @@ class DatabaseManager:
             
             logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
     
-    def execute_query(self, query: str, params=None):  # type: ignore[override]
+    def execute_query(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:  # type: ignore[override]
         """Run a raw SQL query and return list of dict rows.
 
         Uses SQLAlchemy 2.x ``exec_driver_sql`` API so plain SQL strings work

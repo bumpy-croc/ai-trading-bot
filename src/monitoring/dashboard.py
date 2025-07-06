@@ -54,7 +54,7 @@ class MonitoringDashboard:
         # Gracefully degrade if Binance is unreachable (e.g. no outbound DNS in the env)
         try:
             binance_provider = BinanceDataProvider()
-            self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=0.1)  # 6-min cache
+            self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)
         except Exception as e:
             logger.warning(f"Binance provider unavailable: {e}. Starting dashboard in offline mode.")
 
