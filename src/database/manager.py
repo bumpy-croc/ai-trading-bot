@@ -25,10 +25,10 @@ from config.config_manager import get_config
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
-    # SQLAlchemy runtime imports lack stubs; import for type checkers only
-    from sqlalchemy.engine.base import Connection as _Connection, Engine as _Engine  # type: ignore
-    from sqlalchemy.engine import Result as _Result  # type: ignore
-    from sqlalchemy.sql.elements import TextClause as _TextClause  # type: ignore
+    # SQLAlchemy runtime type stubs (optional dependency)
+    from sqlalchemy.engine import Engine as _Engine, Result as _Result
+    from sqlalchemy.engine import Connection as _Connection  # SQLAlchemy ≥1.4
+    from sqlalchemy.sql.elements import TextClause as _TextClause
 
 class DatabaseManager:
     """
@@ -543,14 +543,22 @@ class DatabaseManager:
             # Ensure JSON is serializable – convert Decimal objects to float.
             from decimal import Decimal  # Local import to avoid global dependency
 
-            def _sanitize(obj):
-                if isinstance(obj, Decimal):
-                    return float(obj)
-                if isinstance(obj, dict):
-                    return {k: _sanitize(v) for k, v in obj.items()}
-                if isinstance(obj, (list, tuple)):
-                    return [_sanitize(v) for v in obj]
-                return obj
+            JsonSafe = Dict[str, Any]
+
+            def _sanitize(obj: Any) -> JsonSafe:
+                """Convert arbitrary objects to a JSON-serialisable dict for DB logging."""
+                try:
+                    # Pass-through dicts after validation
+                    if isinstance(obj, dict):
+                        json.dumps(obj, default=str)
+                        return obj
+                    # Wrap primitives
+                    if isinstance(obj, (str, int, float, bool)) or obj is None:
+                        return {"value": obj}
+                    # Attempt generic serialisation
+                    return {"value": json.loads(json.dumps(obj, default=str))}
+                except Exception:
+                    return {"value": str(obj)}
 
             if details is not None:
                 details = _sanitize(details)
