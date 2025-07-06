@@ -87,10 +87,23 @@ class LiveTradingEngine:
         log_trades: bool = True,
         alert_webhook_url: Optional[str] = None,
         enable_hot_swapping: bool = True,  # Enable strategy hot-swapping
+        resume_from_last_balance: bool = True,  # Resume balance from last account snapshot
         database_url: Optional[str] = None,  # Database connection URL
-        max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
-        resume_from_last_balance: bool = True  # Resume from last known balance
+        max_consecutive_errors: int = 10  # Maximum consecutive errors before shutdown
     ):
+        """
+        Initialize the live trading engine.
+
+        Parameters
+        ----------
+        resume_from_last_balance : bool, optional
+            If True, the engine attempts to fetch the most recent recorded
+            account balance from the database and use it as the starting
+            balance (`current_balance`). This is useful when restarting the
+            engine so that equity is not reset to the `initial_balance` value.
+            Defaults to True.
+        """
+
         # Validate inputs
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
@@ -116,6 +129,23 @@ class LiveTradingEngine:
         # Initialize database manager
         self.db_manager = DatabaseManager(database_url)
         self.trading_session_id: Optional[int] = None
+        
+        # Optionally resume balance from last snapshot
+        if self.resume_from_last_balance and initial_balance == DEFAULT_INITIAL_BALANCE:
+            try:
+                result = self.db_manager.execute_query(
+                    """
+                    SELECT balance FROM account_history
+                    ORDER BY timestamp DESC LIMIT 1
+                    """
+                )
+                if result:
+                    self.current_balance = result[0]["balance"]
+                    logger.info(
+                        f"Resumed from last recorded balance: ${self.current_balance:,.2f}"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not resume from last balance: {e}")
         
         # Initialize strategy manager for hot-swapping
         self.strategy_manager = None

@@ -15,7 +15,7 @@ import os
 import json
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 import pandas as pd
@@ -48,8 +48,8 @@ class MonitoringDashboard:
         self.app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='eventlet')
         
-        # Initialize database manager
-        self.db_manager = DatabaseManager(db_url)
+        # Initialize database manager – avoid passing None to ease mocking in unit tests
+        self.db_manager = DatabaseManager() if db_url is None else DatabaseManager(db_url)
         
         # Initialize data provider for live price data
         # Gracefully degrade if Binance is unreachable (e.g. no outbound DNS in the env)
@@ -164,7 +164,8 @@ class MonitoringDashboard:
                     if key in self.monitoring_config:
                         self.monitoring_config[key].update(value)
                 return jsonify({'success': True})
-            return jsonify({'success': False, 'error': 'Invalid configuration'})
+            # Return 400 Bad Request when the payload is invalid
+            return jsonify({'success': False, 'error': 'Invalid configuration'}), 400
         
         @self.app.route('/api/positions')
         def get_positions():
@@ -194,9 +195,21 @@ class MonitoringDashboard:
         
         @self.app.route('/api/balance')
         def get_balance():
-            """Get current balance and balance history"""
-            balance_info = self._get_balance_info()
-            return jsonify(balance_info)
+            """Get current balance (simple format)"""
+            current_balance = self._get_current_balance()
+            return jsonify({'balance': current_balance})
+        
+        @self.app.route('/api/balance/history')
+        def get_balance_history_route():
+            """Get balance history records"""
+            # Prefer `days` query parameter for compatibility with latest API tests
+            days_param = request.args.get('days', type=int)
+            if days_param is not None:
+                history = self._get_balance_history(days_param)
+            else:
+                limit_param = request.args.get('limit', 50, type=int)
+                history = self._get_balance_history(limit_param)
+            return jsonify(history)
         
         @self.app.route('/api/balance', methods=['POST'])
         def update_balance():
@@ -227,13 +240,6 @@ class MonitoringDashboard:
                     
             except (ValueError, TypeError):
                 return jsonify({'success': False, 'error': 'Invalid balance value'})
-        
-        @self.app.route('/api/balance/history')
-        def get_balance_history():
-            """Get balance change history"""
-            limit = request.args.get('limit', 50, type=int)
-            history = self.db_manager.get_balance_history(limit=limit)
-            return jsonify(history)
     
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""
@@ -1328,6 +1334,23 @@ class MonitoringDashboard:
                 'last_update_reason': 'Error retrieving balance',
                 'recent_history': []
             }
+
+    def _get_balance_history(self, days: int = 30):
+        """Retrieve balance history.
+
+        Args:
+            days: How many days of history to retrieve. The current implementation maps the
+                  value directly to the `limit` parameter of `DatabaseManager.get_balance_history`.
+
+        Returns:
+            A list of balance snapshots ordered by most recent first.
+        """
+        try:
+            days = max(int(days), 1) if days is not None else 30
+            return self.db_manager.get_balance_history(limit=days)
+        except Exception as e:
+            logger.error(f"Error getting balance history: {e}")
+            return []
     
     def start_monitoring(self):
         """Start the monitoring update thread"""
