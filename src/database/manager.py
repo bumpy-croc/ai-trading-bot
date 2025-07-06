@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
     # SQLAlchemy runtime type stubs (optional dependency)
-    from sqlalchemy.engine import Engine as _Engine, Result as _Result
-    from sqlalchemy.engine import Connection as _Connection  # SQLAlchemy ≥1.4
-    from sqlalchemy.sql.elements import TextClause as _TextClause
+    from sqlalchemy.engine import Engine as _Engine, Result as _Result  # type: ignore
+    from sqlalchemy.engine import Connection as _Connection  # type: ignore
+    from sqlalchemy.sql.elements import TextClause as _TextClause  # type: ignore
 
 class DatabaseManager:
     """
@@ -543,9 +543,7 @@ class DatabaseManager:
             # Ensure JSON is serializable – convert Decimal objects to float.
             from decimal import Decimal  # Local import to avoid global dependency
 
-            JsonSafe = Dict[str, Any]
-
-            def _sanitize(obj: Any) -> JsonSafe:
+            def _sanitize(obj: Any) -> Dict[str, Any]:
                 """Convert arbitrary objects to a JSON-serialisable dict for DB logging."""
                 try:
                     # Pass-through dicts after validation
