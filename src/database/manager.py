@@ -409,7 +409,7 @@ class DatabaseManager:
             position = Position(
                 symbol=symbol,
                 side=side,
-                status=OrderStatus.FILLED,
+                status=OrderStatus.PENDING,
                 entry_price=entry_price,
                 size=size,
                 quantity=quantity,

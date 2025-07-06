@@ -1,28 +1,28 @@
-import os
-from pathlib import Path
+# Persistence tests now use the same PostgreSQL instance provided by the
+# Testcontainers fixture in ``tests/conftest.py``.  This guarantees the real
+# schema is exercised and avoids any SQLite divergence.
+
 from datetime import datetime
+import os
 import pytest
+import uuid
 
 from database.manager import DatabaseManager
 from database.models import PositionSide, TradeSource
 
 
-def _create_db_manager(db_file: Path) -> DatabaseManager:
-    """Utility to get a DatabaseManager bound to a temporary SQLite file"""
-    db_url = f"sqlite:///{db_file}"
-    # Ensure parent directory exists
-    db_file.parent.mkdir(parents=True, exist_ok=True)
-    return DatabaseManager(db_url)
+def _create_db_manager() -> DatabaseManager:
+    """Utility to get a DatabaseManager bound to the session PostgreSQL DB"""
+    return DatabaseManager(os.environ["DATABASE_URL"])
 
 
 @pytest.fixture()
-def temp_db(tmp_path) -> DatabaseManager:
-    """Create a fresh database for each test in a temporary directory"""
-    db_file = tmp_path / "persistent_test.db"
-    return _create_db_manager(db_file)
+def temp_db() -> DatabaseManager:
+    """Provide a fresh DatabaseManager instance for each test."""
+    return _create_db_manager()
 
 
-def test_balance_and_position_persistence(temp_db: DatabaseManager, tmp_path):
+def test_balance_and_position_persistence(temp_db: DatabaseManager):
     """Ensure balance & positions persist after simulated restart."""
     # 1️⃣  START TRADING SESSION & CREATE STATE
     initial_balance = 1000.0
@@ -44,7 +44,7 @@ def test_balance_and_position_persistence(temp_db: DatabaseManager, tmp_path):
         entry_price=45000.0,
         size=0.1,  # 10 % of balance
         strategy_name="persistence_test_strategy",
-        order_id="unit_test_order",
+        order_id=f"unit_test_order_{uuid.uuid4().hex}",
         stop_loss=44000.0,
         take_profit=46000.0,
         session_id=session_id,
@@ -57,17 +57,15 @@ def test_balance_and_position_persistence(temp_db: DatabaseManager, tmp_path):
     pre_positions = temp_db.get_active_positions(session_id)
     assert len(pre_positions) == 1
 
-    # 2️⃣  SIMULATE RESTART (new DatabaseManager instance bound to same DB file)
+    # 2️⃣  SIMULATE RESTART (new DatabaseManager instance bound to same DB)
     # We need to point to the same sqlite file used in fixture
-    db_file = tmp_path / "persistent_test.db"
-    assert db_file.exists(), "Database file should exist after initial operations"
-    new_db_manager = _create_db_manager(db_file)
+    new_db = _create_db_manager()
 
     # 3️⃣  RECOVER STATE IN NEW INSTANCE
-    recovered_balance = new_db_manager.recover_last_balance(session_id)
+    recovered_balance = new_db.recover_last_balance(session_id)
     assert recovered_balance == pre_restart_balance, "Recovered balance mismatch"
 
-    recovered_positions = new_db_manager.get_active_positions(session_id)
+    recovered_positions = new_db.get_active_positions(session_id)
     assert len(recovered_positions) == 1, "Positions did not persist after restart"
     recovered_pos = recovered_positions[0]
     assert recovered_pos["symbol"] == "BTCUSDT"
@@ -76,7 +74,7 @@ def test_balance_and_position_persistence(temp_db: DatabaseManager, tmp_path):
 
 
 @pytest.mark.parametrize("adjustment", [500, -200])
-def test_manual_balance_adjustment_persists(temp_db: DatabaseManager, tmp_path, adjustment):
+def test_manual_balance_adjustment_persists(temp_db: DatabaseManager, adjustment):
     """Manual balance adjustments should persist across restarts."""
     # Create session and set balance
     start_balance = 1000.0
@@ -93,9 +91,8 @@ def test_manual_balance_adjustment_persists(temp_db: DatabaseManager, tmp_path, 
     new_balance = start_balance + adjustment
     assert temp_db.manual_balance_adjustment(new_balance, f"test_adjust_{adjustment}", "unit_test")
 
-    # Restart simulation
-    db_file = tmp_path / "persistent_test.db"
-    new_db = _create_db_manager(db_file)
+    # Restart simulation with a new DatabaseManager connected to the same DB
+    new_db = _create_db_manager()
 
     recovered_balance = new_db.get_current_balance(session_id)
     assert recovered_balance == new_balance, "Manual adjustment did not persist after restart"

@@ -4,7 +4,7 @@ Database models for trade logging and performance tracking
 
 from sqlalchemy import (
     Column, Integer, String, Numeric, DateTime, Boolean, Text, 
-    Enum, ForeignKey, Index, UniqueConstraint
+    Enum, ForeignKey, Index, UniqueConstraint, Float, JSON  # Added Float and JSON
 )
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
