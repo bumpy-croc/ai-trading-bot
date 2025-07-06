@@ -129,10 +129,10 @@ class DatabaseMigrator:
                     trades_query = """
                     SELECT COALESCE(SUM(pnl), 0) as total_pnl
                     FROM trades
-                    WHERE session_id = ?
+                    WHERE session_id = :session_id
                     """
                     
-                    trades_result = self.db_manager.execute_query(trades_query, (session_id,))
+                    trades_result = self.db_manager.execute_query(trades_query, {"session_id": session_id})
                     total_pnl = trades_result[0]['total_pnl'] if trades_result else 0
                     current_balance = initial_balance + total_pnl
                     
