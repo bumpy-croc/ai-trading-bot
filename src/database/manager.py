@@ -1,5 +1,5 @@
 """
-Database manager for handling all database operations
+PostgreSQL database manager for handling all database operations
 """
 
 import logging
@@ -9,93 +9,180 @@ from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
 
-from sqlalchemy import create_engine, func, and_, or_
+from sqlalchemy import create_engine, func, and_, or_, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool
 
 from .models import (
     Base, Trade, Position, AccountHistory, PerformanceMetrics,
     TradingSession, SystemEvent, StrategyExecution,
     PositionSide, OrderStatus, TradeSource, EventType
 )
-from config.paths import get_database_path
+from config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
     """
-    Manages all database operations for the trading system.
+    Manages all PostgreSQL database operations for the trading system.
     
     Features:
-    - Connection pooling and session management
+    - PostgreSQL connection pooling and session management
     - Trade and position logging
     - Performance metrics calculation
     - Account history tracking
     - System event logging
+    - Centralized database for shared access across services
     """
     
     def __init__(self, database_url: Optional[str] = None):
         """
-        Initialize database manager.
+        Initialize PostgreSQL database manager.
         
         Args:
-            database_url: SQLAlchemy database URL. If not provided, uses environment variable
-                        or defaults to SQLite for development.
+            database_url: Optional PostgreSQL database URL. If None, uses DATABASE_URL from environment.
         """
-        if database_url is None:
-            database_url = os.getenv(
-                'DATABASE_URL',
-                get_database_path()  # Default to SQLite for development
-            )
-        
-        # Create engine with appropriate settings
-        if 'sqlite' in database_url:
-            # SQLite specific settings
-            self.engine = create_engine(
-                database_url,
-                connect_args={'check_same_thread': False},
-                poolclass=NullPool  # Disable pooling for SQLite
-            )
-        else:
-            # PostgreSQL/MySQL settings
-            self.engine = create_engine(
-                database_url,
-                pool_size=10,
-                max_overflow=20,
-                pool_pre_ping=True,  # Verify connections before using
-                pool_recycle=3600    # Recycle connections after 1 hour
-            )
-        
-        # Create session factory
-        self.SessionLocal = sessionmaker(
-            autocommit=False,
-            autoflush=False,
-            bind=self.engine
-        )
-        
-        # Create tables if they don't exist
-        Base.metadata.create_all(bind=self.engine)
-        
-        # Cache for current session
+        self.database_url = database_url
+        self.engine = None
+        self.session_factory = None
         self._current_session_id: Optional[int] = None
         
-        logger.info(f"Database manager initialized with {database_url.split('://')[0]} database")
+        # Initialize database connection
+        self._init_database()
+        
+        # Create tables if they don't exist
+        self._create_tables()
+    
+    def _init_database(self):
+        """Initialize PostgreSQL database connection and session factory"""
+        
+        # Get database URL from configuration if not provided
+        if self.database_url is None:
+            config = get_config()
+            self.database_url = config.get('DATABASE_URL')
+            
+            if self.database_url is None:
+                raise ValueError(
+                    "DATABASE_URL environment variable is required for PostgreSQL connection. "
+                    "Please set DATABASE_URL in your environment or Railway configuration."
+                )
+        
+        # Validate PostgreSQL URL
+        if not self.database_url.startswith('postgresql'):
+            raise ValueError(
+                f"Only PostgreSQL databases are supported. "
+                f"Expected URL to start with 'postgresql://', got: {self.database_url[:20]}..."
+            )
+        
+        # Create engine with PostgreSQL configuration
+        engine_kwargs = self._get_engine_config()
+        
+        try:
+            self.engine = create_engine(self.database_url, **engine_kwargs)
+            self.session_factory = sessionmaker(bind=self.engine)
+            
+            # Secure test query
+            from sqlalchemy import text as _sql_text  # local import to avoid circular
+            with self.engine.connect() as conn:
+                conn.execute(_sql_text("SELECT 1"))
+            logger.info("✅ PostgreSQL database connection established")
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize PostgreSQL database: {e}")
+            raise
+    
+    def _get_engine_config(self) -> Dict[str, Any]:
+        """Get PostgreSQL engine configuration"""
+        
+        return {
+            'poolclass': QueuePool,
+            'pool_size': 5,
+            'max_overflow': 10,
+            'pool_pre_ping': True,
+            'pool_recycle': 3600,  # 1 hour
+            'echo': False,  # Set to True for SQL debugging
+            'connect_args': {
+                'sslmode': 'prefer',
+                'connect_timeout': 10,
+                'application_name': 'ai-trading-bot'
+            }
+        }
+    
+    def _create_tables(self):
+        """Create database tables if they don't exist"""
+        try:
+            if self.engine is None:
+                raise ValueError("Database engine not initialized")
+            Base.metadata.create_all(self.engine)
+            logger.info("Database tables created/verified")
+        except Exception as e:
+            logger.error(f"Error creating database tables: {e}")
+            raise
     
     @contextmanager
     def get_session(self) -> Session:
-        """Get a database session with automatic cleanup."""
-        session = self.SessionLocal()
+        """
+        Get a database session with automatic cleanup.
+        
+        Yields:
+            SQLAlchemy session
+        """
+        if self.session_factory is None:
+            raise ValueError("Session factory not initialized")
+        
+        session = self.session_factory()
         try:
             yield session
-            session.commit()
         except Exception as e:
             session.rollback()
             logger.error(f"Database session error: {e}")
             raise
         finally:
             session.close()
+    
+    def test_connection(self) -> bool:
+        """
+        Test PostgreSQL database connection.
+        
+        Returns:
+            True if connection is successful
+        """
+        try:
+            with self.get_session() as session:
+                # Use SQLAlchemy text() for security
+                session.execute(text("SELECT 1"))
+                return True
+        except Exception as e:
+            logger.error(f"Database connection test failed: {e}")
+            return False
+    
+    def get_database_info(self) -> Dict[str, Any]:
+        """
+        Get PostgreSQL database information.
+        
+        Returns:
+            Dictionary with database connection details
+        """
+        def _safe_pool_val(attr_name, default=0):
+            if not self.engine:
+                return default
+            pool_attr = getattr(self.engine.pool, attr_name, default)
+            try:
+                return pool_attr() if callable(pool_attr) else pool_attr
+            except Exception:  # pragma: no cover
+                return default
+
+        info = {
+            'database_url': self.database_url,
+            'database_type': 'postgresql',
+            'connection_pool_size': _safe_pool_val('size'),
+            'checked_in_connections': _safe_pool_val('checkedin'),
+            'checked_out_connections': _safe_pool_val('checkedout'),
+        }
+        
+        return info
     
     def create_trading_session(
         self,
@@ -111,34 +198,40 @@ class DatabaseManager:
         Create a new trading session.
         
         Returns:
-            Session ID
+            Trading session ID
         """
         with self.get_session() as session:
-            # Convert string mode to enum if necessary
+            # Convert string enum if necessary
             if isinstance(mode, str):
                 mode = TradeSource[mode.upper()]
             
+            # Generate session name if not provided - use UTC for consistency
+            if session_name is None:
+                session_name = f"{strategy_name}_{symbol}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+            
             trading_session = TradingSession(
-                session_name=session_name or f"{strategy_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                start_time=datetime.utcnow(),
+                session_name=session_name,
+                strategy_name=strategy_name,
+                symbol=symbol,
+                timeframe=timeframe,
                 mode=mode,
                 initial_balance=initial_balance,
-                strategy_name=strategy_name,
-                strategy_config=strategy_config or {},
-                symbol=symbol,
-                timeframe=timeframe
+                strategy_config=strategy_config,
+                start_time=datetime.utcnow()
             )
             
             session.add(trading_session)
             session.commit()
             
+            # Set as current session
             self._current_session_id = trading_session.id
             
-            # Log session start event
+            # Log session creation
             self.log_event(
-                EventType.ENGINE_START,
-                f"Trading session started: {trading_session.session_name}",
+                event_type=EventType.ENGINE_START,
+                message=f"Trading session created: {session_name}",
                 details={
+                    'session_id': trading_session.id,
                     'strategy': strategy_name,
                     'symbol': symbol,
                     'mode': mode.value,
@@ -146,7 +239,7 @@ class DatabaseManager:
                 }
             )
             
-            logger.info(f"Created trading session #{trading_session.id}: {trading_session.session_name}")
+            logger.info(f"Created trading session #{trading_session.id}: {session_name}")
             return trading_session.id
     
     def end_trading_session(self, session_id: Optional[int] = None, final_balance: Optional[float] = None):
@@ -172,7 +265,8 @@ class DatabaseManager:
             
             if trades:
                 winning_trades = [t for t in trades if t.pnl > 0]
-                trading_session.win_rate = len(winning_trades) / len(trades) * 100
+                # Protect against division by zero
+                trading_session.win_rate = (len(winning_trades) / len(trades) * 100) if trades else 0
                 trading_session.total_pnl = sum(t.pnl for t in trades)
                 
                 # Calculate max drawdown from account history
@@ -187,8 +281,10 @@ class DatabaseManager:
                     for record in account_history:
                         if record.balance > peak_balance:
                             peak_balance = record.balance
-                        drawdown = (peak_balance - record.balance) / peak_balance
-                        max_drawdown = max(max_drawdown, drawdown)
+                        # Protect against division by zero
+                        if peak_balance > 0:
+                            drawdown = (peak_balance - record.balance) / peak_balance
+                            max_drawdown = max(max_drawdown, drawdown)
                     
                     trading_session.max_drawdown = max_drawdown * 100
             
@@ -196,8 +292,8 @@ class DatabaseManager:
             
             # Log session end event
             self.log_event(
-                EventType.ENGINE_STOP,
-                f"Trading session ended: {trading_session.session_name}",
+                event_type=EventType.ENGINE_STOP,
+                message=f"Trading session ended: {trading_session.session_name}",
                 details={
                     'duration_hours': (trading_session.end_time - trading_session.start_time).total_seconds() / 3600,
                     'total_trades': trading_session.total_trades,
@@ -241,11 +337,15 @@ class DatabaseManager:
             if isinstance(source, str):
                 source = TradeSource[source.upper()]
             
-            # Calculate percentage P&L
-            if side == PositionSide.LONG:
-                pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+            # Calculate percentage P&L with division by zero protection
+            if entry_price > 0:
+                if side == PositionSide.LONG:
+                    pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+                else:
+                    pnl_percent = ((entry_price - exit_price) / entry_price) * 100
             else:
-                pnl_percent = ((entry_price - exit_price) / entry_price) * 100
+                logger.warning(f"Invalid entry price {entry_price} for trade calculation")
+                pnl_percent = 0.0
             
             trade = Trade(
                 symbol=symbol,
@@ -273,8 +373,10 @@ class DatabaseManager:
             
             logger.info(f"Logged trade #{trade.id}: {symbol} {side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)")
             
-            # Update performance metrics
-            self._update_performance_metrics(session_id or self._current_session_id)
+            # Update performance metrics - handle None session_id
+            effective_session_id = session_id or self._current_session_id
+            if effective_session_id:
+                self._update_performance_metrics(effective_session_id)
             
             return trade.id
     
@@ -344,14 +446,13 @@ class DatabaseManager:
             position.current_price = current_price
             position.last_update = datetime.utcnow()
             
-            # Calculate unrealized P&L if not provided
-            if unrealized_pnl is None:
+            # Calculate unrealized P&L if not provided - with division by zero protection
+            if unrealized_pnl is None and position.entry_price > 0:
                 if position.side == PositionSide.LONG:
                     unrealized_pnl_percent = ((current_price - position.entry_price) / position.entry_price) * 100
                 else:
                     unrealized_pnl_percent = ((position.entry_price - current_price) / position.entry_price) * 100
                 
-                # Assuming position size is fraction of balance, need actual balance for dollar P&L
                 position.unrealized_pnl_percent = unrealized_pnl_percent
             else:
                 position.unrealized_pnl = unrealized_pnl
@@ -417,32 +518,35 @@ class DatabaseManager:
         event_type: Union[str, EventType],
         message: str,
         severity: str = 'info',
-        details: Optional[Dict] = None,
         component: Optional[str] = None,
-        error_code: Optional[str] = None,
-        stack_trace: Optional[str] = None,
+        details: Optional[Dict] = None,
         session_id: Optional[int] = None
-    ):
-        """Log a system event."""
+    ) -> int:
+        """
+        Log a system event.
+        
+        Returns:
+            Event ID
+        """
         with self.get_session() as session:
             # Convert string enum if necessary
             if isinstance(event_type, str):
                 event_type = EventType[event_type.upper()]
             
             event = SystemEvent(
-                timestamp=datetime.utcnow(),
                 event_type=event_type,
-                severity=severity,
                 message=message,
-                details=details,
+                severity=severity,
                 component=component,
-                error_code=error_code,
-                stack_trace=stack_trace,
-                session_id=session_id or self._current_session_id
+                details=details,
+                session_id=session_id or self._current_session_id,
+                timestamp=datetime.utcnow()
             )
             
             session.add(event)
             session.commit()
+            
+            return event.id
     
     def log_strategy_execution(
         self,
@@ -588,19 +692,19 @@ class DatabaseManager:
                     'max_drawdown': 0
                 }
             
-            # Calculate metrics
+            # Calculate metrics with division by zero protection
             winning_trades = [t for t in trades if t.pnl > 0]
             losing_trades = [t for t in trades if t.pnl < 0]
             
             total_pnl = sum(t.pnl for t in trades)
-            win_rate = len(winning_trades) / len(trades) * 100 if trades else 0
+            win_rate = (len(winning_trades) / len(trades) * 100) if trades else 0
             
-            avg_win = sum(t.pnl for t in winning_trades) / len(winning_trades) if winning_trades else 0
-            avg_loss = sum(t.pnl for t in losing_trades) / len(losing_trades) if losing_trades else 0
+            avg_win = (sum(t.pnl for t in winning_trades) / len(winning_trades)) if winning_trades else 0
+            avg_loss = (sum(t.pnl for t in losing_trades) / len(losing_trades)) if losing_trades else 0
             
             gross_profit = sum(t.pnl for t in winning_trades)
             gross_loss = abs(sum(t.pnl for t in losing_trades))
-            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+            profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf')
             
             # Get account history for drawdown calculation
             history_query = session.query(AccountHistory)
@@ -622,8 +726,10 @@ class DatabaseManager:
                 for record in account_history:
                     if record.balance > peak_balance:
                         peak_balance = record.balance
-                    drawdown = (peak_balance - record.balance) / peak_balance * 100
-                    max_drawdown = max(max_drawdown, drawdown)
+                    # Protect against division by zero
+                    if peak_balance > 0:
+                        drawdown = (peak_balance - record.balance) / peak_balance * 100
+                        max_drawdown = max(max_drawdown, drawdown)
             
             return {
                 'total_trades': len(trades),
@@ -645,6 +751,11 @@ class DatabaseManager:
     
     def _update_performance_metrics(self, session_id: int):
         """Update performance metrics after each trade."""
+        # Guard against None session_id
+        if not session_id:
+            logger.warning("Cannot update performance metrics: session_id is None")
+            return
+        
         try:
             # Calculate daily metrics
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -741,4 +852,32 @@ class DatabaseManager:
                 return rows
         except SQLAlchemyError as e:
             logger.error(f"Raw query error: {e}")
-            return [] 
+            return []
+    
+    def get_connection_stats(self) -> Dict[str, Any]:
+        """Get PostgreSQL connection pool statistics"""
+        if not self.engine or not hasattr(self.engine.pool, 'status'):
+            return {'status': 'Connection pool statistics not available'}
+
+        pool = self.engine.pool  # noqa: E501  # pool is guaranteed after the check above
+
+        def _safe(attr_name, default=0):
+            pool_attr = getattr(pool, attr_name, default)
+            try:
+                return pool_attr() if callable(pool_attr) else pool_attr
+            except Exception:
+                return default
+
+        return {
+            'pool_status': pool.status(),
+            'checked_in': _safe('checkedin'),
+            'checked_out': _safe('checkedout'),
+            'overflow': _safe('overflow'),
+            'invalid': _safe('invalid')
+        }
+    
+    def cleanup_connection_pool(self):
+        """Cleanup PostgreSQL connection pool"""
+        if self.engine and hasattr(self.engine.pool, 'dispose'):
+            self.engine.pool.dispose()
+            logger.info("PostgreSQL connection pool disposed") 

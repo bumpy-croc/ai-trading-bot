@@ -214,6 +214,18 @@ def validate_test_environment():
     print_success("Test environment validation passed")
     return True
 
+def run_database_tests():
+    """Run database tests only"""
+    print_header("Running Database Tests")
+    
+    cmd = [
+        sys.executable, '-m', 'pytest',
+        'tests/test_database.py',
+        '-v', '--tb=short'
+    ]
+    
+    return run_command(cmd, "Database Tests")
+
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
@@ -223,6 +235,7 @@ def parse_arguments():
 Examples:
   python run_tests.py smoke                    # Quick smoke test
   python run_tests.py unit                     # Run unit tests
+  python run_tests.py database                 # Run database tests only
   python run_tests.py critical                 # Run critical tests
   python run_tests.py all                      # Run all tests
   python run_tests.py test_strategies.py       # Run specific test file
@@ -236,7 +249,7 @@ Examples:
     parser.add_argument(
         'command',
         nargs='?',
-        choices=['smoke', 'critical', 'unit', 'integration', 'coverage', 'all', 'validate'],
+        choices=['smoke', 'critical', 'unit', 'integration', 'database', 'coverage', 'all', 'validate'],
         help='Test command to run'
     )
     
@@ -330,9 +343,10 @@ def interactive_mode():
     print("2. critical - Critical tests (live trading + risk)")
     print("3. unit     - All unit tests")
     print("4. integration - Integration tests")
-    print("5. coverage - Tests with coverage analysis")
-    print("6. all      - All tests")
-    print("7. validate - Validate test environment")
+    print("5. database - Database tests only")
+    print("6. coverage - Tests with coverage analysis")
+    print("7. all      - All tests")
+    print("8. validate - Validate test environment")
     print()
     
     command = input("Enter command (or test file name): ").strip().lower()
@@ -384,6 +398,8 @@ def main():
         success = run_unit_tests()
     elif command == 'integration':
         success = run_integration_tests()
+    elif command == 'database':
+        success = run_database_tests()
     elif command == 'coverage':
         success = run_coverage_analysis()
     elif command == 'all':
@@ -399,7 +415,7 @@ def main():
         success = run_specific_test_file(command)
     elif command:
         print_error(f"Unknown command: {command}")
-        print("Available commands: smoke, critical, unit, integration, coverage, all, validate")
+        print("Available commands: smoke, critical, unit, integration, coverage, all, validate, database")
         print("Or use --help for more options")
         sys.exit(1)
     else:
