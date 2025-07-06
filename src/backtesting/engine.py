@@ -1,11 +1,11 @@
 from typing import Optional, Dict, List, Any
-import pandas as pd
+import pandas as pd  # type: ignore
 import logging
 from datetime import datetime
 from data_providers.data_provider import DataProvider
 from strategies.base import BaseStrategy
 from risk.risk_manager import RiskManager, RiskParameters
-import numpy as np
+import numpy as np  # type: ignore
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource, PositionSide
