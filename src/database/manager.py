@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
     # SQLAlchemy runtime imports lack stubs; import for type checkers only
-    from sqlalchemy.engine import Engine as _Engine  # type: ignore
+    from sqlalchemy.engine import Engine as _Engine, Connection as _Connection, Result as _Result  # type: ignore
+    from sqlalchemy.sql.elements import TextClause as _TextClause  # type: ignore
 
 class DatabaseManager:
     """
@@ -861,19 +862,24 @@ class DatabaseManager:
         """
         params = params or ()
         try:
-            with self.engine.connect() as connection:
+            assert self.engine is not None, "Engine not initialised"
+            connection = self.engine.connect()
+            # Cast for type checkers
+            conn_typed: "_Connection" = connection  # type: ignore[assignment]
+            with conn_typed as connection:
                 # SQLAlchemy 2.0
                 try:
-                    result = connection.exec_driver_sql(query, params)
+                    result: "_Result" = connection.exec_driver_sql(query, params)  # type: ignore[arg-type]
                 except AttributeError:
                     # Older SQLAlchemy (<1.4) fallback
-                    from sqlalchemy import text
-                    result = connection.execute(text(query), params)
+                    from sqlalchemy import text  # type: ignore
+                    result = connection.execute(text(query), params)  # type: ignore[arg-type]
+
                 # Convert to list of dictionaries
                 try:
-                    rows = [dict(row) for row in result.mappings()]
+                    rows: List[Dict[str, Any]] = [dict(row) for row in result.mappings()]  # type: ignore[attr-defined]
                 except AttributeError:
-                    rows = [dict(row.items()) for row in result]
+                    rows = [dict(row.items()) for row in result]  # type: ignore[attr-defined]
                 return rows
         except SQLAlchemyError as e:
             logger.error(f"Raw query error: {e}")
