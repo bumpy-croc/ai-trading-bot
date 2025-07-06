@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AI Trading Bot system has been successfully configured to use a centralized database on Railway, allowing both the trading bot and dashboard services to share the same PostgreSQL database while maintaining local SQLite development capabilities.
+The AI Trading Bot system uses a centralized PostgreSQL database on Railway, allowing both the trading bot and dashboard services to share the same database.
 
 ## ✅ Implementation Status
 
@@ -11,23 +11,18 @@ The AI Trading Bot system has been successfully configured to use a centralized 
 1. **Database Choice Analysis** - PostgreSQL selected over Redis for optimal compatibility
 2. **Enhanced Database Manager** - Added PostgreSQL support with connection pooling
 3. **Configuration System** - Automatic database type detection and configuration
-4. **Migration Scripts** - Export/import tools for data migration
+4. **Database Tools** - Scripts for database setup and verification
 5. **Verification Tools** - Scripts to test database connectivity and setup
 6. **Railway Integration** - Seamless integration with Railway's database services
-7. **Local Development** - Continues to use SQLite for development
+7. **Local Development** - Runs against a PostgreSQL Testcontainers instance
 
 ### ✅ Database Architecture
 
-#### Before (Current SQLite)
-- **Trading Bot Service**: Individual SQLite database
-- **Dashboard Service**: Individual SQLite database  
-- **Data Isolation**: Each service has its own data
-
-#### After (Centralized PostgreSQL)
+#### Centralized PostgreSQL Architecture
 - **Trading Bot Service**: Connects to shared PostgreSQL database
 - **Dashboard Service**: Connects to shared PostgreSQL database
 - **Data Sharing**: Both services access the same data
-- **Local Development**: Still uses SQLite (no changes needed)
+- **Local Development**: Uses PostgreSQL with docker-compose
 
 ## 🗄️ Database Choice: PostgreSQL vs Redis
 
@@ -76,15 +71,15 @@ The system uses a configuration hierarchy:
 1. **Railway Provider** - Checks Railway environment variables
 2. **Environment Variables** - Standard environment variables
 3. **Local Configuration** - .env files
-4. **Default Fallback** - SQLite for local development
+4. **Default Configuration** - PostgreSQL for all environments
 
 ### Database Connection Logic
 ```python
-# If DATABASE_URL is set (Railway/Production)
+# PostgreSQL used in all environments
 if DATABASE_URL:
-    use PostgreSQL with connection pooling
+    use PostgreSQL with connection pooling (Railway)
 else:
-    use SQLite for local development
+    use PostgreSQL with docker-compose (Local)
 ```
 
 ## 🛠️ Available Tools
@@ -101,14 +96,6 @@ python scripts/railway_database_setup.py --verify
 python scripts/railway_database_setup.py --check-migration
 ```
 
-### Data Migration (if needed)
-```bash
-# Export existing SQLite data
-python scripts/export_sqlite_data.py
-
-# Import to PostgreSQL
-python scripts/import_to_postgresql.py
-```
 
 ### Database Testing
 ```bash
@@ -148,7 +135,7 @@ import sys, os
 sys.path.insert(0, 'src')
 from config.config_manager import get_config
 config = get_config()
-print(f'Database URL: {config.get(\"DATABASE_URL\") or \"SQLite (local)\"}')
+print(f'Database URL: {config.get(\"DATABASE_URL\") or \"PostgreSQL (local)\"}')
 "
 ```
 
@@ -161,7 +148,7 @@ python scripts/railway_database_setup.py --verify
 ## 🚨 Important Notes
 
 ### Local Development
-- **No Changes Required**: Local development continues to use SQLite
+- **No Changes Required**: Local development continues to use PostgreSQL Testcontainers
 - **Same Commands**: All existing commands work unchanged
 - **Data Isolation**: Local data separate from production
 
@@ -180,9 +167,9 @@ python scripts/railway_database_setup.py --verify
 ### Configuration Flow
 1. **Service Starts**: Database Manager initializes
 2. **Check Environment**: Look for `DATABASE_URL`
-3. **Database Selection**: 
-   - If `DATABASE_URL` exists → PostgreSQL
-   - If not → SQLite (local development)
+3. **Database Connection**: 
+   - If `DATABASE_URL` exists → PostgreSQL (Railway)
+   - If not → PostgreSQL (Local with docker-compose)
 4. **Connection Setup**: Configure appropriate connection pooling
 5. **Schema Creation**: Create tables if they don't exist
 6. **Ready**: Service ready to use database
@@ -198,17 +185,17 @@ python scripts/railway_database_setup.py --verify
 ### ✅ Configuration System
 - Environment detection working correctly
 - Database URL configuration functional
-- Local SQLite fallback operational
+- Local PostgreSQL setup operational
 
 ### ✅ Database Connection
 - PostgreSQL connection pooling configured
-- SQLite local development maintained
+- Local PostgreSQL development setup
 - Error handling implemented
 
-### ✅ Migration Tools
-- Export script created for SQLite data
-- Import script created for PostgreSQL
-- Data type conversion handled
+### ✅ Database Tools
+- Setup scripts for PostgreSQL
+- Verification tools implemented
+- Connection testing available
 
 ### ✅ Verification Tools
 - Connection testing implemented
@@ -223,11 +210,11 @@ python scripts/railway_database_setup.py --verify
 3. Verify connection using provided scripts
 4. Monitor database performance
 
-### For Data Migration (if needed)
-1. Export existing SQLite data
-2. Import to PostgreSQL using migration scripts
-3. Verify data integrity
-4. Remove old SQLite files
+### For Database Setup
+1. Setup PostgreSQL using docker-compose
+2. Verify database connection
+3. Run database verification scripts
+4. Monitor database performance
 
 ### For Monitoring
 1. Use Railway's database monitoring
@@ -242,10 +229,10 @@ python scripts/railway_database_setup.py --verify
 The database centralization implementation is complete and ready for deployment. The system provides:
 
 - **Seamless Integration**: Automatic database type detection
-- **Local Development**: Unchanged SQLite experience
+- **Local Development**: Consistent PostgreSQL experience
 - **Production Ready**: PostgreSQL with connection pooling
 - **Data Sharing**: Both services access same database
-- **Migration Support**: Tools for data migration
+- **Setup Tools**: Scripts for database setup and verification
 - **Verification**: Comprehensive testing tools
 
 The implementation maintains backward compatibility while adding powerful new capabilities for Railway deployment.

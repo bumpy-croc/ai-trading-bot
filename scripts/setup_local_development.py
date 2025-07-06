@@ -113,13 +113,8 @@ def setup_environment_file(database_choice):
         lines.append(postgres_url_line)
         content = '\n'.join(lines) + '\n'
         print("✅ Configured for PostgreSQL")
-    else:  # No SQLite support
-        # Ensure PostgreSQL DATABASE_URL is commented out
-        content = content.replace(
-            'DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot',
-            '# DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot'
-        )
-        print("✅ Configured for PostgreSQL")
+    # PostgreSQL is the only option
+    print("✅ Configured for PostgreSQL")
     
     with open(env_file, 'w') as f:
         f.write(content)
@@ -246,21 +241,21 @@ def print_next_steps(database_choice):
         print("   # Connect to PostgreSQL")
         print("   docker-compose exec postgres psql -U trading_bot -d ai_trading_bot")
         print()
-    else:  # No SQLite branch
-        print("\n🐘 PostgreSQL Development Environment Ready")
-        print("\n📋 Useful Commands:")
-        print("   # Start PostgreSQL")
-        print("   docker-compose up -d postgres")
-        print()
-        print("   # Stop PostgreSQL")
-        print("   docker-compose down")
-        print()
-        print("   # View PostgreSQL logs")
-        print("   docker-compose logs postgres")
-        print()
-        print("   # Connect to PostgreSQL")
-        print("   docker-compose exec postgres psql -U trading_bot -d ai_trading_bot")
-        print()
+    # PostgreSQL is the only option
+    print("\n🐘 PostgreSQL Development Environment Ready")
+    print("\n📋 Useful Commands:")
+    print("   # Start PostgreSQL")
+    print("   docker-compose up -d postgres")
+    print()
+    print("   # Stop PostgreSQL")
+    print("   docker-compose down")
+    print()
+    print("   # View PostgreSQL logs")
+    print("   docker-compose logs postgres")
+    print()
+    print("   # Connect to PostgreSQL")
+    print("   docker-compose exec postgres psql -U trading_bot -d ai_trading_bot")
+    print()
     
     print("🚀 Run Your First Backtest:")
     print("   python scripts/run_backtest.py adaptive --days 30 --no-db")

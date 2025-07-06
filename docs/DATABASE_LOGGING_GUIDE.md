@@ -45,12 +45,11 @@ The database includes the following tables:
 
 ## Configuration
 
-### Default Database (SQLite)
+### Default Database (PostgreSQL)
 
-By default, the system uses SQLite with the database file at:
-```
-data/trading_bot.db
-```
+By default, the system connects to PostgreSQL via the `DATABASE_URL`
+environment variable.  During tests a PostgreSQL Testcontainers instance is
+started automatically.
 
 ### PostgreSQL Configuration
 
@@ -216,14 +215,7 @@ The database is designed to support the monitoring dashboard outlined in the go-
    pip install sqlalchemy psycopg2-binary
    ```
 
-2. **Database locked (SQLite)**
-   - Ensure only one process accesses the database at a time
-   - Consider upgrading to PostgreSQL for concurrent access
-
-3. **Connection refused (PostgreSQL)**
-   - Check PostgreSQL is running
-   - Verify connection string and credentials
-   - Check firewall settings
+2. **Database locked** *(historical SQLite issue – should no longer occur)*
 
 ### Debug Mode
 

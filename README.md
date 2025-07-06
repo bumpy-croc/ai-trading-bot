@@ -220,9 +220,9 @@ The trading bot features a **centralized database architecture** that allows mul
 ### 🏗️ **Centralized Database Design**
 
 #### **Local Development**
-- **PostgreSQL Option**: Environment parity with production (recommended)
-- **SQLite Fallback**: Zero setup for quick development
-- **Flexible Configuration**: Easy switching between database types
+- **PostgreSQL Database**: Full environment parity with production
+- **Docker Integration**: Easy local setup with docker-compose
+- **Connection Pooling**: Efficient local development setup
 - **Data Isolation**: Local data separate from production
 
 #### **Production (Railway)**
@@ -247,11 +247,11 @@ The system uses a comprehensive schema designed for trading operations:
 
 #### **Automatic Configuration**
 ```python
-# The system automatically detects the database type:
+# The system uses PostgreSQL in all environments:
 if DATABASE_URL:  # PostgreSQL on Railway
     use PostgreSQL with connection pooling
 else:  # Local development
-    use SQLite with default settings
+    use local PostgreSQL with docker-compose
 ```
 
 #### **Railway Setup**
@@ -259,9 +259,9 @@ else:  # Local development
 2. Deploy services (no code changes needed)
 3. Database connection configured automatically
 
-#### **Local Development Options**
+#### **Local Development Setup**
 
-**Option 1: PostgreSQL (Recommended for Environment Parity)**
+**PostgreSQL Setup**
 ```bash
 # Quick setup with guided wizard
 python scripts/setup_local_development.py
@@ -270,11 +270,6 @@ python scripts/setup_local_development.py
 docker-compose up -d postgres
 # Edit .env: DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
 ```
-
-**Option 2: SQLite (Simple Development)**
-- Uses SQLite database at `src/data/trading_bot.db`
-- No configuration required (default when DATABASE_URL not set)
-- Same commands work unchanged
 
 ### 🛠️ **Database Tools**
 
@@ -290,21 +285,12 @@ python scripts/railway_database_setup.py --verify
 python scripts/railway_database_setup.py --check-migration
 ```
 
-#### **Data Migration (if needed)**
-```bash
-# Export existing SQLite data for migration
-python scripts/export_sqlite_data.py
-
-# Import data to PostgreSQL
-python scripts/import_to_postgresql.py
-```
-
 #### **Connection Testing**
 ```bash
 # Test database connection and basic operations
 python scripts/verify_database_connection.py
 
-# Setup local development environment (PostgreSQL or SQLite)
+# Setup local development environment
 python scripts/setup_local_development.py
 ```
 
@@ -317,10 +303,10 @@ python scripts/setup_local_development.py
 - **Scalability**: Services can scale independently
 
 #### **For Development**
-- **Local SQLite**: Fast development without external dependencies
-- **Production PostgreSQL**: Robust production database
-- **Seamless Transition**: Same code works in both environments
-- **Zero Configuration**: Automatic database type detection
+- **Local PostgreSQL**: Full environment parity with production
+- **Docker Integration**: Easy local setup with docker-compose
+- **Consistent Environment**: Same database in development and production
+- **Zero Configuration**: Automatic database connection detection
 
 #### **For Operations**
 - **Connection Pooling**: Efficient database resource usage
@@ -358,7 +344,7 @@ python scripts/setup_local_development.py
 ### 🎯 **How It Works**
 
 1. **Service Initialization**: Database manager detects environment
-2. **Database Selection**: Uses `DATABASE_URL` if available, else SQLite
+2. **Database Connection**: Uses `DATABASE_URL` for Railway or local PostgreSQL
 3. **Connection Setup**: Configures appropriate connection pooling
 4. **Schema Creation**: Creates tables automatically if needed
 5. **Service Ready**: Both trading bot and dashboard use same database
