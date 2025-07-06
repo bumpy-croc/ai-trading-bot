@@ -116,6 +116,7 @@ class DatabaseManager:
             if self.engine is None:
                 raise ValueError("Database engine not initialized")
             Base.metadata.create_all(self.engine)
+
             logger.info("Database tables created/verified")
         except Exception as e:
             logger.error(f"Error creating database tables: {e}")
@@ -532,7 +533,7 @@ class DatabaseManager:
             # Convert string enum if necessary
             if isinstance(event_type, str):
                 event_type = EventType[event_type.upper()]
-            
+
             event = SystemEvent(
                 event_type=event_type,
                 message=message,

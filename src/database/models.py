@@ -43,6 +43,7 @@ class EventType(enum.Enum):
     ERROR = "error"
     WARNING = "warning"
     ALERT = "alert"
+    TEST = "test"  # Added for verification scripts and development diagnostics
 
 
 class Trade(Base):

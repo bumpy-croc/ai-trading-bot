@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Local Development Setup Script
-Helps developers set up their local development environment with either PostgreSQL or SQLite
+Helps developers set up their local development environment with PostgreSQL (default)
 """
 
 import os
@@ -19,60 +19,63 @@ def print_header():
 
 
 def check_requirements():
-    """Check if required tools are available"""
+    """Check if required tools are available.
+
+    `python3` is mandatory. Docker and Docker-Compose are recommended for the default
+    containerised PostgreSQL setup, but their absence should not abort the entire
+    process, as developers may run a local PostgreSQL instance instead.
+    """
     print("🔍 Checking System Requirements...")
-    
+
     requirements = {
-        'python3': 'Python 3.9+ required',
-        'docker': 'Docker required for PostgreSQL option',
-        'docker-compose': 'Docker Compose required for PostgreSQL option'
+        'python3': {
+            'description': 'Python 3.9+ required',
+            'required': True,
+        },
+        'docker': {
+            'description': 'Docker recommended for containerised PostgreSQL',
+            'required': False,
+        },
+        'docker-compose': {
+            'description': 'Docker Compose recommended for containerised PostgreSQL',
+            'required': False,
+        },
     }
-    
-    missing = []
-    
-    for tool, description in requirements.items():
+
+    missing_required = []
+    missing_optional = []
+
+    for tool, meta in requirements.items():
+        description = meta['description']
         try:
             result = subprocess.run([tool, '--version'], capture_output=True, text=True)
             if result.returncode == 0:
                 version = result.stdout.split('\n')[0]
                 print(f"✅ {tool}: {version}")
             else:
-                missing.append((tool, description))
+                (missing_required if meta['required'] else missing_optional).append((tool, description))
         except FileNotFoundError:
-            missing.append((tool, description))
-    
-    if missing:
+            (missing_required if meta['required'] else missing_optional).append((tool, description))
+
+    if missing_required or missing_optional:
         print("\n⚠️  Missing Requirements:")
-        for tool, description in missing:
+        for tool, description in missing_required + missing_optional:
             print(f"   - {tool}: {description}")
         print()
-    
-    return len(missing) == 0
+
+    # Fail only if required dependencies are missing
+    return len(missing_required) == 0
 
 
 def choose_database_option():
-    """Let user choose between PostgreSQL and SQLite"""
-    print("🗄️  Database Configuration")
-    print("Choose your local development database:")
-    print()
-    print("1. 🐘 PostgreSQL (Recommended)")
-    print("   ✅ Environment parity with production")
-    print("   ✅ Test all PostgreSQL features locally")
-    print("   ✅ Realistic performance testing")
-    print("   ❌ Requires Docker and more setup")
-    print()
-    print("2. 🗃️  SQLite (Simple)")
-    print("   ✅ Zero setup, instant start")
-    print("   ✅ Lightweight and fast")
-    print("   ✅ Perfect for quick development")
-    print("   ❌ Different from production environment")
-    print()
-    
-    while True:
-        choice = input("Enter your choice (1 or 2): ").strip()
-        if choice in ['1', '2']:
-            return choice
-        print("Please enter 1 or 2")
+    """Return PostgreSQL as the default database option.
+
+    The project has standardized on PostgreSQL for local development. This helper exists
+    for backward compatibility with the original flow, but it now simply returns "1"
+    to indicate PostgreSQL without any interactive prompt.
+    """
+    print("🗄️  Database Configuration: Defaulting to PostgreSQL (🐘)")
+    return '1'
 
 
 def setup_environment_file(database_choice):
@@ -101,58 +104,76 @@ def setup_environment_file(database_choice):
         content = f.read()
     
     if database_choice == '1':  # PostgreSQL
-        # Uncomment PostgreSQL DATABASE_URL
-        content = content.replace(
-            '# DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot',
-            'DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot'
-        )
+        postgres_url_line = 'DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot'
+
+        lines = [ln for ln in content.split('\n') if ln.strip()]
+        # Remove any existing DATABASE_URL lines (commented or malformed)
+        lines = [ln for ln in lines if not ln.strip().startswith('DATABASE_URL')]
+        # Add the correct line
+        lines.append(postgres_url_line)
+        content = '\n'.join(lines) + '\n'
         print("✅ Configured for PostgreSQL")
-    else:  # SQLite
+    else:  # No SQLite support
         # Ensure PostgreSQL DATABASE_URL is commented out
         content = content.replace(
             'DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot',
             '# DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot'
         )
-        print("✅ Configured for SQLite")
+        print("✅ Configured for PostgreSQL")
     
     with open(env_file, 'w') as f:
         f.write(content)
 
 
 def setup_postgresql():
-    """Set up PostgreSQL using Docker Compose"""
-    print("\n🐘 Setting up PostgreSQL with Docker...")
-    
+    """Ensure a PostgreSQL instance is available.
+
+    Preference order:
+    1. If `docker-compose` is available – spin up the container defined in the
+       local `docker-compose.yml`.
+    2. If Docker tooling is **not** available – assume the developer has a local
+       PostgreSQL instance running (or will start it manually) and simply warn.
+    """
+    print("\n🐘 Setting up PostgreSQL...")
+
+    # Quick check for docker-compose
+    docker_compose_available = shutil.which('docker-compose') is not None
+
+    if not docker_compose_available:
+        print("⚠️  docker-compose not found – Skipping container startup.")
+        print("   Ensure your local PostgreSQL instance is running and matches the credentials in the .env file.")
+        return True  # Considered success; user handles DB themselves
+
+    # Start container via docker-compose
     try:
-        # Start PostgreSQL service
-        print("Starting PostgreSQL container...")
+        print("Starting PostgreSQL container via docker-compose...")
         result = subprocess.run([
             'docker-compose', 'up', '-d', 'postgres'
         ], capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print("✅ PostgreSQL container started successfully")
-            
-            # Wait for PostgreSQL to be ready
-            print("Waiting for PostgreSQL to be ready...")
-            result = subprocess.run([
-                'docker-compose', 'exec', '-T', 'postgres',
-                'pg_isready', '-U', 'trading_bot', '-d', 'ai_trading_bot'
-            ], capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                print("✅ PostgreSQL is ready for connections")
-                return True
-            else:
-                print("⚠️  PostgreSQL started but not yet ready")
-                print("   Run 'docker-compose logs postgres' to check status")
-                return True
-        else:
-            print(f"❌ Failed to start PostgreSQL: {result.stderr}")
+
+        if result.returncode != 0:
+            print(f"❌ Failed to start PostgreSQL container: {result.stderr}")
             return False
-            
-    except FileNotFoundError:
-        print("❌ docker-compose not found. Please install Docker Compose.")
+
+        print("✅ PostgreSQL container started successfully")
+
+        # Wait for readiness (basic check)
+        print("Waiting for PostgreSQL to be ready...")
+        result = subprocess.run([
+            'docker-compose', 'exec', '-T', 'postgres',
+            'pg_isready', '-U', 'trading_bot', '-d', 'ai_trading_bot'
+        ], capture_output=True, text=True)
+
+        if result.returncode == 0:
+            print("✅ PostgreSQL is ready for connections")
+        else:
+            print("⚠️  PostgreSQL started but readiness check failed.")
+            print("   You may need to check logs: docker-compose logs postgres")
+
+        return True
+
+    except Exception as e:
+        print(f"❌ Error setting up PostgreSQL via docker-compose: {e}")
         return False
 
 
@@ -225,10 +246,20 @@ def print_next_steps(database_choice):
         print("   # Connect to PostgreSQL")
         print("   docker-compose exec postgres psql -U trading_bot -d ai_trading_bot")
         print()
-    else:  # SQLite
-        print("\n🗃️  SQLite Development Environment Ready")
-        print("\n📋 Database Location:")
-        print("   src/data/trading_bot.db")
+    else:  # No SQLite branch
+        print("\n🐘 PostgreSQL Development Environment Ready")
+        print("\n📋 Useful Commands:")
+        print("   # Start PostgreSQL")
+        print("   docker-compose up -d postgres")
+        print()
+        print("   # Stop PostgreSQL")
+        print("   docker-compose down")
+        print()
+        print("   # View PostgreSQL logs")
+        print("   docker-compose logs postgres")
+        print()
+        print("   # Connect to PostgreSQL")
+        print("   docker-compose exec postgres psql -U trading_bot -d ai_trading_bot")
         print()
     
     print("🚀 Run Your First Backtest:")
@@ -243,13 +274,6 @@ def print_next_steps(database_choice):
     print("📈 Start Dashboard:")
     print("   python scripts/start_dashboard.py")
     print()
-    
-    if database_choice == '1':
-        print("🔄 Switch to SQLite Later:")
-        print("   1. Edit .env file")
-        print("   2. Comment out DATABASE_URL line")
-        print("   3. Restart your application")
-        print()
 
 
 def main():
@@ -277,7 +301,7 @@ def main():
     if database_choice == '1':
         if not setup_postgresql():
             print("\n❌ PostgreSQL setup failed.")
-            print("You can still use SQLite by editing your .env file.")
+            print("You can still use PostgreSQL by editing your .env file.")
             sys.exit(1)
     
     # Test the setup
