@@ -1304,7 +1304,7 @@ class MonitoringDashboard:
                     recent_balance = balance_history[0]['balance']
                     older_balance = next(
                         (h['balance'] for h in balance_history 
-                         if (datetime.now() - h['timestamp']).days >= 1), 
+                         if ((datetime.now(timezone.utc) - h['timestamp'].astimezone(timezone.utc)).days >= 1)), 
                         recent_balance
                     )
                     if older_balance > 0:
