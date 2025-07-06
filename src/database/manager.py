@@ -240,8 +240,8 @@ class DatabaseManager:
             
             # Log session creation
             self.log_event(
-                EventType.ENGINE_START,
-                f"Trading session created: {session_name}",
+                event_type=EventType.ENGINE_START,
+                message=f"Trading session created: {session_name}",
                 details={
                     'session_id': trading_session.id,
                     'strategy': strategy_name,
@@ -301,8 +301,8 @@ class DatabaseManager:
             
             # Log session end event
             self.log_event(
-                EventType.ENGINE_STOP,
-                f"Trading session ended: {trading_session.session_name}",
+                event_type=EventType.ENGINE_STOP,
+                message=f"Trading session ended: {trading_session.session_name}",
                 details={
                     'duration_hours': (trading_session.end_time - trading_session.start_time).total_seconds() / 3600,
                     'total_trades': trading_session.total_trades,
