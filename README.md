@@ -203,8 +203,9 @@ The trading bot features a **centralized database architecture** that allows mul
 ### 🏗️ **Centralized Database Design**
 
 #### **Local Development**
-- **SQLite Database**: Automatic fallback for local development
-- **No Configuration**: Zero setup required for development
+- **PostgreSQL Option**: Environment parity with production (recommended)
+- **SQLite Fallback**: Zero setup for quick development
+- **Flexible Configuration**: Easy switching between database types
 - **Data Isolation**: Local data separate from production
 
 #### **Production (Railway)**
@@ -241,9 +242,21 @@ else:  # Local development
 2. Deploy services (no code changes needed)
 3. Database connection configured automatically
 
-#### **Local Development**
+#### **Local Development Options**
+
+**Option 1: PostgreSQL (Recommended for Environment Parity)**
+```bash
+# Quick setup with guided wizard
+python scripts/setup_local_development.py
+
+# Manual setup
+docker-compose up -d postgres
+# Edit .env: DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
+```
+
+**Option 2: SQLite (Simple Development)**
 - Uses SQLite database at `src/data/trading_bot.db`
-- No configuration required
+- No configuration required (default when DATABASE_URL not set)
 - Same commands work unchanged
 
 ### 🛠️ **Database Tools**
@@ -273,6 +286,9 @@ python scripts/import_to_postgresql.py
 ```bash
 # Test database connection and basic operations
 python scripts/verify_database_connection.py
+
+# Setup local development environment (PostgreSQL or SQLite)
+python scripts/setup_local_development.py
 ```
 
 ### 📈 **Benefits**
@@ -330,7 +346,9 @@ python scripts/verify_database_connection.py
 4. **Schema Creation**: Creates tables automatically if needed
 5. **Service Ready**: Both trading bot and dashboard use same database
 
-For detailed setup instructions, see [Database Centralization Guide](docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md).
+For detailed setup instructions, see:
+- [Database Centralization Guide](docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md) - Railway PostgreSQL setup
+- [Local PostgreSQL Setup](docs/LOCAL_POSTGRESQL_SETUP.md) - Local development with PostgreSQL
 
 ---
 
