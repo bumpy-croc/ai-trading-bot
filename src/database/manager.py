@@ -83,10 +83,11 @@ class DatabaseManager:
             self.engine = create_engine(self.database_url, **engine_kwargs)
             self.session_factory = sessionmaker(bind=self.engine)
             
-            # Test connection
+            # Secure test query
+            from sqlalchemy import text as _sql_text  # local import to avoid circular
             with self.engine.connect() as conn:
-                conn.execute("SELECT 1")
-                logger.info("✅ PostgreSQL database connection established")
+                conn.execute(_sql_text("SELECT 1"))
+            logger.info("✅ PostgreSQL database connection established")
                 
         except Exception as e:
             logger.error(f"Failed to initialize PostgreSQL database: {e}")
@@ -164,12 +165,21 @@ class DatabaseManager:
         Returns:
             Dictionary with database connection details
         """
+        def _safe_pool_val(attr_name, default=0):
+            if not self.engine:
+                return default
+            pool_attr = getattr(self.engine.pool, attr_name, default)
+            try:
+                return pool_attr() if callable(pool_attr) else pool_attr
+            except Exception:  # pragma: no cover
+                return default
+
         info = {
             'database_url': self.database_url,
             'database_type': 'postgresql',
-            'connection_pool_size': getattr(self.engine.pool, 'size', 0) if self.engine else 0,
-            'checked_in_connections': getattr(self.engine.pool, 'checkedin', 0) if self.engine else 0,
-            'checked_out_connections': getattr(self.engine.pool, 'checkedout', 0) if self.engine else 0,
+            'connection_pool_size': _safe_pool_val('size'),
+            'checked_in_connections': _safe_pool_val('checkedin'),
+            'checked_out_connections': _safe_pool_val('checkedout'),
         }
         
         return info
@@ -846,15 +856,25 @@ class DatabaseManager:
     
     def get_connection_stats(self) -> Dict[str, Any]:
         """Get PostgreSQL connection pool statistics"""
-        if self.engine and hasattr(self.engine.pool, 'status'):
-            return {
-                'pool_status': self.engine.pool.status(),
-                'checked_in': getattr(self.engine.pool, 'checkedin', 0),
-                'checked_out': getattr(self.engine.pool, 'checkedout', 0),
-                'overflow': getattr(self.engine.pool, 'overflow', 0),
-                'invalid': getattr(self.engine.pool, 'invalid', 0)
-            }
-        return {'status': 'Connection pool statistics not available'}
+        if not self.engine or not hasattr(self.engine.pool, 'status'):
+            return {'status': 'Connection pool statistics not available'}
+
+        pool = self.engine.pool  # noqa: E501  # pool is guaranteed after the check above
+
+        def _safe(attr_name, default=0):
+            pool_attr = getattr(pool, attr_name, default)
+            try:
+                return pool_attr() if callable(pool_attr) else pool_attr
+            except Exception:
+                return default
+
+        return {
+            'pool_status': pool.status(),
+            'checked_in': _safe('checkedin'),
+            'checked_out': _safe('checkedout'),
+            'overflow': _safe('overflow'),
+            'invalid': _safe('invalid')
+        }
     
     def cleanup_connection_pool(self):
         """Cleanup PostgreSQL connection pool"""
