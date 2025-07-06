@@ -534,11 +534,11 @@ class LiveTradingEngine:
         except Exception as e:
             logger.error(f"Failed to open position: {e}")
             self.db_manager.log_event(
-                "ERROR",
-                f"Failed to open position: {str(e)}",
+                event_type="ERROR",
+                message=f"Failed to open position: {str(e)}",
                 severity="error",
                 component="LiveTradingEngine",
-                stack_trace=str(e),
+                details={"stack_trace": str(e)},
                 session_id=self.trading_session_id
             )
             
@@ -662,11 +662,11 @@ class LiveTradingEngine:
             logger.error(f"Failed to close position: {e}")
             try:
                 self.db_manager.log_event(
-                    "ERROR",
-                    f"Failed to close position: {str(e)}",
+                    event_type="ERROR",
+                    message=f"Failed to close position: {str(e)}",
                     severity="error",
                     component="LiveTradingEngine",
-                    stack_trace=str(e),
+                    details={"stack_trace": str(e)},
                     session_id=self.trading_session_id
                 )
             except Exception as db_e:

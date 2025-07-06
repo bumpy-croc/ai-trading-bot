@@ -20,10 +20,11 @@ The codebase supports **backtesting**, **live trading**, **machine-learning pric
     4. [Cache Management](#cache-management)
     5. [Risk Management Utilities](#risk-management-utilities)
 7. [Built-in Strategies](#built-in-strategies)
-8. [Deployment](#deployment)
-9. [Testing](#testing)
-10. [Sentiment Analysis Integration](#sentiment-analysis-integration)
-11. [Disclaimer](#disclaimer)
+8. [Database Architecture](#database-architecture)
+9. [Deployment](#deployment)
+10. [Testing](#testing)
+11. [Sentiment Analysis Integration](#sentiment-analysis-integration)
+12. [Disclaimer](#disclaimer)
 
 ---
 
@@ -209,6 +210,162 @@ python -m core.risk.risk_manager --symbol BTCUSDT --qty 0.05
 | `ml_with_sentiment.py`             | ML + sentiment, confidence-weighted sizing             |
 
 Add your own by subclassing `strategies.base.BaseStrategy` and implementing `generate_signals()` & `calculate_position_size()`.
+
+---
+
+## Database Architecture
+
+The trading bot features a **centralized database architecture** that allows multiple services (trading bot and dashboard) to share the same database while maintaining seamless local development capabilities.
+
+### 🏗️ **Centralized Database Design**
+
+#### **Local Development**
+- **PostgreSQL Option**: Environment parity with production (recommended)
+- **SQLite Fallback**: Zero setup for quick development
+- **Flexible Configuration**: Easy switching between database types
+- **Data Isolation**: Local data separate from production
+
+#### **Production (Railway)**
+- **PostgreSQL Database**: Shared across all services
+- **Automatic Detection**: Services automatically use PostgreSQL when `DATABASE_URL` is available
+- **Connection Pooling**: Efficient connection management
+- **ACID Transactions**: Data integrity for financial operations
+
+### 📊 **Database Schema**
+
+The system uses a comprehensive schema designed for trading operations:
+
+- **`trading_sessions`**: Track trading sessions with strategy configuration
+- **`trades`**: Complete trade history with entry/exit prices and P&L
+- **`positions`**: Active positions with real-time unrealized P&L
+- **`account_history`**: Balance snapshots for performance tracking
+- **`performance_metrics`**: Aggregated metrics (win rate, Sharpe ratio, drawdown)
+- **`system_events`**: System logs and error tracking
+- **`strategy_executions`**: Detailed strategy decision logs
+
+### 🔧 **Database Configuration**
+
+#### **Automatic Configuration**
+```python
+# The system automatically detects the database type:
+if DATABASE_URL:  # PostgreSQL on Railway
+    use PostgreSQL with connection pooling
+else:  # Local development
+    use SQLite with default settings
+```
+
+#### **Railway Setup**
+1. Create PostgreSQL database service in Railway
+2. Deploy services (no code changes needed)
+3. Database connection configured automatically
+
+#### **Local Development Options**
+
+**Option 1: PostgreSQL (Recommended for Environment Parity)**
+```bash
+# Quick setup with guided wizard
+python scripts/setup_local_development.py
+
+# Manual setup
+docker-compose up -d postgres
+# Edit .env: DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
+```
+
+**Option 2: SQLite (Simple Development)**
+- Uses SQLite database at `src/data/trading_bot.db`
+- No configuration required (default when DATABASE_URL not set)
+- Same commands work unchanged
+
+### 🛠️ **Database Tools**
+
+#### **Setup and Verification**
+```bash
+# Display Railway database setup instructions
+python scripts/railway_database_setup.py
+
+# Verify database connection and configuration
+python scripts/railway_database_setup.py --verify
+
+# Check if data migration is needed
+python scripts/railway_database_setup.py --check-migration
+```
+
+#### **Data Migration (if needed)**
+```bash
+# Export existing SQLite data for migration
+python scripts/export_sqlite_data.py
+
+# Import data to PostgreSQL
+python scripts/import_to_postgresql.py
+```
+
+#### **Connection Testing**
+```bash
+# Test database connection and basic operations
+python scripts/verify_database_connection.py
+
+# Setup local development environment (PostgreSQL or SQLite)
+python scripts/setup_local_development.py
+```
+
+### 📈 **Benefits**
+
+#### **For Multi-Service Architecture**
+- **Shared Data**: Trading bot and dashboard access same database
+- **Real-Time Updates**: Dashboard shows live trading data
+- **Data Consistency**: ACID transactions ensure data integrity
+- **Scalability**: Services can scale independently
+
+#### **For Development**
+- **Local SQLite**: Fast development without external dependencies
+- **Production PostgreSQL**: Robust production database
+- **Seamless Transition**: Same code works in both environments
+- **Zero Configuration**: Automatic database type detection
+
+#### **For Operations**
+- **Connection Pooling**: Efficient database resource usage
+- **Backup & Recovery**: Railway's built-in backup features
+- **Monitoring**: Database performance metrics
+- **Security**: Encrypted connections and private networking
+
+### 🔍 **Database Choice: PostgreSQL vs Redis**
+
+**PostgreSQL** was chosen over Redis for the centralized database:
+
+✅ **PostgreSQL Advantages**:
+- Perfect SQLAlchemy integration with existing models
+- ACID transactions for financial data integrity
+- Complex queries with joins and analytics
+- Relational structure for foreign keys
+- Built-in backup and recovery on Railway
+- Cost-effective for persistent storage
+
+❌ **Redis Limitations**:
+- NoSQL nature would require complete model rewrite
+- No built-in relationships or foreign keys
+- Limited query capabilities (no SQL joins)
+- Memory storage increases costs for large datasets
+- No complex analytical queries
+
+### 📊 **Performance Features**
+
+- **Connection Pooling**: 5 connections with 10 overflow for PostgreSQL
+- **SSL/TLS Encryption**: Secure connections in production
+- **Query Optimization**: PostgreSQL's advanced query planner
+- **Indexing**: Optimized indexes for trading queries
+- **Private Networking**: Railway's internal network for service communication
+
+### 🎯 **How It Works**
+
+1. **Service Initialization**: Database manager detects environment
+2. **Database Selection**: Uses `DATABASE_URL` if available, else SQLite
+3. **Connection Setup**: Configures appropriate connection pooling
+4. **Schema Creation**: Creates tables automatically if needed
+5. **Service Ready**: Both trading bot and dashboard use same database
+
+For detailed setup instructions, see:
+- [Database Centralization Guide](docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md) - Railway PostgreSQL setup
+- [Local PostgreSQL Setup](docs/LOCAL_POSTGRESQL_SETUP.md) - Local development with PostgreSQL
 
 ---
 

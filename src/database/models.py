@@ -44,6 +44,7 @@ class EventType(enum.Enum):
     WARNING = "warning"
     ALERT = "alert"
     BALANCE_ADJUSTMENT = "balance_adjustment"
+    TEST = "test"  # Added for verification scripts and development diagnostics
 
 
 class Trade(Base):

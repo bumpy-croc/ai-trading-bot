@@ -214,6 +214,18 @@ def validate_test_environment():
     print_success("Test environment validation passed")
     return True
 
+def run_database_tests():
+    """Run database tests only"""
+    print_header("Running Database Tests")
+    
+    cmd = [
+        sys.executable, '-m', 'pytest',
+        'tests/test_database.py',
+        '-v', '--tb=short'
+    ]
+    
+    return run_command(cmd, "Database Tests")
+
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
@@ -223,6 +235,7 @@ def parse_arguments():
 Examples:
   python run_tests.py smoke                    # Quick smoke test
   python run_tests.py unit                     # Run unit tests
+  python run_tests.py database                 # Run database tests only
   python run_tests.py critical                 # Run critical tests
   python run_tests.py all                      # Run all tests
   python run_tests.py test_strategies.py       # Run specific test file
@@ -348,18 +361,6 @@ def run_all_tests(coverage=False, verbose=False, quiet=False):
         quiet=quiet,
     )
 
-def run_database_tests():
-    """Run database-specific tests only."""
-    print_header("Running Database Tests")
-
-    cmd = [
-        sys.executable, '-m', 'pytest',
-        'tests/test_database.py',
-        '-v', '--tb=short'
-    ]
-
-    return run_command(cmd, "Database Tests")
-
 def main():
     """Main test runner function"""
     args = parse_arguments()
@@ -422,7 +423,7 @@ def main():
         success = run_specific_test_file(command)
     elif command:
         print_error(f"Unknown command: {command}")
-        print("Available commands: smoke, critical, unit, integration, database, coverage, all, validate")
+        print("Available commands: smoke, critical, unit, integration, coverage, all, validate, database")
         print("Or use --help for more options")
         sys.exit(1)
     else:
