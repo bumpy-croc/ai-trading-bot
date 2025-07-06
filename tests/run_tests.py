@@ -338,6 +338,15 @@ def interactive_mode():
     command = input("Enter command (or test file name): ").strip().lower()
     return command
 
+def run_all_tests(coverage=False, verbose=False, quiet=False):
+    """Run the full test suite (all tests in the tests/ directory)."""
+    return run_custom_pytest_command(
+        markers=None,  # no marker restriction ⇒ run everything
+        coverage=coverage,
+        verbose=verbose,
+        quiet=quiet,
+    )
+
 def main():
     """Main test runner function"""
     args = parse_arguments()
@@ -387,11 +396,10 @@ def main():
     elif command == 'coverage':
         success = run_coverage_analysis()
     elif command == 'all':
-        success = (
-            run_quick_smoke_test() and
-            run_critical_tests() and
-            run_unit_tests() and
-            run_integration_tests()
+        success = run_all_tests(
+            coverage=args.coverage,
+            verbose=args.verbose,
+            quiet=args.quiet
         )
     elif command == 'validate':
         success = validate_test_environment()
