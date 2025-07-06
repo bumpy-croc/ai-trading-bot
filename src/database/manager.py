@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, func, and_, or_, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import QueuePool
+from decimal import Decimal, InvalidOperation
 
 from .models import (
     Base, Trade, Position, AccountHistory, PerformanceMetrics,
@@ -1041,3 +1042,29 @@ class DatabaseManager:
         if self.engine and hasattr(self.engine.pool, 'dispose'):
             self.engine.pool.dispose()
             logger.info("PostgreSQL connection pool disposed")
+
+    # ----------------------
+    # Utility helpers
+    # ----------------------
+    @staticmethod
+    def decimal_to_float(value):
+        """Safely cast SQLAlchemy Numeric / Decimal values to float.
+
+        Accepts Decimal, int, float or None and always returns a Python float
+        (or None). This prevents subtle precision / scale issues when Numeric
+        values are used directly in arithmetic.
+        """
+        if value is None:
+            return None
+        try:
+            # Handle SQLAlchemy Numeric (often Decimal)
+            if isinstance(value, Decimal):
+                return float(value)
+            # Primitives
+            return float(value)
+        except (TypeError, ValueError, InvalidOperation):
+            # As a last-ditch attempt use native cast
+            try:
+                return float(str(value))
+            except Exception:
+                return None

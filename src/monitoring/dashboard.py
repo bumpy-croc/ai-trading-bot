@@ -497,7 +497,7 @@ class MonitoringDashboard:
             std_return = df['daily_return'].std()
             
             if std_return > 0:
-                return (mean_return / std_return) * (252 ** 0.5)  # Annualized
+                return (mean_return / std_return) * (365 ** 0.5)  # Annualized sync with backtester
             return 0.0
             
         except Exception as e:
