@@ -94,7 +94,7 @@ class MonitoringDashboard:
                     return 0.0
 
                 @staticmethod
-                def get_historical_data(symbol: str, start, end):
+                def get_historical_data(symbol: str, timeframe: str, start, end):  # noqa: D401
                     return pd.DataFrame()
 
             self.data_provider = _OfflineProvider()
@@ -1191,7 +1191,7 @@ class MonitoringDashboard:
             """
             result = self.db_manager.execute_query(query)
             
-            positions = []
+            positions: List[PositionDict] = []
             current_price = self._get_current_price()
             
             for row in result:
@@ -1204,7 +1204,7 @@ class MonitoringDashboard:
                 else:
                     unrealized_pnl = (entry_price - current_price) * quantity
                 
-                positions.append({
+                positions.append(PositionDict(**{
                     'symbol': row['symbol'],
                     'side': row['side'],
                     'entry_price': entry_price,
@@ -1215,13 +1215,13 @@ class MonitoringDashboard:
                     'stop_loss': row['stop_loss'],
                     'take_profit': row['take_profit'],
                     'order_id': row['order_id']
-                })
+                }))
             
             return positions
             
         except Exception as e:
             logger.error(f"Error getting current positions: {e}")
-            return []
+            return []  # type: ignore[return-value]
     
     def _get_recent_trades(self, limit: int = 50) -> List[TradeDict]:
         """Get recent completed trades"""
@@ -1236,7 +1236,10 @@ class MonitoringDashboard:
             LIMIT ?
             """
             result = self.db_manager.execute_query(query, (limit,))
-            return [dict(row) for row in result] if result else []
+            trades: List[TradeDict] = []
+            for row in result or []:
+                trades.append(TradeDict(**row))  # type: ignore[arg-type]
+            return trades
         except Exception as e:
             logger.error(f"Error getting recent trades: {e}")
             return []
