@@ -175,10 +175,13 @@ class Backtester:
                         # Close the trade
                         self.current_trade.close(candle['close'], candle.name, "Strategy exit")
                         
-                        # Update balance (guard against None PnL)
-                        trade_pnl: float = float(self.current_trade.pnl or 0.0)
+                        # Update balance (convert percentage PnL to absolute currency)
+                        trade_pnl_percent: float = float(self.current_trade.pnl or 0.0)  # e.g. 0.02 for +2%
+                        # Convert to absolute profit/loss based on current balance BEFORE applying PnL
+                        trade_pnl: float = trade_pnl_percent * self.balance
+
                         self.balance += trade_pnl
-                        
+
                         # Update metrics
                         total_trades += 1
                         if trade_pnl > 0:
