@@ -31,6 +31,12 @@ if TYPE_CHECKING:  # pragma: no cover
     from sqlalchemy.engine import Result as _Result  # type: ignore
     from sqlalchemy.sql.elements import TextClause as _TextClause  # type: ignore
 
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, Decimal):
+            return float(o)
+        return super().default(o)
+
 class DatabaseManager:
     """
     Manages all PostgreSQL database operations for the trading system.
@@ -110,6 +116,7 @@ class DatabaseManager:
             'pool_pre_ping': True,
             'pool_recycle': 3600,  # 1 hour
             'echo': False,  # Set to True for SQL debugging
+            'json_serializer': lambda obj: json.dumps(obj, cls=CustomJSONEncoder),
             'connect_args': {
                 'sslmode': 'prefer',
                 'connect_timeout': 10,

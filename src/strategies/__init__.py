@@ -10,4 +10,18 @@ except ModuleNotFoundError:
 from .ml_basic import MlBasic
 from .ml_with_sentiment import MlWithSentiment
 
-__all__ = ['BaseStrategy', 'AdaptiveStrategy', 'EnhancedStrategy', 'HighRiskHighRewardStrategy', 'MlBasic', 'MlWithSentiment'] 
+
+def get_strategy_class(strategy_name: str):
+    """Get strategy class by name"""
+    strategy_map = {
+        'adaptive': AdaptiveStrategy,
+        'enhanced': EnhancedStrategy,
+        'high_risk_high_reward': HighRiskHighRewardStrategy,
+        'ml_basic': MlBasic,
+        'ml_with_sentiment': MlWithSentiment,
+    }
+    
+    return strategy_map.get(strategy_name.lower())
+
+
+__all__ = ['BaseStrategy', 'AdaptiveStrategy', 'EnhancedStrategy', 'HighRiskHighRewardStrategy', 'MlBasic', 'MlWithSentiment', 'get_strategy_class'] 

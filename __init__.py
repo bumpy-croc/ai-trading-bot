@@ -12,7 +12,7 @@ from indicators import (
 )
 from risk import RiskManager, RiskParameters
 from strategies import BaseStrategy
-from backtesting import Backtester, Trade
+from src.backtesting import Backtester
 
 __version__ = '0.1.0'
 
@@ -34,6 +34,5 @@ __all__ = [
     
     # Strategy and backtesting
     'BaseStrategy',
-    'Backtester',
-    'Trade'
+    'Backtester'
 ] 

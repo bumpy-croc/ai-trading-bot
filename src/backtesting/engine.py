@@ -1,94 +1,75 @@
-from typing import Optional, Dict, List, Any, Iterator
-from pandas import DataFrame  # type: ignore
-import pandas as pd  # type: ignore
+"""
+Backtesting Engine
+
+This engine integrates the following components:
+- TradeExecutor for consistent trade management
+- SignalGenerator for standardized signal generation
+- TradingDataRepository for data access
+- BacktestOrderExecutor for simulated order execution
+"""
+
+from typing import Optional, Dict, List, Any
+import pandas as pd
 import logging
 from datetime import datetime
-from data_providers.data_provider import DataProvider
-from strategies.base import BaseStrategy
-from risk.risk_manager import RiskManager, RiskParameters
-import numpy as np  # type: ignore
-from data_providers.sentiment_provider import SentimentDataProvider
-from database.manager import DatabaseManager
-from database.models import TradeSource, PositionSide
-from config.constants import DEFAULT_INITIAL_BALANCE
 
-# Shared performance metrics
-from performance.metrics import (
-    Side,
-    cash_pnl,
-    total_return as perf_total_return,
-    cagr as perf_cagr,
-    sharpe as perf_sharpe,
-    max_drawdown as perf_max_drawdown,
-)
+from execution.trade_executor import TradeExecutor, TradeRequest, CloseRequest, ExecutionMode
+from execution.signal_generator import SignalGenerator, MarketContext
+from execution.order_executors import BacktestOrderExecutor
+from data.repository import TradingDataRepository
+from strategies.base import BaseStrategy
+from database.manager import DatabaseManager
+from database.models import TradeSource
+from config.constants import DEFAULT_INITIAL_BALANCE
+from performance.metrics import Side
 
 logger = logging.getLogger(__name__)
 
-class Trade:
-    """Represents a single trade"""
-    def __init__(
-        self,
-        symbol: str,
-        side: str,
-        entry_price: float,
-        entry_time: datetime,
-        size: float,
-        stop_loss: float,
-        take_profit: Optional[float] = None
-    ):
-        self.symbol = symbol
-        self.side = side
-        self.entry_price = entry_price
-        self.entry_time = entry_time
-        self.size = min(size, 1.0)  # Limit position size to 100% of balance
-        self.stop_loss = stop_loss
-        self.take_profit = take_profit
-        self.exit_price: Optional[float] = None
-        self.exit_time: Optional[datetime] = None
-        self.pnl: Optional[float] = None
-        self.exit_reason: Optional[str] = None
-        
-    def close(self, price: float, time: datetime, reason: str):
-        """Close the trade and calculate PnL"""
-        self.exit_price = price
-        self.exit_time = time
-        self.exit_reason = reason
-        
-        # Calculate percentage return
-        if self.side == 'long':
-            self.pnl = ((self.exit_price - self.entry_price) / self.entry_price) * self.size
-        else:  # short
-            self.pnl = ((self.entry_price - self.exit_price) / self.entry_price) * self.size
 
 class Backtester:
-    """Backtesting engine for trading strategies"""
+    """
+    Backtesting engine using the new component architecture.
+    
+    This replaces the original Backtester with a cleaner implementation
+    that uses our TradeExecutor, SignalGenerator, and TradingDataRepository.
+    """
     
     def __init__(
         self,
         strategy: BaseStrategy,
-        data_provider: DataProvider,
-        sentiment_provider: Optional[SentimentDataProvider] = None,
-        risk_parameters: Optional[Any] = None,
+        data_provider: Any,  # Can be DataProvider or TradingDataRepository
+        sentiment_provider: Optional[Any] = None,  # Ignored for compatibility
+        risk_parameters: Optional[Any] = None,  # Ignored for compatibility
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
         database_url: Optional[str] = None,
         log_to_database: bool = True
     ):
         self.strategy = strategy
-        self.data_provider = data_provider
-        self.sentiment_provider = sentiment_provider
-        self.risk_parameters = risk_parameters
         self.initial_balance = initial_balance
-        self.balance = initial_balance
-        self.peak_balance = initial_balance
-        self.trades: List[Trade] = []
-        self.current_trade: Optional[Trade] = None
-        
-        # Database logging
         self.log_to_database = log_to_database
+        
+        # Handle both DataProvider and TradingDataRepository
+        if hasattr(data_provider, 'get_market_data'):
+            # It's a TradingDataRepository
+            self.data_repository = data_provider
+            self.data_provider = None
+        else:
+            # It's a DataProvider, create a TradingDataRepository
+            self.data_provider = data_provider
+            # Create database manager if needed
+            db_manager = DatabaseManager(database_url) if log_to_database else None
+            self.data_repository = TradingDataRepository(db_manager, data_provider)
+        
+        # Initialize database manager
         self.db_manager = None
         self.trading_session_id = None
         if log_to_database:
             self.db_manager = DatabaseManager(database_url)
+        
+        # Initialize components (will be set up during run)
+        self.signal_generator = None
+        self.trade_executor = None
+        self.order_executor = None
         
     def run(
         self,
@@ -97,7 +78,7 @@ class Backtester:
         start: datetime,
         end: Optional[datetime] = None
     ) -> Dict:
-        """Run backtest with sentiment data if available"""
+        """Run backtest"""
         try:
             # Create trading session in database if enabled
             if self.log_to_database and self.db_manager:
@@ -107,204 +88,368 @@ class Backtester:
                     timeframe=timeframe,
                     mode=TradeSource.BACKTEST,
                     initial_balance=self.initial_balance,
-                    strategy_config=getattr(self.strategy, 'config', {}),
+                    strategy_config=getattr(self.strategy, 'get_parameters', lambda: {})(),
                     session_name=f"Backtest_{symbol}_{start.strftime('%Y%m%d')}"
                 )
             
-            # Fetch price data
-            df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
+            # Get market data with indicators
+            df = self.data_repository.get_market_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_date=start,
+                end_date=end,
+                include_indicators=True
+            )
+            
             if df.empty:
-                raise ValueError("No price data available for the specified period")
-                
-            # Fetch sentiment data if provider is available
-            if self.sentiment_provider:
-                sentiment_df = self.sentiment_provider.get_historical_sentiment(
-                    symbol, start, end
-                )
-                if not sentiment_df.empty:
-                    # Aggregate sentiment data to match price timeframe
-                    sentiment_df = self.sentiment_provider.aggregate_sentiment(
-                        sentiment_df, window=timeframe
-                    )
-                    # Merge sentiment data with price data
-                    df = df.join(sentiment_df, how='left')
-                    # Forward fill sentiment scores
-                    df['sentiment_score'] = df['sentiment_score'].fillna(method='ffill')
-                    # Fill any remaining NaN values with 0
-                    df['sentiment_score'] = df['sentiment_score'].fillna(0)
-            
-            # Calculate indicators
-            df = self.strategy.calculate_indicators(df)
-            
-            # Remove warmup period - only drop rows where essential price data is missing
-            # Don't drop rows just because ML predictions or sentiment data is missing
-            essential_columns = ['open', 'high', 'low', 'close', 'volume']
-            df = df.dropna(subset=essential_columns)
+                raise ValueError("No market data available for the specified period")
             
             logger.info(f"Starting backtest with {len(df)} candles")
             
-            # -----------------------------
-            # Metrics & tracking variables
-            # -----------------------------
-            total_trades = 0
-            winning_trades = 0
-            max_drawdown_running = 0  # interim tracker (still used for intra-loop stopping)
-
-            # Track balance over time to enable robust performance stats
-            balance_history = []  # (timestamp, balance)
-
-            # Helper dict to track first/last balance of each calendar year
-            yearly_balance = {}
+            # Initialize components
+            self.signal_generator = SignalGenerator(self.strategy)
+            self.order_executor = BacktestOrderExecutor(df)
+            self.trade_executor = TradeExecutor(
+                mode=ExecutionMode.BACKTEST,
+                order_executor=self.order_executor,
+                db_manager=self.db_manager,
+                session_id=self.trading_session_id,
+                initial_balance=self.initial_balance
+            )
             
-            # Iterate through candles
+            # Track performance over time
+            equity_curve = []
+            
+            # Main backtesting loop
             for i in range(len(df)):
                 candle = df.iloc[i]
                 
-                # Record current balance for time-series analytics
-                balance_history.append((candle.name, self.balance))
-
-                # Track yearly start/end balances for return calc
-                yr = candle.name.year
-                if yr not in yearly_balance:
-                    yearly_balance[yr] = {
-                        'start': self.balance,
-                        'end': self.balance
-                    }
-                else:
-                    yearly_balance[yr]['end'] = self.balance
+                # Update order executor's current index
+                self.order_executor.set_current_index(i)
                 
-                # Update max drawdown
-                if self.balance > self.peak_balance:
-                    self.peak_balance = self.balance
-                current_drawdown = (self.peak_balance - self.balance) / self.peak_balance
-                max_drawdown_running = max(max_drawdown_running, current_drawdown)
+                # Record equity point
+                equity_curve.append({
+                    'timestamp': candle.name,
+                    'balance': self.trade_executor.current_balance,
+                    'equity': self._calculate_current_equity(candle['close'])
+                })
                 
-                # Check for exit if in position
-                if self.current_trade is not None:
-                    if self.strategy.check_exit_conditions(df, i, self.current_trade.entry_price):
-                        # Close the trade
-                        self.current_trade.close(candle['close'], candle.name, "Strategy exit")
-                        
-                        # Update balance (convert percentage PnL to absolute currency)
-                        trade_pnl_percent: float = float(self.current_trade.pnl or 0.0)  # e.g. 0.02 for +2%
-                        # Convert to absolute profit/loss based on current balance BEFORE applying PnL
-                        trade_pnl: float = cash_pnl(trade_pnl_percent, self.balance)
-
-                        self.balance += trade_pnl
-
-                        # Update metrics
-                        total_trades += 1
-                        if trade_pnl > 0:
-                            winning_trades += 1
-                        
-                        # Log trade
-                        logger.info(f"Exited position at {candle['close']}, Balance: {self.balance:.2f}")
-                        
-                        # Log to database if enabled
-                        if (self.log_to_database and self.db_manager and
-                                self.current_trade.exit_price is not None and
-                                self.current_trade.exit_time is not None and
-                                self.current_trade.exit_reason is not None):
-                            self.db_manager.log_trade(
-                                symbol=symbol,
-                                side="long",  # Backtester only does long trades currently
-                                entry_price=self.current_trade.entry_price,
-                                exit_price=self.current_trade.exit_price,
-                                size=self.current_trade.size,
-                                entry_time=self.current_trade.entry_time,
-                                exit_time=self.current_trade.exit_time,
-                                pnl=trade_pnl,
-                                exit_reason=self.current_trade.exit_reason,
-                                strategy_name=self.strategy.__class__.__name__,
-                                source=TradeSource.BACKTEST,
-                                stop_loss=self.current_trade.stop_loss,
-                                take_profit=self.current_trade.take_profit,
-                                session_id=self.trading_session_id
-                            )
-                        
-                        # Store trade
-                        self.trades.append(self.current_trade)
-                        self.current_trade = None
-                        
-                        # Check if maximum drawdown exceeded
-                        if current_drawdown > 0.5:  # 50% max drawdown
-                            logger.warning("Maximum drawdown exceeded. Stopping backtest.")
-                            break
+                # Create market context for signal generation
+                context = MarketContext(
+                    symbol=symbol,
+                    current_price=candle['close'],
+                    timestamp=candle.name,
+                    timeframe=timeframe,
+                    data=df.iloc[:i+1],  # Historical data up to current point
+                    index=i
+                )
                 
-                # Check for entry if not in position
-                elif self.strategy.check_entry_conditions(df, i):
-                    # Calculate position size
-                    size = self.strategy.calculate_position_size(df, i, self.balance)
+                # Generate signal
+                signal = self.signal_generator.generate_signal(
+                    context=context,
+                    current_balance=self.trade_executor.current_balance,
+                    active_positions=self.trade_executor.active_positions
+                )
+                
+                # Process signal
+                if signal.action == "enter" and len(self.trade_executor.active_positions) == 0:
+                    # Open new position
+                    trade_request = TradeRequest(
+                        symbol=symbol,
+                        side=signal.side,
+                        size=signal.position_size,
+                        price=signal.price or candle['close'],
+                        stop_loss=signal.stop_loss,
+                        take_profit=signal.take_profit,
+                        strategy_name=self.strategy.__class__.__name__,
+                        confidence=signal.confidence
+                    )
                     
-                    if size > 0:
-                        # Enter new trade
-                        # Assuming df and index are available in this context
-                        stop_loss = self.strategy.calculate_stop_loss(df, len(df) - 1, candle['close'], 'long')
-                        self.current_trade = Trade(
-                            symbol=symbol,
-                            side='long',
-                            entry_price=candle['close'],
-                            entry_time=candle.name,
-                            size=size,
-                            stop_loss=stop_loss
+                    result = self.trade_executor.open_position(trade_request)
+                    if result.success:
+                        logger.info(f"Opened position: {signal.side.value} at {result.executed_price}")
+                    else:
+                        logger.warning(f"Failed to open position: {result.error_message}")
+                
+                elif signal.action == "exit" and len(self.trade_executor.active_positions) > 0:
+                    # Close existing positions
+                    for position_id in list(self.trade_executor.active_positions.keys()):
+                        close_request = CloseRequest(
+                            position_id=position_id,
+                            reason="strategy_exit",
+                            price=candle['close']
                         )
-                        logger.info(f"Entered long position at {candle['close']}")
+                        
+                        result = self.trade_executor.close_position(close_request)
+                        if result.success:
+                            logger.info(f"Closed position at {result.executed_price}, P&L: {result.pnl:.2f}")
+                        else:
+                            logger.warning(f"Failed to close position: {result.error_message}")
+                
+                # Check for stop losses and take profits
+                current_price = candle['close']
+                positions_to_close = []
+                
+                for position_id, position in self.trade_executor.active_positions.items():
+                    should_close = False
+                    close_reason = ""
+                    
+                    # Check stop loss
+                    if position.stop_loss:
+                        if ((position.side == Side.LONG and current_price <= position.stop_loss) or
+                            (position.side == Side.SHORT and current_price >= position.stop_loss)):
+                            should_close = True
+                            close_reason = "stop_loss"
+                    
+                    # Check take profit
+                    if not should_close and position.take_profit:
+                        if ((position.side == Side.LONG and current_price >= position.take_profit) or
+                            (position.side == Side.SHORT and current_price <= position.take_profit)):
+                            should_close = True
+                            close_reason = "take_profit"
+                    
+                    if should_close:
+                        positions_to_close.append((position_id, close_reason))
+                
+                # Close positions that hit stops
+                for position_id, reason in positions_to_close:
+                    close_request = CloseRequest(
+                        position_id=position_id,
+                        reason=reason,
+                        price=current_price
+                    )
+                    result = self.trade_executor.close_position(close_request)
+                    if result.success:
+                        logger.info(f"Closed position ({reason}) at {result.executed_price}")
+                
+                # Check for maximum drawdown (safety stop)
+                if self._calculate_current_drawdown(candle['close']) > 0.5:  # 50% max drawdown
+                    logger.warning("Maximum drawdown exceeded. Stopping backtest.")
+                    break
             
-            # Calculate final metrics
-            win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-            total_return = perf_total_return(self.initial_balance, self.balance)
+            # Close any remaining positions at the end
+            final_price = df.iloc[-1]['close']
+            for position_id in list(self.trade_executor.active_positions.keys()):
+                close_request = CloseRequest(
+                    position_id=position_id,
+                    reason="backtest_end",
+                    price=final_price
+                )
+                self.trade_executor.close_position(close_request)
             
-            # ----------------------------------------------
-            # Sharpe ratio ‑ use *daily* returns of balance
-            # ----------------------------------------------
-            if balance_history:
-                bh_df = pd.DataFrame(balance_history, columns=['timestamp', 'balance']).set_index('timestamp')
-                # Resample to 1-day frequency for stability
-                daily_balance = bh_df['balance'].resample('1D').last().ffill()
-                daily_returns = daily_balance.pct_change().dropna()
-                if not daily_returns.empty and daily_returns.std() != 0:
-                    sharpe_ratio = perf_sharpe(daily_balance)
-                else:
-                    sharpe_ratio = 0
-                # Re-calculate max drawdown from full equity curve
-                max_drawdown_pct = perf_max_drawdown(daily_balance)
-            else:
-                sharpe_ratio = 0
-                max_drawdown_pct = 0
-            
-            # Calculate annualized return
-            days = (end - start).days if end else (datetime.now() - start).days
-            annualized_return = perf_cagr(self.initial_balance, self.balance, days)
-
-            # ---------------------------------------------
-            # Yearly returns based on account balance
-            # ---------------------------------------------
-            yearly_returns = {}
-            for yr, bal in yearly_balance.items():
-                start_bal = bal['start']
-                end_bal = bal['end']
-                if start_bal > 0:
-                    yearly_returns[str(yr)] = (end_bal / start_bal - 1) * 100
+            # Calculate final performance metrics
+            performance_metrics = self._calculate_performance_metrics(equity_curve, start, end)
             
             # End trading session in database if enabled
             if self.log_to_database and self.db_manager and self.trading_session_id:
                 self.db_manager.end_trading_session(
                     session_id=self.trading_session_id,
-                    final_balance=self.balance
+                    final_balance=self.trade_executor.current_balance
                 )
-
-            return {
-                'total_trades': total_trades,
-                'win_rate': win_rate,
-                'total_return': total_return,
-                'max_drawdown': max_drawdown_pct,
-                'sharpe_ratio': sharpe_ratio,
-                'final_balance': self.balance,
-                'annualized_return': annualized_return,
-                'yearly_returns': yearly_returns,
-                'session_id': self.trading_session_id if self.log_to_database else None
-            }
+            
+            # Add session info to results
+            performance_metrics['session_id'] = self.trading_session_id if self.log_to_database else None
+            performance_metrics['strategy_name'] = self.strategy.__class__.__name__
+            performance_metrics['symbol'] = symbol
+            performance_metrics['timeframe'] = timeframe
+            performance_metrics['start_date'] = start
+            performance_metrics['end_date'] = end or datetime.now()
+            
+            return performance_metrics
             
         except Exception as e:
             logger.error(f"Error running backtest: {str(e)}")
-            raise 
+            raise
+    
+    def _calculate_current_equity(self, current_price: float) -> float:
+        """Calculate current equity including unrealized P&L"""
+        equity = self.trade_executor.current_balance
+        
+        # Add unrealized P&L from open positions
+        for position in self.trade_executor.active_positions.values():
+            if position.side == Side.LONG:
+                unrealized_pnl = (current_price - position.entry_price) / position.entry_price * position.size
+            else:  # SHORT
+                unrealized_pnl = (position.entry_price - current_price) / position.entry_price * position.size
+            
+            equity += unrealized_pnl * self.trade_executor.current_balance
+        
+        return equity
+    
+    def _calculate_current_drawdown(self, current_price: float) -> float:
+        """Calculate current drawdown"""
+        if not hasattr(self, '_peak_equity'):
+            self._peak_equity = self.initial_balance
+
+        current_equity = self._calculate_current_equity(current_price)
+
+        if current_equity > self._peak_equity:
+            self._peak_equity = current_equity
+
+        return (self._peak_equity - current_equity) / self._peak_equity if self._peak_equity > 0 else 0
+    
+    def _calculate_performance_metrics(
+        self,
+        equity_curve: List[Dict],
+        start_date: datetime,
+        end_date: Optional[datetime]
+    ) -> Dict:
+        """Calculate comprehensive performance metrics"""
+        
+        # Use database metrics if available, otherwise calculate from trade executor
+        if self.trading_session_id and self.data_repository:
+            try:
+                trade_stats = self.data_repository.get_trade_performance(
+                    session_id=self.trading_session_id
+                )
+                session_metrics = self.data_repository.calculate_session_metrics(
+                    session_id=self.trading_session_id,
+                    initial_balance=self.initial_balance
+                )
+            except Exception as e:
+                logger.warning(f"Could not get database metrics: {e}")
+                trade_stats = self._calculate_trade_stats_from_executor()
+                session_metrics = self._calculate_session_metrics_from_equity(equity_curve)
+        else:
+            # Calculate from trade executor and equity curve
+            trade_stats = self._calculate_trade_stats_from_executor()
+            session_metrics = self._calculate_session_metrics_from_equity(equity_curve)
+        
+        # Calculate yearly returns from equity curve
+        yearly_returns = self._calculate_yearly_returns(equity_curve)
+        
+        # Combine all metrics
+        return {
+            'total_trades': trade_stats.get('total_trades', 0),
+            'win_rate': trade_stats.get('win_rate', 0),
+            'total_return': session_metrics.get('total_return_pct', 0),
+            'max_drawdown': session_metrics.get('max_drawdown_pct', 0),
+            'sharpe_ratio': session_metrics.get('sharpe_ratio', 0),
+            'initial_balance': self.initial_balance,
+            'final_balance': self.trade_executor.current_balance,
+            'annualized_return': session_metrics.get('cagr', 0),
+            'yearly_returns': yearly_returns,
+            'total_pnl': trade_stats.get('total_pnl', 0),
+            'avg_trade_pnl': trade_stats.get('avg_pnl', 0),
+            'max_win': trade_stats.get('max_win', 0),
+            'max_loss': trade_stats.get('max_loss', 0),
+            'profit_factor': trade_stats.get('profit_factor', 0)
+        }
+    
+    def _calculate_trade_stats_from_executor(self) -> Dict:
+        """Calculate trade statistics from trade executor history"""
+        completed_trades = self.trade_executor.completed_trades
+        
+        if not completed_trades:
+            return {
+                'total_trades': 0,
+                'win_rate': 0,
+                'total_pnl': 0,
+                'avg_pnl': 0,
+                'max_win': 0,
+                'max_loss': 0,
+                'profit_factor': 0
+            }
+        
+        total_trades = len(completed_trades)
+        winning_trades = [t for t in completed_trades if t.pnl > 0]
+        losing_trades = [t for t in completed_trades if t.pnl < 0]
+        
+        win_rate = len(winning_trades) / total_trades * 100 if total_trades > 0 else 0
+        total_pnl = sum(t.pnl for t in completed_trades)
+        avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+        max_win = max((t.pnl for t in winning_trades), default=0)
+        max_loss = min((t.pnl for t in losing_trades), default=0)
+        
+        gross_profit = sum(t.pnl for t in winning_trades)
+        gross_loss = abs(sum(t.pnl for t in losing_trades))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
+        
+        return {
+            'total_trades': total_trades,
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'avg_pnl': avg_pnl,
+            'max_win': max_win,
+            'max_loss': max_loss,
+            'profit_factor': profit_factor
+        }
+    
+    def _calculate_yearly_returns(self, equity_curve: List[Dict]) -> Dict:
+        """Calculate yearly returns from equity curve"""
+        if not equity_curve:
+            return {}
+        
+        try:
+            equity_df = pd.DataFrame(equity_curve).set_index('timestamp')
+            equity_df['year'] = equity_df.index.year
+            yearly_returns = {}
+            
+            for year in equity_df['year'].unique():
+                year_data = equity_df[equity_df['year'] == year]
+                if len(year_data) > 1:
+                    start_balance = year_data['balance'].iloc[0]
+                    end_balance = year_data['balance'].iloc[-1]
+                    if start_balance > 0:
+                        yearly_returns[str(year)] = (end_balance / start_balance - 1) * 100
+            
+            return yearly_returns
+        except Exception as e:
+            logger.warning(f"Could not calculate yearly returns: {e}")
+            return {}
+    
+    def _calculate_session_metrics_from_equity(self, equity_curve: List[Dict]) -> Dict:
+        """Calculate session metrics from equity curve"""
+        if not equity_curve:
+            return {
+                'total_return_pct': 0,
+                'max_drawdown_pct': 0,
+                'sharpe_ratio': 0,
+                'cagr': 0
+            }
+        
+        # Convert to DataFrame for analysis
+        equity_df = pd.DataFrame(equity_curve).set_index('timestamp')
+        
+        # Calculate total return
+        start_balance = equity_df['balance'].iloc[0]
+        end_balance = equity_df['balance'].iloc[-1]
+        total_return_pct = (end_balance / start_balance - 1) * 100 if start_balance > 0 else 0
+        
+        # Calculate maximum drawdown
+        peak = equity_df['balance'].expanding().max()
+        drawdown = (peak - equity_df['balance']) / peak * 100
+        max_drawdown_pct = drawdown.max()
+        
+        # Calculate CAGR (Compound Annual Growth Rate)
+        days = (equity_df.index[-1] - equity_df.index[0]).days
+        years = days / 365.25
+        cagr = ((end_balance / start_balance) ** (1 / years) - 1) * 100 if years > 0 and start_balance > 0 else 0
+        
+        # Calculate Sharpe ratio (simplified)
+        returns = equity_df['balance'].pct_change().dropna()
+        if len(returns) > 1:
+            sharpe_ratio = returns.mean() / returns.std() * (252 ** 0.5) if returns.std() > 0 else 0
+        else:
+            sharpe_ratio = 0
+        
+        return {
+            'total_return_pct': total_return_pct,
+            'max_drawdown_pct': max_drawdown_pct,
+            'sharpe_ratio': sharpe_ratio,
+            'cagr': cagr
+        }
+    
+    def get_trade_history(self) -> List[Dict]:
+        """Get detailed trade history"""
+        if not self.trading_session_id or not self.data_repository:
+            return []
+        
+        return self.data_repository.get_trades(session_id=self.trading_session_id)
+    
+    def get_signal_history(self) -> List[Dict]:
+        """Get signal generation history"""
+        if not self.signal_generator:
+            return []
+        
+        return [signal.__dict__ for signal in self.signal_generator.get_signal_history()] 

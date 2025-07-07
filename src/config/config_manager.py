@@ -1,6 +1,6 @@
 """
-Configuration manager that provides a unified interface for accessing configuration
-from multiple sources with fallback support
+Configuration manager that provides an interface for accessing configuration
+from multiple sources (e.g., environment variables, .env files, AWS Secrets Manager).
 """
 import os
 from typing import List, Optional, Any, Dict

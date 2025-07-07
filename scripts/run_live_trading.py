@@ -1,288 +1,229 @@
 #!/usr/bin/env python3
 """
-Live Trading Bot Runner
+Live Trading Runner
 
-This script starts the live trading engine with proper configuration and safety checks.
-It supports both paper trading (simulation) and live trading with real money.
-
-Usage:
-    # Paper trading (default - safe)
-    python run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
-    
-    # Live trading (requires explicit confirmation)
-    python run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
-    
-    # With custom settings
-    python run_live_trading.py ml_with_sentiment --symbol BTCUSDT --balance 5000 --max-position 0.05
+This script runs live trading using the new architecture with:
+- TradeExecutor for consistent trade management
+- SignalGenerator for standardized signal generation
+- TradingDataRepository for data access
 """
 
+import os
+import sys
+import asyncio
 import argparse
 import logging
-import sys
+import signal
 from datetime import datetime
-from pathlib import Path
+from typing import Optional
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
-# Also add the 'src' directory to PYTHONPATH so that modules like 'config', 'data_providers', etc. can be imported correctly when this script is executed directly.
-root_dir = Path(__file__).parent.parent
-src_dir = root_dir / "src"
-sys.path.append(str(src_dir))
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from config import get_config
-
-from data_providers.binance_data_provider import BinanceDataProvider
-from data_providers.cached_data_provider import CachedDataProvider
-from data_providers.senticrypt_provider import SentiCryptProvider
-from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
+from data.repository import TradingDataRepository
+from data_providers.cached_data_provider import CachedDataProvider
+from data_providers.binance_data_provider import BinanceDataProvider
+from database.manager import DatabaseManager
+from strategies import get_strategy_class
+from config.config_manager import ConfigManager
+from config.providers.env_provider import EnvVarProvider
 
-# Import strategies
-from strategies.adaptive import AdaptiveStrategy
-from strategies.enhanced import EnhancedStrategy
-# Optional high-risk strategy depends on TA-Lib
-try:
-    from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
-except ModuleNotFoundError:
-    HighRiskHighRewardStrategy = None
-from strategies.ml_basic import MlBasic
-from strategies.ml_with_sentiment import MlWithSentiment
-
-# Configure logging - ensure the logs directory exists at project root
-project_root = Path(__file__).parent.parent  # ai-trading-bot/
-logs_dir = project_root / "logs"
-logs_dir.mkdir(exist_ok=True)
-log_file_path = logs_dir / f"live_trading_{datetime.now().strftime('%Y%m%d')}.log"
-
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(str(log_file_path))
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger('live_trading')
+logger = logging.getLogger(__name__)
 
-def load_strategy(strategy_name: str):
-    """Load a strategy by name"""
-    strategies = {
-        'adaptive': AdaptiveStrategy,
-        'enhanced': EnhancedStrategy,
-        'ml_basic': MlBasic,
-        'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True)
-    }
-    # Register high-risk strategy only if available
-    if HighRiskHighRewardStrategy is not None:
-        strategies['high_risk_high_reward'] = HighRiskHighRewardStrategy
-    
-    if strategy_name not in strategies:
-        logger.error(f"Unknown strategy: {strategy_name}")
-        logger.info(f"Available strategies: {list(strategies.keys())}")
-        sys.exit(1)
-    
-    try:
-        strategy_class = strategies[strategy_name]
-        strategy = strategy_class() if callable(strategy_class) else strategy_class()
-        logger.info(f"Loaded strategy: {strategy.name}")
-        return strategy
-    except Exception as e:
-        logger.error(f"Error loading strategy: {e}")
-        raise
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='Run live trading bot')
-    
-    # Strategy selection
-    parser.add_argument('strategy', help='Strategy name (e.g., adaptive, ml_with_sentiment)')
-    
-    # Trading parameters
-    parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')
-    parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
-    parser.add_argument('--balance', type=float, default=100, help='Initial balance')
-    parser.add_argument('--max-position', type=float, default=0.1, help='Max position size (0.1 = 10% of balance)')
-    parser.add_argument('--check-interval', type=int, default=60, help='Check interval in seconds')
-    
-    # Trading mode
-    parser.add_argument('--paper-trading', action='store_true', help='Run in paper trading mode (safe)')
-    parser.add_argument('--live-trading', action='store_true', help='Run with real money (DANGEROUS)')
-    parser.add_argument('--i-understand-the-risks', action='store_true', 
-                       help='Required confirmation for live trading')
-    
-    # Risk management
-    parser.add_argument('--risk-per-trade', type=float, default=0.01, help='Risk per trade (1% = 0.01)')
-    parser.add_argument('--max-risk-per-trade', type=float, default=0.02, help='Maximum risk per trade')
-    parser.add_argument('--max-drawdown', type=float, default=0.2, help='Maximum drawdown before stopping')
-    
-    # Data providers
-    parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis')
-    parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
-    
-    # Monitoring
-    parser.add_argument('--webhook-url', help='Webhook URL for alerts')
-    parser.add_argument('--log-trades', action='store_true', default=True, help='Log trades to file')
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Run live trading')
+    parser.add_argument('strategy', help='Strategy name to run')
+    parser.add_argument('--symbol', default='BTCUSDT', help='Symbol to trade (default: BTCUSDT)')
+    parser.add_argument('--timeframe', default='1d', help='Timeframe (default: 1d)')
+    parser.add_argument('--initial-balance', type=float, default=10000, help='Initial balance for paper trading (default: 10000)')
+    parser.add_argument('--paper', action='store_true', help='Paper trading mode (default: live)')
+    parser.add_argument('--config', help='Path to custom config file')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
+    parser.add_argument('--max-position-size', type=float, default=0.1, help='Max position size as fraction of balance (default: 0.1)')
+    parser.add_argument('--stop-loss', type=float, default=0.02, help='Stop loss percentage (default: 0.02)')
+    parser.add_argument('--take-profit', type=float, default=0.04, help='Take profit percentage (default: 0.04)')
     
     return parser.parse_args()
 
-def validate_configuration(args):
-    """Validate trading configuration and safety checks"""
-    logger.info("Validating configuration...")
+
+def setup_logging(verbose: bool = False):
+    """Setup logging configuration"""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.getLogger().setLevel(level)
     
-    # Skip API credential checks when running in paper trading mode
-    if args.paper_trading and not args.live_trading:
-        logger.info("Paper trading mode detected – skipping API credential validation")
-    else:
-        # Check API credentials
-        config = get_config()
+    # Reduce noise from external libraries
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+
+
+def create_data_repository(config: ConfigManager) -> TradingDataRepository:
+    """Create data repository with cached data provider"""
+    # Use cached provider for efficiency
+    base_provider = BinanceDataProvider()
+    cached_provider = CachedDataProvider(base_provider)
+    
+    # Create database manager
+    db_manager = DatabaseManager(config.get('DATABASE_URL'))
+    
+    return TradingDataRepository(db_manager, cached_provider)
+
+
+class TradingApp:
+    """Main application class to manage the trading engine"""
+    
+    def __init__(self, engine: LiveTradingEngine, loop: Optional[asyncio.AbstractEventLoop] = None):
+        self.engine = engine
+        self.shutdown_event = asyncio.Event()
+        self.loop = loop or asyncio.get_event_loop()
+        
+    async def run(self):
+        """Start the trading engine with proper signal handling"""
+        # Setup signal handlers
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, initiating shutdown...")
+            self.shutdown_event.set()
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Setup event callbacks
+        self.engine.set_on_trade_opened(self._on_trade_opened)
+        self.engine.set_on_trade_closed(self._on_trade_closed)
+        self.engine.set_on_signal_generated(self._on_signal_generated)
+        self.engine.set_on_error(self._on_error)
+        
         try:
-            api_key = config.get('BINANCE_API_KEY')
-            secret = config.get('BINANCE_API_SECRET')
-
-            if not api_key or not secret:
-                raise ValueError("Missing key or secret")
-
-            logger.info("✅ Binance API credentials detected")
-        except ValueError:
-            logger.error("❌ Binance API credentials not found!")
-            logger.error("Please ensure BOTH variables are set in Railway (or other providers):")
-            logger.error("  - BINANCE_API_KEY")
-            logger.error("  - BINANCE_API_SECRET")
-            return False
+            # Start the engine
+            engine_task = asyncio.create_task(self.engine.start())
+            
+            # Wait for shutdown signal
+            await self.shutdown_event.wait()
+            
+            # Stop the engine
+            await self.engine.stop()
+            
+            # Cancel engine task if still running
+            if not engine_task.done():
+                engine_task.cancel()
+                try:
+                    await engine_task
+                except asyncio.CancelledError:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Error in trading engine controller: {str(e)}")
+            raise
     
-    # Validate trading mode
-    if args.live_trading:
-        if not args.i_understand_the_risks:
-            logger.error("❌ LIVE TRADING REQUIRES EXPLICIT RISK ACKNOWLEDGMENT")
-            logger.error("Add --i-understand-the-risks flag if you want to trade with real money")
-            return False
+    async def _on_trade_opened(self, result):
+        """Handle trade opened event"""
+        logger.info(f"🔵 TRADE OPENED: {result.position_id} at ${result.executed_price:.2f}")
         
-        logger.warning("⚠️  LIVE TRADING MODE ENABLED - REAL MONEY AT RISK")
-        logger.warning("⚠️  This bot will execute real trades on your Binance account")
+    async def _on_trade_closed(self, result):
+        """Handle trade closed event"""
+        pnl_emoji = "🟢" if result.pnl > 0 else "🔴"
+        logger.info(f"{pnl_emoji} TRADE CLOSED: P&L ${result.pnl:.2f}")
         
-        # Additional confirmation for live trading
-        confirmation = input("\nType 'I UNDERSTAND' to continue with live trading: ")
-        if confirmation != "I UNDERSTAND":
-            logger.info("Live trading cancelled by user")
-            return False
-    else:
-        logger.info("✅ Paper trading mode - no real orders will be executed")
-    
-    # Validate parameters
-    if args.max_position > 0.5:
-        logger.error("Maximum position size too large (>50%). This is dangerous.")
-        return False
-    
-    if args.balance < 100:
-        logger.error("Balance too small. Minimum recommended: $100")
-        return False
-    
-    if args.check_interval < 30:
-        logger.warning("Check interval very short. May cause rate limiting.")
-    
-    logger.info("✅ Configuration validated")
-    return True
+    async def _on_signal_generated(self, signal):
+        """Handle signal generated event"""
+        if signal.action != "hold":
+            logger.info(f"📊 SIGNAL: {signal.action.upper()} - {signal.side.value if signal.side else 'N/A'} "
+                       f"(Confidence: {signal.confidence:.2f})")
+        
+    async def _on_error(self, error):
+        """Handle error event"""
+        logger.error(f"❌ TRADING ERROR: {str(error)}")
 
-def print_startup_info(args, strategy):
-    """Print startup information"""
-    print("\n" + "="*70)
-    print("🤖 LIVE TRADING BOT STARTUP")
-    print("="*70)
-    print(f"Strategy: {strategy.name}")
-    print(f"Symbol: {args.symbol}")
-    print(f"Timeframe: {args.timeframe}")
-    print(f"Initial Balance: ${args.balance:,.2f}")
-    print(f"Max Position Size: {args.max_position*100:.1f}% of balance")
-    print(f"Check Interval: {args.check_interval}s")
-    print(f"Risk Per Trade: {args.risk_per_trade*100:.1f}%")
-    print(f"Trading Mode: {'🔴 LIVE TRADING' if args.live_trading else '📄 PAPER TRADING'}")
-    print(f"Sentiment Analysis: {'✅ Enabled' if args.use_sentiment else '❌ Disabled'}")
-    print(f"Data Caching: {'❌ Disabled' if args.no_cache else '✅ Enabled'}")
-    print(f"Trade Logging: {'✅ Enabled' if args.log_trades else '❌ Disabled'}")
-    print(f"Alerts: {'✅ Configured' if args.webhook_url else '❌ Not configured'}")
-    print("="*70)
+    async def shutdown(self):
+        """Shutdown the trading engine"""
+        await self.engine.stop()
+
 
 def main():
+    """Main function"""
+    args = parse_arguments()
+    
+    # Setup logging
+    setup_logging(args.verbose)
+    
     try:
-        args = parse_args()
+        # Load configuration
+        config = ConfigManager(providers=[EnvVarProvider()])
         
-        # Validate configuration
-        if not validate_configuration(args):
-            sys.exit(1)
+        # Get API credentials
+        api_key = config.get('binance.api_key')
+        api_secret = config.get('binance.api_secret')
         
-        # Load strategy
-        strategy = load_strategy(args.strategy)
+        if not api_key or not api_secret:
+            if not args.paper:
+                logger.error("Binance API credentials not found. Use --paper for paper trading.")
+                return 1
+            else:
+                logger.info("Running in paper trading mode (no real API credentials needed)")
+                api_key = "dummy_key"
+                api_secret = "dummy_secret"
         
-        # Show startup information
-        print_startup_info(args, strategy)
+        # Create data repository
+        data_repository = create_data_repository(config)
         
-        # Initialize data provider
-        logger.info("Initializing data providers...")
-        binance_provider = BinanceDataProvider()
+        # Get strategy class
+        strategy_class = get_strategy_class(args.strategy)
+        if not strategy_class:
+            logger.error(f"Strategy '{args.strategy}' not found")
+            return 1
         
-        if args.no_cache:
-            data_provider = binance_provider
-            logger.info("Data caching disabled")
-        else:
-            data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)  # Short TTL for live trading
-            logger.info("Data caching enabled (1 hour TTL)")
-        
-        # Initialize sentiment provider if requested
-        sentiment_provider = None
-        if args.use_sentiment:
-            try:
-                sentiment_provider = SentiCryptProvider(
-                    csv_path='data/senticrypt_sentiment_data.csv',
-                    live_mode=True,
-                    cache_duration_minutes=15
-                )
-                logger.info("✅ Sentiment provider initialized for live trading")
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize sentiment provider: {e}")
-                logger.info("Continuing without sentiment analysis...")
-        
-        # Set up risk parameters
-        risk_params = RiskParameters(
-            base_risk_per_trade=args.risk_per_trade,
-            max_risk_per_trade=args.max_risk_per_trade,
-            max_drawdown=args.max_drawdown
-        )
-        
-        # Create trading engine
-        logger.info("Creating live trading engine...")
+        # Create live trading engine
         engine = LiveTradingEngine(
-            strategy=strategy,
-            data_provider=data_provider,
-            sentiment_provider=sentiment_provider,
-            risk_parameters=risk_params,
-            check_interval=args.check_interval,
-            initial_balance=args.balance,
-            max_position_size=args.max_position,
-            enable_live_trading=args.live_trading,
-            log_trades=args.log_trades,
-            alert_webhook_url=args.webhook_url
+            strategy=strategy_class(),
+            data_provider=data_repository.data_provider,
+            api_key=api_key,
+            api_secret=api_secret,
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+            paper_trading=args.paper
         )
         
-        # Final safety check for live trading
-        if args.live_trading:
-            logger.critical("🚨 FINAL WARNING: STARTING LIVE TRADING IN 10 SECONDS")
-            logger.critical("🚨 Press Ctrl+C now to cancel")
-            import time
-            for i in range(10, 0, -1):
-                print(f"Starting in {i}...", end='\r')
-                time.sleep(1)
-            print("\n🚀 LIVE TRADING STARTED")
+        # Create and run the application
+        app = TradingApp(engine)
         
-        # Start trading
-        logger.info(f"Starting trading engine for {args.symbol} on {args.timeframe}")
-        engine.start(args.symbol, args.timeframe)
+        # Print startup info
+        mode = "PAPER" if args.paper else "LIVE"
+        logger.info(f"🚀 Starting {mode} trading engine")
+        logger.info(f"Strategy: {args.strategy}")
+        logger.info(f"Symbol: {args.symbol}")
+        logger.info(f"Timeframe: {args.timeframe}")
+        logger.info(f"Initial Balance: ${args.initial_balance:,.2f}")
+        logger.info(f"Max Position Size: {args.max_position_size*100:.1f}%")
+        logger.info(f"Stop Loss: {args.stop_loss*100:.1f}%")
+        logger.info(f"Take Profit: {args.take_profit*100:.1f}%")
+        
+        if not args.paper:
+            logger.warning("⚠️  LIVE TRADING MODE - REAL MONEY AT RISK!")
+            logger.warning("⚠️  Press Ctrl+C to stop trading safely")
+        
+        # Start the application
+        asyncio.run(app.run())
+        
+        logger.info("Trading engine stopped successfully")
+        return 0
         
     except KeyboardInterrupt:
-        logger.info("🛑 Trading stopped by user")
+        logger.info("Application interrupted")
+        return 1
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
-        sys.exit(1)
-    finally:
-        logger.info("🏁 Trading session ended")
+        logger.error(f"Error running live trading: {str(e)}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
 
 if __name__ == "__main__":
-    main() 
+    sys.exit(main()) 
