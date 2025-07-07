@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 import signal
 import sys
+import numpy as np
 
 from data_providers.data_provider import DataProvider
 from data_providers.binance_data_provider import BinanceDataProvider
@@ -20,6 +21,11 @@ from live.strategy_manager import StrategyManager
 from database.manager import DatabaseManager
 from database.models import TradeSource
 from config.constants import DEFAULT_INITIAL_BALANCE
+from performance.metrics import (
+    Side,
+    pnl_percent,
+    cash_pnl,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -418,9 +424,9 @@ class LiveTradingEngine:
         """Update unrealized PnL for all positions"""
         for position in self.positions.values():
             if position.side == PositionSide.LONG:
-                position.unrealized_pnl = (current_price - position.entry_price) / position.entry_price * position.size
+                position.unrealized_pnl = pnl_percent(position.entry_price, current_price, Side.LONG, position.size)
             else:  # SHORT
-                position.unrealized_pnl = (position.entry_price - current_price) / position.entry_price * position.size
+                position.unrealized_pnl = pnl_percent(position.entry_price, current_price, Side.SHORT, position.size)
                 
     def _check_exit_conditions(self, df: pd.DataFrame, current_index: int, current_price: float):
         """Check if any positions should be closed"""
@@ -569,12 +575,8 @@ class LiveTradingEngine:
                 logger.info(f"📄 PAPER TRADE - Would close {position.side.value} position")
             
             # Calculate PnL
-            if position.side == PositionSide.LONG:
-                pnl_pct = (exit_price - position.entry_price) / position.entry_price
-            else:
-                pnl_pct = (position.entry_price - exit_price) / position.entry_price
-                
-            pnl_dollar = pnl_pct * position.size * self.current_balance
+            pnl_pct = pnl_percent(position.entry_price, exit_price, Side(position.side.value))
+            pnl_dollar = cash_pnl(pnl_pct * position.size, self.current_balance)
             
             # Update balance
             self.current_balance += pnl_dollar

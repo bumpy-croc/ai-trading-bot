@@ -32,6 +32,8 @@ sys.path.append(str(project_root))
 from database.manager import DatabaseManager
 from data_providers.binance_data_provider import BinanceDataProvider
 from data_providers.cached_data_provider import CachedDataProvider
+from performance.metrics import sharpe as perf_sharpe
+from performance.metrics import max_drawdown as perf_max_drawdown
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -457,18 +459,13 @@ class MonitoringDashboard:
     def _get_max_drawdown(self) -> float:
         """Calculate maximum drawdown"""
         try:
-            query = """
-            SELECT 
-                MAX(balance) as peak_balance,
-                MIN(balance) as min_balance
-            FROM account_history
-            """
+            query = "SELECT balance, DATE(timestamp) as date FROM account_history ORDER BY timestamp"
             result = self.db_manager.execute_query(query)
-            if result and result[0]['peak_balance']:
-                peak = result[0]['peak_balance']
-                min_bal = result[0]['min_balance']
-                return ((peak - min_bal) / peak) * 100 if peak > 0 else 0.0
-            return 0.0
+            if len(result) < 2:
+                return 0.0
+            df = pd.DataFrame(result)
+            daily_balance = df.set_index('date')['balance']
+            return perf_max_drawdown(daily_balance)
         except Exception as e:
             logger.error(f"Error calculating max drawdown: {e}")
             return 0.0
@@ -514,19 +511,8 @@ class MonitoringDashboard:
             
             # Calculate daily returns
             df = pd.DataFrame(result)
-            df['daily_return'] = df['balance'].pct_change()
-            df = df.dropna()
-            
-            if len(df) == 0:
-                return 0.0
-            
-            # Calculate Sharpe ratio (assuming 0% risk-free rate)
-            mean_return = df['daily_return'].mean()
-            std_return = df['daily_return'].std()
-            
-            if std_return > 0:
-                return (mean_return / std_return) * (365 ** 0.5)  # Annualized sync with backtester
-            return 0.0
+            daily_balance = df.set_index('date')['balance']
+            return perf_sharpe(daily_balance)
             
         except Exception as e:
             logger.error(f"Error calculating Sharpe ratio: {e}")

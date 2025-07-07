@@ -12,6 +12,16 @@ from database.manager import DatabaseManager
 from database.models import TradeSource, PositionSide
 from config.constants import DEFAULT_INITIAL_BALANCE
 
+# Shared performance metrics
+from performance.metrics import (
+    Side,
+    cash_pnl,
+    total_return as perf_total_return,
+    cagr as perf_cagr,
+    sharpe as perf_sharpe,
+    max_drawdown as perf_max_drawdown,
+)
+
 logger = logging.getLogger(__name__)
 
 class Trade:
@@ -138,7 +148,7 @@ class Backtester:
             # -----------------------------
             total_trades = 0
             winning_trades = 0
-            max_drawdown = 0
+            max_drawdown_running = 0  # interim tracker (still used for intra-loop stopping)
 
             # Track balance over time to enable robust performance stats
             balance_history = []  # (timestamp, balance)
@@ -167,7 +177,7 @@ class Backtester:
                 if self.balance > self.peak_balance:
                     self.peak_balance = self.balance
                 current_drawdown = (self.peak_balance - self.balance) / self.peak_balance
-                max_drawdown = max(max_drawdown, current_drawdown)
+                max_drawdown_running = max(max_drawdown_running, current_drawdown)
                 
                 # Check for exit if in position
                 if self.current_trade is not None:
@@ -178,7 +188,7 @@ class Backtester:
                         # Update balance (convert percentage PnL to absolute currency)
                         trade_pnl_percent: float = float(self.current_trade.pnl or 0.0)  # e.g. 0.02 for +2%
                         # Convert to absolute profit/loss based on current balance BEFORE applying PnL
-                        trade_pnl: float = trade_pnl_percent * self.balance
+                        trade_pnl: float = cash_pnl(trade_pnl_percent, self.balance)
 
                         self.balance += trade_pnl
 
@@ -242,7 +252,7 @@ class Backtester:
             
             # Calculate final metrics
             win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-            total_return = ((self.balance - self.initial_balance) / self.initial_balance) * 100
+            total_return = perf_total_return(self.initial_balance, self.balance)
             
             # ----------------------------------------------
             # Sharpe ratio ‑ use *daily* returns of balance
@@ -253,15 +263,18 @@ class Backtester:
                 daily_balance = bh_df['balance'].resample('1D').last().ffill()
                 daily_returns = daily_balance.pct_change().dropna()
                 if not daily_returns.empty and daily_returns.std() != 0:
-                    sharpe_ratio = np.sqrt(365) * daily_returns.mean() / daily_returns.std()
+                    sharpe_ratio = perf_sharpe(daily_balance)
                 else:
                     sharpe_ratio = 0
+                # Re-calculate max drawdown from full equity curve
+                max_drawdown_pct = perf_max_drawdown(daily_balance)
             else:
                 sharpe_ratio = 0
+                max_drawdown_pct = 0
             
             # Calculate annualized return
             days = (end - start).days if end else (datetime.now() - start).days
-            annualized_return = ((1 + total_return / 100) ** (365 / days) - 1) * 100
+            annualized_return = perf_cagr(self.initial_balance, self.balance, days)
 
             # ---------------------------------------------
             # Yearly returns based on account balance
@@ -284,7 +297,7 @@ class Backtester:
                 'total_trades': total_trades,
                 'win_rate': win_rate,
                 'total_return': total_return,
-                'max_drawdown': max_drawdown * 100,
+                'max_drawdown': max_drawdown_pct,
                 'sharpe_ratio': sharpe_ratio,
                 'final_balance': self.balance,
                 'annualized_return': annualized_return,
