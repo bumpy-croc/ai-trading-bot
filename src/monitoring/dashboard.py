@@ -15,12 +15,12 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, TypedDict
 from pathlib import Path
-import pandas as pd
+import pandas as pd  # type: ignore
 
-from flask import Flask, render_template, jsonify, request
-from flask_socketio import SocketIO, emit
+from flask import Flask, render_template, jsonify, request  # type: ignore
+from flask_socketio import SocketIO, emit  # type: ignore
 import threading
 import time
 
@@ -36,6 +36,34 @@ from data_providers.cached_data_provider import CachedDataProvider
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# after imports define typedicts
+
+# ---- TypedDicts for static typing ----
+
+class PositionDict(TypedDict):
+    symbol: str
+    side: str
+    entry_price: float
+    current_price: float
+    quantity: float
+    unrealized_pnl: float
+    entry_time: Any
+    stop_loss: Optional[float]
+    take_profit: Optional[float]
+    order_id: Optional[str]
+
+
+class TradeDict(TypedDict):
+    symbol: str
+    side: str
+    entry_price: float
+    exit_price: float
+    quantity: float
+    entry_time: Any
+    exit_time: Any
+    pnl: float
+    exit_reason: str
 
 class MonitoringDashboard:
     """
@@ -54,7 +82,7 @@ class MonitoringDashboard:
         # Gracefully degrade if Binance is unreachable (e.g. no outbound DNS in the env)
         try:
             binance_provider = BinanceDataProvider()
-            self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=0.1)  # 6-min cache
+            self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)
         except Exception as e:
             logger.warning(f"Binance provider unavailable: {e}. Starting dashboard in offline mode.")
 
@@ -66,7 +94,7 @@ class MonitoringDashboard:
                     return 0.0
 
                 @staticmethod
-                def get_historical_data(symbol: str, start, end):
+                def get_historical_data(symbol: str, timeframe: str, start, end):  # noqa: D401
                     return pd.DataFrame()
 
             self.data_provider = _OfflineProvider()
@@ -497,7 +525,7 @@ class MonitoringDashboard:
             std_return = df['daily_return'].std()
             
             if std_return > 0:
-                return (mean_return / std_return) * (252 ** 0.5)  # Annualized
+                return (mean_return / std_return) * (365 ** 0.5)  # Annualized sync with backtester
             return 0.0
             
         except Exception as e:
@@ -631,7 +659,7 @@ class MonitoringDashboard:
     def _get_price_change_24h(self) -> float:
         """Get 24h price change percentage"""
         try:
-            df = self.data_provider.get_historical_data('BTCUSDT', 
+            df = self.data_provider.get_historical_data('BTCUSDT', '1h',
                                                        datetime.now() - timedelta(days=2), 
                                                        datetime.now())
             if len(df) >= 2:
@@ -646,7 +674,7 @@ class MonitoringDashboard:
     def _get_volume_24h(self) -> float:
         """Get 24h trading volume"""
         try:
-            df = self.data_provider.get_historical_data('BTCUSDT', 
+            df = self.data_provider.get_historical_data('BTCUSDT', '1h',
                                                        datetime.now() - timedelta(days=1), 
                                                        datetime.now())
             if not df.empty:
@@ -660,7 +688,7 @@ class MonitoringDashboard:
         """Get current RSI value"""
         try:
             from indicators.technical import calculate_rsi
-            df = self.data_provider.get_historical_data('BTCUSDT', 
+            df = self.data_provider.get_historical_data('BTCUSDT', '1h',
                                                        datetime.now() - timedelta(days=30), 
                                                        datetime.now())
             if len(df) > 14:
@@ -675,7 +703,7 @@ class MonitoringDashboard:
         """Get EMA trend direction"""
         try:
             from indicators.technical import calculate_ema
-            df = self.data_provider.get_historical_data('BTCUSDT', 
+            df = self.data_provider.get_historical_data('BTCUSDT', '1h',
                                                        datetime.now() - timedelta(days=30), 
                                                        datetime.now())
             if len(df) > 50:
@@ -1150,7 +1178,7 @@ class MonitoringDashboard:
             logger.error(f"Error calculating win/loss ratio: {e}")
             return 0.0
     
-    def _get_current_positions(self) -> List[Dict[str, Any]]:
+    def _get_current_positions(self) -> List[PositionDict]:
         """Get current active positions"""
         try:
             query = """
@@ -1163,7 +1191,7 @@ class MonitoringDashboard:
             """
             result = self.db_manager.execute_query(query)
             
-            positions = []
+            positions: List[PositionDict] = []
             current_price = self._get_current_price()
             
             for row in result:
@@ -1176,7 +1204,7 @@ class MonitoringDashboard:
                 else:
                     unrealized_pnl = (entry_price - current_price) * quantity
                 
-                positions.append({
+                positions.append(PositionDict(**{
                     'symbol': row['symbol'],
                     'side': row['side'],
                     'entry_price': entry_price,
@@ -1187,15 +1215,15 @@ class MonitoringDashboard:
                     'stop_loss': row['stop_loss'],
                     'take_profit': row['take_profit'],
                     'order_id': row['order_id']
-                })
+                }))
             
             return positions
             
         except Exception as e:
             logger.error(f"Error getting current positions: {e}")
-            return []
+            return []  # type: ignore[return-value]
     
-    def _get_recent_trades(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def _get_recent_trades(self, limit: int = 50) -> List[TradeDict]:
         """Get recent completed trades"""
         try:
             query = """
@@ -1208,7 +1236,10 @@ class MonitoringDashboard:
             LIMIT ?
             """
             result = self.db_manager.execute_query(query, (limit,))
-            return [dict(row) for row in result] if result else []
+            trades: List[TradeDict] = []
+            for row in result or []:
+                trades.append(TradeDict(**row))  # type: ignore[arg-type]
+            return trades
         except Exception as e:
             logger.error(f"Error getting recent trades: {e}")
             return []

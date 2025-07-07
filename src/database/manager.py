@@ -4,15 +4,16 @@ PostgreSQL database manager for handling all database operations
 
 import logging
 import os
-from typing import Optional, Dict, List, Any, Union
+from typing import Optional, Dict, List, Any, Union, TYPE_CHECKING, Iterable
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
 
-from sqlalchemy import create_engine, func, and_, or_, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import QueuePool
+from sqlalchemy import create_engine, func, and_, or_, text  # type: ignore
+from sqlalchemy.orm import sessionmaker, Session  # type: ignore
+from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+from sqlalchemy.pool import QueuePool  # type: ignore
+from decimal import Decimal, InvalidOperation
 
 from .models import (
     Base, Trade, Position, AccountHistory, PerformanceMetrics,
@@ -23,6 +24,12 @@ from config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:  # pragma: no cover
+    # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
+    # Import only for static analysis; guarded to avoid hard runtime dependency.
+    from sqlalchemy.engine.base import Engine as _Engine, Connection as _Connection  # type: ignore
+    from sqlalchemy.engine import Result as _Result  # type: ignore
+    from sqlalchemy.sql.elements import TextClause as _TextClause  # type: ignore
 
 class DatabaseManager:
     """
@@ -45,7 +52,7 @@ class DatabaseManager:
             database_url: Optional PostgreSQL database URL. If None, uses DATABASE_URL from environment.
         """
         self.database_url = database_url
-        self.engine = None
+        self.engine: "_Engine | None" = None
         self.session_factory = None
         self._current_session_id: Optional[int] = None
         
@@ -537,14 +544,20 @@ class DatabaseManager:
             # Ensure JSON is serializable – convert Decimal objects to float.
             from decimal import Decimal  # Local import to avoid global dependency
 
-            def _sanitize(obj):
-                if isinstance(obj, Decimal):
-                    return float(obj)
-                if isinstance(obj, dict):
-                    return {k: _sanitize(v) for k, v in obj.items()}
-                if isinstance(obj, (list, tuple)):
-                    return [_sanitize(v) for v in obj]
-                return obj
+            def _sanitize(obj: Any) -> Dict[str, Any]:
+                """Convert arbitrary objects to a JSON-serialisable dict for DB logging."""
+                try:
+                    # Pass-through dicts after validation
+                    if isinstance(obj, dict):
+                        json.dumps(obj, default=str)
+                        return obj
+                    # Wrap primitives
+                    if isinstance(obj, (str, int, float, bool)) or obj is None:
+                        return {"value": obj}
+                    # Attempt generic serialisation
+                    return {"value": json.loads(json.dumps(obj, default=str))}
+                except Exception:
+                    return {"value": str(obj)}
 
             if details is not None:
                 details = _sanitize(details)
@@ -848,7 +861,7 @@ class DatabaseManager:
             
             logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
     
-    def execute_query(self, query: str, params=None):  # type: ignore[override]
+    def execute_query(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:  # type: ignore[override]
         """Run a raw SQL query and return list of dict rows.
 
         Uses SQLAlchemy 2.x ``exec_driver_sql`` API so plain SQL strings work
@@ -856,23 +869,35 @@ class DatabaseManager:
         older versions.
         """
         params = params or ()
+        if self.engine is None:
+            logger.error("Database engine not initialised – cannot execute query")
+            return []
+
+        # Local import to avoid top-level circular dependencies and keep stubs optional
+        from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+        from sqlalchemy import text as _sql_text  # type: ignore
+
+        engine_typed: "_Engine" = self.engine  # type: ignore[assignment]
+        connection_raw = engine_typed.connect()
+        conn: "_Connection" = connection_raw  # type: ignore[assignment]
+
         try:
-            with self.engine.connect() as connection:
-                # SQLAlchemy 2.0
+            with conn as connection:
+                # Prefer SQLAlchemy 2.x driver-level exec
                 try:
-                    result = connection.exec_driver_sql(query, params)
+                    result: "_Result" = connection.exec_driver_sql(query, params)  # type: ignore[arg-type]
                 except AttributeError:
-                    # Older SQLAlchemy (<1.4) fallback
-                    from sqlalchemy import text
-                    result = connection.execute(text(query), params)
-                # Convert to list of dictionaries
+                    # Fallback for <1.4
+                    result = connection.execute(_sql_text(query), params)  # type: ignore[arg-type]
+
+                # Map rows to plain dictionaries
                 try:
-                    rows = [dict(row) for row in result.mappings()]
+                    rows: List[Dict[str, Any]] = [dict(row) for row in result.mappings()]  # type: ignore[attr-defined]
                 except AttributeError:
-                    rows = [dict(row.items()) for row in result]
+                    rows = [dict(row.items()) for row in result]  # type: ignore[attr-defined]
                 return rows
-        except SQLAlchemyError as e:
-            logger.error(f"Raw query error: {e}")
+        except SQLAlchemyError as exc:
+            logger.error(f"Raw query error: {exc}")
             return []
 
     # ========== BALANCE MANAGEMENT ==========
@@ -1041,3 +1066,29 @@ class DatabaseManager:
         if self.engine and hasattr(self.engine.pool, 'dispose'):
             self.engine.pool.dispose()
             logger.info("PostgreSQL connection pool disposed")
+
+    # ----------------------
+    # Utility helpers
+    # ----------------------
+    @staticmethod
+    def decimal_to_float(value):
+        """Safely cast SQLAlchemy Numeric / Decimal values to float.
+
+        Accepts Decimal, int, float or None and always returns a Python float
+        (or None). This prevents subtle precision / scale issues when Numeric
+        values are used directly in arithmetic.
+        """
+        if value is None:
+            return None
+        try:
+            # Handle SQLAlchemy Numeric (often Decimal)
+            if isinstance(value, Decimal):
+                return float(value)
+            # Primitives
+            return float(value)
+        except (TypeError, ValueError, InvalidOperation):
+            # As a last-ditch attempt use native cast
+            try:
+                return float(str(value))
+            except Exception:
+                return None
