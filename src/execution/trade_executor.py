@@ -119,14 +119,37 @@ class TradeExecutor:
         self.winning_trades = 0
         self.total_pnl = 0.0
         
+        # Batch logging for performance
+        self.batch_logging = mode == ExecutionMode.BACKTEST
+        self.pending_trades: List[Dict] = []
+        self.pending_balance_updates: List[Dict] = []
+        
     def open_position(self, request: TradeRequest) -> TradeResult:
         """Open a new trading position"""
         try:
             # Validate request
+            if not request.symbol:
+                return TradeResult(
+                    success=False, 
+                    error_message="Symbol cannot be empty"
+                )
+                
             if request.size <= 0 or request.size > 1.0:
                 return TradeResult(
                     success=False, 
-                    error_message=f"Invalid position size: {request.size}"
+                    error_message=f"Invalid position size: {request.size} (must be between 0 and 1)"
+                )
+                
+            if request.price <= 0:
+                return TradeResult(
+                    success=False, 
+                    error_message=f"Invalid price: {request.price} (must be positive)"
+                )
+                
+            if self.current_balance <= 0:
+                return TradeResult(
+                    success=False, 
+                    error_message="Insufficient balance to open position"
                 )
             
             # Calculate position value
@@ -134,15 +157,30 @@ class TradeExecutor:
             quantity = position_value / request.price
             
             # Execute order
-            order_result = self.order_executor.execute_buy_order(
-                request.symbol, quantity, request.price
-            )
-            
-            if not isinstance(order_result, OrderResult) or not order_result.success:
-                error_message = order_result.error_message if hasattr(order_result, 'error_message') else "Invalid order result"
+            try:
+                order_result = self.order_executor.execute_buy_order(
+                    request.symbol, quantity, request.price
+                )
+                
+                if not isinstance(order_result, OrderResult):
+                    return TradeResult(
+                        success=False,
+                        error_message="Invalid order result type returned"
+                    )
+                    
+                if not order_result.success:
+                    error_message = getattr(order_result, 'error_message', 'Unknown execution error')
+                    logger.warning(f"Order execution failed: {error_message}")
+                    return TradeResult(
+                        success=False,
+                        error_message=error_message
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Exception during order execution: {e}")
                 return TradeResult(
                     success=False,
-                    error_message=error_message
+                    error_message=f"Order execution exception: {str(e)}"
                 )
             
             order_id = order_result.order_id or f"{self.mode.value}_{self.position_counter}"
@@ -205,6 +243,19 @@ class TradeExecutor:
     def close_position(self, request: CloseRequest) -> TradeResult:
         """Close an existing position"""
         try:
+            # Validate request
+            if not request.position_id:
+                return TradeResult(
+                    success=False,
+                    error_message="Position ID cannot be empty"
+                )
+                
+            if not request.reason:
+                return TradeResult(
+                    success=False,
+                    error_message="Close reason cannot be empty"
+                )
+            
             position = self.active_positions.get(request.position_id)
             if not position:
                 return TradeResult(
@@ -215,18 +266,45 @@ class TradeExecutor:
             # Get exit price
             exit_price = request.price
             if exit_price is None:
-                exit_price = self.order_executor.get_current_price(position.symbol)
+                try:
+                    exit_price = self.order_executor.get_current_price(position.symbol)
+                    if exit_price is None or exit_price <= 0:
+                        return TradeResult(
+                            success=False,
+                            error_message="Unable to get valid current price for position close"
+                        )
+                except Exception as e:
+                    logger.error(f"Error getting current price: {e}")
+                    return TradeResult(
+                        success=False,
+                        error_message=f"Price retrieval error: {str(e)}"
+                    )
             
             # Execute closing order
-            close_order_result = self.order_executor.execute_sell_order(
-                position.symbol, position.quantity, exit_price
-            )
-            
-            if not isinstance(close_order_result, OrderResult) or not close_order_result.success:
-                error_message = close_order_result.error_message if hasattr(close_order_result, 'error_message') else "Invalid order result"
+            try:
+                close_order_result = self.order_executor.execute_sell_order(
+                    position.symbol, position.quantity, exit_price
+                )
+                
+                if not isinstance(close_order_result, OrderResult):
+                    return TradeResult(
+                        success=False,
+                        error_message="Invalid close order result type returned"
+                    )
+                    
+                if not close_order_result.success:
+                    error_message = getattr(close_order_result, 'error_message', 'Unknown close execution error')
+                    logger.warning(f"Close order execution failed: {error_message}")
+                    return TradeResult(
+                        success=False,
+                        error_message=error_message
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Exception during close order execution: {e}")
                 return TradeResult(
                     success=False,
-                    error_message=error_message
+                    error_message=f"Close order execution exception: {str(e)}"
                 )
             
             # Calculate P&L
@@ -252,32 +330,65 @@ class TradeExecutor:
                 if self.mode == ExecutionMode.BACKTEST:
                     trade_source = TradeSource.BACKTEST
                 
-                trade_id = self.db_manager.log_trade(
-                    symbol=position.symbol,
-                    side=PositionSide(position.side.value),
-                    entry_price=position.entry_price,
-                    exit_price=exit_price,
-                    size=position.size,
-                    entry_time=position.entry_time,
-                    exit_time=datetime.now(),
-                    pnl=pnl_cash,
-                    exit_reason=request.reason,
-                    strategy_name=position.strategy_name,
-                    source=trade_source,
-                    stop_loss=position.stop_loss,
-                    take_profit=position.take_profit,
-                    order_id=position.id,
-                    confidence_score=position.confidence,
-                    session_id=self.session_id
-                )
-                
-                # Update balance in database
-                self.db_manager.update_balance(
-                    self.current_balance,
-                    f'trade_pnl_{request.reason.lower()}',
-                    'system',
-                    self.session_id
-                )
+                if self.batch_logging:
+                    # Batch database operations for performance
+                    self.pending_trades.append({
+                        'symbol': position.symbol,
+                        'side': PositionSide(position.side.value),
+                        'entry_price': position.entry_price,
+                        'exit_price': exit_price,
+                        'size': position.size,
+                        'entry_time': position.entry_time,
+                        'exit_time': datetime.now(),
+                        'pnl': pnl_cash,
+                        'exit_reason': request.reason,
+                        'strategy_name': position.strategy_name,
+                        'source': trade_source,
+                        'stop_loss': position.stop_loss,
+                        'take_profit': position.take_profit,
+                        'order_id': position.id,
+                        'confidence_score': position.confidence,
+                        'session_id': self.session_id
+                    })
+                    
+                    self.pending_balance_updates.append({
+                        'balance': self.current_balance,
+                        'reason': f'trade_pnl_{request.reason.lower()}',
+                        'source': 'system',
+                        'session_id': self.session_id
+                    })
+                    
+                    # Flush batch operations periodically to manage memory
+                    if len(self.pending_trades) >= 100:
+                        self.flush_batch_operations()
+                else:
+                    # Immediate logging for live/paper trading
+                    trade_id = self.db_manager.log_trade(
+                        symbol=position.symbol,
+                        side=PositionSide(position.side.value),
+                        entry_price=position.entry_price,
+                        exit_price=exit_price,
+                        size=position.size,
+                        entry_time=position.entry_time,
+                        exit_time=datetime.now(),
+                        pnl=pnl_cash,
+                        exit_reason=request.reason,
+                        strategy_name=position.strategy_name,
+                        source=trade_source,
+                        stop_loss=position.stop_loss,
+                        take_profit=position.take_profit,
+                        order_id=position.id,
+                        confidence_score=position.confidence,
+                        session_id=self.session_id
+                    )
+                    
+                    # Update balance in database
+                    self.db_manager.update_balance(
+                        self.current_balance,
+                        f'trade_pnl_{request.reason.lower()}',
+                        'system',
+                        self.session_id
+                    )
             
             # Remove from active positions
             del self.active_positions[request.position_id]
@@ -336,6 +447,50 @@ class TradeExecutor:
             'total_trades': self.total_trades,
             'win_rate': (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
         }
+    
+    def flush_batch_operations(self) -> None:
+        """Flush all pending batch operations to database"""
+        if not self.batch_logging or not self.db_manager:
+            return
+            
+        try:
+            # Batch insert trades
+            if self.pending_trades:
+                logger.info(f"Flushing {len(self.pending_trades)} trades to database")
+                successful_trades = 0
+                for trade_data in self.pending_trades:
+                    try:
+                        self.db_manager.log_trade(**trade_data)
+                        successful_trades += 1
+                    except Exception as e:
+                        logger.error(f"Failed to log trade: {e}")
+                        
+                if successful_trades < len(self.pending_trades):
+                    logger.warning(f"Only {successful_trades}/{len(self.pending_trades)} trades logged successfully")
+                    
+                self.pending_trades.clear()
+            
+            # Batch update balances (only keep the latest per session)
+            if self.pending_balance_updates:
+                try:
+                    # Only keep the final balance update
+                    final_update = self.pending_balance_updates[-1]
+                    self.db_manager.update_balance(
+                        final_update['balance'],
+                        'backtest_final',
+                        final_update['source'],
+                        final_update['session_id']
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to update final balance: {e}")
+                finally:
+                    self.pending_balance_updates.clear()
+                
+        except Exception as e:
+            logger.error(f"Error flushing batch operations: {e}")
+            # Clear pending operations even on error to prevent memory buildup
+            self.pending_trades.clear()
+            self.pending_balance_updates.clear()
 
 
 @dataclass
