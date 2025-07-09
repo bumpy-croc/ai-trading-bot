@@ -344,7 +344,7 @@ class LiveTradingEngine:
                 self._check_exit_conditions(df, current_index, current_price)
                 
                 # Check entry conditions if not at maximum positions
-                if len(self.positions) < self._get_max_positions():
+                if len(self.positions) < self.risk_manager.get_max_concurrent_positions():
                     self._check_entry_conditions(df, current_index, symbol, current_price)
                 
                 # Update performance metrics
@@ -706,10 +706,6 @@ class LiveTradingEngine:
         else:
             return current_price <= position.take_profit
             
-    def _get_max_positions(self) -> int:
-        """Get maximum number of concurrent positions"""
-        return 3  # Limit concurrent positions for risk management
-        
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
         if self.current_balance > self.peak_balance:

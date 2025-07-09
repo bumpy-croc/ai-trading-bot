@@ -9,5 +9,6 @@ except ModuleNotFoundError:
     HighRiskHighRewardStrategy = None
 from .ml_basic import MlBasic
 from .ml_with_sentiment import MlWithSentiment
+from .test_high_frequency import TestHighFrequencyStrategy
 
-__all__ = ['BaseStrategy', 'AdaptiveStrategy', 'EnhancedStrategy', 'HighRiskHighRewardStrategy', 'MlBasic', 'MlWithSentiment'] 
+__all__ = ['BaseStrategy', 'AdaptiveStrategy', 'EnhancedStrategy', 'HighRiskHighRewardStrategy', 'MlBasic', 'MlWithSentiment', 'TestHighFrequencyStrategy'] 

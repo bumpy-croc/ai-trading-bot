@@ -47,6 +47,7 @@ except ModuleNotFoundError:
     HighRiskHighRewardStrategy = None
 from strategies.ml_basic import MlBasic
 from strategies.ml_with_sentiment import MlWithSentiment
+from strategies.test_high_frequency import TestHighFrequencyStrategy
 
 # Configure logging - ensure the logs directory exists at project root
 project_root = Path(__file__).parent.parent  # ai-trading-bot/
@@ -70,7 +71,8 @@ def load_strategy(strategy_name: str):
         'adaptive': AdaptiveStrategy,
         'enhanced': EnhancedStrategy,
         'ml_basic': MlBasic,
-        'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True)
+        'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True),
+        'test_high_frequency': TestHighFrequencyStrategy
     }
     # Register high-risk strategy only if available
     if HighRiskHighRewardStrategy is not None:
