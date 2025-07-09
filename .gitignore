@@ -7,6 +7,8 @@ src/data/cache
 logs/
 .cursor/mcp.json
 
+.DS_Store
+
 # database
 src/data/trading_bot.db
 # Staging directories (now using /tmp but keeping this for safety)
