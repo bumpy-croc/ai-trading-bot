@@ -26,7 +26,6 @@ from database.manager import DatabaseManager
 from strategies import get_strategy_class
 from config.config_manager import ConfigManager
 from config.providers.env_provider import EnvVarProvider
-from performance.monitor import get_monitor, set_monitoring_enabled
 
 # Configure logging
 logging.basicConfig(
@@ -45,22 +44,15 @@ def parse_arguments():
     parser.add_argument('--timeframe', default='1d', help='Timeframe (default: 1d)')
     parser.add_argument('--initial-balance', type=float, default=10000, help='Initial balance (default: 10000)')
     parser.add_argument('--no-db', action='store_true', help='Skip database logging')
-    parser.add_argument('--fast', action='store_true', help='Fast mode: minimal logging, no database, optimized for speed')
     parser.add_argument('--config', help='Path to custom config file')
     parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
     
     return parser.parse_args()
 
 
-def setup_logging(verbose: bool = False, fast_mode: bool = False):
+def setup_logging(verbose: bool = False):
     """Setup logging configuration"""
-    if fast_mode:
-        level = logging.WARNING  # Minimal logging for speed
-    elif verbose:
-        level = logging.DEBUG
-    else:
-        level = logging.INFO
-        
+    level = logging.DEBUG if verbose else logging.INFO
     logging.getLogger().setLevel(level)
     
     # Reduce noise from external libraries
@@ -135,12 +127,8 @@ def main():
     """Main function"""
     args = parse_arguments()
     
-    # Setup logging (disable most logging in fast mode)
-    setup_logging(args.verbose, args.fast)
-    
-    # Disable performance monitoring in fast mode for maximum speed
-    if args.fast:
-        set_monitoring_enabled(False)
+    # Setup logging
+    setup_logging(args.verbose)
     
     try:
         # Load configuration
@@ -158,18 +146,17 @@ def main():
         # Create strategy instance
         strategy = strategy_class()
         
-        # Create backtester (fast mode disables database logging)
-        use_database = not args.no_db and not args.fast
+        # Create backtester
         backtester = Backtester(
             strategy=strategy,
             data_provider=data_repository.data_provider,
             initial_balance=args.initial_balance,
-            database_url=config.get('DATABASE_URL') if use_database else None,
-            log_to_database=use_database
+            database_url=config.get('DATABASE_URL') if not args.no_db else None,
+            log_to_database=not args.no_db
         )
         
-        # Calculate date range - exclude incomplete current day
-        end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # Calculate date range
+        end_date = datetime.now()
         start_date = end_date - timedelta(days=args.days)
         
         logger.info(f"Starting backtest: {args.strategy} on {args.symbol}")
@@ -188,14 +175,9 @@ def main():
         print_results(results)
         
         # Additional information
-        if use_database:
+        if not args.no_db:
             print(f"\nTrade history and detailed analytics available in database.")
             print(f"Session ID: {results.get('session_id')}")
-        
-        # Show performance metrics (skip in fast mode)
-        if not args.fast:
-            monitor = get_monitor()
-            print(f"\nCurrent system stats: {monitor.get_current_system_stats()}")
         
         return 0
         

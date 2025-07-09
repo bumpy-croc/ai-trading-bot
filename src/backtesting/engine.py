@@ -120,9 +120,6 @@ class Backtester:
             # Track performance over time
             equity_curve = []
             
-            # Performance tracking
-            log_interval = max(1, len(df) // 100)  # Log every 1% of progress
-            
             # Main backtesting loop
             for i in range(len(df)):
                 candle = df.iloc[i]
@@ -130,17 +127,12 @@ class Backtester:
                 # Update order executor's current index
                 self.order_executor.set_current_index(i)
                 
-                # Record equity point (limit memory usage)
-                equity_point = {
+                # Record equity point
+                equity_curve.append({
                     'timestamp': candle.name,
                     'balance': self.trade_executor.current_balance,
                     'equity': self._calculate_current_equity(candle['close'])
-                }
-                equity_curve.append(equity_point)
-                
-                # Limit equity curve size to prevent memory issues
-                if len(equity_curve) > 10000:  # Keep last 10k points
-                    equity_curve = equity_curve[::2]  # Downsample by 2x
+                })
                 
                 # Create market context for signal generation
                 context = MarketContext(
@@ -174,9 +166,9 @@ class Backtester:
                     )
                     
                     result = self.trade_executor.open_position(trade_request)
-                    if result.success and i % log_interval == 0:
+                    if result.success:
                         logger.info(f"Opened position: {signal.side.value} at {result.executed_price}")
-                    elif not result.success:
+                    else:
                         logger.warning(f"Failed to open position: {result.error_message}")
                 
                 elif signal.action == "exit" and len(self.trade_executor.active_positions) > 0:
@@ -189,9 +181,9 @@ class Backtester:
                         )
                         
                         result = self.trade_executor.close_position(close_request)
-                        if result.success and i % log_interval == 0:
+                        if result.success:
                             logger.info(f"Closed position at {result.executed_price}, P&L: {result.pnl:.2f}")
-                        elif not result.success:
+                        else:
                             logger.warning(f"Failed to close position: {result.error_message}")
                 
                 # Check for stop losses and take profits
@@ -227,13 +219,8 @@ class Backtester:
                         price=current_price
                     )
                     result = self.trade_executor.close_position(close_request)
-                    if result.success and i % log_interval == 0:
+                    if result.success:
                         logger.info(f"Closed position ({reason}) at {result.executed_price}")
-                
-                # Progress logging
-                if i % log_interval == 0:
-                    progress = (i + 1) / len(df) * 100
-                    logger.info(f"Backtest progress: {progress:.1f}% ({i+1}/{len(df)} candles)")
                 
                 # Check for maximum drawdown (safety stop)
                 if self._calculate_current_drawdown(candle['close']) > 0.5:  # 50% max drawdown
@@ -249,10 +236,6 @@ class Backtester:
                     price=final_price
                 )
                 self.trade_executor.close_position(close_request)
-            
-            # Flush any pending batch operations
-            if hasattr(self.trade_executor, 'flush_batch_operations'):
-                self.trade_executor.flush_batch_operations()
             
             # Calculate final performance metrics
             performance_metrics = self._calculate_performance_metrics(equity_curve, start, end)
