@@ -301,6 +301,12 @@ class LiveTradingEngine:
         
         while self.is_running and not self.stop_event.is_set():
             try:
+                # For mock and real providers, update live data if supported
+                if hasattr(self.data_provider, 'update_live_data'):
+                    try:
+                        self.data_provider.update_live_data(symbol, timeframe)
+                    except Exception as e:
+                        logger.debug(f"update_live_data failed: {e}")
                 # Fetch latest market data
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
@@ -336,6 +342,8 @@ class LiveTradingEngine:
                 current_index = len(df) - 1
                 current_candle = df.iloc[current_index]
                 current_price = current_candle['close']
+
+                logger.info(f"Trading loop: current_index={current_index}, last_candle_time={df.index[-1]}")
                 
                 # Update position PnL
                 self._update_position_pnl(current_price)

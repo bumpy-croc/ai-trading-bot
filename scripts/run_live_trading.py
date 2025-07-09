@@ -34,6 +34,7 @@ from config.constants import DEFAULT_INITIAL_BALANCE
 from data_providers.binance_data_provider import BinanceDataProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from data_providers.senticrypt_provider import SentiCryptProvider
+from data_providers.mock_data_provider import MockDataProvider
 from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
 
@@ -119,6 +120,7 @@ def parse_args():
     # Data providers
     parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis')
     parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
+    parser.add_argument('--mock-data', action='store_true', help='Use mock data provider for rapid testing')
     
     # Monitoring
     parser.add_argument('--webhook-url', help='Webhook URL for alerts')
@@ -218,14 +220,17 @@ def main():
         
         # Initialize data provider
         logger.info("Initializing data providers...")
-        binance_provider = BinanceDataProvider()
-        
-        if args.no_cache:
-            data_provider = binance_provider
-            logger.info("Data caching disabled")
+        if args.mock_data:
+            data_provider = MockDataProvider(interval_seconds=5)  # 5s candles for rapid testing
+            logger.info("Using MockDataProvider for rapid testing")
         else:
-            data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)  # Short TTL for live trading
-            logger.info("Data caching enabled (1 hour TTL)")
+            binance_provider = BinanceDataProvider()
+            if args.no_cache:
+                data_provider = binance_provider
+                logger.info("Data caching disabled")
+            else:
+                data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)  # Short TTL for live trading
+                logger.info("Data caching enabled (1 hour TTL)")
         
         # Initialize sentiment provider if requested
         sentiment_provider = None
