@@ -1,196 +1,221 @@
 #!/usr/bin/env python3
-"""
-Backtest Runner
-
-This script runs backtests using the new architecture with:
-- TradeExecutor for consistent trade management
-- SignalGenerator for standardized signal generation
-- TradingDataRepository for data access
-"""
-
-import os
-import sys
 import argparse
-import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any
+import logging
+import importlib
+import sys
+from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Add parent directory to path for imports
+sys.path.append(str(Path(__file__).parent.parent))
 
-from backtesting.engine import Backtester
-from data.repository import TradingDataRepository
+from config import get_config
+from config.constants import DEFAULT_INITIAL_BALANCE
+
+from data_providers import BinanceDataProvider
 from data_providers.cached_data_provider import CachedDataProvider
-from data_providers.binance_data_provider import BinanceDataProvider
-from database.manager import DatabaseManager
-from strategies import get_strategy_class
-from config.config_manager import ConfigManager
-from config.providers.env_provider import EnvVarProvider
+from data_providers.cryptocompare_sentiment import CryptoCompareSentimentProvider
+from risk import RiskParameters
+from backtesting import Backtester
 
-# Configure logging
+from strategies import AdaptiveStrategy, EnhancedStrategy, HighRiskHighRewardStrategy, MlBasic  # Direct imports
+
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('backtest')
 
+def load_strategy(strategy_name: str):
+    """Load a strategy by name"""
+    try:
+        # Import strategies
+        if strategy_name == 'adaptive':
+            from strategies.adaptive import AdaptiveStrategy
+            strategy = AdaptiveStrategy()
 
-def parse_arguments():
-    """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description='Run backtest')
-    parser.add_argument('strategy', help='Strategy name to backtest')
-    parser.add_argument('--days', type=int, default=30, help='Number of days to backtest (default: 30)')
-    parser.add_argument('--symbol', default='BTCUSDT', help='Symbol to trade (default: BTCUSDT)')
-    parser.add_argument('--timeframe', default='1d', help='Timeframe (default: 1d)')
-    parser.add_argument('--initial-balance', type=float, default=10000, help='Initial balance (default: 10000)')
-    parser.add_argument('--no-db', action='store_true', help='Skip database logging')
-    parser.add_argument('--config', help='Path to custom config file')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
-    
+        elif strategy_name == 'enhanced':
+            from strategies.enhanced import EnhancedStrategy
+            strategy = EnhancedStrategy()
+        elif strategy_name == 'high_risk_high_reward':
+            from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
+            strategy = HighRiskHighRewardStrategy()
+        elif strategy_name == 'ml_basic':
+            from strategies.ml_basic import MlBasic
+            strategy = MlBasic()
+        elif strategy_name == 'ml_with_sentiment':
+            from strategies.ml_with_sentiment import MlWithSentiment
+            strategy = MlWithSentiment(use_sentiment=True)
+        else:
+            print(f"Unknown strategy: {strategy_name}")
+            available_strategies = ['adaptive', 'enhanced', 'high_risk_high_reward', 'ml_basic', 'ml_with_sentiment']
+            print(f"Available strategies: {', '.join(available_strategies)}")
+            sys.exit(1)
+        
+        # Create and return strategy instance
+        return strategy
+        
+    except Exception as e:
+        logger.error(f"Error loading strategy: {e}")
+        raise
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Run strategy backtest')
+    parser.add_argument('strategy', help='Strategy name (e.g., adaptive, enhanced)')
+    parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')
+    parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
+    parser.add_argument('--days', type=int, default=30, help='Number of days to backtest')
+    parser.add_argument('--start', help='Start date (YYYY-MM-DD)')
+    parser.add_argument('--end', help='End date (YYYY-MM-DD)')
+    parser.add_argument('--initial-balance', type=float, default=DEFAULT_INITIAL_BALANCE, help='Initial balance')
+    parser.add_argument('--risk-per-trade', type=float, default=0.01, help='Risk per trade (1% = 0.01)')
+    parser.add_argument('--max-risk-per-trade', type=float, default=0.02, help='Maximum risk per trade')
+    parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis in backtest')
+    parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
+    parser.add_argument('--cache-ttl', type=int, default=24, help='Cache TTL in hours (default: 24)')
+    parser.add_argument('--no-db', action='store_true', help='Disable database logging for this backtest')
     return parser.parse_args()
 
-
-def setup_logging(verbose: bool = False):
-    """Setup logging configuration"""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.getLogger().setLevel(level)
-    
-    # Reduce noise from external libraries
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('requests').setLevel(logging.WARNING)
-
-
-def create_data_repository(config: ConfigManager) -> TradingDataRepository:
-    """Create data repository with cached data provider"""
-    # Use cached provider to avoid API rate limits during backtesting
-    base_provider = BinanceDataProvider()
-    cached_provider = CachedDataProvider(base_provider)
-    
-    # Create database manager (optional for backtesting)
-    db_manager = None
-    try:
-        db_manager = DatabaseManager(config.get('DATABASE_URL'))
-    except Exception as e:
-        logger.warning(f"Could not connect to database: {e}")
-    
-    return TradingDataRepository(db_manager, cached_provider)
-
-
-def print_results(results: Dict[str, Any]):
-    """Print backtest results in a formatted way"""
-    print("\n" + "="*60)
-    print("BACKTEST RESULTS")
-    print("="*60)
-    
-    # Basic info
-    print(f"Strategy: {results.get('strategy_name', 'Unknown')}")
-    print(f"Symbol: {results.get('symbol', 'Unknown')}")
-    print(f"Timeframe: {results.get('timeframe', 'Unknown')}")
-    print(f"Period: {results.get('start_date', 'Unknown')} to {results.get('end_date', 'Unknown')}")
-    print(f"Session ID: {results.get('session_id', 'N/A')}")
-    
-    print("\n" + "-"*40)
-    print("PERFORMANCE METRICS")
-    print("-"*40)
-    
-    # Performance metrics
-    print(f"Total Trades: {results.get('total_trades', 0)}")
-    print(f"Win Rate: {results.get('win_rate', 0):.2f}%")
-    print(f"Total Return: {results.get('total_return', 0):.2f}%")
-    print(f"Annualized Return: {results.get('annualized_return', 0):.2f}%")
-    print(f"Max Drawdown: {results.get('max_drawdown', 0):.2f}%")
-    print(f"Sharpe Ratio: {results.get('sharpe_ratio', 0):.2f}")
-    
-    print(f"\nInitial Balance: ${results.get('initial_balance', 0):,.2f}")
-    print(f"Final Balance: ${results.get('final_balance', 0):,.2f}")
-    print(f"Total P&L: ${results.get('total_pnl', 0):,.2f}")
-    
-    # Trade statistics
-    print(f"\nAverage Trade P&L: ${results.get('avg_trade_pnl', 0):,.2f}")
-    print(f"Max Win: ${results.get('max_win', 0):,.2f}")
-    print(f"Max Loss: ${results.get('max_loss', 0):,.2f}")
-    print(f"Profit Factor: {results.get('profit_factor', 0):.2f}")
-    
-    # Yearly returns
-    yearly_returns = results.get('yearly_returns', {})
-    if yearly_returns:
-        print("\n" + "-"*30)
-        print("YEARLY RETURNS")
-        print("-"*30)
-        for year, return_pct in yearly_returns.items():
-            print(f"{year}: {return_pct:.2f}%")
-    
-    print("\n" + "="*60)
-
-
-def main():
-    """Main function"""
-    args = parse_arguments()
-    
-    # Setup logging
-    setup_logging(args.verbose)
-    
-    try:
-        # Load configuration
-        config = ConfigManager(providers=[EnvVarProvider()])
-        
-        # Create data repository
-        data_repository = create_data_repository(config)
-        
-        # Get strategy class
-        strategy_class = get_strategy_class(args.strategy)
-        if not strategy_class:
-            logger.error(f"Strategy '{args.strategy}' not found")
-            return 1
-        
-        # Create strategy instance
-        strategy = strategy_class()
-        
-        # Create backtester
-        backtester = Backtester(
-            strategy=strategy,
-            data_provider=data_repository.data_provider,
-            initial_balance=args.initial_balance,
-            database_url=config.get('DATABASE_URL') if not args.no_db else None,
-            log_to_database=not args.no_db
-        )
-        
-        # Calculate date range
+def get_date_range(args):
+    if args.start and args.end:
+        start_date = datetime.strptime(args.start, '%Y-%m-%d')
+        end_date = datetime.strptime(args.end, '%Y-%m-%d')
+    elif args.start:
+        start_date = datetime.strptime(args.start, '%Y-%m-%d')
+        end_date = datetime.now()
+    elif args.days:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=args.days)
+    else:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=30)  # Default to 30 days
+    return start_date, end_date
+
+def main():
+    args = parse_args()
+    
+    try:
+        # Calculate date range
+        start_date, end_date = get_date_range(args)
         
-        logger.info(f"Starting backtest: {args.strategy} on {args.symbol}")
-        logger.info(f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
-        logger.info(f"Initial balance: ${args.initial_balance:,.2f}")
+        # Load the strategy
+        strategy = load_strategy(args.strategy)
+        logger.info(f"Loaded strategy: {strategy.name}")
+        
+        # Initialize data provider with caching
+        binance_provider = BinanceDataProvider()
+        if args.no_cache:
+            data_provider = binance_provider
+            logger.info("Data caching disabled")
+        else:
+            data_provider = CachedDataProvider(
+                binance_provider, 
+                cache_ttl_hours=args.cache_ttl
+            )
+            logger.info(f"Using cached data provider (TTL: {args.cache_ttl} hours)")
+            
+            # Show cache info
+            cache_info = data_provider.get_cache_info()
+            logger.info(f"Cache info: {cache_info['total_files']} files, {cache_info['total_size_mb']} MB")
+        
+        # Initialize sentiment provider if requested
+        sentiment_provider = None
+        if args.use_sentiment:
+            sentiment_provider = CryptoCompareSentimentProvider()
+            logger.info("Using sentiment analysis in backtest")
+        
+        # Set up risk parameters
+        risk_params = RiskParameters(
+            base_risk_per_trade=args.risk_per_trade,
+            max_risk_per_trade=args.max_risk_per_trade
+        )
+        
+        # Create and run backtester
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=data_provider,
+            sentiment_provider=sentiment_provider,
+            risk_parameters=risk_params,
+            initial_balance=args.initial_balance,
+            log_to_database=not args.no_db  # Disable DB logging if --no-db is passed
+        )
+        
+        # Use strategy-specific trading pair if not overridden by command line
+        # If user provided a symbol explicitly, use it; otherwise use strategy's default
+        if args.symbol != 'BTCUSDT':  # User provided a specific symbol
+            trading_symbol = args.symbol
+        else:  # Use strategy's default trading pair
+            trading_symbol = strategy.get_trading_pair()
         
         # Run backtest
         results = backtester.run(
-            symbol=args.symbol,
+            symbol=trading_symbol,
             timeframe=args.timeframe,
             start=start_date,
             end=end_date
         )
         
         # Print results
-        print_results(results)
+        print("\nBacktest Results:")
+        print("=" * 50)
+        print(f"Strategy: {strategy.name}")
+        print(f"Symbol: {trading_symbol}")
+        print(f"Period: {start_date.date()} to {end_date.date()}")
+        print(f"Timeframe: {args.timeframe}")
+        print(f"Using Sentiment: {args.use_sentiment}")
+        print(f"Using Cache: {not args.no_cache}")
+        print(f"Database Logging: {not args.no_db}")
+        print("-" * 50)
+        print(f"Total Trades: {results['total_trades']}")
+        print(f"Win Rate: {results['win_rate']:.2f}%")
+        print(f"Total Return: {results['total_return']:.2f}%")
+        print(f"Annualized Return: {results['annualized_return']:.2f}%")
+        print(f"Max Drawdown: {results['max_drawdown']:.2f}%")
+        print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
+        print(f"Final Balance: ${results['final_balance']:.2f}")
+        print("=" * 50)
+
+        # Print session ID if database logging was enabled
+        if not args.no_db and 'session_id' in results and results['session_id']:
+            print(f"Database Session ID: {results['session_id']}")
+            print("=" * 50)
+
+        # Print yearly returns if available
+        if 'yearly_returns' in results and results['yearly_returns']:
+            print("Yearly Returns:")
+            print(f"{'Year':<8} {'Return (%)':>12}")
+            for year in sorted(results['yearly_returns'].keys()):
+                print(f"{year:<8} {results['yearly_returns'][year]:>12.2f}")
+            print("=" * 50)
         
-        # Additional information
-        if not args.no_db:
-            print(f"\nTrade history and detailed analytics available in database.")
-            print(f"Session ID: {results.get('session_id')}")
+        # Show final cache info if using cache
+        if not args.no_cache:
+            final_cache_info = data_provider.get_cache_info()
+            logger.info(f"Final cache info: {final_cache_info['total_files']} files, {final_cache_info['total_size_mb']} MB")
         
-        return 0
+        # --- Save aligned sentiment data to file if sentiment is used ---
+        if sentiment_provider is not None:
+            # Fetch price data
+            df = data_provider.get_historical_data(args.symbol, args.timeframe, start_date, end_date)
+            sentiment_df = sentiment_provider.get_historical_sentiment(args.symbol, start_date, end_date)
+            if not sentiment_df.empty:
+                sentiment_df = sentiment_provider.aggregate_sentiment(sentiment_df, window=args.timeframe)
+                aligned_df = df.join(sentiment_df, how='left')
+                print(f"Shape of aligned DataFrame: {aligned_df.shape}")
+                if aligned_df.empty:
+                    print("Warning: aligned DataFrame is empty. No file will be written.")
+                output_path = '../data/sentiment_aligned_output.csv'
+                try:
+                    aligned_df.to_csv(output_path)
+                    print(f'Aligned sentiment and price data saved to {output_path}')
+                except Exception as file_err:
+                    print(f'Error writing {output_path}: {file_err}')
+                    logger.error(f'Error writing {output_path}: {file_err}')
         
-    except KeyboardInterrupt:
-        logger.info("Backtest interrupted by user")
-        return 1
     except Exception as e:
-        logger.error(f"Error running backtest: {str(e)}")
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
-        return 1
+        logger.error(f"Error running backtest: {e}")
+        sys.exit(1)
 
-
-if __name__ == "__main__":
-    sys.exit(main()) 
+if __name__ == '__main__':
+    main() 

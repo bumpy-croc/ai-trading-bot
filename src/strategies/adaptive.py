@@ -154,16 +154,15 @@ class AdaptiveStrategy(BaseStrategy):
         # Ensure we don't exceed maximum risk limits
         risk = min(risk, self.max_risk_per_trade)
         
-        # Calculate position size based on risk
-        # For now, use a simple risk-based position sizing
-        # Position size = risk percentage of balance
-        position_size_dollars = risk * balance
+        # Calculate position size based on ATR
+        atr = df['atr'].iloc[index] if 'atr' in df.columns and index < len(df) else df['close'].iloc[index] * 0.01
+        price = df['close'].iloc[index]
+        position_size = (risk * balance) / (atr * self.position_size_atr_multiplier)
         
         # Ensure position size doesn't exceed maximum
-        position_size_dollars = min(position_size_dollars, balance * self.max_position_size)
+        position_size = min(position_size, balance * self.max_position_size)
         
-        # Return position size in dollars (SignalGenerator will convert to fraction)
-        return position_size_dollars
+        return position_size
 
     def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = 'long') -> float:
         """Calculate adaptive stop loss level"""

@@ -1,3 +1,3 @@
-from .engine import Backtester
+from .engine import Backtester, Trade
 
-__all__ = ['Backtester']
+__all__ = ['Backtester', 'Trade']
