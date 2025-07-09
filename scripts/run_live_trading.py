@@ -30,7 +30,7 @@ src_dir = root_dir / "src"
 sys.path.append(str(src_dir))
 
 from config import get_config
-
+from config.constants import DEFAULT_INITIAL_BALANCE
 from data_providers.binance_data_provider import BinanceDataProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from data_providers.senticrypt_provider import SentiCryptProvider
@@ -99,7 +99,7 @@ def parse_args():
     # Trading parameters
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')
     parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
-    parser.add_argument('--balance', type=float, default=100, help='Initial balance')
+    parser.add_argument('--balance', type=float, default=DEFAULT_INITIAL_BALANCE, help='Initial balance')
     parser.add_argument('--max-position', type=float, default=0.1, help='Max position size (0.1 = 10% of balance)')
     parser.add_argument('--check-interval', type=int, default=60, help='Check interval in seconds')
     
@@ -190,7 +190,6 @@ def print_startup_info(args, strategy):
     print(f"Strategy: {strategy.name}")
     print(f"Symbol: {args.symbol}")
     print(f"Timeframe: {args.timeframe}")
-    print(f"Initial Balance: ${args.balance:,.2f}")
     print(f"Max Position Size: {args.max_position*100:.1f}% of balance")
     print(f"Check Interval: {args.check_interval}s")
     print(f"Risk Per Trade: {args.risk_per_trade*100:.1f}%")

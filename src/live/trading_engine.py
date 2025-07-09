@@ -137,7 +137,7 @@ class LiveTradingEngine:
         self.trading_session_id: Optional[int] = None
         
         # Optionally resume balance from last snapshot
-        if self.resume_from_last_balance and initial_balance == DEFAULT_INITIAL_BALANCE:
+        if self.resume_from_last_balance:
             try:
                 result = self.db_manager.execute_query(
                     """
