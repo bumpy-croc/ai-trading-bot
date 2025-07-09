@@ -309,28 +309,9 @@ def setup_logging():
 # Pytest configuration
 def pytest_configure(config):
     """Configure pytest"""
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests (slower)"
-    )
-    config.addinivalue_line(
-        "markers", "live_trading: marks tests that test live trading components"
-    )
-    config.addinivalue_line(
-        "markers", "risk_management: marks tests related to risk management"
-    )
-    config.addinivalue_line(
-        "markers", "strategy: marks tests related to strategy logic"
-    )
-    config.addinivalue_line(
-        "markers", "data_provider: marks tests related to data providers"
-    )
-    # Added markers for performance tests and timeout decorator
-    config.addinivalue_line(
-        "markers", "performance: marks tests that validate performance metrics"
-    )
-    config.addinivalue_line(
-        "markers", "timeout(duration): mark test to fail if it runs longer than given seconds"
-    )
+    # Marker registration is now handled declaratively in pytest.ini to avoid duplication.
+    # Add any runtime configuration changes here if needed.
+    pass
 
 
 # Test categories for easy selection
