@@ -152,7 +152,25 @@ def mock_data_provider():
     return mock_provider
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
+def btcusdt_1h_2023_2024():
+    """Load cached BTCUSDT 1-hour candles for 2023-01-01 → 2024-12-31.
+
+    The data must be generated with ``scripts/download_binance_data.py`` and
+    committed to the repository (preferably via Git LFS) under
+    ``tests/data``.  If the file is missing, tests that depend on this
+    fixture will be skipped automatically.
+    """
+    from pathlib import Path
+    path = Path(__file__).parent / "data" / "BTCUSDT_1h_2023-01-01_2024-12-31.feather"
+    if not path.exists():
+        pytest.skip("Cached Binance data file not found")
+    import pandas as pd
+    df = pd.read_feather(path)
+    df.set_index("timestamp", inplace=True)
+    return df
+
+
 def risk_parameters():
     """Standard risk parameters for testing"""
     return RiskParameters(
@@ -304,6 +322,13 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "data_provider: marks tests related to data providers"
+    )
+    # Added markers for performance tests and timeout decorator
+    config.addinivalue_line(
+        "markers", "performance: marks tests that validate performance metrics"
+    )
+    config.addinivalue_line(
+        "markers", "timeout(duration): mark test to fail if it runs longer than given seconds"
     )
 
 

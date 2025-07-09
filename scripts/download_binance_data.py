@@ -9,11 +9,32 @@ import ccxt
 import pandas as pd
 import argparse
 import os
-import sys
-from datetime import datetime, timedelta
 from pathlib import Path
 
-def download_data(symbol, timeframe='1d', start_date=None, end_date=None, output_dir='.'):
+from typing import Optional, Union
+
+
+def download_data(symbol: str,
+                 timeframe: str = '1h',
+                 start_date: Optional[str] = None,
+                 end_date: Optional[str] = None,
+                 output_dir: Optional[os.PathLike] = '.',  # Changed here
+                 fmt: str = 'feather') -> Path:
+    """Download OHLCV data and save to Feather or CSV.
+
+    Args:
+        symbol: Trading pair, e.g. ``'BTCUSDT'``.
+        timeframe: Binance/ccxt timeframe string, default ``'1h'``.
+        start_date, end_date: ISO date strings.  If omitted, downloads all available.
+        end_date: end_date: ISO date strings.  If omitted, downloads all available.
+        output_dir: Directory to place file (will be created).
+        fmt: 'feather' (default) or 'csv'.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the saved file.
+    """
     """
     Download OHLCV data from Binance and save as CSV. Returns the CSV file path.
     """
@@ -45,26 +66,36 @@ def download_data(symbol, timeframe='1d', start_date=None, end_date=None, output
     df.set_index('timestamp', inplace=True)
     os.makedirs(output_dir, exist_ok=True)
     csv_file = os.path.join(output_dir, f"{symbol.replace('/', '')}_{timeframe}.csv")
-    df.to_csv(csv_file)
-    return csv_file
+    path = Path(output_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    stem = f"{symbol.replace('/', '')}_{timeframe}_{start_date}_{end_date}"
+    if fmt == 'csv':
+        out = path / f"{stem}.csv"
+        df.to_csv(out, index=True)
+    else:
+        out = path / f"{stem}.feather"
+        df.reset_index().to_feather(out, compression='zstd')
+    return out
 
 def main():
     parser = argparse.ArgumentParser(description='Download Binance OHLCV data and save as CSV')
     parser.add_argument('symbol', help='Trading pair symbol (e.g., ETHUSDT, BTCUSDT)')
-    parser.add_argument('--timeframe', default='1d', help='Candle timeframe (default: 1d)')
+    parser.add_argument('--timeframe', default='1h', help='Candle timeframe (default: 1h)')
     parser.add_argument('--start_date', default=None, help='Start date (YYYY-MM-DD or ISO format)')
     parser.add_argument('--end_date', default=None, help='End date (YYYY-MM-DD or ISO format)')
-    parser.add_argument('--output_dir', default='.', help='Directory to save CSV')
+    parser.add_argument('--output_dir', default='tests/data', help='Directory to save data file')
+    parser.add_argument('--format', choices=['feather', 'csv'], default='feather', help='Output format')
     args = parser.parse_args()
     try:
-        csv_file = download_data(
+        out_file = download_data(
             symbol=args.symbol,
             timeframe=args.timeframe,
             start_date=args.start_date,
             end_date=args.end_date,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            fmt=args.format,
         )
-        print(f"CSV saved to {csv_file}")
+        print(f"Saved to {out_file}")
     except Exception as e:
         print(f"Error: {e}")
         exit(1)
