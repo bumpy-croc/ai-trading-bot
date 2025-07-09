@@ -200,6 +200,11 @@ class Backtester:
                         # Log trade
                         logger.info(f"Exited position at {candle['close']}, Balance: {self.balance:.2f}")
                         
+                        # After updating self.balance, update yearly_balance for the exit year
+                        exit_year = candle.name.year
+                        if exit_year in yearly_balance:
+                            yearly_balance[exit_year]['end'] = self.balance
+                        
                         # Log to database if enabled
                         if (self.log_to_database and self.db_manager and
                                 self.current_trade.exit_price is not None and

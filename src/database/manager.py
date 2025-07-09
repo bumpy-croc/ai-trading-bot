@@ -544,23 +544,18 @@ class DatabaseManager:
             # Ensure JSON is serializable – convert Decimal objects to float.
             from decimal import Decimal  # Local import to avoid global dependency
 
-            def _sanitize(obj: Any) -> Dict[str, Any]:
-                """Convert arbitrary objects to a JSON-serialisable dict for DB logging."""
-                try:
-                    # Pass-through dicts after validation
-                    if isinstance(obj, dict):
-                        json.dumps(obj, default=str)
-                        return obj
-                    # Wrap primitives
-                    if isinstance(obj, (str, int, float, bool)) or obj is None:
-                        return {"value": obj}
-                    # Attempt generic serialisation
-                    return {"value": json.loads(json.dumps(obj, default=str))}
-                except Exception:
-                    return {"value": str(obj)}
+            def _convert_decimals(obj):
+                if isinstance(obj, dict):
+                    return {k: _convert_decimals(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [_convert_decimals(i) for i in obj]
+                elif isinstance(obj, Decimal):
+                    return float(obj)
+                else:
+                    return obj
 
             if details is not None:
-                details = _sanitize(details)
+                details = _convert_decimals(details)
 
             event = SystemEvent(
                 event_type=event_type,

@@ -171,6 +171,7 @@ def btcusdt_1h_2023_2024():
     return df
 
 
+@pytest.fixture
 def risk_parameters():
     """Standard risk parameters for testing"""
     return RiskParameters(
