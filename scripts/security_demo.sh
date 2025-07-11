@@ -25,45 +25,26 @@ echo -e "• JSON report export for CI/CD integration"
 echo -e "• Environment-specific security recommendations"
 echo
 
-# Demo 1: Dry run mode
-echo -e "${BLUE}Demo 1: Dry Run Mode${NC}"
-echo -e "This shows what would happen without making actual changes:"
-echo -e "${YELLOW}DRY_RUN=true ./scripts/setup_iam_security.sh staging${NC}"
+# Demo 1: Railway deployment
+echo -e "${BLUE}Demo 1: Railway Deployment${NC}"
+echo -e "This shows Railway deployment setup:"
+echo -e "${YELLOW}./bin/railway-setup.sh${NC}"
 echo
 read -p "Press Enter to continue..."
 echo
 
-# Demo 2: Verbose validation
-echo -e "${BLUE}Demo 2: Detailed Security Validation${NC}"
-echo -e "This runs a comprehensive security check with detailed output:"
-echo -e "${YELLOW}DETAILED=true ./scripts/validate_security.sh staging${NC}"
+# Demo 2: Environment validation
+echo -e "${BLUE}Demo 2: Environment Validation${NC}"
+echo -e "This runs a comprehensive environment check:"
+echo -e "${YELLOW}python scripts/verify_database_connection.py${NC}"
 echo
 read -p "Press Enter to continue..."
 echo
 
-# Demo 3: JSON report export
-echo -e "${BLUE}Demo 3: JSON Report Export${NC}"
-echo -e "This exports a detailed security report in JSON format:"
-echo -e "${YELLOW}EXPORT_REPORT=true ./scripts/validate_security.sh staging${NC}"
-echo
-read -p "Press Enter to continue..."
-echo
-
-# Demo 4: Production safety
-echo -e "${BLUE}Demo 4: Production Safety Features${NC}"
-echo -e "Production deployments include extra safety checks:"
-echo -e "• Manual confirmation required"
-echo -e "• No automatic rollback (safety)"
-echo -e "• Enhanced logging and audit trail"
-echo -e "${YELLOW}./scripts/setup_iam_security.sh production${NC}"
-echo
-read -p "Press Enter to continue..."
-echo
-
-# Demo 5: Rollback capability
-echo -e "${BLUE}Demo 5: Automatic Rollback${NC}"
-echo -e "Development/staging can auto-rollback on failure:"
-echo -e "${YELLOW}ROLLBACK_ON_FAILURE=true ./scripts/setup_iam_security.sh development${NC}"
+# Demo 3: Security validation
+echo -e "${BLUE}Demo 3: Security Validation${NC}"
+echo -e "This validates the security configuration:"
+echo -e "${YELLOW}python scripts/test_secrets_access.py${NC}"
 echo
 read -p "Press Enter to continue..."
 echo
@@ -73,32 +54,32 @@ echo -e "${BLUE}📋 Usage Examples${NC}"
 echo -e "${BLUE}================${NC}"
 echo
 
-echo -e "${GREEN}1. Basic Setup (Staging):${NC}"
-echo -e "   ./scripts/setup_iam_security.sh staging"
+echo -e "${GREEN}1. Railway Setup:${NC}"
+echo -e "   ./bin/railway-setup.sh"
 echo
 
-echo -e "${GREEN}2. Dry Run (Production):${NC}"
-echo -e "   DRY_RUN=true ./scripts/setup_iam_security.sh production"
+echo -e "${GREEN}2. Environment Validation:${NC}"
+echo -e "   python scripts/verify_database_connection.py"
 echo
 
-echo -e "${GREEN}3. Verbose Setup with Rollback:${NC}"
-echo -e "   VERBOSE=true ROLLBACK_ON_FAILURE=true ./scripts/setup_iam_security.sh development"
+echo -e "${GREEN}3. Security Validation:${NC}"
+echo -e "   python scripts/test_secrets_access.py"
 echo
 
-echo -e "${GREEN}4. Detailed Security Validation:${NC}"
-echo -e "   DETAILED=true ./scripts/validate_security.sh staging"
+echo -e "${GREEN}4. Health Check:${NC}"
+echo -e "   python scripts/health_check.py"
 echo
 
-echo -e "${GREEN}5. Export Security Report:${NC}"
-echo -e "   EXPORT_REPORT=true ./scripts/validate_security.sh production"
+echo -e "${GREEN}5. Database Backup:${NC}"
+echo -e "   python scripts/backup_database.py"
 echo
 
 echo -e "${GREEN}6. CI/CD Integration:${NC}"
 echo -e "   # In your CI/CD pipeline:"
-echo -e "   EXPORT_REPORT=true ./scripts/validate_security.sh production"
-echo -e "   source /tmp/ai-trading-bot-security-status.env"
-echo -e "   if [ \"\$SECURITY_STATUS\" != \"PASSED\" ]; then"
-echo -e "     echo \"Security validation failed: \$SECURITY_STATUS (Score: \$SECURITY_SCORE%)\""
+echo -e "   python scripts/verify_database_connection.py"
+echo -e "   python scripts/test_secrets_access.py"
+echo -e "   if [ \$? -ne 0 ]; then"
+echo -e "     echo \"Environment validation failed\""
 echo -e "     exit 1"
 echo -e "   fi"
 echo
@@ -107,32 +88,28 @@ echo -e "${BLUE}🔧 New Features Summary${NC}"
 echo -e "${BLUE}======================${NC}"
 echo
 
-echo -e "${GREEN}Setup Script Improvements:${NC}"
-echo -e "• ✅ Enhanced error handling with retry logic"
-echo -e "• ✅ Dry run mode for safe testing"
-echo -e "• ✅ Verbose logging with timestamped log files"
-echo -e "• ✅ Automatic rollback on failure (non-production)"
-echo -e "• ✅ Production confirmation prompts"
-echo -e "• ✅ Better S3 bucket configuration with lifecycle policies"
-echo -e "• ✅ Resource tagging for cost tracking"
-echo -e "• ✅ Comprehensive prerequisite validation"
+echo -e "${GREEN}Railway Deployment Improvements:${NC}"
+echo -e "• ✅ Easy one-click deployment"
+echo -e "• ✅ Automatic environment management"
+echo -e "• ✅ Built-in database and SSL"
+echo -e "• ✅ Simple scaling and monitoring"
+echo -e "• ✅ Cost-effective hosting"
 echo
 
-echo -e "${GREEN}Validation Script Improvements:${NC}"
-echo -e "• ✅ JSON report export for automation"
-echo -e "• ✅ Detailed remediation suggestions"
-echo -e "• ✅ Environment-specific recommendations"
+echo -e "${GREEN}Environment Validation:${NC}"
+echo -e "• ✅ Database connection verification"
+echo -e "• ✅ Secrets access validation"
+echo -e "• ✅ Health check monitoring"
+echo -e "• ✅ Automated backup systems"
 echo -e "• ✅ CI/CD integration support"
-echo -e "• ✅ Security scoring with thresholds"
-echo -e "• ✅ Category-based check organization"
 echo
 
-echo -e "${GREEN}Security Enhancements:${NC}"
-echo -e "• ✅ Enhanced S3 bucket security (lifecycle, encryption, versioning)"
-echo -e "• ✅ Better IAM policy conditions and restrictions"
-echo -e "• ✅ Improved error handling and logging"
-echo -e "• ✅ Resource tagging for governance"
-echo -e "• ✅ Production-specific safety checks"
+echo -e "${GREEN}Security Features:${NC}"
+echo -e "• ✅ Environment variable management"
+echo -e "• ✅ Secure database connections"
+echo -e "• ✅ API key validation"
+echo -e "• ✅ Comprehensive logging"
+echo -e "• ✅ Automated health monitoring"
 echo
 
 echo -e "${BLUE}💡 Best Practices Implemented${NC}"
@@ -160,6 +137,6 @@ echo -e "   Logging, monitoring, and automation"
 echo
 
 echo -e "${BLUE}🚀 Ready to Use!${NC}"
-echo -e "Try the scripts with different options to see the improvements in action."
-echo -e "Start with: ${YELLOW}DRY_RUN=true ./scripts/setup_iam_security.sh staging${NC}"
+echo -e "Try the Railway deployment to see the improvements in action."
+echo -e "Start with: ${YELLOW}./bin/railway-setup.sh${NC}"
 echo 

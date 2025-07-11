@@ -7,13 +7,13 @@ The AI Trading Bot now features a secure, flexible configuration system that eli
 ## Key Benefits
 
 ### 1. **Enhanced Security**
-- **No secrets on disk**: On AWS, secrets are fetched directly from AWS Secrets Manager into memory
+- **No secrets on disk**: On Railway, secrets are stored as environment variables
 - **No .env files in production**: Eliminates risk of accidental exposure
-- **Encrypted at rest**: AWS Secrets Manager uses KMS encryption
-- **Audit trail**: All secret access is logged in CloudTrail
+- **Encrypted at rest**: Railway environment variables are encrypted
+- **Audit trail**: All environment variable access is logged
 
 ### 2. **Flexibility**
-- **Multiple sources**: AWS Secrets Manager, environment variables, .env files
+- **Multiple sources**: Railway environment variables, local environment variables, .env files
 - **Easy migration**: Works with existing .env files for local development
 - **Cloud agnostic**: Easy to add Azure Key Vault, GCP Secret Manager, etc.
 - **Environment specific**: Automatic selection based on ENVIRONMENT variable
