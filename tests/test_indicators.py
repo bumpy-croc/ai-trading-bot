@@ -45,7 +45,7 @@ class TestMovingAverages:
     def test_moving_average_edge_cases(self):
         """Test moving averages with edge cases"""
         # Empty series
-        empty_data = pd.Series([])
+        empty_data = pd.Series([], dtype=float)
         ema_empty = calculate_ema(empty_data, period=3)
         assert len(ema_empty) == 0
         
