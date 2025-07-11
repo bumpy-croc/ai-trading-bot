@@ -8,6 +8,7 @@ from typing import Optional, Dict, List, Any, Union, TYPE_CHECKING, Iterable
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
+import math
 
 from sqlalchemy import create_engine, func, and_, or_, text  # type: ignore
 from sqlalchemy.orm import sessionmaker, Session  # type: ignore
@@ -592,7 +593,28 @@ class DatabaseManager:
         trade_id: Optional[int] = None,
         session_id: Optional[int] = None
     ):
-        """Log detailed strategy execution information."""
+        # Sanitize all dict fields for JSON serialization (including numpy types)
+        indicators = self._sanitize_for_json(indicators) if indicators else None
+        sentiment_data = self._sanitize_for_json(sentiment_data) if sentiment_data else None
+        ml_predictions = self._sanitize_for_json(ml_predictions) if ml_predictions else None
+        # Sanitize all scalar fields that may be numpy types
+        def _sanitize_scalar(val):
+            import numpy as np
+            if isinstance(val, (np.integer,)):
+                return int(val)
+            elif isinstance(val, (np.floating,)):
+                return float(val)
+            elif hasattr(val, 'item') and callable(val.item):
+                return val.item()
+            return val
+        price = _sanitize_scalar(price)
+        volume = _sanitize_scalar(volume)
+        volatility = _sanitize_scalar(volatility)
+        position_size = _sanitize_scalar(position_size)
+        signal_strength = _sanitize_scalar(signal_strength)
+        confidence_score = _sanitize_scalar(confidence_score)
+        session_id = _sanitize_scalar(session_id)
+        trade_id = _sanitize_scalar(trade_id)
         with self.get_session() as session:
             execution = StrategyExecution(
                 timestamp=datetime.utcnow(),
@@ -614,7 +636,6 @@ class DatabaseManager:
                 trade_id=trade_id,
                 session_id=session_id or self._current_session_id
             )
-            
             session.add(execution)
             session.commit()
     
@@ -1087,3 +1108,22 @@ class DatabaseManager:
                 return float(str(value))
             except Exception:
                 return None
+
+    def _sanitize_for_json(self, obj):
+        """Recursively convert NaN/inf values and numpy types to native Python types for JSON serialization."""
+        import numpy as np
+        if isinstance(obj, dict):
+            return {k: self._sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._sanitize_for_json(v) for v in obj]
+        elif isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
+        elif isinstance(obj, (np.integer,)):
+            return int(obj)
+        elif isinstance(obj, (np.floating,)):
+            return float(obj)
+        elif isinstance(obj, np.generic):
+            return obj.item()
+        return obj

@@ -89,6 +89,9 @@ class Backtester:
         self.trading_session_id = None
         if log_to_database:
             self.db_manager = DatabaseManager(database_url)
+            # Set up strategy logging
+            if self.db_manager:
+                self.strategy.set_database_manager(self.db_manager)
         
     def run(
         self,
@@ -110,6 +113,10 @@ class Backtester:
                     strategy_config=getattr(self.strategy, 'config', {}),
                     session_name=f"Backtest_{symbol}_{start.strftime('%Y%m%d')}"
                 )
+                
+                # Set session ID on strategy for logging
+                if hasattr(self.strategy, 'session_id'):
+                    self.strategy.session_id = self.trading_session_id
             
             # Fetch price data
             df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
@@ -181,7 +188,40 @@ class Backtester:
                 
                 # Check for exit if in position
                 if self.current_trade is not None:
-                    if self.strategy.check_exit_conditions(df, i, self.current_trade.entry_price):
+                    exit_signal = self.strategy.check_exit_conditions(df, i, self.current_trade.entry_price)
+                    
+                    # Log exit decision
+                    if self.log_to_database and self.db_manager:
+                        indicators = self._extract_indicators(df, i)
+                        sentiment_data = self._extract_sentiment_data(df, i)
+                        
+                        # Calculate current P&L for context
+                        current_pnl = (candle['close'] - self.current_trade.entry_price) / self.current_trade.entry_price
+                        
+                        self.db_manager.log_strategy_execution(
+                            strategy_name=self.strategy.__class__.__name__,
+                            symbol=symbol,
+                            signal_type='exit',
+                            action_taken='closed_position' if exit_signal else 'hold_position',
+                            price=candle['close'],
+                            timeframe=timeframe,
+                            signal_strength=1.0 if exit_signal else 0.0,
+                            confidence_score=indicators.get('prediction_confidence', 0.5),
+                            indicators=indicators,
+                            sentiment_data=sentiment_data if sentiment_data else None,
+                            position_size=self.current_trade.size,
+                            reasons=[
+                                'exit_signal' if exit_signal else 'holding_position',
+                                f'current_pnl_{current_pnl:.4f}',
+                                f'position_age_{(candle.name - self.current_trade.entry_time).total_seconds():.0f}s',
+                                f'entry_price_{self.current_trade.entry_price:.2f}'
+                            ],
+                            volume=indicators.get('volume'),
+                            volatility=indicators.get('volatility'),
+                            session_id=self.trading_session_id
+                        )
+                    
+                    if exit_signal:
                         # Close the trade
                         self.current_trade.close(candle['close'], candle.name, "Strategy exit")
                         
@@ -241,6 +281,33 @@ class Backtester:
                     # Calculate position size
                     size = self.strategy.calculate_position_size(df, i, self.balance)
                     
+                    # Log entry decision
+                    if self.log_to_database and self.db_manager:
+                        indicators = self._extract_indicators(df, i)
+                        sentiment_data = self._extract_sentiment_data(df, i)
+                        
+                        self.db_manager.log_strategy_execution(
+                            strategy_name=self.strategy.__class__.__name__,
+                            symbol=symbol,
+                            signal_type='entry',
+                            action_taken='opened_long' if size > 0 else 'no_action',
+                            price=candle['close'],
+                            timeframe=timeframe,
+                            signal_strength=1.0 if size > 0 else 0.0,
+                            confidence_score=indicators.get('prediction_confidence', 0.5),
+                            indicators=indicators,
+                            sentiment_data=sentiment_data if sentiment_data else None,
+                            position_size=size if size > 0 else None,
+                            reasons=[
+                                'entry_conditions_met',
+                                f'position_size_{size:.4f}' if size > 0 else 'no_position_size',
+                                f'balance_{self.balance:.2f}'
+                            ],
+                            volume=indicators.get('volume'),
+                            volatility=indicators.get('volatility'),
+                            session_id=self.trading_session_id
+                        )
+                    
                     if size > 0:
                         # Enter new trade
                         # Assuming df and index are available in this context
@@ -254,6 +321,34 @@ class Backtester:
                             stop_loss=stop_loss
                         )
                         logger.info(f"Entered long position at {candle['close']}")
+                
+                # Log no-action cases (when no position and no entry signal)
+                else:
+                    # Only log every 10th candle to avoid spam, but capture key decision points
+                    if i % 10 == 0 and self.log_to_database and self.db_manager:
+                        indicators = self._extract_indicators(df, i)
+                        sentiment_data = self._extract_sentiment_data(df, i)
+                        
+                        self.db_manager.log_strategy_execution(
+                            strategy_name=self.strategy.__class__.__name__,
+                            symbol=symbol,
+                            signal_type='entry',
+                            action_taken='no_action',
+                            price=candle['close'],
+                            timeframe=timeframe,
+                            signal_strength=0.0,
+                            confidence_score=indicators.get('prediction_confidence', 0.5),
+                            indicators=indicators,
+                            sentiment_data=sentiment_data if sentiment_data else None,
+                            reasons=[
+                                'no_entry_conditions',
+                                f'balance_{self.balance:.2f}',
+                                f'candle_{i}_of_{len(df)}'
+                            ],
+                            volume=indicators.get('volume'),
+                            volatility=indicators.get('volatility'),
+                            session_id=self.trading_session_id
+                        )
             
             # Calculate final metrics
             win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
@@ -313,3 +408,58 @@ class Backtester:
         except Exception as e:
             logger.error(f"Error running backtest: {str(e)}")
             raise 
+    
+    def _extract_indicators(self, df: pd.DataFrame, index: int) -> Dict:
+        """Extract indicator values from dataframe for logging"""
+        if index >= len(df):
+            return {}
+            
+        indicators = {}
+        current_row = df.iloc[index]
+        
+        # Common indicators to extract
+        indicator_columns = [
+            'rsi', 'macd', 'macd_signal', 'macd_hist', 'atr', 'volatility',
+            'trend_ma', 'short_ma', 'long_ma', 'volume_ma', 'trend_strength',
+            'regime', 'body_size', 'upper_wick', 'lower_wick', 'onnx_pred',
+            'ml_prediction', 'prediction_confidence'
+        ]
+        
+        for col in indicator_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                # Only convert to float if the value is numeric (int or float)
+                if col == 'regime':
+                    indicators[col] = current_row[col]  # Keep as string
+                else:
+                    try:
+                        indicators[col] = float(current_row[col])
+                    except (ValueError, TypeError):
+                        # Skip non-numeric values
+                        continue
+        
+        # Add basic OHLCV data
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df.columns:
+                indicators[col] = float(current_row[col])
+        
+        return indicators
+    
+    def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> Dict:
+        """Extract sentiment data from dataframe for logging"""
+        if index >= len(df):
+            return {}
+            
+        sentiment_data = {}
+        current_row = df.iloc[index]
+        
+        # Sentiment columns to extract
+        sentiment_columns = [
+            'sentiment_score', 'sentiment_primary', 'sentiment_momentum', 
+            'sentiment_volatility', 'sentiment_confidence'
+        ]
+        
+        for col in sentiment_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                sentiment_data[col] = float(current_row[col])
+        
+        return sentiment_data 

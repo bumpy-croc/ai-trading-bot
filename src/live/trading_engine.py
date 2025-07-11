@@ -168,6 +168,10 @@ class LiveTradingEngine:
             self.strategy_manager.on_strategy_change = self._handle_strategy_change
             self.strategy_manager.on_model_update = self._handle_model_update
         
+        # Set up strategy logging if database is available
+        if self.db_manager:
+            self.strategy.set_database_manager(self.db_manager)
+        
         # Trading state
         self.is_running = False
         self.positions: Dict[str, Position] = {}
@@ -198,12 +202,12 @@ class LiveTradingEngine:
         
         logger.info(f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}")
         
-    def start(self, symbol: str, timeframe: str = "1h"):
+    def start(self, symbol: str, timeframe: str = "1h", max_steps: int = None):
         """Start the live trading engine"""
         if self.is_running:
             logger.warning("Trading engine is already running")
             return
-            
+        
         self.is_running = True
         logger.info(f"🚀 Starting live trading for {symbol} on {timeframe} timeframe")
         logger.info(f"Initial balance: ${self.current_balance:,.2f}")
@@ -219,7 +223,6 @@ class LiveTradingEngine:
             if recovered_balance is not None:
                 self.current_balance = recovered_balance
                 logger.info(f"💾 Recovered balance from previous session: ${recovered_balance:,.2f}")
-                
                 # Also recover active positions
                 self._recover_active_positions()
             else:
@@ -244,9 +247,13 @@ class LiveTradingEngine:
                 'system', 
                 self.trading_session_id
             )
+            
+            # Set session ID on strategy for logging
+            if hasattr(self.strategy, 'session_id'):
+                self.strategy.session_id = self.trading_session_id
         
         # Start main trading loop in separate thread
-        self.main_thread = threading.Thread(target=self._trading_loop, args=(symbol, timeframe))
+        self.main_thread = threading.Thread(target=self._trading_loop, args=(symbol, timeframe, max_steps))
         self.main_thread.daemon = True
         self.main_thread.start()
         
@@ -302,11 +309,16 @@ class LiveTradingEngine:
         self.stop()
         sys.exit(0)
         
-    def _trading_loop(self, symbol: str, timeframe: str):
+    def _trading_loop(self, symbol: str, timeframe: str, max_steps: int = None):
         """Main trading loop"""
         logger.info("Trading loop started")
-        
+        steps = 0
         while self.is_running and not self.stop_event.is_set():
+            if max_steps is not None and steps >= max_steps:
+                logger.info(f"Reached max_steps={max_steps}, stopping engine for test.")
+                self.stop()
+                break
+            steps += 1
             try:
                 # For mock and real providers, update live data if supported
                 if hasattr(self.data_provider, 'update_live_data'):
@@ -320,11 +332,9 @@ class LiveTradingEngine:
                     logger.warning("No market data received")
                     self._sleep_with_interrupt(self.check_interval)
                     continue
-                
                 # Add sentiment data if available
                 if self.sentiment_provider:
                     df = self._add_sentiment_data(df, symbol)
-                
                 # Check for pending strategy/model updates
                 if self.strategy_manager and self.strategy_manager.has_pending_update():
                     logger.info("🔄 Applying pending strategy/model update...")
@@ -335,36 +345,27 @@ class LiveTradingEngine:
                         self._send_alert("Strategy/Model updated in live trading")
                     else:
                         logger.error("❌ Failed to apply strategy/model update")
-                
                 # Calculate indicators
                 df = self.strategy.calculate_indicators(df)
-                
                 # Remove warmup period and ensure we have enough data
                 df = df.dropna()
                 if len(df) < 2:
                     logger.warning("Insufficient data for analysis")
                     self._sleep_with_interrupt(self.check_interval)
                     continue
-                
                 current_index = len(df) - 1
                 current_candle = df.iloc[current_index]
                 current_price = current_candle['close']
-
                 logger.info(f"Trading loop: current_index={current_index}, last_candle_time={df.index[-1]}")
-                
                 # Update position PnL
                 self._update_position_pnl(current_price)
-                
                 # Check exit conditions for existing positions
                 self._check_exit_conditions(df, current_index, current_price)
-                
                 # Check entry conditions if not at maximum positions
                 if len(self.positions) < self.risk_manager.get_max_concurrent_positions():
                     self._check_entry_conditions(df, current_index, symbol, current_price)
-                
                 # Update performance metrics
                 self._update_performance_metrics()
-                
                 # Log account snapshot to database periodically (configurable interval)
                 now = datetime.now()
                 if (self.account_snapshot_interval > 0 and 
@@ -372,23 +373,18 @@ class LiveTradingEngine:
                      (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval)):
                     self._log_account_snapshot()
                     self.last_account_snapshot = now
-                
                 # Log status periodically
                 if self.total_trades % 10 == 0 or len(self.positions) > 0:
                     self._log_status(symbol, current_price)
-                
                 # Reset error counter on successful iteration
                 self.consecutive_errors = 0
-                
             except Exception as e:
                 self.consecutive_errors += 1
                 logger.error(f"Error in trading loop (#{self.consecutive_errors}): {e}")
-                
                 if self.consecutive_errors >= self.max_consecutive_errors:
                     logger.critical(f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.")
                     self.stop()
                     break
-                
                 # Sleep longer after errors
                 sleep_time = min(self.error_cooldown, self.check_interval * self.consecutive_errors)
                 self._sleep_with_interrupt(sleep_time)
@@ -449,6 +445,11 @@ class LiveTradingEngine:
         """Check if any positions should be closed"""
         positions_to_close = []
         
+        # Extract context for logging
+        indicators = self._extract_indicators(df, current_index)
+        sentiment_data = self._extract_sentiment_data(df, current_index)
+        ml_predictions = self._extract_ml_predictions(df, current_index)
+        
         for position in self.positions.values():
             should_exit = False
             exit_reason = ""
@@ -473,6 +474,38 @@ class LiveTradingEngine:
                 should_exit = True
                 exit_reason = "Time limit"
             
+            # Log exit decision for each position
+            if self.db_manager:
+                # Calculate current P&L for context
+                if position.side == PositionSide.LONG:
+                    current_pnl = (current_price - position.entry_price) / position.entry_price
+                else:
+                    current_pnl = (position.entry_price - current_price) / position.entry_price
+                
+                self.db_manager.log_strategy_execution(
+                    strategy_name=self.strategy.__class__.__name__,
+                    symbol=position.symbol,
+                    signal_type='exit',
+                    action_taken='closed_position' if should_exit else 'hold_position',
+                    price=current_price,
+                    timeframe='1m',
+                    signal_strength=1.0 if should_exit else 0.0,
+                    confidence_score=indicators.get('prediction_confidence', 0.5),
+                    indicators=indicators,
+                    sentiment_data=sentiment_data if sentiment_data else None,
+                    ml_predictions=ml_predictions if ml_predictions else None,
+                    position_size=position.size,
+                    reasons=[
+                        exit_reason if should_exit else 'holding_position',
+                        f'current_pnl_{current_pnl:.4f}',
+                        f'position_age_{(datetime.now() - position.entry_time).total_seconds():.0f}s',
+                        f'entry_price_{position.entry_price:.2f}'
+                    ],
+                    volume=indicators.get('volume'),
+                    volatility=indicators.get('volatility'),
+                    session_id=self.trading_session_id
+                )
+            
             if should_exit:
                 positions_to_close.append((position, exit_reason))
         
@@ -482,14 +515,47 @@ class LiveTradingEngine:
             
     def _check_entry_conditions(self, df: pd.DataFrame, current_index: int, symbol: str, current_price: float):
         """Check if new positions should be opened"""
-        if not self.strategy.check_entry_conditions(df, current_index):
-            return
-            
-        # Calculate position size
-        position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
-        position_size = min(position_size, self.max_position_size)  # Cap at max position size
+        # Check strategy entry conditions
+        entry_signal = self.strategy.check_entry_conditions(df, current_index)
         
-        if position_size <= 0:
+        # Extract context for logging
+        indicators = self._extract_indicators(df, current_index)
+        sentiment_data = self._extract_sentiment_data(df, current_index)
+        ml_predictions = self._extract_ml_predictions(df, current_index)
+        
+        # Calculate position size if entry signal is present
+        position_size = 0.0
+        if entry_signal:
+            position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+            position_size = min(position_size, self.max_position_size)  # Cap at max position size
+        
+        # Log strategy execution decision
+        if self.db_manager:
+            self.db_manager.log_strategy_execution(
+                strategy_name=self.strategy.__class__.__name__,
+                symbol=symbol,
+                signal_type='entry',
+                action_taken='opened_long' if entry_signal and position_size > 0 else 'no_action',
+                price=current_price,
+                timeframe='1m',  # Could be made configurable
+                signal_strength=1.0 if entry_signal else 0.0,
+                confidence_score=indicators.get('prediction_confidence', 0.5),
+                indicators=indicators,
+                sentiment_data=sentiment_data if sentiment_data else None,
+                ml_predictions=ml_predictions if ml_predictions else None,
+                position_size=position_size if position_size > 0 else None,
+                reasons=[
+                    'entry_conditions_met' if entry_signal else 'entry_conditions_not_met',
+                    f'position_size_{position_size:.4f}' if position_size > 0 else 'no_position_size',
+                    f'max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}'
+                ],
+                volume=indicators.get('volume'),
+                volatility=indicators.get('volatility'),
+                session_id=self.trading_session_id
+            )
+        
+        # Only proceed if we have a valid entry signal and position size
+        if not entry_signal or position_size <= 0:
             return
             
         # Calculate risk management levels
@@ -730,6 +796,73 @@ class LiveTradingEngine:
             
         current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
         self.max_drawdown = max(self.max_drawdown, current_drawdown)
+    
+    def _extract_indicators(self, df: pd.DataFrame, index: int) -> Dict:
+        """Extract indicator values from dataframe for logging"""
+        if index >= len(df):
+            return {}
+            
+        indicators = {}
+        current_row = df.iloc[index]
+        
+        # Common indicators to extract
+        indicator_columns = [
+            'rsi', 'macd', 'macd_signal', 'macd_hist', 'atr', 'volatility',
+            'trend_ma', 'short_ma', 'long_ma', 'volume_ma', 'trend_strength',
+            'regime', 'body_size', 'upper_wick', 'lower_wick'
+        ]
+        
+        for col in indicator_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                indicators[col] = float(current_row[col])
+        
+        # Add basic OHLCV data
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df.columns:
+                indicators[col] = float(current_row[col])
+        
+        return indicators
+    
+    def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> Dict:
+        """Extract sentiment data from dataframe for logging"""
+        if index >= len(df):
+            return {}
+            
+        sentiment_data = {}
+        current_row = df.iloc[index]
+        
+        # Sentiment columns to extract
+        sentiment_columns = [
+            'sentiment_primary', 'sentiment_momentum', 'sentiment_volatility',
+            'sentiment_extreme_positive', 'sentiment_extreme_negative',
+            'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14',
+            'sentiment_confidence', 'sentiment_freshness'
+        ]
+        
+        for col in sentiment_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                sentiment_data[col] = float(current_row[col])
+        
+        return sentiment_data
+    
+    def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> Dict:
+        """Extract ML prediction data from dataframe for logging"""
+        if index >= len(df):
+            return {}
+            
+        ml_data = {}
+        current_row = df.iloc[index]
+        
+        # ML prediction columns to extract
+        ml_columns = [
+            'ml_prediction', 'prediction_confidence', 'onnx_pred'
+        ]
+        
+        for col in ml_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                ml_data[col] = float(current_row[col])
+        
+        return ml_data
     
     def _log_account_snapshot(self):
         """Log current account state to database"""

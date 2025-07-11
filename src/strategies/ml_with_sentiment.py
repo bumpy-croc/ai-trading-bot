@@ -474,6 +474,14 @@ class MlWithSentiment(BaseStrategy):
         
         # Check if we have a valid prediction
         if pd.isna(df['ml_prediction'].iloc[index]):
+            # Log the missing prediction
+            self.log_execution(
+                signal_type='entry',
+                action_taken='no_action',
+                price=df['close'].iloc[index],
+                reasons=['missing_ml_prediction'],
+                additional_context={'prediction_available': False}
+            )
             return False
         
         prediction = df['ml_prediction'].iloc[index]
@@ -490,10 +498,58 @@ class MlWithSentiment(BaseStrategy):
         
         predicted_return = (prediction - current_price) / current_price
         
+        # Log detailed decision process
+        sentiment_data = {}
+        if 'sentiment_primary' in df.columns:
+            sentiment_data = {
+                'sentiment_primary': df['sentiment_primary'].iloc[index],
+                'sentiment_confidence': df.get('sentiment_confidence', pd.Series([0])).iloc[index],
+                'sentiment_freshness': sentiment_freshness
+            }
+        
+        ml_predictions = {
+            'raw_prediction': prediction,
+            'current_price': current_price,
+            'predicted_return': predicted_return,
+            'confidence': confidence,
+            'freshness_boost': freshness_boost
+        }
+        
+        # Determine entry signal
         entry_signal = (predicted_return > price_increase_threshold and 
                        confidence > confidence_threshold)
         
-
+        # Log the decision process
+        reasons = [
+            f'predicted_return_{predicted_return:.4f}_vs_threshold_{price_increase_threshold:.4f}',
+            f'confidence_{confidence:.4f}_vs_threshold_{confidence_threshold:.4f}',
+            f'freshness_boost_{freshness_boost:.2f}',
+            'entry_signal_met' if entry_signal else 'entry_signal_not_met'
+        ]
+        
+        # Add sentiment-specific reasons
+        if sentiment_freshness > 0:
+            reasons.append('fresh_sentiment_available')
+            reasons.append(f'sentiment_primary_{sentiment_data.get("sentiment_primary", 0):.3f}')
+        else:
+            reasons.append('historical_sentiment_only')
+        
+        self.log_execution(
+            signal_type='entry',
+            action_taken='entry_signal' if entry_signal else 'no_action',
+            price=current_price,
+            signal_strength=predicted_return if entry_signal else 0.0,
+            confidence_score=confidence,
+            sentiment_data=sentiment_data if sentiment_data else None,
+            ml_predictions=ml_predictions,
+            reasons=reasons,
+            additional_context={
+                'model_type': 'ml_with_sentiment',
+                'sequence_length': self.sequence_length,
+                'use_sentiment': self.use_sentiment,
+                'prediction_available': True
+            }
+        )
         
         if entry_signal and sentiment_freshness > 0:
             print(f"🚀 LIVE SENTIMENT ENTRY: Fresh sentiment boosted confidence!")

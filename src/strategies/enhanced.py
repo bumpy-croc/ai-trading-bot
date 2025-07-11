@@ -137,9 +137,58 @@ class EnhancedStrategy(BaseStrategy):
         
         # Count how many conditions are met
         met_conditions = sum(conditions.values())
+        entry_signal = met_conditions >= self.min_conditions
         
-        # Return True if minimum conditions are met
-        return met_conditions >= self.min_conditions
+        # Log detailed condition analysis
+        indicators = {
+            'close': close,
+            'trend_ma': trend_ma,
+            'trend_strength': trend_strength,
+            'volume': volume,
+            'volume_ma': volume_ma,
+            'rsi': rsi,
+            'short_ma': short_ma,
+            'volume_change': volume_change,
+            'price_change': price_change
+        }
+        
+        # Create detailed reasons list
+        reasons = [
+            f'conditions_met_{met_conditions}_of_{len(conditions)}_min_{self.min_conditions}',
+            'entry_signal_met' if entry_signal else 'entry_signal_not_met'
+        ]
+        
+        # Add condition-specific details
+        for condition_name, condition_met in conditions.items():
+            reasons.append(f'{condition_name}_{condition_met}')
+        
+        # Add threshold details
+        reasons.extend([
+            f'trend_strength_{trend_strength:.4f}_vs_0.01',
+            f'volume_ratio_{volume/volume_ma:.2f}_vs_1.1',
+            f'rsi_{rsi:.1f}_in_range_25_75',
+            f'price_momentum_{price_change:.4f}_vs_0.005'
+        ])
+        
+        self.log_execution(
+            signal_type='entry',
+            action_taken='entry_signal' if entry_signal else 'no_action',
+            price=close,
+            signal_strength=met_conditions / len(conditions),  # Strength as percentage of conditions met
+            confidence_score=met_conditions / len(conditions),
+            indicators=indicators,
+            reasons=reasons,
+            volume=volume,
+            volatility=indicators.get('atr', 0) / close if 'atr' in df.columns else None,
+            additional_context={
+                'strategy_type': 'enhanced_multi_condition',
+                'total_conditions': len(conditions),
+                'min_conditions_required': self.min_conditions,
+                'conditions_met': met_conditions
+            }
+        )
+        
+        return entry_signal
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Check if exit conditions are met at the given index"""
