@@ -762,3 +762,79 @@ class TestLiveTradingFallbacks:
         assert LiveTradingEngine is not None
         assert Position is not None
         assert PositionSide is not None
+
+    def test_strategy_execution_logging(self, mock_strategy, mock_data_provider):
+        """Test that strategy execution is logged via DatabaseManager when a trade signal is generated"""
+        engine = LiveTradingEngine(
+            strategy=mock_strategy,
+            data_provider=mock_data_provider,
+            enable_live_trading=False
+        )
+        # Patch the db_manager and its log_strategy_execution method
+        engine.db_manager = MagicMock()
+        engine.db_manager.log_strategy_execution = MagicMock()
+        engine.risk_manager = MagicMock()
+        engine.risk_manager.get_max_concurrent_positions.return_value = 1
+        engine.positions = {}  # No open positions
+        engine.trading_session_id = 42  # Dummy session id
+
+        # Prepare mock data
+        market_data = pd.DataFrame({
+            'open': [50000, 50100],
+            'high': [50200, 50300],
+            'low': [49800, 49900],
+            'close': [50100, 50200],
+            'volume': [1000, 1100],
+            'rsi': [45, 55],
+            'atr': [500, 510]
+        }, index=pd.date_range('2024-01-01', periods=2, freq='1H'))
+        mock_data_provider.get_live_data.return_value = market_data.tail(1)
+        mock_strategy.calculate_indicators.return_value = market_data
+        mock_strategy.check_entry_conditions.return_value = True
+        mock_strategy.calculate_position_size.return_value = 0.1
+        mock_strategy.calculate_stop_loss.return_value = 49500
+
+        # Call _check_entry_conditions directly (this triggers logging)
+        current_index = len(market_data) - 1
+        symbol = "BTCUSDT"
+        current_price = market_data['close'].iloc[-1]
+        engine._check_entry_conditions(market_data, current_index, symbol, current_price)
+
+        # Assert that log_strategy_execution was called
+        assert engine.db_manager.log_strategy_execution.called, "Strategy execution was not logged"
+        call_args = engine.db_manager.log_strategy_execution.call_args
+        assert call_args is not None
+        # Optionally, check some expected argument keys
+        kwargs = call_args.kwargs
+        assert 'strategy_name' in kwargs
+        assert 'symbol' in kwargs
+        assert 'signal_type' in kwargs
+        assert 'action_taken' in kwargs
+
+        # Also test exit logging
+        # Simulate an open position
+        from datetime import datetime, timedelta
+        from types import SimpleNamespace
+        position = SimpleNamespace(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG if hasattr(PositionSide, 'LONG') else "LONG",
+            size=0.1,
+            entry_price=50000,
+            entry_time=datetime.now() - timedelta(hours=2),
+            stop_loss=49500,
+            take_profit=None,
+            order_id="test_exit_001"
+        )
+        engine.positions = {"test_exit_001": position}
+        # Patch strategy to trigger exit
+        mock_strategy.check_exit_conditions.return_value = True
+        # Call _check_exit_conditions directly (this triggers exit logging)
+        engine.db_manager.log_strategy_execution.reset_mock()
+        engine._check_exit_conditions(market_data, current_index, current_price)
+        # Assert that log_strategy_execution was called for exit
+        assert engine.db_manager.log_strategy_execution.called, "Strategy execution for exit was not logged"
+        exit_call_args = engine.db_manager.log_strategy_execution.call_args
+        assert exit_call_args is not None
+        exit_kwargs = exit_call_args.kwargs
+        assert exit_kwargs.get('signal_type') == 'exit'
+        assert 'action_taken' in exit_kwargs
