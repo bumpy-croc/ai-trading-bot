@@ -321,3 +321,22 @@ pytest_plugins = [
     "tests.test_strategies",
     "tests.test_data_providers"
 ]
+
+
+@pytest.fixture
+def mock_sentiment_provider():
+    """Create a mock sentiment provider for testing"""
+    mock_provider = Mock()
+    
+    # Setup default return values
+    mock_provider.get_historical_sentiment.return_value = pd.DataFrame({
+        'sentiment_score': [0.1, 0.2, -0.1, 0.3, 0.0],
+        'volume': [100, 150, 80, 200, 120]
+    }, index=pd.date_range('2024-01-01', periods=5, freq='1H'))
+    
+    mock_provider.aggregate_sentiment.return_value = pd.DataFrame({
+        'sentiment_score': [0.15, 0.1, 0.2],
+        'volume': [125, 140, 160]
+    }, index=pd.date_range('2024-01-01', periods=3, freq='1H'))
+    
+    return mock_provider

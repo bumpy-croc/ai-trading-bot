@@ -80,19 +80,20 @@ class TestTradeGeneration:
             symbol="BTCUSDT",
             side="long",
             entry_price=50000,
-            exit_price=55000,
             entry_time=datetime(2024, 1, 1, 10, 0),
-            exit_time=datetime(2024, 1, 1, 12, 0),
             size=0.1,
-            pnl=500
+            stop_loss=49000
         )
         
         assert trade.symbol == "BTCUSDT"
         assert trade.side == "long"
         assert trade.entry_price == 50000
-        assert trade.exit_price == 55000
+        assert trade.entry_time == datetime(2024, 1, 1, 10, 0)
         assert trade.size == 0.1
-        assert trade.pnl == 500
+        assert trade.stop_loss == 49000
+        assert trade.exit_price is None
+        assert trade.exit_time is None
+        assert trade.pnl is None
 
     def test_trade_pnl_calculation(self):
         """Test trade P&L calculation"""
@@ -101,27 +102,33 @@ class TestTradeGeneration:
             symbol="BTCUSDT",
             side="long",
             entry_price=50000,
-            exit_price=55000,
             entry_time=datetime(2024, 1, 1, 10, 0),
-            exit_time=datetime(2024, 1, 1, 12, 0),
-            size=0.1
+            size=0.1,
+            stop_loss=49000
         )
         
+        # Close the trade with profit
+        trade_long_profit.close(55000, datetime(2024, 1, 1, 12, 0), "Take profit")
+        
         # P&L should be calculated automatically
-        assert trade_long_profit.pnl == 500  # (55000-50000) * 0.1
+        expected_pnl = ((55000 - 50000) / 50000) * 0.1  # 10% return on 10% position
+        assert trade_long_profit.pnl == expected_pnl
         
         # Short position with profit
         trade_short_profit = Trade(
             symbol="BTCUSDT",
             side="short",
             entry_price=55000,
-            exit_price=50000,
             entry_time=datetime(2024, 1, 1, 10, 0),
-            exit_time=datetime(2024, 1, 1, 12, 0),
-            size=0.1
+            size=0.1,
+            stop_loss=56000
         )
         
-        assert trade_short_profit.pnl == 500  # (55000-50000) * 0.1
+        # Close the trade with profit
+        trade_short_profit.close(50000, datetime(2024, 1, 1, 12, 0), "Take profit")
+        
+        expected_pnl_short = ((55000 - 50000) / 55000) * 0.1  # 9.09% return on 10% position
+        assert trade_short_profit.pnl == expected_pnl_short
 
     def test_trade_duration_calculation(self):
         """Test trade duration calculation"""
@@ -132,11 +139,13 @@ class TestTradeGeneration:
             symbol="BTCUSDT",
             side="long",
             entry_price=50000,
-            exit_price=55000,
             entry_time=entry_time,
-            exit_time=exit_time,
-            size=0.1
+            size=0.1,
+            stop_loss=49000
         )
+        
+        # Close the trade
+        trade.close(55000, exit_time, "Take profit")
         
         # Duration should be 2 hours
         expected_duration = timedelta(hours=2)

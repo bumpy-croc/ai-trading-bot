@@ -51,11 +51,11 @@ class TestMonitoringDashboard:
             dashboard = MonitoringDashboard()
             
             assert dashboard.app is not None
-            assert dashboard.socketio is not None
-            assert dashboard.db_manager is not None
-            assert dashboard.data_provider is not None
-            assert dashboard.is_running == False
-            assert dashboard.update_interval == 3600
+        assert dashboard.socketio is not None
+        assert dashboard.db_manager is not None
+        assert dashboard.data_provider is not None
+        assert dashboard.is_running is False
+        assert dashboard.update_interval == 3600
 
     def test_dashboard_initialization_with_offline_mode(self):
         """Test dashboard initialization when Binance is unavailable"""
@@ -342,14 +342,14 @@ class TestMonitoringDashboard:
              patch('monitoring.dashboard.DatabaseManager'):
             
             dashboard = MonitoringDashboard()
-            
+        
             # Test start monitoring
             dashboard.start_monitoring()
-            assert dashboard.is_running == True
+            assert dashboard.is_running is True
             
             # Test stop monitoring
             dashboard.stop_monitoring()
-            assert dashboard.is_running == False
+            assert dashboard.is_running is False
 
     @pytest.mark.monitoring
     def test_websocket_functionality(self):
