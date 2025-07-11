@@ -5,14 +5,17 @@ import logging
 from typing import List, Dict, Any, Optional
 
 # Ensure project src directory is on the path when executed directly (`python src/.../app.py`)
+# TODO: Proper packaging or entry point is preferred over sys.path manipulation for production use.
 _SRC_ROOT = Path(__file__).resolve().parent.parent
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
-from flask import Flask, jsonify, Response  # type: ignore
+from flask import Flask, jsonify, Response, request, redirect, url_for, render_template_string, session  # type: ignore
 from flask_admin import Admin  # type: ignore
 from flask_admin.contrib.sqla import ModelView  # type: ignore
 from sqlalchemy.orm import scoped_session  # type: ignore
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user  # type: ignore
+import sqlalchemy.exc
 
 # Re-use existing database layer
 from database.manager import DatabaseManager  # type: ignore
@@ -45,6 +48,11 @@ class CustomModelView(ModelView):
         super().__init__(model, session, **kwargs)
 
 
+class AdminUser(UserMixin):
+    def __init__(self, id):
+        self.id = id
+
+
 def create_app() -> Flask:
     """Factory to create and configure the Flask application.
 
@@ -55,12 +63,19 @@ def create_app() -> Flask:
     500 status to callers.
     """
 
+    # Enforce SECRET_KEY from env
+    secret_key = os.environ.get("DB_MANAGER_SECRET_KEY")
+    if not secret_key:
+        logger.error("❌ Environment variable 'DB_MANAGER_SECRET_KEY' is not set. Exiting.")
+        sys.exit(1)
+
     # Initialise database manager (re-uses existing connection settings)
     try:
         db_manager = DatabaseManager()
-    except Exception as exc:  # pragma: no cover – we want to surface the error in logs
-        logger.exception("❌ Failed to initialise DatabaseManager: %s", exc)
+    except sqlalchemy.exc.OperationalError as exc:  # pragma: no cover – we want to surface the error in logs
+        logger.exception("❌ Failed to initialise DatabaseManager due to a database connection error: %s", exc)
         app = Flask(__name__)
+        app.config["SECRET_KEY"] = secret_key
 
         @app.route("/db_error")
         def db_error() -> tuple[Dict[str, str], int]:
@@ -78,7 +93,53 @@ def create_app() -> Flask:
 
     # Create Flask app
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.environ.get("DB_MANAGER_SECRET_KEY", "dev-key-change-in-production")
+    app.config["SECRET_KEY"] = secret_key
+
+    # --- Flask-Login setup for admin authentication ---
+    login_manager = LoginManager()
+    login_manager.init_app(app)
+    login_manager.login_view = "login"
+
+    ADMIN_USERNAME = os.environ.get("DB_MANAGER_ADMIN_USER", "admin")
+    ADMIN_PASSWORD = os.environ.get("DB_MANAGER_ADMIN_PASS", "password")
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        if user_id == ADMIN_USERNAME:
+            return AdminUser(user_id)
+        return None
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if request.method == "POST":
+            username = request.form.get("username")
+            password = request.form.get("password")
+            if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+                user = AdminUser(username)
+                login_user(user)
+                return redirect(request.args.get("next") or url_for("admin.index"))
+            return render_template_string("""
+                <h3>Login Failed</h3>
+                <form method='post'>
+                    <input name='username' placeholder='Username'><br>
+                    <input name='password' type='password' placeholder='Password'><br>
+                    <input type='submit' value='Login'>
+                </form>
+                <p>Invalid credentials.</p>
+            """)
+        return render_template_string("""
+            <form method='post'>
+                <input name='username' placeholder='Username'><br>
+                <input name='password' type='password' placeholder='Password'><br>
+                <input type='submit' value='Login'>
+            </form>
+        """)
+
+    @app.route("/logout")
+    @login_required
+    def logout():
+        logout_user()
+        return redirect(url_for("login"))
 
     # Set up Flask-Admin
     admin = Admin(app, name="Database Manager", template_mode="bootstrap4")
@@ -86,7 +147,7 @@ def create_app() -> Flask:
     # Dynamically register all models declared in Base metadata
     for mapper in Base.registry.mappers:
         model_class = mapper.class_
-        admin.add_view(CustomModelView(model_class, db_session))
+        admin.add_view(AuthModelView(model_class, db_session))
 
     # Basic health route
     @app.route("/health")
