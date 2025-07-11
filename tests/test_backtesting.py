@@ -323,12 +323,8 @@ class TestDataHandling:
         )
         
         # Should handle missing columns gracefully or raise appropriate error
-        try:
-            results = backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
-            assert isinstance(results, dict)
-        except (KeyError, ValueError):
-            # Expected behavior for missing required columns
-            pass
+        with pytest.raises((KeyError, ValueError), match="Missing required columns"):
+            backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
 
     def test_data_validation(self, mock_data_provider):
         """Test data validation in backtester"""
