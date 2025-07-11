@@ -32,14 +32,14 @@ The AI Trading Bot now features a secure, flexible configuration system that eli
 │  ┌─────────────────────────────────────────┐  │
 │  │    Priority Chain (First Found Wins)     │  │
 │  │                                          │  │
-│  │  1. AWS Secrets Manager Provider         │  │
-│  │     └─ ai-trading-bot/{environment}          │  │
+│  │  1. Railway Environment Provider         │  │
+│  │     └─ Railway environment variables     │  │
 │  │                                          │  │
 │  │  2. Environment Variables Provider       │  │
-│  │     └─ System environment               │  │
+│  │     └─ System environment                │  │
 │  │                                          │  │
-│  │  3. DotEnv File Provider               │  │
-│  │     └─ .env file in project root       │  │
+│  │  3. DotEnv File Provider                 │  │
+│  │     └─ .env file in project root         │  │
 │  └─────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────┘
 ```
@@ -54,7 +54,6 @@ The AI Trading Bot now features a secure, flexible configuration system that eli
    - Provides typed access methods
 
 2. **Providers** (`core/config/providers/`)
-   - `AWSSecretsProvider`: Fetches from AWS Secrets Manager with caching
    - `EnvVarProvider`: Reads from environment variables
    - `DotEnvProvider`: Parses .env files
 
@@ -66,32 +65,6 @@ The AI Trading Bot now features a secure, flexible configuration system that eli
    api_key = config.get_required('BINANCE_API_KEY')
    balance = config.get_int('INITIAL_BALANCE', 1000)
    ```
-
-### AWS Integration
-
-- **No .env file creation**: The staging script no longer dumps secrets to disk
-- **Direct access**: Secrets are fetched on-demand with 60-minute cache
-- **Pre-flight check**: Service validates config access before starting
-- **Automatic environment**: Uses ENVIRONMENT variable to select secret
-
-### Security Improvements
-
-1. **Memory only**: Secrets exist only in application memory
-2. **Short-lived cache**: 60-minute TTL for cached secrets
-3. **Least privilege**: IAM role only needs GetSecretValue permission
-4. **No disk forensics**: No secrets left on disk after compromise
-
-## Migration Path
-
-### For Existing Users
-- **No changes required**: Existing .env files continue to work
-- **Gradual migration**: Can test with environment variables first
-- **AWS deployment**: Just create secrets in Secrets Manager
-
-### For New Users
-- **Local dev**: Create .env file as usual
-- **AWS deploy**: Create secrets in AWS Secrets Manager
-- **Docker**: Use environment variables
 
 ## Configuration Variables
 

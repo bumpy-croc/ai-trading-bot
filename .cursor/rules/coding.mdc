@@ -15,3 +15,6 @@ You are an expert in Python, data analysis, visualisation and Deep Learning.
 
 ## Git
 - Important: Never commit to git unless specifically asked to!
+
+## Tests
+For more complex requests and larger changes, always run the tests before finishing to make sure they are passing. Fix any failing tests before reporting.

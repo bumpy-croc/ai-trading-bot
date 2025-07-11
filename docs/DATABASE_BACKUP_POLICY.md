@@ -12,14 +12,14 @@ objectives (RTO) and recovery-point objectives (RPO).
 
 | Item | Value |
 |------|-------|
-| Tool | `scripts/backup_database.py` (pg_dump → S3) |
+| Tool | `scripts/backup_database.py` (pg_dump → local backup) |
 | Schedule | Every 1 h via Railway Scheduled Jobs |
-| Destination | S3 bucket `${S3_BACKUP_BUCKET}` |
+| Destination | Local backup directory `${BACKUP_DIR}` |
 | Format | `pg_dump` custom (`-Fc`) – compressed, schema-aware |
-| Encryption | S3 SSE-AES256 (default) or SSE-KMS (`--kms-key`) |
+| Encryption | Local file system security |
 | Retention | 7 days (configurable `BACKUP_RETENTION_DAYS`) |
 
-Backups are stored under the key pattern:
+Backups are stored under the path pattern:
 
 ```
 backups/<db_name>/<YYYY>/<MM>/<DD>/backup-<timestamp>.dump
@@ -29,10 +29,7 @@ backups/<db_name>/<YYYY>/<MM>/<DD>/backup-<timestamp>.dump
 
 ```
 DATABASE_URL           # Postgres connection string
-AWS_ACCESS_KEY_ID      # S3 credential
-AWS_SECRET_ACCESS_KEY  # 〃
-AWS_DEFAULT_REGION     # 〃
-S3_BACKUP_BUCKET       # Destination bucket (e.g. ai-trading-db-backups)
+BACKUP_DIR      # Local backup directory
 BACKUP_RETENTION_DAYS  # Optional, default 7
 ```
 
@@ -40,10 +37,10 @@ BACKUP_RETENTION_DAYS  # Optional, default 7
 
 ## 2  Restore Procedure
 
-1. Download the desired backup file from S3:
+1. Download the desired backup file from backup directory:
 
    ```bash
-   aws s3 cp s3://$S3_BACKUP_BUCKET/backups/<db>/<date>/backup-<ts>.dump /tmp/
+   cp ./backups/<db>/<date>/backup-<ts>.dump /tmp/
    ```
 
 2. (Optionally) create a fresh database to restore into:
