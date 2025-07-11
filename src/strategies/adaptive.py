@@ -271,8 +271,64 @@ class AdaptiveStrategy(BaseStrategy):
         else:
             min_conditions = 2  # Normal conditions in stable/rising market
         
-        # Return True if minimum conditions are met
-        return conditions_met >= min_conditions
+        # Determine entry signal
+        entry_signal = conditions_met >= min_conditions
+        
+        # Log detailed decision process
+        indicators = {
+            'regime': regime,
+            'rsi': rsi,
+            'volume': volume,
+            'volume_ma': volume_ma,
+            'trend_strength': trend_strength,
+            'fast_ma': fast_ma,
+            'slow_ma': slow_ma,
+            'current_price': current_price,
+            'prev_price': prev_price
+        }
+        
+        # Create detailed reasons list
+        reasons = [
+            f'conditions_met_{conditions_met}_of_4_min_{min_conditions}',
+            f'regime_{regime}',
+            f'trend_ok_{trend_ok}',
+            f'volume_condition_{volume_condition}',
+            f'rsi_condition_{rsi_condition}',
+            f'ma_crossover_{ma_crossover}',
+            f'price_declining_{price_declining}',
+            f'sustained_decline_{sustained_decline}',
+            'entry_signal_met' if entry_signal else 'entry_signal_not_met'
+        ]
+        
+        # Add condition-specific details
+        reasons.extend([
+            f'trend_strength_{trend_strength:.4f}_vs_threshold_{self.regime_threshold * 0.3:.4f}',
+            f'volume_ratio_{volume/volume_ma:.2f}_vs_min_{max(0.8, self.min_volume_multiplier * 0.7):.2f}',
+            f'rsi_{rsi:.1f}_vs_thresholds_{rsi_thresholds["oversold"] * 1.2:.1f}_40'
+        ])
+        
+        self.log_execution(
+            signal_type='entry',
+            action_taken='entry_signal' if entry_signal else 'no_action',
+            price=current_price,
+            signal_strength=conditions_met / 4,  # Strength as percentage of conditions met
+            confidence_score=conditions_met / 4,
+            indicators=indicators,
+            reasons=reasons,
+            volume=volume,
+            volatility=df['atr'].iloc[index] / current_price if 'atr' in df.columns and index < len(df) else None,
+            additional_context={
+                'strategy_type': 'adaptive_market_regime',
+                'market_regime': regime,
+                'total_conditions': 4,
+                'min_conditions_required': min_conditions,
+                'conditions_met': conditions_met,
+                'price_declining': price_declining,
+                'sustained_decline': sustained_decline
+            }
+        )
+        
+        return entry_signal
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Check if exit conditions are met at the given index"""

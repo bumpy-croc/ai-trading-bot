@@ -93,9 +93,57 @@ class MlBasic(BaseStrategy):
         # Go long if the predicted price for the next bar is higher than the current close
         if index < 1 or index >= len(df):
             return False
+        
         pred = df['onnx_pred'].iloc[index]
         close = df['close'].iloc[index]
-        return pred > close
+        
+        # Check if we have a valid prediction
+        if pd.isna(pred):
+            # Log the missing prediction
+            self.log_execution(
+                signal_type='entry',
+                action_taken='no_action',
+                price=close,
+                reasons=['missing_ml_prediction'],
+                additional_context={'prediction_available': False}
+            )
+            return False
+        
+        # Calculate predicted return
+        predicted_return = (pred - close) / close if close > 0 else 0
+        
+        # Determine entry signal
+        entry_signal = pred > close
+        
+        # Log the decision process
+        ml_predictions = {
+            'raw_prediction': pred,
+            'current_price': close,
+            'predicted_return': predicted_return
+        }
+        
+        reasons = [
+            f'predicted_return_{predicted_return:.4f}',
+            f'prediction_{pred:.2f}_vs_current_{close:.2f}',
+            'entry_signal_met' if entry_signal else 'entry_signal_not_met'
+        ]
+        
+        self.log_execution(
+            signal_type='entry',
+            action_taken='entry_signal' if entry_signal else 'no_action',
+            price=close,
+            signal_strength=abs(predicted_return) if entry_signal else 0.0,
+            confidence_score=min(1.0, abs(predicted_return) * 10),  # Scale confidence based on predicted return
+            ml_predictions=ml_predictions,
+            reasons=reasons,
+            additional_context={
+                'model_type': 'ml_basic',
+                'sequence_length': self.sequence_length,
+                'prediction_available': True
+            }
+        )
+        
+        return entry_signal
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         if index < 1 or index >= len(df):
