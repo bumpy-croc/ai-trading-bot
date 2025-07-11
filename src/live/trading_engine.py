@@ -95,7 +95,8 @@ class LiveTradingEngine:
         enable_hot_swapping: bool = True,  # Enable strategy hot-swapping
         resume_from_last_balance: bool = True,  # Resume balance from last account snapshot
         database_url: Optional[str] = None,  # Database connection URL
-        max_consecutive_errors: int = 10  # Maximum consecutive errors before shutdown
+        max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
+        account_snapshot_interval: int = 1800,  # Account snapshot interval in seconds (30 minutes)
     ):
         """
         Initialize the live trading engine.
@@ -108,6 +109,9 @@ class LiveTradingEngine:
             balance (`current_balance`). This is useful when restarting the
             engine so that equity is not reset to the `initial_balance` value.
             Defaults to True.
+        account_snapshot_interval : int, optional
+            How often to log account snapshots to database in seconds.
+            Defaults to 1800 (30 minutes). Set to 0 to disable snapshots.
         """
 
         # Validate inputs
@@ -117,6 +121,8 @@ class LiveTradingEngine:
             raise ValueError("Max position size must be between 0 and 1")
         if check_interval <= 0:
             raise ValueError("Check interval must be positive")
+        if account_snapshot_interval < 0:
+            raise ValueError("Account snapshot interval must be non-negative")
             
         self.strategy = strategy
         self.data_provider = data_provider
@@ -131,6 +137,7 @@ class LiveTradingEngine:
         self.alert_webhook_url = alert_webhook_url
         self.enable_hot_swapping = enable_hot_swapping
         self.resume_from_last_balance = resume_from_last_balance
+        self.account_snapshot_interval = account_snapshot_interval
         
         # Initialize database manager
         self.db_manager = DatabaseManager(database_url)
@@ -358,9 +365,11 @@ class LiveTradingEngine:
                 # Update performance metrics
                 self._update_performance_metrics()
                 
-                # Log account snapshot to database periodically (every 5 minutes)
+                # Log account snapshot to database periodically (configurable interval)
                 now = datetime.now()
-                if self.last_account_snapshot is None or (now - self.last_account_snapshot).seconds >= 300:
+                if (self.account_snapshot_interval > 0 and 
+                    (self.last_account_snapshot is None or 
+                     (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval)):
                     self._log_account_snapshot()
                     self.last_account_snapshot = now
                 

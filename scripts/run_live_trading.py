@@ -125,6 +125,8 @@ def parse_args():
     # Monitoring
     parser.add_argument('--webhook-url', help='Webhook URL for alerts')
     parser.add_argument('--log-trades', action='store_true', default=True, help='Log trades to file')
+    parser.add_argument('--snapshot-interval', type=int, default=1800, 
+                       help='Account snapshot interval in seconds (default: 1800 = 30 minutes, 0 = disable)')
     
     return parser.parse_args()
 
@@ -202,6 +204,8 @@ def print_startup_info(args, strategy):
     print(f"Data Caching: {'❌ Disabled' if args.no_cache else '✅ Enabled'}")
     print(f"Trade Logging: {'✅ Enabled' if args.log_trades else '❌ Disabled'}")
     print(f"Alerts: {'✅ Configured' if args.webhook_url else '❌ Not configured'}")
+    snapshot_info = f"{args.snapshot_interval}s ({args.snapshot_interval//60}min)" if args.snapshot_interval > 0 else "Disabled"
+    print(f"Account Snapshots: {snapshot_info}")
     print("="*70)
 
 def main():
@@ -265,7 +269,8 @@ def main():
             max_position_size=args.max_position,
             enable_live_trading=args.live_trading,
             log_trades=args.log_trades,
-            alert_webhook_url=args.webhook_url
+            alert_webhook_url=args.webhook_url,
+            account_snapshot_interval=args.snapshot_interval
         )
         
         # Final safety check for live trading
