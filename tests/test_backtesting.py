@@ -16,9 +16,9 @@ import numpy as np
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
-from backtesting.engine import Backtester, Trade
-from strategies.adaptive import AdaptiveStrategy
-from risk.risk_manager import RiskParameters
+from src.backtesting.engine import Backtester, Trade
+from src.strategies.adaptive import AdaptiveStrategy
+from src.risk.risk_manager import RiskParameters
 
 
 class TestBacktesterInitialization:

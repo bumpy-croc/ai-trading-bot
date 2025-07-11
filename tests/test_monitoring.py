@@ -19,7 +19,7 @@ import pandas as pd
 
 # Import conditionally to handle missing dependencies
 try:
-    from monitoring.dashboard import MonitoringDashboard
+    from src.monitoring.dashboard import MonitoringDashboard
     MONITORING_AVAILABLE = True
 except ImportError:
     MONITORING_AVAILABLE = False

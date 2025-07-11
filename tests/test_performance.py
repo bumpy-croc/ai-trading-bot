@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-from performance.metrics import (
+from src.performance.metrics import (
     Side, pnl_percent, cash_pnl, total_return, cagr, sharpe, max_drawdown
 )
 
