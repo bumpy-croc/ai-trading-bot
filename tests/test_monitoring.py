@@ -153,7 +153,7 @@ class TestMonitoringDashboard:
             ])
             
             win_rate = dashboard._get_win_rate()
-            assert win_rate == 66.67  # 2 out of 3 trades profitable
+            assert win_rate == pytest.approx(66.67)  # 2 out of 3 trades profitable
 
     @pytest.mark.monitoring
     def test_drawdown_calculation(self):
