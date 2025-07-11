@@ -64,7 +64,7 @@ class TestRSI:
         # Test data with clear trends
         data = pd.Series([44, 44.34, 44.09, 44.15, 43.61, 44.33, 44.23, 44.57, 44.15, 43.42])
         
-        rsi = calculate_rsi(data, period=14)
+        rsi = calculate_rsi(data, period=10)
         
         # RSI should be between 0 and 100
         assert rsi.min() >= 0
