@@ -38,10 +38,11 @@ class RiskParameters:
 class RiskManager:
     """Handles position sizing and risk management"""
     
-    def __init__(self, parameters: Optional[RiskParameters] = None):
+    def __init__(self, parameters: Optional[RiskParameters] = None, max_concurrent_positions: int = 3):
         self.params = parameters or RiskParameters()
         self.daily_risk_used = 0.0
         self.positions: Dict[str, dict] = {}
+        self.max_concurrent_positions = max_concurrent_positions
         
     def reset_daily_risk(self):
         """Reset daily risk counter"""
@@ -164,3 +165,7 @@ class RiskManager:
             if symbol in symbols
         )
         return round(exposure, 2)  # Round to avoid floating point precision issues 
+
+    def get_max_concurrent_positions(self) -> int:
+        """Return the maximum number of concurrent positions allowed."""
+        return self.max_concurrent_positions 

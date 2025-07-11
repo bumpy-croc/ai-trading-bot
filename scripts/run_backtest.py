@@ -6,10 +6,15 @@ import importlib
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
+# Add project root and its 'src' directory to Python path so that imports like `config.*` work when running this script directly
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
+src_path = project_root / 'src'
+if src_path.exists():
+    sys.path.append(str(src_path))
 
-from config import get_config
+
+from config.config_manager import get_config
 from config.constants import DEFAULT_INITIAL_BALANCE
 
 from data_providers import BinanceDataProvider

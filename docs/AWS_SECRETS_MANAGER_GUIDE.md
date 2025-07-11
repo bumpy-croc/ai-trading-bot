@@ -20,7 +20,7 @@ AWS Secrets Manager provides secure storage for your trading bot's sensitive con
 |----------|-------------|---------|-------|
 | `BINANCE_API_KEY` | Your Binance API key | `abc123...` | Get from Binance API Management |
 | `BINANCE_API_SECRET` | Your Binance API secret | `xyz789...` | Keep this absolutely secure |
-| `DATABASE_URL` | Database connection string | `sqlite:///data/trading_bot.db` | SQLite for simplicity |
+| `DATABASE_URL` | Database connection string | `postgresql://user:pass@db.amazonaws.com:5432/ai_trading_bot` | PostgreSQL connection |
 | `TRADING_MODE` | Trading mode | `paper` or `live` | Start with `paper` |
 | `INITIAL_BALANCE` | Starting balance for paper trading | `1000` | Only used in paper mode |
 

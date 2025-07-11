@@ -658,7 +658,7 @@ class TestRiskIntegration:
         )
         
         # Fill up to maximum positions
-        max_positions = engine._get_max_positions()
+        max_positions = engine.risk_manager.get_max_concurrent_positions()
         for i in range(max_positions + 2):  # Try to exceed limit
             engine._open_position(
                 symbol=f"COIN{i}USDT",

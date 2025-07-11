@@ -1,15 +1,26 @@
-from typing import Optional, Dict, List
-import pandas as pd
+from typing import Optional, Dict, List, Any, Iterator
+from pandas import DataFrame  # type: ignore
+import pandas as pd  # type: ignore
 import logging
 from datetime import datetime
 from data_providers.data_provider import DataProvider
 from strategies.base import BaseStrategy
 from risk.risk_manager import RiskManager, RiskParameters
-import numpy as np
+import numpy as np  # type: ignore
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource, PositionSide
 from config.constants import DEFAULT_INITIAL_BALANCE
+
+# Shared performance metrics
+from performance.metrics import (
+    Side,
+    cash_pnl,
+    total_return as perf_total_return,
+    cagr as perf_cagr,
+    sharpe as perf_sharpe,
+    max_drawdown as perf_max_drawdown,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +68,7 @@ class Backtester:
         strategy: BaseStrategy,
         data_provider: DataProvider,
         sentiment_provider: Optional[SentimentDataProvider] = None,
-        risk_parameters: Optional[RiskParameters] = None,
+        risk_parameters: Optional[Any] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
         database_url: Optional[str] = None,
         log_to_database: bool = True
@@ -101,7 +112,7 @@ class Backtester:
                 )
             
             # Fetch price data
-            df = self.data_provider.get_historical_data(symbol, timeframe, start, end)
+            df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
             if df.empty:
                 raise ValueError("No price data available for the specified period")
                 
@@ -132,21 +143,41 @@ class Backtester:
             
             logger.info(f"Starting backtest with {len(df)} candles")
             
-            # Initialize metrics
+            # -----------------------------
+            # Metrics & tracking variables
+            # -----------------------------
             total_trades = 0
             winning_trades = 0
-            returns = []
-            max_drawdown = 0
+            max_drawdown_running = 0  # interim tracker (still used for intra-loop stopping)
+
+            # Track balance over time to enable robust performance stats
+            balance_history = []  # (timestamp, balance)
+
+            # Helper dict to track first/last balance of each calendar year
+            yearly_balance = {}
             
             # Iterate through candles
             for i in range(len(df)):
                 candle = df.iloc[i]
                 
+                # Record current balance for time-series analytics
+                balance_history.append((candle.name, self.balance))
+
+                # Track yearly start/end balances for return calc
+                yr = candle.name.year
+                if yr not in yearly_balance:
+                    yearly_balance[yr] = {
+                        'start': self.balance,
+                        'end': self.balance
+                    }
+                else:
+                    yearly_balance[yr]['end'] = self.balance
+                
                 # Update max drawdown
                 if self.balance > self.peak_balance:
                     self.peak_balance = self.balance
                 current_drawdown = (self.peak_balance - self.balance) / self.peak_balance
-                max_drawdown = max(max_drawdown, current_drawdown)
+                max_drawdown_running = max(max_drawdown_running, current_drawdown)
                 
                 # Check for exit if in position
                 if self.current_trade is not None:
@@ -154,24 +185,31 @@ class Backtester:
                         # Close the trade
                         self.current_trade.close(candle['close'], candle.name, "Strategy exit")
                         
-                        # Update balance
-                        trade_pnl = self.current_trade.pnl * self.balance
+                        # Update balance (convert percentage PnL to absolute currency)
+                        trade_pnl_percent: float = float(self.current_trade.pnl or 0.0)  # e.g. 0.02 for +2%
+                        # Convert to absolute profit/loss based on current balance BEFORE applying PnL
+                        trade_pnl: float = cash_pnl(trade_pnl_percent, self.balance)
+
                         self.balance += trade_pnl
-                        
+
                         # Update metrics
                         total_trades += 1
                         if trade_pnl > 0:
                             winning_trades += 1
                         
-                        # Calculate return for this period
-                        trade_return = trade_pnl / (self.current_trade.entry_price * self.current_trade.size)
-                        returns.append(trade_return)
-                        
                         # Log trade
                         logger.info(f"Exited position at {candle['close']}, Balance: {self.balance:.2f}")
                         
+                        # After updating self.balance, update yearly_balance for the exit year
+                        exit_year = candle.name.year
+                        if exit_year in yearly_balance:
+                            yearly_balance[exit_year]['end'] = self.balance
+                        
                         # Log to database if enabled
-                        if self.log_to_database and self.db_manager:
+                        if (self.log_to_database and self.db_manager and
+                                self.current_trade.exit_price is not None and
+                                self.current_trade.exit_time is not None and
+                                self.current_trade.exit_reason is not None):
                             self.db_manager.log_trade(
                                 symbol=symbol,
                                 side="long",  # Backtester only does long trades currently
@@ -219,31 +257,39 @@ class Backtester:
             
             # Calculate final metrics
             win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-            total_return = ((self.balance - self.initial_balance) / self.initial_balance) * 100
+            total_return = perf_total_return(self.initial_balance, self.balance)
             
-            # Calculate Sharpe ratio
-            if len(returns) > 0:
-                returns_array = np.array(returns)
-                sharpe_ratio = np.sqrt(252) * (np.mean(returns_array) / np.std(returns_array)) if np.std(returns_array) != 0 else 0
+            # ----------------------------------------------
+            # Sharpe ratio ‑ use *daily* returns of balance
+            # ----------------------------------------------
+            if balance_history:
+                bh_df = pd.DataFrame(balance_history, columns=['timestamp', 'balance']).set_index('timestamp')
+                # Resample to 1-day frequency for stability
+                daily_balance = bh_df['balance'].resample('1D').last().ffill()
+                daily_returns = daily_balance.pct_change().dropna()
+                if not daily_returns.empty and daily_returns.std() != 0:
+                    sharpe_ratio = perf_sharpe(daily_balance)
+                else:
+                    sharpe_ratio = 0
+                # Re-calculate max drawdown from full equity curve
+                max_drawdown_pct = perf_max_drawdown(daily_balance)
             else:
                 sharpe_ratio = 0
+                max_drawdown_pct = 0
             
             # Calculate annualized return
             days = (end - start).days if end else (datetime.now() - start).days
-            annualized_return = ((1 + total_return / 100) ** (365 / days) - 1) * 100
+            annualized_return = perf_cagr(self.initial_balance, self.balance, days)
 
-            # --- Yearly returns calculation ---
+            # ---------------------------------------------
+            # Yearly returns based on account balance
+            # ---------------------------------------------
             yearly_returns = {}
-            if not df.empty and hasattr(df.index, 'year'):
-                df_years = df.copy()
-                df_years['year'] = df_years.index.year
-                for year, group in df_years.groupby('year'):
-                    first_close = group['close'].iloc[0]
-                    last_close = group['close'].iloc[-1]
-                    if first_close > 0:
-                        yearly_return = (last_close / first_close - 1) * 100
-                        yearly_returns[str(year)] = yearly_return
-            # --- End yearly returns ---
+            for yr, bal in yearly_balance.items():
+                start_bal = bal['start']
+                end_bal = bal['end']
+                if start_bal > 0:
+                    yearly_returns[str(yr)] = (end_bal / start_bal - 1) * 100
             
             # End trading session in database if enabled
             if self.log_to_database and self.db_manager and self.trading_session_id:
@@ -256,7 +302,7 @@ class Backtester:
                 'total_trades': total_trades,
                 'win_rate': win_rate,
                 'total_return': total_return,
-                'max_drawdown': max_drawdown * 100,
+                'max_drawdown': max_drawdown_pct,
                 'sharpe_ratio': sharpe_ratio,
                 'final_balance': self.balance,
                 'annualized_return': annualized_return,

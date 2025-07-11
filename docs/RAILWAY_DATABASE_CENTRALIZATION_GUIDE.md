@@ -247,12 +247,7 @@ print(stats)
 
 ## Migration from Previous Systems
 
-If migrating from SQLite-based systems:
-1. Export data from SQLite databases
-2. Set up PostgreSQL database on Railway
-3. Import data using provided migration scripts
-4. Update environment variables
-5. Test connection and functionality
+<!-- Migration from SQLite section removed: project is now PostgreSQL-only -->
 
 ---
 

@@ -111,7 +111,7 @@ class TestInitialization(TestDatabaseManager):
     
     def test_init_fails_with_non_postgresql_url(self):
         """Test initialization fails with non-PostgreSQL URL"""
-        sqlite_url = "sqlite:///test.db"
+        sqlite_url = "mysql://user:pass@localhost:3306/testdb"
         
         with pytest.raises(ValueError, match="Only PostgreSQL databases are supported"):
             DatabaseManager(database_url=sqlite_url)

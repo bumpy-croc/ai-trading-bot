@@ -52,18 +52,17 @@ def get_cache_dir() -> Path:
     return get_data_dir() / "cache"
 
 
-def get_database_path(filename: str = "trading_bot.db") -> str:
+def get_database_path(*_args, **_kwargs):  # type: ignore[override]
+    """DEPRECATED: SQLite is no longer supported.
+
+    This helper previously returned an SQLite connection string.  The project
+    now requires PostgreSQL exclusively, so this function raises a
+    ``RuntimeError`` if called.
     """
-    Get the database file path.
-    
-    Args:
-        filename: Database filename (default: trading_bot.db)
-        
-    Returns:
-        str: SQLite connection string
-    """
-    db_path = get_data_dir() / filename
-    return f"sqlite:///{db_path}"
+    raise RuntimeError(
+        "SQLite has been removed from the project.  Replace calls to"
+        " `get_database_path()` with environment-based PostgreSQL URLs."
+    )
 
 
 def get_sentiment_data_path() -> Path:

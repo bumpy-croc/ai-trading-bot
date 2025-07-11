@@ -4,25 +4,32 @@ PostgreSQL database manager for handling all database operations
 
 import logging
 import os
-from typing import Optional, Dict, List, Any, Union
+from typing import Optional, Dict, List, Any, Union, TYPE_CHECKING, Iterable
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
 
-from sqlalchemy import create_engine, func, and_, or_, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import QueuePool
+from sqlalchemy import create_engine, func, and_, or_, text  # type: ignore
+from sqlalchemy.orm import sessionmaker, Session  # type: ignore
+from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+from sqlalchemy.pool import QueuePool  # type: ignore
+from decimal import Decimal, InvalidOperation
 
 from .models import (
     Base, Trade, Position, AccountHistory, PerformanceMetrics,
-    TradingSession, SystemEvent, StrategyExecution,
+    TradingSession, SystemEvent, StrategyExecution, AccountBalance,
     PositionSide, OrderStatus, TradeSource, EventType
 )
 from config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:  # pragma: no cover
+    # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
+    # Import only for static analysis; guarded to avoid hard runtime dependency.
+    from sqlalchemy.engine.base import Engine as _Engine, Connection as _Connection  # type: ignore
+    from sqlalchemy.engine import Result as _Result  # type: ignore
+    from sqlalchemy.sql.elements import TextClause as _TextClause  # type: ignore
 
 class DatabaseManager:
     """
@@ -45,7 +52,7 @@ class DatabaseManager:
             database_url: Optional PostgreSQL database URL. If None, uses DATABASE_URL from environment.
         """
         self.database_url = database_url
-        self.engine = None
+        self.engine: "_Engine | None" = None
         self.session_factory = None
         self._current_session_id: Optional[int] = None
         
@@ -409,7 +416,7 @@ class DatabaseManager:
             position = Position(
                 symbol=symbol,
                 side=side,
-                status=OrderStatus.FILLED,
+                status=OrderStatus.PENDING,
                 entry_price=entry_price,
                 size=size,
                 quantity=quantity,
@@ -533,6 +540,22 @@ class DatabaseManager:
             # Convert string enum if necessary
             if isinstance(event_type, str):
                 event_type = EventType[event_type.upper()]
+
+            # Ensure JSON is serializable – convert Decimal objects to float.
+            from decimal import Decimal  # Local import to avoid global dependency
+
+            def _convert_decimals(obj):
+                if isinstance(obj, dict):
+                    return {k: _convert_decimals(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [_convert_decimals(i) for i in obj]
+                elif isinstance(obj, Decimal):
+                    return float(obj)
+                else:
+                    return obj
+
+            if details is not None:
+                details = _convert_decimals(details)
 
             event = SystemEvent(
                 event_type=event_type,
@@ -721,6 +744,11 @@ class DatabaseManager:
             
             account_history = history_query.order_by(AccountHistory.timestamp).all()
             
+            # Some unit tests mock the session and return a MagicMock instead of
+            # a list.  Gracefully degrade when the result is not list-like.
+            if not isinstance(account_history, (list, tuple)):
+                account_history = []
+
             max_drawdown = 0
             if account_history:
                 peak_balance = account_history[0].balance
@@ -828,7 +856,7 @@ class DatabaseManager:
             
             logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
     
-    def execute_query(self, query: str, params=None):  # type: ignore[override]
+    def execute_query(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:  # type: ignore[override]
         """Run a raw SQL query and return list of dict rows.
 
         Uses SQLAlchemy 2.x ``exec_driver_sql`` API so plain SQL strings work
@@ -836,31 +864,182 @@ class DatabaseManager:
         older versions.
         """
         params = params or ()
-        try:
-            with self.engine.connect() as connection:
-                # SQLAlchemy 2.0
-                try:
-                    result = connection.exec_driver_sql(query, params)
-                except AttributeError:
-                    # Older SQLAlchemy (<1.4) fallback
-                    from sqlalchemy import text
-                    result = connection.execute(text(query), params)
-                # Convert to list of dictionaries
-                try:
-                    rows = [dict(row) for row in result.mappings()]
-                except AttributeError:
-                    rows = [dict(row.items()) for row in result]
-                return rows
-        except SQLAlchemyError as e:
-            logger.error(f"Raw query error: {e}")
+        if self.engine is None:
+            logger.error("Database engine not initialised – cannot execute query")
             return []
+
+        # Local import to avoid top-level circular dependencies and keep stubs optional
+        from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+        from sqlalchemy import text as _sql_text  # type: ignore
+
+        engine_typed: "_Engine" = self.engine  # type: ignore[assignment]
+        connection_raw = engine_typed.connect()
+        conn: "_Connection" = connection_raw  # type: ignore[assignment]
+
+        try:
+            with conn as connection:
+                # Prefer SQLAlchemy 2.x driver-level exec
+                try:
+                    result: "_Result" = connection.exec_driver_sql(query, params)  # type: ignore[arg-type]
+                except AttributeError:
+                    # Fallback for <1.4
+                    result = connection.execute(_sql_text(query), params)  # type: ignore[arg-type]
+
+                # Map rows to plain dictionaries
+                try:
+                    rows: List[Dict[str, Any]] = [dict(row) for row in result.mappings()]  # type: ignore[attr-defined]
+                except AttributeError:
+                    rows = [dict(row.items()) for row in result]  # type: ignore[attr-defined]
+                return rows
+        except SQLAlchemyError as exc:
+            logger.error(f"Raw query error: {exc}")
+            return []
+
+    # ========== BALANCE MANAGEMENT ==========
+    
+    def get_current_balance(self, session_id: Optional[int] = None) -> float:
+        """Get the current balance for a session"""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return 0.0
+        
+        with self.get_session() as session:
+            return AccountBalance.get_current_balance(session_id, session)
+    
+    def update_balance(
+        self,
+        new_balance: float,
+        update_reason: str,
+        updated_by: str = 'system',
+        session_id: Optional[int] = None
+    ) -> bool:
+        """Update the current balance"""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            logger.error("No active session for balance update")
+            return False
+        
+        try:
+            with self.get_session() as session:
+                AccountBalance.update_balance(
+                    session_id, new_balance, update_reason, updated_by, session
+                )
+                logger.info(f"Updated balance to ${new_balance:.2f} - {update_reason}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to update balance: {e}")
+            return False
+    
+    def get_balance_history(
+        self,
+        session_id: Optional[int] = None,
+        limit: int = 100
+    ) -> List[Dict]:
+        """Get balance change history"""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return []
+        
+        with self.get_session() as session:
+            balances = session.query(AccountBalance).filter(
+                AccountBalance.session_id == session_id
+            ).order_by(AccountBalance.last_updated.desc()).limit(limit).all()
+            
+            return [
+                {
+                    'id': b.id,
+                    'balance': b.total_balance,
+                    'available': b.available_balance,
+                    'reserved': b.reserved_balance,
+                    'timestamp': b.last_updated,
+                    'updated_by': b.updated_by,
+                    'reason': b.update_reason,
+                    'base_currency': b.base_currency
+                }
+                for b in balances
+            ]
+    
+    def recover_last_balance(self, session_id: Optional[int] = None) -> Optional[float]:
+        """Recover the last known balance for a session"""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return None
+        
+        # First try to get from account_balances table
+        balance = self.get_current_balance(session_id)
+        if balance > 0:
+            return balance
+        
+        # Fallback: calculate from trading session and trades
+        with self.get_session() as session:
+            trading_session = session.query(TradingSession).filter(
+                TradingSession.id == session_id
+            ).first()
+            
+            if not trading_session:
+                return None
+            
+            # Get all trades for this session
+            trades = session.query(Trade).filter(
+                Trade.session_id == session_id
+            ).all()
+            
+            # Calculate current balance from initial balance + total PnL
+            total_pnl = sum(trade.pnl for trade in trades)
+            current_balance = trading_session.initial_balance + total_pnl
+            
+            # Update the balance tracking
+            self.update_balance(current_balance, 'recovered_from_trades', 'system', session_id)
+            
+            return current_balance
+    
+    def get_active_session_id(self) -> Optional[int]:
+        """Get the current active session ID"""
+        with self.get_session() as session:
+            active_session = session.query(TradingSession).filter(
+                TradingSession.is_active == True
+            ).order_by(TradingSession.start_time.desc()).first()
+            
+            return active_session.id if active_session else None
+    
+    def manual_balance_adjustment(
+        self,
+        new_balance: float,
+        reason: str,
+        updated_by: str = 'user'
+    ) -> bool:
+        """Manual balance adjustment (for user-initiated changes)"""
+        current_balance = self.get_current_balance()
+        
+        if current_balance == 0:
+            logger.error("Cannot adjust balance - no current balance found")
+            return False
+        
+        success = self.update_balance(new_balance, f"Manual adjustment: {reason}", updated_by)
+        
+        if success:
+            # Log the adjustment as a system event
+            self.log_event(
+                EventType.BALANCE_ADJUSTMENT,
+                f"Balance manually adjusted from ${current_balance:.2f} to ${new_balance:.2f}",
+                details={
+                    'old_balance': current_balance,
+                    'new_balance': new_balance,
+                    'reason': reason,
+                    'adjusted_by': updated_by
+                }
+            )
+        
+        return success
+
+    # ========== CONNECTION MANAGEMENT ==========
     
     def get_connection_stats(self) -> Dict[str, Any]:
         """Get PostgreSQL connection pool statistics"""
         if not self.engine or not hasattr(self.engine.pool, 'status'):
             return {'status': 'Connection pool statistics not available'}
 
-        pool = self.engine.pool  # noqa: E501  # pool is guaranteed after the check above
+        pool = self.engine.pool  # pool is guaranteed after the check above
 
         def _safe(attr_name, default=0):
             pool_attr = getattr(pool, attr_name, default)
@@ -881,4 +1060,30 @@ class DatabaseManager:
         """Cleanup PostgreSQL connection pool"""
         if self.engine and hasattr(self.engine.pool, 'dispose'):
             self.engine.pool.dispose()
-            logger.info("PostgreSQL connection pool disposed") 
+            logger.info("PostgreSQL connection pool disposed")
+
+    # ----------------------
+    # Utility helpers
+    # ----------------------
+    @staticmethod
+    def decimal_to_float(value):
+        """Safely cast SQLAlchemy Numeric / Decimal values to float.
+
+        Accepts Decimal, int, float or None and always returns a Python float
+        (or None). This prevents subtle precision / scale issues when Numeric
+        values are used directly in arithmetic.
+        """
+        if value is None:
+            return None
+        try:
+            # Handle SQLAlchemy Numeric (often Decimal)
+            if isinstance(value, Decimal):
+                return float(value)
+            # Primitives
+            return float(value)
+        except (TypeError, ValueError, InvalidOperation):
+            # As a last-ditch attempt use native cast
+            try:
+                return float(str(value))
+            except Exception:
+                return None

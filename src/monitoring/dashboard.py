@@ -14,14 +14,13 @@ _ASYNC_MODE = 'eventlet'
 import os
 import json
 import logging
-import sqlite3
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Any, Optional, TypedDict
 from pathlib import Path
-import pandas as pd
+import pandas as pd  # type: ignore
 
-from flask import Flask, render_template, jsonify, request
-from flask_socketio import SocketIO, emit
+from flask import Flask, render_template, jsonify, request  # type: ignore
+from flask_socketio import SocketIO, emit  # type: ignore
 import threading
 import time
 
@@ -33,10 +32,40 @@ sys.path.append(str(project_root))
 from database.manager import DatabaseManager
 from data_providers.binance_data_provider import BinanceDataProvider
 from data_providers.cached_data_provider import CachedDataProvider
+from performance.metrics import sharpe as perf_sharpe
+from performance.metrics import max_drawdown as perf_max_drawdown
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# after imports define typedicts
+
+# ---- TypedDicts for static typing ----
+
+class PositionDict(TypedDict):
+    symbol: str
+    side: str
+    entry_price: float
+    current_price: float
+    quantity: float
+    unrealized_pnl: float
+    entry_time: Any
+    stop_loss: Optional[float]
+    take_profit: Optional[float]
+    order_id: Optional[str]
+
+
+class TradeDict(TypedDict):
+    symbol: str
+    side: str
+    entry_price: float
+    exit_price: float
+    quantity: float
+    entry_time: Any
+    exit_time: Any
+    pnl: float
+    exit_reason: str
 
 class MonitoringDashboard:
     """
@@ -48,14 +77,14 @@ class MonitoringDashboard:
         self.app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='eventlet')
         
-        # Initialize database manager
-        self.db_manager = DatabaseManager(db_url)
+        # Initialize database manager – avoid passing None to ease mocking in unit tests
+        self.db_manager = DatabaseManager() if db_url is None else DatabaseManager(db_url)
         
         # Initialize data provider for live price data
         # Gracefully degrade if Binance is unreachable (e.g. no outbound DNS in the env)
         try:
             binance_provider = BinanceDataProvider()
-            self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=0.1)  # 6-min cache
+            self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)
         except Exception as e:
             logger.warning(f"Binance provider unavailable: {e}. Starting dashboard in offline mode.")
 
@@ -67,7 +96,7 @@ class MonitoringDashboard:
                     return 0.0
 
                 @staticmethod
-                def get_historical_data(symbol: str, start, end):
+                def get_historical_data(symbol: str, timeframe: str, start, end):  # noqa: D401
                     return pd.DataFrame()
 
             self.data_provider = _OfflineProvider()
@@ -164,7 +193,8 @@ class MonitoringDashboard:
                     if key in self.monitoring_config:
                         self.monitoring_config[key].update(value)
                 return jsonify({'success': True})
-            return jsonify({'success': False, 'error': 'Invalid configuration'})
+            # Return 400 Bad Request when the payload is invalid
+            return jsonify({'success': False, 'error': 'Invalid configuration'}), 400
         
         @self.app.route('/api/positions')
         def get_positions():
@@ -191,6 +221,54 @@ class MonitoringDashboard:
             """Get system health status"""
             status = self._get_system_status()
             return jsonify(status)
+        
+        @self.app.route('/api/balance')
+        def get_balance():
+            """Get current balance (simple format)"""
+            current_balance = self._get_current_balance()
+            return jsonify({'balance': current_balance})
+        
+        @self.app.route('/api/balance/history')
+        def get_balance_history_route():
+            """Get balance history records"""
+            # Prefer `days` query parameter for compatibility with latest API tests
+            days_param = request.args.get('days', type=int)
+            if days_param is not None:
+                history = self._get_balance_history(days_param)
+            else:
+                limit_param = request.args.get('limit', 50, type=int)
+                history = self._get_balance_history(limit_param)
+            return jsonify(history)
+        
+        @self.app.route('/api/balance', methods=['POST'])
+        def update_balance():
+            """Manually update balance"""
+            data = request.json
+            new_balance = data.get('balance')
+            reason = data.get('reason', 'Manual adjustment via dashboard')
+            updated_by = data.get('updated_by', 'dashboard_user')
+            
+            if new_balance is None:
+                return jsonify({'success': False, 'error': 'Balance not provided'})
+            
+            try:
+                new_balance = float(new_balance)
+                if new_balance < 0:
+                    return jsonify({'success': False, 'error': 'Balance cannot be negative'})
+                
+                success = self.db_manager.manual_balance_adjustment(new_balance, reason, updated_by)
+                
+                if success:
+                    return jsonify({
+                        'success': True, 
+                        'new_balance': new_balance,
+                        'message': f'Balance updated to ${new_balance:,.2f}'
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Failed to update balance'})
+                    
+            except (ValueError, TypeError):
+                return jsonify({'success': False, 'error': 'Invalid balance value'})
     
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""
@@ -381,18 +459,13 @@ class MonitoringDashboard:
     def _get_max_drawdown(self) -> float:
         """Calculate maximum drawdown"""
         try:
-            query = """
-            SELECT 
-                MAX(balance) as peak_balance,
-                MIN(balance) as min_balance
-            FROM account_history
-            """
+            query = "SELECT balance, DATE(timestamp) as date FROM account_history ORDER BY timestamp"
             result = self.db_manager.execute_query(query)
-            if result and result[0]['peak_balance']:
-                peak = result[0]['peak_balance']
-                min_bal = result[0]['min_balance']
-                return ((peak - min_bal) / peak) * 100 if peak > 0 else 0.0
-            return 0.0
+            if len(result) < 2:
+                return 0.0
+            df = pd.DataFrame(result)
+            daily_balance = df.set_index('date')['balance']
+            return perf_max_drawdown(daily_balance)
         except Exception as e:
             logger.error(f"Error calculating max drawdown: {e}")
             return 0.0
@@ -438,19 +511,8 @@ class MonitoringDashboard:
             
             # Calculate daily returns
             df = pd.DataFrame(result)
-            df['daily_return'] = df['balance'].pct_change()
-            df = df.dropna()
-            
-            if len(df) == 0:
-                return 0.0
-            
-            # Calculate Sharpe ratio (assuming 0% risk-free rate)
-            mean_return = df['daily_return'].mean()
-            std_return = df['daily_return'].std()
-            
-            if std_return > 0:
-                return (mean_return / std_return) * (252 ** 0.5)  # Annualized
-            return 0.0
+            daily_balance = df.set_index('date')['balance']
+            return perf_sharpe(daily_balance)
             
         except Exception as e:
             logger.error(f"Error calculating Sharpe ratio: {e}")
@@ -583,7 +645,7 @@ class MonitoringDashboard:
     def _get_price_change_24h(self) -> float:
         """Get 24h price change percentage"""
         try:
-            df = self.data_provider.get_historical_data('BTCUSDT', 
+            df = self.data_provider.get_historical_data('BTCUSDT', '1h',
                                                        datetime.now() - timedelta(days=2), 
                                                        datetime.now())
             if len(df) >= 2:
@@ -598,7 +660,7 @@ class MonitoringDashboard:
     def _get_volume_24h(self) -> float:
         """Get 24h trading volume"""
         try:
-            df = self.data_provider.get_historical_data('BTCUSDT', 
+            df = self.data_provider.get_historical_data('BTCUSDT', '1h',
                                                        datetime.now() - timedelta(days=1), 
                                                        datetime.now())
             if not df.empty:
@@ -612,7 +674,7 @@ class MonitoringDashboard:
         """Get current RSI value"""
         try:
             from indicators.technical import calculate_rsi
-            df = self.data_provider.get_historical_data('BTCUSDT', 
+            df = self.data_provider.get_historical_data('BTCUSDT', '1h',
                                                        datetime.now() - timedelta(days=30), 
                                                        datetime.now())
             if len(df) > 14:
@@ -627,7 +689,7 @@ class MonitoringDashboard:
         """Get EMA trend direction"""
         try:
             from indicators.technical import calculate_ema
-            df = self.data_provider.get_historical_data('BTCUSDT', 
+            df = self.data_provider.get_historical_data('BTCUSDT', '1h',
                                                        datetime.now() - timedelta(days=30), 
                                                        datetime.now())
             if len(df) > 50:
@@ -1102,7 +1164,7 @@ class MonitoringDashboard:
             logger.error(f"Error calculating win/loss ratio: {e}")
             return 0.0
     
-    def _get_current_positions(self) -> List[Dict[str, Any]]:
+    def _get_current_positions(self) -> List[PositionDict]:
         """Get current active positions"""
         try:
             query = """
@@ -1115,7 +1177,7 @@ class MonitoringDashboard:
             """
             result = self.db_manager.execute_query(query)
             
-            positions = []
+            positions: List[PositionDict] = []
             current_price = self._get_current_price()
             
             for row in result:
@@ -1128,7 +1190,7 @@ class MonitoringDashboard:
                 else:
                     unrealized_pnl = (entry_price - current_price) * quantity
                 
-                positions.append({
+                positions.append(PositionDict(**{
                     'symbol': row['symbol'],
                     'side': row['side'],
                     'entry_price': entry_price,
@@ -1139,15 +1201,15 @@ class MonitoringDashboard:
                     'stop_loss': row['stop_loss'],
                     'take_profit': row['take_profit'],
                     'order_id': row['order_id']
-                })
+                }))
             
             return positions
             
         except Exception as e:
             logger.error(f"Error getting current positions: {e}")
-            return []
+            return []  # type: ignore[return-value]
     
-    def _get_recent_trades(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def _get_recent_trades(self, limit: int = 50) -> List[TradeDict]:
         """Get recent completed trades"""
         try:
             query = """
@@ -1160,7 +1222,10 @@ class MonitoringDashboard:
             LIMIT ?
             """
             result = self.db_manager.execute_query(query, (limit,))
-            return [dict(row) for row in result] if result else []
+            trades: List[TradeDict] = []
+            for row in result or []:
+                trades.append(TradeDict(**row))  # type: ignore[arg-type]
+            return trades
         except Exception as e:
             logger.error(f"Error getting recent trades: {e}")
             return []
@@ -1247,6 +1312,61 @@ class MonitoringDashboard:
         except Exception as e:
             logger.error(f"Error getting error rate: {e}")
             return 0.0
+    
+    def _get_balance_info(self) -> Dict[str, Any]:
+        """Get comprehensive balance information"""
+        try:
+            current_balance = self.db_manager.get_current_balance()
+            balance_history = self.db_manager.get_balance_history(limit=10)
+            
+            # Calculate balance change over time
+            balance_change_24h = 0.0
+            if len(balance_history) >= 2:
+                try:
+                    recent_balance = balance_history[0]['balance']
+                    older_balance = next(
+                        (h['balance'] for h in balance_history 
+                         if ((datetime.now(timezone.utc) - h['timestamp'].astimezone(timezone.utc)).days >= 1)), 
+                        recent_balance
+                    )
+                    if older_balance > 0:
+                        balance_change_24h = ((recent_balance - older_balance) / older_balance) * 100
+                except (KeyError, TypeError, ZeroDivisionError):
+                    pass
+            
+            return {
+                'current_balance': current_balance,
+                'balance_change_24h': balance_change_24h,
+                'last_updated': balance_history[0]['timestamp'].isoformat() if balance_history and isinstance(balance_history[0]['timestamp'], datetime) else balance_history[0]['timestamp'] if balance_history else None,
+                'last_update_reason': balance_history[0]['reason'] if balance_history else None,
+                'recent_history': balance_history[:5]  # Last 5 balance changes
+            }
+        except Exception as e:
+            logger.error(f"Error getting balance info: {e}")
+            return {
+                'current_balance': 0.0,
+                'balance_change_24h': 0.0,
+                'last_updated': None,
+                'last_update_reason': 'Error retrieving balance',
+                'recent_history': []
+            }
+
+    def _get_balance_history(self, days: int = 30):
+        """Retrieve balance history.
+
+        Args:
+            days: How many days of history to retrieve. The current implementation maps the
+                  value directly to the `limit` parameter of `DatabaseManager.get_balance_history`.
+
+        Returns:
+            A list of balance snapshots ordered by most recent first.
+        """
+        try:
+            days = max(int(days), 1) if days is not None else 30
+            return self.db_manager.get_balance_history(limit=days)
+        except Exception as e:
+            logger.error(f"Error getting balance history: {e}")
+            return []
     
     def start_monitoring(self):
         """Start the monitoring update thread"""

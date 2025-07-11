@@ -34,6 +34,7 @@ The codebase supports **backtesting**, **live trading**, **machine-learning pric
 - 🎯 **Multiple Trading Strategies** – Adaptive EMA, ML-driven, sentiment-enhanced, and high-risk-high-reward templates (see below).
 - ♻️ **Fast Backtesting Engine** – Vectorised simulation with intelligent on-disk caching of historical data.
 - 🤖 **Live Trading Engine** – Robust real-time execution on Binance with position sizing, trailing stops, and exposure limits.
+- 💾 **Persistent Balance & Positions** – Never lose progress on restarts; automatic balance recovery and position restoration.
 - 🧠 **Machine-Learning Integration** – Keras & ONNX models for price prediction with optional sentiment features.
 - 💬 **Sentiment Data Providers** – SentiCrypt, Augmento, CryptoCompare, and custom providers via a simple interface.
 - 🛡 **Centralised Risk Manager** – Enforces max 1-2 % capital risk per trade and validates all position sizes.
@@ -98,9 +99,14 @@ Each component is completely decoupled and can be swapped out or extended withou
 ```bash
 # Clone & install python dependencies
 pip install -r requirements.txt
+
+# Run database migration for persistent balance features
+python scripts/migrate_database.py migrate
 ```
 
-> Python 3.9+ is recommended.  GPU acceleration is optional for model training.
+> Python 3.9+ is recommended. GPU acceleration is optional for model training.
+> 
+> **🔄 For existing users**: The database migration adds persistent balance tracking so your trading progress survives restarts.
 
 ---
 
@@ -145,12 +151,23 @@ python scripts/run_backtest.py ml_with_sentiment \
 ### Live Trading
 
 ```bash
-# Start live trading (paper-mode by default)
-python scripts/run_live_trading.py adaptive
+# Start live trading (paper-mode by default) 
+# Balance and positions automatically recovered from last session
+python scripts/run_live_trading.py adaptive --balance 1000
+
+# The bot will display recovery information:
+# 💾 Recovered balance from previous session: $1,250.00
+# 🔄 Recovering 2 active positions...
+# ✅ Recovered position: BTCUSDT long @ $45,000.00
 
 # Switch to a different strategy on the fly
 python live_trading_control.py switch ml_basic
+
+# Manually adjust balance via dashboard at http://localhost:8080
+# Or via API: POST /api/balance {"balance": 5000, "reason": "Added funds"}
 ```
+
+> **💾 Persistent Progress**: Your balance and active positions are automatically saved and recovered on restart, so Railway deployments never lose your trading progress.
 
 ### Training ML Models
 
@@ -203,9 +220,9 @@ The trading bot features a **centralized database architecture** that allows mul
 ### 🏗️ **Centralized Database Design**
 
 #### **Local Development**
-- **PostgreSQL Option**: Environment parity with production (recommended)
-- **SQLite Fallback**: Zero setup for quick development
-- **Flexible Configuration**: Easy switching between database types
+- **PostgreSQL Database**: Full environment parity with production
+- **Docker Integration**: Easy local setup with docker-compose
+- **Connection Pooling**: Efficient local development setup
 - **Data Isolation**: Local data separate from production
 
 #### **Production (Railway)**
@@ -230,11 +247,11 @@ The system uses a comprehensive schema designed for trading operations:
 
 #### **Automatic Configuration**
 ```python
-# The system automatically detects the database type:
+# The system uses PostgreSQL in all environments:
 if DATABASE_URL:  # PostgreSQL on Railway
     use PostgreSQL with connection pooling
 else:  # Local development
-    use SQLite with default settings
+    use local PostgreSQL with docker-compose
 ```
 
 #### **Railway Setup**
@@ -242,9 +259,9 @@ else:  # Local development
 2. Deploy services (no code changes needed)
 3. Database connection configured automatically
 
-#### **Local Development Options**
+#### **Local Development Setup**
 
-**Option 1: PostgreSQL (Recommended for Environment Parity)**
+**PostgreSQL Setup**
 ```bash
 # Quick setup with guided wizard
 python scripts/setup_local_development.py
@@ -253,11 +270,6 @@ python scripts/setup_local_development.py
 docker-compose up -d postgres
 # Edit .env: DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
 ```
-
-**Option 2: SQLite (Simple Development)**
-- Uses SQLite database at `src/data/trading_bot.db`
-- No configuration required (default when DATABASE_URL not set)
-- Same commands work unchanged
 
 ### 🛠️ **Database Tools**
 
@@ -273,21 +285,12 @@ python scripts/railway_database_setup.py --verify
 python scripts/railway_database_setup.py --check-migration
 ```
 
-#### **Data Migration (if needed)**
-```bash
-# Export existing SQLite data for migration
-python scripts/export_sqlite_data.py
-
-# Import data to PostgreSQL
-python scripts/import_to_postgresql.py
-```
-
 #### **Connection Testing**
 ```bash
 # Test database connection and basic operations
 python scripts/verify_database_connection.py
 
-# Setup local development environment (PostgreSQL or SQLite)
+# Setup local development environment
 python scripts/setup_local_development.py
 ```
 
@@ -300,10 +303,10 @@ python scripts/setup_local_development.py
 - **Scalability**: Services can scale independently
 
 #### **For Development**
-- **Local SQLite**: Fast development without external dependencies
-- **Production PostgreSQL**: Robust production database
-- **Seamless Transition**: Same code works in both environments
-- **Zero Configuration**: Automatic database type detection
+- **Local PostgreSQL**: Full environment parity with production
+- **Docker Integration**: Easy local setup with docker-compose
+- **Consistent Environment**: Same database in development and production
+- **Zero Configuration**: Automatic database connection detection
 
 #### **For Operations**
 - **Connection Pooling**: Efficient database resource usage
@@ -341,7 +344,7 @@ python scripts/setup_local_development.py
 ### 🎯 **How It Works**
 
 1. **Service Initialization**: Database manager detects environment
-2. **Database Selection**: Uses `DATABASE_URL` if available, else SQLite
+2. **Database Connection**: Uses `DATABASE_URL` for Railway or local PostgreSQL
 3. **Connection Setup**: Configures appropriate connection pooling
 4. **Schema Creation**: Creates tables automatically if needed
 5. **Service Ready**: Both trading bot and dashboard use same database

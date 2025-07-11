@@ -2,22 +2,17 @@
 
 ## Overview
 
-The AI Trading Bot now supports **PostgreSQL for local development** to provide complete environment parity between development and production. This eliminates database-specific issues and provides a more realistic development experience.
+The AI Trading Bot uses **PostgreSQL for all environments** to provide complete environment parity between development and production. This eliminates database-specific issues and provides a consistent development experience.
 
-## 🆚 Database Options Comparison
+## 🚀 PostgreSQL Benefits
 
-| Feature | PostgreSQL (Recommended) | SQLite (Simple) |
-|---------|-------------------------|-----------------|
-| **Environment Parity** | ✅ Identical to production | ❌ Different from production |
-| **Setup Complexity** | ⚠️ Requires Docker | ✅ Zero setup |
-| **Performance Testing** | ✅ Realistic performance | ❌ Different performance characteristics |
-| **Complex Queries** | ✅ Full PostgreSQL features | ⚠️ Limited SQL features |
-| **Concurrent Access** | ✅ True concurrent testing | ❌ File-based limitations |
-| **Transaction Testing** | ✅ Full ACID compliance | ⚠️ Limited transaction support |
-| **Team Development** | ✅ Consistent across team | ⚠️ Potential inconsistencies |
-| **Resource Usage** | ❌ Higher memory/CPU | ✅ Minimal resources |
-| **Startup Time** | ❌ Service startup required | ✅ Instant |
-| **Data Reset** | ⚠️ Docker volume management | ✅ Simple file deletion |
+**PostgreSQL provides:**
+- **Environment Parity**: Identical to production
+- **Performance Testing**: Realistic performance characteristics
+- **Complex Queries**: Full PostgreSQL features
+- **Concurrent Access**: True concurrent testing
+- **Transaction Testing**: Full ACID compliance
+- **Team Development**: Consistent across team
 
 ## 🚀 Quick Setup
 
@@ -170,7 +165,7 @@ sys.path.insert(0, 'src')
 from database.manager import DatabaseManager
 db = DatabaseManager()
 info = db.get_database_info()
-print(f'Database Type: PostgreSQL' if info['is_postgresql'] else 'SQLite')
+print(f'Database Type: PostgreSQL')
 print(f'Connection Pool: {info[\"connection_pool_size\"]} connections')
 "
 ```
@@ -190,26 +185,16 @@ python scripts/run_backtest.py adaptive --days 7
 python scripts/run_live_trading.py adaptive
 ```
 
-### Switch Between SQLite and PostgreSQL
+### PostgreSQL Configuration
 ```bash
-# Switch to PostgreSQL
+# Local PostgreSQL
 # Edit .env file:
 DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
-
-# Switch to SQLite
-# Edit .env file (comment out DATABASE_URL):
-# DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
 ```
 
-### Data Migration Between Environments
+### Data Management
 ```bash
-# Export from SQLite
-python scripts/export_sqlite_data.py
-
-# Import to PostgreSQL (ensure PostgreSQL is running)
-python scripts/import_to_postgresql.py
-
-# Verify migration
+# Verify database connection
 python scripts/verify_database_connection.py
 ```
 
@@ -275,25 +260,6 @@ ORDER BY total_time DESC
 LIMIT 10;"
 ```
 
-## 🔄 Switching Back to SQLite
-
-If you need to switch back to SQLite:
-
-1. **Edit .env file**:
-   ```bash
-   # Comment out PostgreSQL
-   # DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
-   ```
-
-2. **Stop PostgreSQL** (optional):
-   ```bash
-   docker-compose down
-   ```
-
-3. **Restart application**:
-   ```bash
-   python scripts/verify_database_connection.py
-   ```
 
 ## 📊 Performance Comparison
 
@@ -304,32 +270,25 @@ If you need to switch back to SQLite:
 - **Concurrent Development**: Multiple developers can connect simultaneously
 - **Transaction Isolation**: Test complex transaction scenarios
 
-### When to Use Each Option
+### PostgreSQL Usage
 
-**Use PostgreSQL when**:
-- Working on complex database features
-- Testing performance-critical operations
-- Collaborating with a team
-- Preparing for production deployment
-- Testing database migrations
-
-**Use SQLite when**:
-- Quick prototyping or experimentation
-- Simple single-developer tasks
-- Limited development resources
-- Testing basic functionality
-- Working offline or with limited connectivity
+**PostgreSQL is used for**:
+- All development and production environments
+- Complex database features
+- Performance-critical operations
+- Team collaboration
+- Database migrations
+- Testing and deployment
 
 ---
 
 ## 🎯 Best Practices
 
-1. **Use PostgreSQL for feature development** that involves database operations
-2. **Use SQLite for quick tests** and experimentation
-3. **Test database migrations** on PostgreSQL before production
-4. **Monitor resource usage** with PostgreSQL locally
-5. **Keep both environments updated** with the same schema changes
-6. **Use version control** for database configuration files
-7. **Document database changes** for team members
+1. **Use PostgreSQL for all development** that involves database operations
+2. **Test database migrations** on PostgreSQL before production
+3. **Monitor resource usage** with PostgreSQL locally
+4. **Keep all environments consistent** with the same schema changes
+5. **Use version control** for database configuration files
+6. **Document database changes** for team members
 
-This setup provides the best of both worlds: the simplicity of SQLite when you need it, and the power and compatibility of PostgreSQL when you're building production features.
+This setup provides consistent PostgreSQL experience across all environments.

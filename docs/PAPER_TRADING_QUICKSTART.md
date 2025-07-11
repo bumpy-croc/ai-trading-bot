@@ -32,8 +32,12 @@ cat > .env << 'EOF'
 BINANCE_API_KEY=your_api_key_here
 BINANCE_API_SECRET=your_api_secret_here
 
-# Optional: Database URL (defaults to SQLite)
-# DATABASE_URL=sqlite:///data/trading_bot.db
+# ⚠️ **Database Note**
+#
+# The trading bot now **requires PostgreSQL**.  Any previous references to a
+# SQLite fallback have been removed.
+#
+# Optional: Database URL (defaults to the `DATABASE_URL` environment variable)
 EOF
 ```
 

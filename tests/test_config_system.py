@@ -111,7 +111,7 @@ class TestAWSSecretsProvider:
             'SecretString': json.dumps({
                 'BINANCE_API_KEY': 'test_api_key',
                 'BINANCE_API_SECRET': 'test_api_secret',
-                'DATABASE_URL': 'sqlite:///test.db'
+                'DATABASE_URL': 'postgresql://test_user:test_pass@localhost:5432/test_db'
             })
         }
         
@@ -119,7 +119,7 @@ class TestAWSSecretsProvider:
             provider = AWSSecretsProvider()
             assert provider.get('BINANCE_API_KEY') == 'test_api_key'
             assert provider.get('BINANCE_API_SECRET') == 'test_api_secret'
-            assert provider.get('DATABASE_URL') == 'sqlite:///test.db'
+            assert provider.get('DATABASE_URL') == 'postgresql://test_user:test_pass@localhost:5432/test_db'
             assert provider.get('NONEXISTENT') is None
     
     @patch('boto3.client')
@@ -358,7 +358,7 @@ class TestConfigSystemIntegration:
         with patch.dict(os.environ, {
             'BINANCE_API_KEY': 'test_key',
             'BINANCE_API_SECRET': 'test_secret',
-            'DATABASE_URL': 'sqlite:///test.db',
+            'DATABASE_URL': 'postgresql://test_user:test_pass@localhost:5432/test_db',
             'TRADING_MODE': 'paper',
             'INITIAL_BALANCE': '1000',
             'LOG_LEVEL': 'INFO'

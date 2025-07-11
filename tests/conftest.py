@@ -13,6 +13,14 @@ from unittest.mock import Mock, MagicMock
 import tempfile
 import os
 from pathlib import Path
+import sys
+
+# Add project root and src directory to PYTHONPATH for test imports
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_SRC_DIR = _PROJECT_ROOT / "src"
+for _p in (str(_PROJECT_ROOT), str(_SRC_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 # Import core components for fixture creation
 from data_providers.data_provider import DataProvider
@@ -20,6 +28,65 @@ from data_providers.binance_data_provider import BinanceDataProvider
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
 from strategies.adaptive import AdaptiveStrategy
+
+# ---------- Database setup for tests ----------
+# Spin up a temporary PostgreSQL instance via Testcontainers so that modules that
+# require a valid DATABASE_URL can import successfully.  This happens at import
+# time, so we do it at module import as well.
+
+_POSTGRES_CONTAINER = None
+try:
+    from testcontainers.postgres import PostgresContainer  # type: ignore
+    _POSTGRES_CONTAINER = PostgresContainer("postgres:15-alpine")
+    _POSTGRES_CONTAINER.start()
+    os.environ["DATABASE_URL"] = _POSTGRES_CONTAINER.get_connection_url()
+except Exception as _e:  # pragma: no cover -- fallback if Docker not available
+    # Provide a dummy URL so the code can still import, but mark that Postgres is
+    # unavailable.  Tests that actually require DB connectivity should handle the
+    # failure or be skipped.
+    os.environ.setdefault(
+        "DATABASE_URL",
+        "postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test"
+    )
+    _POSTGRES_CONTAINER = None
+
+    # --- Ensure the fallback local test database exists (for developers without Docker) ---
+    try:
+        from sqlalchemy.engine.url import make_url
+        from sqlalchemy import create_engine, text
+
+        _raw_url = os.environ["DATABASE_URL"]
+        _url_obj = make_url(_raw_url)
+
+        # Attempt connection; if database missing, create it.
+        try:
+            _test_engine = create_engine(_raw_url, isolation_level="AUTOCOMMIT")
+            with _test_engine.connect() as _conn:
+                pass  # connection successful -> DB exists
+        except Exception:
+            # Connect to default 'postgres' database to create target DB
+            _default_db_url = _url_obj.set(database="postgres")
+            _admin_engine = create_engine(_default_db_url, isolation_level="AUTOCOMMIT")
+            with _admin_engine.connect() as _conn:
+                _db_name = _url_obj.database
+                _conn.execute(text(f"CREATE DATABASE {_db_name};"))
+            # Retry connection
+            _test_engine = create_engine(_raw_url, isolation_level="AUTOCOMMIT")
+            with _test_engine.connect():
+                pass
+    except Exception:
+        # If we can't ensure db creation, tests that need it will fail/skipped.
+        pass
+
+
+def pytest_sessionfinish(session, exitstatus):  # noqa: D401
+    """Cleanup the Postgres container after the entire test session."""
+    global _POSTGRES_CONTAINER
+    if _POSTGRES_CONTAINER is not None:
+        try:
+            _POSTGRES_CONTAINER.stop()
+        except Exception:
+            pass  # We tried, nothing else to do
 
 
 @pytest.fixture
@@ -83,6 +150,25 @@ def mock_data_provider():
     }, index=[datetime.now()])
     
     return mock_provider
+
+
+@pytest.fixture(scope="session")
+def btcusdt_1h_2023_2024():
+    """Load cached BTCUSDT 1-hour candles for 2023-01-01 → 2024-12-31.
+
+    The data must be generated with ``scripts/download_binance_data.py`` and
+    committed to the repository (preferably via Git LFS) under
+    ``tests/data``.  If the file is missing, tests that depend on this
+    fixture will be skipped automatically.
+    """
+    from pathlib import Path
+    path = Path(__file__).parent / "data" / "BTCUSDT_1h_2023-01-01_2024-12-31.feather"
+    if not path.exists():
+        pytest.skip("Cached Binance data file not found")
+    import pandas as pd
+    df = pd.read_feather(path)
+    df.set_index("timestamp", inplace=True)
+    return df
 
 
 @pytest.fixture
@@ -223,21 +309,9 @@ def setup_logging():
 # Pytest configuration
 def pytest_configure(config):
     """Configure pytest"""
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests (slower)"
-    )
-    config.addinivalue_line(
-        "markers", "live_trading: marks tests that test live trading components"
-    )
-    config.addinivalue_line(
-        "markers", "risk_management: marks tests related to risk management"
-    )
-    config.addinivalue_line(
-        "markers", "strategy: marks tests related to strategy logic"
-    )
-    config.addinivalue_line(
-        "markers", "data_provider: marks tests related to data providers"
-    )
+    # Marker registration is now handled declaratively in pytest.ini to avoid duplication.
+    # Add any runtime configuration changes here if needed.
+    pass
 
 
 # Test categories for easy selection

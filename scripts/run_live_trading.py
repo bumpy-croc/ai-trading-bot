@@ -30,10 +30,11 @@ src_dir = root_dir / "src"
 sys.path.append(str(src_dir))
 
 from config import get_config
-
+from config.constants import DEFAULT_INITIAL_BALANCE
 from data_providers.binance_data_provider import BinanceDataProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from data_providers.senticrypt_provider import SentiCryptProvider
+from data_providers.mock_data_provider import MockDataProvider
 from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
 
@@ -47,6 +48,7 @@ except ModuleNotFoundError:
     HighRiskHighRewardStrategy = None
 from strategies.ml_basic import MlBasic
 from strategies.ml_with_sentiment import MlWithSentiment
+from strategies.test_high_frequency import TestHighFrequencyStrategy
 
 # Configure logging - ensure the logs directory exists at project root
 project_root = Path(__file__).parent.parent  # ai-trading-bot/
@@ -70,7 +72,8 @@ def load_strategy(strategy_name: str):
         'adaptive': AdaptiveStrategy,
         'enhanced': EnhancedStrategy,
         'ml_basic': MlBasic,
-        'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True)
+        'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True),
+        'test_high_frequency': TestHighFrequencyStrategy
     }
     # Register high-risk strategy only if available
     if HighRiskHighRewardStrategy is not None:
@@ -99,7 +102,7 @@ def parse_args():
     # Trading parameters
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')
     parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
-    parser.add_argument('--balance', type=float, default=100, help='Initial balance')
+    parser.add_argument('--balance', type=float, default=DEFAULT_INITIAL_BALANCE, help='Initial balance')
     parser.add_argument('--max-position', type=float, default=0.1, help='Max position size (0.1 = 10% of balance)')
     parser.add_argument('--check-interval', type=int, default=60, help='Check interval in seconds')
     
@@ -117,6 +120,7 @@ def parse_args():
     # Data providers
     parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis')
     parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
+    parser.add_argument('--mock-data', action='store_true', help='Use mock data provider for rapid testing')
     
     # Monitoring
     parser.add_argument('--webhook-url', help='Webhook URL for alerts')
@@ -190,7 +194,6 @@ def print_startup_info(args, strategy):
     print(f"Strategy: {strategy.name}")
     print(f"Symbol: {args.symbol}")
     print(f"Timeframe: {args.timeframe}")
-    print(f"Initial Balance: ${args.balance:,.2f}")
     print(f"Max Position Size: {args.max_position*100:.1f}% of balance")
     print(f"Check Interval: {args.check_interval}s")
     print(f"Risk Per Trade: {args.risk_per_trade*100:.1f}%")
@@ -217,14 +220,17 @@ def main():
         
         # Initialize data provider
         logger.info("Initializing data providers...")
-        binance_provider = BinanceDataProvider()
-        
-        if args.no_cache:
-            data_provider = binance_provider
-            logger.info("Data caching disabled")
+        if args.mock_data:
+            data_provider = MockDataProvider(interval_seconds=5)  # 5s candles for rapid testing
+            logger.info("Using MockDataProvider for rapid testing")
         else:
-            data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)  # Short TTL for live trading
-            logger.info("Data caching enabled (1 hour TTL)")
+            binance_provider = BinanceDataProvider()
+            if args.no_cache:
+                data_provider = binance_provider
+                logger.info("Data caching disabled")
+            else:
+                data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)  # Short TTL for live trading
+                logger.info("Data caching enabled (1 hour TTL)")
         
         # Initialize sentiment provider if requested
         sentiment_provider = None
