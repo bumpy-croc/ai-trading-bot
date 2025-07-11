@@ -1,0 +1,10 @@
+{
+    "mcpServers": {
+      "Railway": {
+        "command": "npx -y @jasontanswe/railway-mcp RAILWAY_API_TOKEN",
+        "env": {
+          "RAILWAY_API_KEY": "eacd4325-34c0-41f8-a6fb-22e01163e79b"
+        }
+      }
+    }
+  }
