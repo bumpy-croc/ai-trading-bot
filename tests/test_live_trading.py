@@ -1386,3 +1386,75 @@ class TestDatabaseLogging:
         
         # Cleanup
         db_manager.end_trading_session(session_id, 10100.0)
+
+    def test_balance_and_position_persistence(self, mock_strategy, mock_data_provider):
+        """Ensure balance & positions persist after simulated restart."""
+        from database.manager import DatabaseManager
+        from database.models import PositionSide, TradeSource
+        import uuid
+        import os
+        # 1️⃣  START TRADING SESSION & CREATE STATE
+        initial_balance = 1000.0
+        db_manager = DatabaseManager()
+        session_id = db_manager.create_trading_session(
+            strategy_name="persistence_test_strategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode=TradeSource.PAPER,
+            initial_balance=initial_balance,
+        )
+        # Set initial balance record
+        assert db_manager.update_balance(initial_balance, "initial_balance", "test", session_id)
+        # Log a position
+        position_id = db_manager.log_position(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            entry_price=45000.0,
+            size=0.1,  # 10 % of balance
+            strategy_name="persistence_test_strategy",
+            order_id=f"unit_test_order_{uuid.uuid4().hex}",
+            stop_loss=44000.0,
+            take_profit=46000.0,
+            session_id=session_id,
+        )
+        assert position_id is not None
+        # Verify state exists before restart
+        pre_restart_balance = db_manager.get_current_balance(session_id)
+        assert pre_restart_balance == initial_balance
+        pre_positions = db_manager.get_active_positions(session_id)
+        assert len(pre_positions) == 1
+        # 2️⃣  SIMULATE RESTART (new DatabaseManager instance bound to same DB)
+        new_db = DatabaseManager()
+        # 3️⃣  RECOVER STATE IN NEW INSTANCE
+        recovered_balance = new_db.recover_last_balance(session_id)
+        assert recovered_balance == pre_restart_balance, "Recovered balance mismatch"
+        recovered_positions = new_db.get_active_positions(session_id)
+        assert len(recovered_positions) == 1, "Positions did not persist after restart"
+        recovered_pos = recovered_positions[0]
+        assert recovered_pos["symbol"] == "BTCUSDT"
+        assert recovered_pos["side"] == "long"
+        assert recovered_pos["entry_price"] == 45000.0
+
+    @pytest.mark.parametrize("adjustment", [500, -200])
+    def test_manual_balance_adjustment_persists(self, mock_strategy, mock_data_provider, adjustment):
+        """Manual balance adjustments should persist across restarts."""
+        from database.manager import DatabaseManager
+        from database.models import TradeSource
+        # Create session and set balance
+        start_balance = 1000.0
+        db_manager = DatabaseManager()
+        session_id = db_manager.create_trading_session(
+            strategy_name="manual_adjust_test",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode=TradeSource.PAPER,
+            initial_balance=start_balance,
+        )
+        db_manager.update_balance(start_balance, "initial_balance", "test", session_id)
+        # Manual adjustment
+        new_balance = start_balance + adjustment
+        assert db_manager.manual_balance_adjustment(new_balance, f"test_adjust_{adjustment}", "unit_test")
+        # Restart simulation with a new DatabaseManager connected to the same DB
+        new_db = DatabaseManager()
+        recovered_balance = new_db.get_current_balance(session_id)
+        assert recovered_balance == new_balance, "Manual adjustment did not persist after restart"

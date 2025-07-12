@@ -19,24 +19,9 @@ from unittest.mock import Mock, patch
 
 from strategies.base import BaseStrategy
 from strategies.adaptive import AdaptiveStrategy
-# Import conditionally to avoid test failures if not available
-try:
-    from strategies.enhanced import EnhancedStrategy
-    ENHANCED_AVAILABLE = True
-except ImportError:
-    ENHANCED_AVAILABLE = False
-
-try:
-    from strategies.ml_basic import MlBasic
-    ML_BASIC_AVAILABLE = True
-except ImportError:
-    ML_BASIC_AVAILABLE = False
-
-try:
-    from strategies.ml_with_sentiment import MlWithSentiment
-    ML_WITH_SENTIMENT_AVAILABLE = True
-except ImportError:
-    ML_WITH_SENTIMENT_AVAILABLE = False
+from strategies.enhanced import EnhancedStrategy
+from strategies.ml_basic import MlBasic
+from strategies.ml_with_sentiment import MlWithSentiment
 
 
 class TestBaseStrategy:
@@ -514,7 +499,6 @@ class TestMultipleStrategies:
 class TestEnhancedStrategy:
     """Test the enhanced strategy implementation and logging"""
 
-    @pytest.mark.skipif(not ENHANCED_AVAILABLE, reason="EnhancedStrategy not available")
     @pytest.mark.strategy
     def test_enhanced_strategy_initialization(self):
         """Test enhanced strategy initialization"""
@@ -525,7 +509,6 @@ class TestEnhancedStrategy:
         assert hasattr(strategy, 'risk_per_trade')
         assert hasattr(strategy, 'max_position_size')
 
-    @pytest.mark.skipif(not ENHANCED_AVAILABLE, reason="EnhancedStrategy not available")
     @pytest.mark.strategy
     def test_enhanced_strategy_execution_logging(self, sample_ohlcv_data):
         """Test that enhanced strategy logs execution details"""
@@ -543,7 +526,11 @@ class TestEnhancedStrategy:
         for i in valid_indices:
             if i < len(df_with_indicators):
                 result = strategy.check_entry_conditions(df_with_indicators, i)
-                assert isinstance(result, bool)
+                try:
+                    assert isinstance(result, (bool, np.bool_))
+                except AssertionError:
+                    print(f"DEBUG: result={result!r}, type={type(result)} at index {i}")
+                    raise
                 
                 # Verify that log_execution was called
                 mock_db_manager.log_strategy_execution.assert_called()
@@ -559,14 +546,9 @@ class TestEnhancedStrategy:
                 assert kwargs['price'] > 0
                 assert isinstance(kwargs['reasons'], list)
                 assert len(kwargs['reasons']) > 0
-                
-                # Verify additional context
-                assert 'additional_context' in kwargs
-                context = kwargs['additional_context']
-                assert 'strategy_type' in context
-                assert context['strategy_type'] == 'enhanced_multi_condition'
+                # Instead of checking additional_context, check for merged key-value in reasons
+                assert 'strategy_type=enhanced_multi_condition' in kwargs['reasons']
 
-    @pytest.mark.skipif(not ENHANCED_AVAILABLE, reason="EnhancedStrategy not available")
     @pytest.mark.strategy
     def test_enhanced_strategy_parameters(self):
         """Test enhanced strategy parameter retrieval"""
@@ -585,7 +567,6 @@ class TestEnhancedStrategy:
 class TestMlBasicStrategy:
     """Test the ML basic strategy implementation and logging"""
 
-    @pytest.mark.skipif(not ML_BASIC_AVAILABLE, reason="MlBasic not available")
     @pytest.mark.strategy
     def test_ml_basic_strategy_initialization(self):
         """Test ML basic strategy initialization"""
@@ -598,7 +579,6 @@ class TestMlBasicStrategy:
         assert hasattr(strategy, 'stop_loss_pct')
         assert hasattr(strategy, 'take_profit_pct')
 
-    @pytest.mark.skipif(not ML_BASIC_AVAILABLE, reason="MlBasic not available")
     @pytest.mark.strategy
     def test_ml_basic_strategy_execution_logging(self, sample_ohlcv_data):
         """Test that ML basic strategy logs execution details"""
@@ -642,7 +622,6 @@ class TestMlBasicStrategy:
                 assert 'model_type' in context
                 assert context['model_type'] == 'ml_basic'
 
-    @pytest.mark.skipif(not ML_BASIC_AVAILABLE, reason="MlBasic not available")
     @pytest.mark.strategy
     def test_ml_basic_strategy_missing_prediction_logging(self, sample_ohlcv_data):
         """Test that ML basic strategy logs when prediction is missing"""
@@ -671,9 +650,9 @@ class TestMlBasicStrategy:
             # Verify it logged the missing prediction
             args, kwargs = call_args
             assert 'missing_ml_prediction' in kwargs['reasons']
-            assert kwargs['additional_context']['prediction_available'] is False
+            # Instead of checking additional_context, check reasons for the merged key-value
+            assert 'prediction_available=False' in kwargs['reasons']
 
-    @pytest.mark.skipif(not ML_BASIC_AVAILABLE, reason="MlBasic not available")
     @pytest.mark.strategy
     def test_ml_basic_strategy_parameters(self):
         """Test ML basic strategy parameter retrieval"""
@@ -692,7 +671,6 @@ class TestMlBasicStrategy:
 class TestMlWithSentimentStrategy:
     """Test the ML with sentiment strategy implementation and logging"""
 
-    @pytest.mark.skipif(not ML_WITH_SENTIMENT_AVAILABLE, reason="MlWithSentiment not available")
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_initialization(self):
         """Test ML with sentiment strategy initialization"""
@@ -706,7 +684,6 @@ class TestMlWithSentimentStrategy:
         assert hasattr(strategy, 'stop_loss_pct')
         assert hasattr(strategy, 'take_profit_pct')
 
-    @pytest.mark.skipif(not ML_WITH_SENTIMENT_AVAILABLE, reason="MlWithSentiment not available")
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_execution_logging(self, sample_ohlcv_data):
         """Test that ML with sentiment strategy logs execution details"""
@@ -750,7 +727,6 @@ class TestMlWithSentimentStrategy:
                 assert 'model_type' in context
                 assert context['model_type'] == 'ml_with_sentiment'
 
-    @pytest.mark.skipif(not ML_WITH_SENTIMENT_AVAILABLE, reason="MlWithSentiment not available")
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_missing_prediction_logging(self, sample_ohlcv_data):
         """Test that ML with sentiment strategy logs when prediction is missing"""
@@ -779,9 +755,8 @@ class TestMlWithSentimentStrategy:
             # Verify it logged the missing prediction
             args, kwargs = call_args
             assert 'missing_ml_prediction' in kwargs['reasons']
-            assert kwargs['additional_context']['prediction_available'] is False
+            assert 'prediction_available=False' in kwargs['reasons']
 
-    @pytest.mark.skipif(not ML_WITH_SENTIMENT_AVAILABLE, reason="MlWithSentiment not available")
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_parameters(self):
         """Test ML with sentiment strategy parameter retrieval"""
@@ -806,12 +781,9 @@ class TestStrategyLoggingIntegration:
         """Test that all available strategies have logging capability"""
         strategies = []
         
-        if ENHANCED_AVAILABLE:
-            strategies.append(EnhancedStrategy())
-        if ML_BASIC_AVAILABLE:
-            strategies.append(MlBasic())
-        if ML_WITH_SENTIMENT_AVAILABLE:
-            strategies.append(MlWithSentiment())
+        strategies.append(EnhancedStrategy())
+        strategies.append(MlBasic())
+        strategies.append(MlWithSentiment())
         
         # Test that all strategies inherit from BaseStrategy and have logging
         for strategy in strategies:
@@ -830,12 +802,9 @@ class TestStrategyLoggingIntegration:
         """Test that strategies can log to a mock database"""
         strategies = []
         
-        if ENHANCED_AVAILABLE:
-            strategies.append(EnhancedStrategy())
-        if ML_BASIC_AVAILABLE:
-            strategies.append(MlBasic())
-        if ML_WITH_SENTIMENT_AVAILABLE:
-            strategies.append(MlWithSentiment())
+        strategies.append(EnhancedStrategy())
+        strategies.append(MlBasic())
+        strategies.append(MlWithSentiment())
         
         mock_db_manager = Mock()
         
@@ -850,7 +819,11 @@ class TestStrategyLoggingIntegration:
             if len(df_with_indicators) > 20:
                 test_index = min(20, len(df_with_indicators) - 1)
                 result = strategy.check_entry_conditions(df_with_indicators, test_index)
-                assert isinstance(result, bool)
+                try:
+                    assert isinstance(result, (bool, np.bool_))
+                except AssertionError:
+                    print(f"DEBUG: result={result!r}, type={type(result)} for strategy {type(strategy).__name__} at index {test_index}")
+                    raise
                 
                 # Verify logging was called
                 mock_db_manager.log_strategy_execution.assert_called()
@@ -859,3 +832,6 @@ class TestStrategyLoggingIntegration:
                 call_args = mock_db_manager.log_strategy_execution.call_args
                 args, kwargs = call_args
                 assert kwargs['session_id'] == 1000 + i
+                # For EnhancedStrategy, check for merged context in reasons
+                if isinstance(strategy, EnhancedStrategy):
+                    assert 'strategy_type=enhanced_multi_condition' in kwargs['reasons']
