@@ -1301,7 +1301,7 @@ class TestDatabaseLogging:
         # Log position
         position_id = db_manager.log_position(
             symbol='BTCUSDT',
-            side='long',
+            side=PositionSide.LONG,
             entry_price=50000.0,
             size=0.1,
             strategy_name='TestStrategy',
