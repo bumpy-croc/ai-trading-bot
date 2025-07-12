@@ -1331,7 +1331,7 @@ class TestDatabaseLogging:
         db_manager.close_position(position_id)
         trade_id = db_manager.log_trade(
             symbol='BTCUSDT',
-            side='long',
+            side=PositionSide.LONG,
             entry_price=50000.0,
             exit_price=51000.0,
             size=0.1,
