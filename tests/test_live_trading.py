@@ -838,3 +838,551 @@ class TestLiveTradingFallbacks:
         exit_kwargs = exit_call_args.kwargs
         assert exit_kwargs.get('signal_type') == 'exit'
         assert 'action_taken' in exit_kwargs
+
+
+@pytest.mark.skipif(not LIVE_TRADING_AVAILABLE, reason="Live trading components not available")
+class TestDatabaseLogging:
+    """Test suite for database logging functionality in live trading"""
+    
+    def test_trades_logged_to_database(self, mock_strategy, mock_data_provider):
+        """Test that completed trades are logged to database accurately"""
+        from database.manager import DatabaseManager
+        from database.models import Trade, TradeSource, PositionSide
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            strategy_config={"test": True},
+            mode="live"
+        )
+        
+        # Simulate a completed trade
+        trade_data = {
+            'symbol': 'BTCUSDT',
+            'side': PositionSide.LONG,
+            'entry_price': 50000.0,
+            'exit_price': 51000.0,
+            'size': 0.1,
+            'entry_time': datetime.now() - timedelta(hours=1),
+            'exit_time': datetime.now(),
+            'pnl': 100.0,
+            'exit_reason': 'take_profit',
+            'strategy_name': 'TestStrategy',
+            'source': TradeSource.PAPER,
+            'order_id': 'test_order_001',
+            'session_id': session_id
+        }
+        
+        # Log the trade
+        trade_id = db_manager.log_trade(**trade_data)
+        assert trade_id > 0
+        
+        # Verify trade was logged correctly
+        with db_manager.get_session() as session:
+            trade = session.query(Trade).filter_by(id=trade_id).first()
+            assert trade is not None
+            assert trade.symbol == 'BTCUSDT'
+            assert trade.side == PositionSide.LONG
+            assert float(trade.entry_price) == 50000.0
+            assert float(trade.exit_price) == 51000.0
+            assert float(trade.pnl) == 100.0
+            assert trade.exit_reason == 'take_profit'
+            assert trade.strategy_name == 'TestStrategy'
+            assert trade.session_id == session_id
+        
+        # Cleanup
+        db_manager.end_trading_session(session_id)
+
+    def test_events_logged_to_database(self, mock_strategy, mock_data_provider):
+        """Test that system events are logged to database accurately"""
+        from database.manager import DatabaseManager
+        from database.models import SystemEvent, EventType
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            mode="live"
+        )
+        
+        # Log various events
+        events = [
+            {
+                'event_type': EventType.ENGINE_START,
+                'message': 'Trading engine started',
+                'severity': 'info',
+                'component': 'trading_engine',
+                'session_id': session_id
+            },
+            {
+                'event_type': EventType.STRATEGY_CHANGE,
+                'message': 'Strategy changed to AdaptiveStrategy',
+                'severity': 'info',
+                'component': 'strategy_manager',
+                'details': {'old_strategy': 'BasicStrategy', 'new_strategy': 'AdaptiveStrategy'},
+                'session_id': session_id
+            },
+            {
+                'event_type': EventType.ERROR,
+                'message': 'API rate limit exceeded',
+                'severity': 'warning',
+                'component': 'data_provider',
+                'session_id': session_id
+            }
+        ]
+        
+        event_ids = []
+        for event_data in events:
+            event_id = db_manager.log_event(**event_data)
+            event_ids.append(event_id)
+            assert event_id > 0
+        
+        # Verify events were logged correctly
+        with db_manager.get_session() as session:
+            for i, event_id in enumerate(event_ids):
+                event = session.query(SystemEvent).filter_by(id=event_id).first()
+                assert event is not None
+                assert event.event_type == events[i]['event_type']
+                assert event.message == events[i]['message']
+                assert event.severity == events[i]['severity']
+                assert event.component == events[i]['component']
+                assert event.session_id == session_id
+        
+        # Cleanup
+        db_manager.end_trading_session(session_id)
+
+    def test_positions_logged_to_database(self, mock_strategy, mock_data_provider):
+        """Test that positions are logged to database accurately"""
+        from database.manager import DatabaseManager
+        from database.models import Position, PositionSide, OrderStatus
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            mode="live"
+        )
+        
+        # Log a position
+        position_data = {
+            'symbol': 'BTCUSDT',
+            'side': PositionSide.LONG,
+            'entry_price': 50000.0,
+            'size': 0.1,
+            'strategy_name': 'TestStrategy',
+            'order_id': 'test_position_001',
+            'stop_loss': 49000.0,
+            'take_profit': 52000.0,
+            'confidence_score': 0.75,
+            'quantity': 0.002,
+            'session_id': session_id
+        }
+        
+        position_id = db_manager.log_position(**position_data)
+        assert position_id > 0
+        
+        # Verify position was logged correctly
+        with db_manager.get_session() as session:
+            position = session.query(Position).filter_by(id=position_id).first()
+            assert position is not None
+            assert position.symbol == 'BTCUSDT'
+            assert position.side == PositionSide.LONG
+            assert float(position.entry_price) == 50000.0
+            assert float(position.size) == 0.1
+            assert float(position.stop_loss) == 49000.0
+            assert float(position.take_profit) == 52000.0
+            assert float(position.confidence_score) == 0.75
+            assert position.strategy_name == 'TestStrategy'
+            assert position.session_id == session_id
+        
+        # Update position
+        db_manager.update_position(
+            position_id=position_id,
+            current_price=51000.0,
+            unrealized_pnl=100.0,
+            unrealized_pnl_percent=0.2
+        )
+        
+        # Verify position was updated
+        with db_manager.get_session() as session:
+            position = session.query(Position).filter_by(id=position_id).first()
+            assert float(position.current_price) == 51000.0
+            assert float(position.unrealized_pnl) == 100.0
+            assert float(position.unrealized_pnl_percent) == 0.2
+        
+        # Cleanup
+        db_manager.end_trading_session(session_id)
+
+    def test_account_history_snapshots_logged(self, mock_strategy, mock_data_provider):
+        """Test that account history snapshots are being logged"""
+        from database.manager import DatabaseManager
+        from database.models import AccountHistory
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            mode="live"
+        )
+        
+        # Log account snapshot
+        snapshot_data = {
+            'balance': 10100.0,
+            'equity': 10150.0,
+            'total_pnl': 150.0,
+            'open_positions': 2,
+            'total_exposure': 5000.0,
+            'drawdown': 0.05,
+            'daily_pnl': 50.0,
+            'margin_used': 2500.0,
+            'session_id': session_id
+        }
+        
+        db_manager.log_account_snapshot(**snapshot_data)
+        
+        # Verify snapshot was logged
+        with db_manager.get_session() as session:
+            snapshot = session.query(AccountHistory).filter_by(session_id=session_id).first()
+            assert snapshot is not None
+            assert float(snapshot.balance) == 10100.0
+            assert float(snapshot.equity) == 10150.0
+            assert float(snapshot.total_pnl) == 150.0
+            assert snapshot.open_positions == 2
+            assert float(snapshot.total_exposure) == 5000.0
+            assert float(snapshot.drawdown) == 0.05
+            assert float(snapshot.daily_pnl) == 50.0
+            assert float(snapshot.margin_used) == 2500.0
+        
+        # Cleanup
+        db_manager.end_trading_session(session_id)
+
+    def test_account_balance_logged(self, mock_strategy, mock_data_provider):
+        """Test that account balance is being logged"""
+        from database.manager import DatabaseManager
+        from database.models import AccountBalance
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            mode="live"
+        )
+        
+        # Update balance
+        new_balance = 10200.0
+        success = db_manager.update_balance(
+            new_balance=new_balance,
+            update_reason='trade_pnl',
+            updated_by='system',
+            session_id=session_id
+        )
+        assert success
+        
+        # Verify balance was updated
+        current_balance = db_manager.get_current_balance(session_id)
+        assert current_balance == new_balance
+        
+        # Verify balance record was created
+        with db_manager.get_session() as session:
+            balance_record = session.query(AccountBalance).filter_by(session_id=session_id).first()
+            assert balance_record is not None
+            assert balance_record.total_balance == new_balance
+            assert balance_record.update_reason == 'trade_pnl'
+            assert balance_record.updated_by == 'system'
+        
+        # Cleanup
+        db_manager.end_trading_session(session_id)
+
+    def test_performance_metrics_logged(self, mock_strategy, mock_data_provider):
+        """Test that performance metrics are being logged"""
+        from database.manager import DatabaseManager
+        from database.models import PerformanceMetrics
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            mode="live"
+        )
+        
+        # Log some trades first to generate metrics
+        trade_data = {
+            'symbol': 'BTCUSDT',
+            'side': 'LONG',  # Use string instead of enum
+            'entry_price': 50000.0,
+            'exit_price': 51000.0,
+            'size': 0.1,
+            'entry_time': datetime.now() - timedelta(hours=2),
+            'exit_time': datetime.now() - timedelta(hours=1),
+            'pnl': 100.0,
+            'exit_reason': 'take_profit',
+            'strategy_name': 'TestStrategy',
+            'session_id': session_id
+        }
+        
+        db_manager.log_trade(**trade_data)
+        
+        # Fetch and check performance metrics
+        metrics = db_manager.get_performance_metrics(session_id=session_id)
+        assert metrics['total_trades'] >= 1
+        assert metrics['winning_trades'] >= 0
+        assert metrics['losing_trades'] >= 0
+        assert float(metrics['total_pnl']) >= 0.0
+        
+        # Cleanup
+        db_manager.end_trading_session(session_id)
+
+    def test_strategy_execution_data_logged(self, mock_strategy, mock_data_provider):
+        """Test that strategy execution data is being logged"""
+        from database.manager import DatabaseManager
+        from database.models import StrategyExecution
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            mode="live"
+        )
+        
+        # Log strategy execution
+        execution_data = {
+            'strategy_name': 'TestStrategy',
+            'symbol': 'BTCUSDT',
+            'signal_type': 'entry',
+            'action_taken': 'opened_long',
+            'price': 50000.0,
+            'timeframe': '1h',
+            'signal_strength': 0.8,
+            'confidence_score': 0.75,
+            'indicators': {'rsi': 45.5, 'ema_20': 49800.0},
+            'sentiment_data': {'sentiment_score': 0.6},
+            'ml_predictions': {'price_prediction': 51000.0},
+            'position_size': 0.1,
+            'reasons': ['RSI oversold', 'Price above EMA'],
+            'volume': 1000.0,
+            'volatility': 0.02,
+            'session_id': session_id
+        }
+        
+        db_manager.log_strategy_execution(**execution_data)
+        
+        # Verify execution was logged
+        with db_manager.get_session() as session:
+            execution = session.query(StrategyExecution).filter_by(session_id=session_id).first()
+            assert execution is not None
+            assert execution.strategy_name == 'TestStrategy'
+            assert execution.symbol == 'BTCUSDT'
+            assert execution.signal_type == 'entry'
+            assert execution.action_taken == 'opened_long'
+            assert float(execution.price) == 50000.0
+            assert float(execution.signal_strength) == 0.8
+            assert float(execution.confidence_score) == 0.75
+            assert execution.indicators['rsi'] == 45.5
+            assert execution.sentiment_data['sentiment_score'] == 0.6
+            assert execution.ml_predictions['price_prediction'] == 51000.0
+            assert float(execution.position_size) == 0.1
+            assert 'RSI oversold' in execution.reasons
+        
+        # Cleanup
+        db_manager.end_trading_session(session_id)
+
+    def test_trading_sessions_logged(self, mock_strategy, mock_data_provider):
+        """Test that trading sessions are being logged"""
+        from database.manager import DatabaseManager
+        from database.models import TradingSession, TradeSource
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_name = "Test Session 2024"
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            strategy_config={"test": True},
+            session_name=session_name,
+            mode="live"
+        )
+        assert session_id > 0
+        
+        # Verify session was created
+        with db_manager.get_session() as session:
+            trading_session = session.query(TradingSession).filter_by(id=session_id).first()
+            assert trading_session is not None
+            assert trading_session.session_name == session_name
+            assert trading_session.strategy_name == "TestStrategy"
+            assert trading_session.symbol == "BTCUSDT"
+            assert trading_session.timeframe == "1h"
+            assert float(trading_session.initial_balance) == 10000.0
+            assert trading_session.mode == TradeSource.LIVE  # Updated to expect LIVE
+        
+        # End the session
+        final_balance = 10150.0
+        db_manager.end_trading_session(session_id, final_balance)
+        
+        # Verify session was ended
+        with db_manager.get_session() as session:
+            trading_session = session.query(TradingSession).filter_by(id=session_id).first()
+            assert trading_session.is_active == False
+            assert trading_session.end_time is not None
+            assert float(trading_session.final_balance) == final_balance
+
+    def test_complete_trading_cycle_logging(self, mock_strategy, mock_data_provider):
+        """Test complete trading cycle with all database logging"""
+        from database.manager import DatabaseManager
+        from database.models import Trade, Position, SystemEvent, AccountHistory, StrategyExecution, EventType
+        
+        # Create database manager
+        db_manager = DatabaseManager()
+        
+        # Create trading session
+        session_id = db_manager.create_trading_session(
+            strategy_name="TestStrategy",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            initial_balance=10000,
+            mode="live"
+        )
+        
+        # Log engine start event
+        db_manager.log_event(
+            event_type=EventType.ENGINE_START,
+            message='Trading engine started',
+            session_id=session_id
+        )
+        
+        # Log strategy execution
+        db_manager.log_strategy_execution(
+            strategy_name='TestStrategy',
+            symbol='BTCUSDT',
+            signal_type='entry',
+            action_taken='opened_long',
+            price=50000.0,
+            session_id=session_id
+        )
+        
+        # Log position
+        position_id = db_manager.log_position(
+            symbol='BTCUSDT',
+            side=PositionSide.LONG.value,
+            entry_price=50000.0,
+            size=0.1,
+            strategy_name='TestStrategy',
+            order_id='test_order_001',
+            session_id=session_id
+        )
+        
+        # Log account snapshot
+        db_manager.log_account_snapshot(
+            balance=10000.0,
+            equity=10000.0,
+            total_pnl=0.0,
+            open_positions=1,
+            total_exposure=5000.0,
+            drawdown=0.0,
+            session_id=session_id
+        )
+        
+        # Update position
+        db_manager.update_position(
+            position_id=position_id,
+            current_price=51000.0,
+            unrealized_pnl=100.0
+        )
+        
+        # Close position and log trade
+        db_manager.close_position(position_id)
+        trade_id = db_manager.log_trade(
+            symbol='BTCUSDT',
+            side=PositionSide.LONG.value,
+            entry_price=50000.0,
+            exit_price=51000.0,
+            size=0.1,
+            entry_time=datetime.now() - timedelta(hours=1),
+            exit_time=datetime.now(),
+            pnl=100.0,
+            exit_reason='take_profit',
+            strategy_name='TestStrategy',
+            session_id=session_id
+        )
+        
+        # Log final account snapshot
+        db_manager.log_account_snapshot(
+            balance=10100.0,
+            equity=10100.0,
+            total_pnl=100.0,
+            open_positions=0,
+            total_exposure=0.0,
+            drawdown=0.0,
+            session_id=session_id
+        )
+        
+        # Log engine stop event
+        db_manager.log_event(
+            event_type=EventType.ENGINE_STOP,
+            message='Trading engine stopped',
+            session_id=session_id
+        )
+        
+        # Verify all records were created
+        with db_manager.get_session() as session:
+            # Check events
+            events = session.query(SystemEvent).filter_by(session_id=session_id).all()
+            assert len(events) >= 2  # start and stop events
+            
+            # Check strategy executions
+            executions = session.query(StrategyExecution).filter_by(session_id=session_id).all()
+            assert len(executions) >= 1
+            
+            # Check positions (should be closed)
+            positions = session.query(Position).filter_by(session_id=session_id).all()
+            assert len(positions) >= 1
+            
+            # Check trades
+            trades = session.query(Trade).filter_by(session_id=session_id).all()
+            assert len(trades) >= 1
+            
+            # Check account history
+            history = session.query(AccountHistory).filter_by(session_id=session_id).all()
+            assert len(history) >= 2  # initial and final snapshots
+        
+        # Cleanup
+        db_manager.end_trading_session(session_id, 10100.0)
