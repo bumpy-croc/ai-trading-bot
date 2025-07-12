@@ -1283,7 +1283,7 @@ class TestDatabaseLogging:
         
         # Log engine start event
         db_manager.log_event(
-            event_type='engine_start',
+            event_type=EventType.ENGINE_START,
             message='Trading engine started',
             session_id=session_id
         )
