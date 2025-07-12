@@ -1134,7 +1134,7 @@ class TestDatabaseLogging:
         # Log some trades first to generate metrics
         trade_data = {
             'symbol': 'BTCUSDT',
-            'side': 'long',
+            'side': PositionSide.LONG,
             'entry_price': 50000.0,
             'exit_price': 51000.0,
             'size': 0.1,
