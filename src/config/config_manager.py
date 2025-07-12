@@ -4,7 +4,7 @@ from multiple sources with fallback support
 """
 import os
 from typing import List, Optional, Any, Dict
-from .providers import ConfigProvider, EnvVarProvider, DotEnvProvider, AWSSecretsProvider, RailwayProvider
+from .providers import ConfigProvider, EnvVarProvider, DotEnvProvider, RailwayProvider
 
 
 class ConfigManager:
@@ -12,7 +12,7 @@ class ConfigManager:
     Manages configuration from multiple sources with fallback support.
     
     Default priority order:
-    1. AWS Secrets Manager (if available)
+    1. Railway environment variables (if available)
     2. Environment variables
     3. .env file
     """
@@ -29,7 +29,6 @@ class ConfigManager:
             # Default provider chain - Railway provider first for Railway deployments
             self.providers = [
                 RailwayProvider(),
-                AWSSecretsProvider(),
                 EnvVarProvider(),
                 DotEnvProvider()
             ]

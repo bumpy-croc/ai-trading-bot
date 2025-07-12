@@ -2,7 +2,7 @@
 
 A modular, production-ready cryptocurrency trading system inspired by Ray Dalio's risk-balanced approach and built around long-term trend-following with strict risk containment.
 
-The codebase supports **backtesting**, **live trading**, **machine-learning price & sentiment models**, multi-exchange data providers, and AWS-based CI/CD deployments.
+The codebase supports **backtesting**, **live trading**, **machine-learning price & sentiment models**, multi-exchange data providers, and Railway-based deployments.
 
 ---
 
@@ -38,7 +38,7 @@ The codebase supports **backtesting**, **live trading**, **machine-learning pric
 - 🧠 **Machine-Learning Integration** – Keras & ONNX models for price prediction with optional sentiment features.
 - 💬 **Sentiment Data Providers** – SentiCrypt, Augmento, CryptoCompare, and custom providers via a simple interface.
 - 🛡 **Centralised Risk Manager** – Enforces max 1-2 % capital risk per trade and validates all position sizes.
-- 🚀 **One-Click AWS Deployment** – Hardened CI/CD pipelines and bash scripts for staging & production environments.
+- 🚀 **Railway Deployment** – Easy deployment to Railway with automatic environment management.
 - 📈 **Rich Analytics** – Automatic metric tracking (Sharpe, max-drawdown, MAPE, etc.) and interactive reports.
 
 ---
@@ -89,7 +89,7 @@ Each component is completely decoupled and can be swapped out or extended withou
 ├── scripts/             # CLI utilities (model training, cache tools, etc.)
 ├── data/                # Cached market & sentiment datasets
 ├── bin/                 # Deployment scripts used by GitHub Actions
-└── docs/                # Additional guides (AWS, sentiment, etc.)
+└── docs/                # Additional guides (Railway, sentiment, etc.)
 ```
 
 ---
@@ -114,7 +114,7 @@ python scripts/migrate_database.py migrate
 
 The bot automatically reads settings in the following priority order:
 
-1. **AWS Secrets Manager** (production)
+1. **Railway Environment Variables** (production/staging)
 2. **Environment Variables** (Docker / CI)
 3. **.env file** (local development)
 
@@ -360,8 +360,8 @@ For detailed setup instructions, see:
 ### Choose Your Deployment Platform
 
 **🚄 Railway (Recommended for beginners)**
-- **5-minute setup** vs 2-4 hours on AWS
-- **40-60% cost savings** compared to AWS
+- **5-minute setup** vs complex cloud infrastructure
+- **40-60% cost savings** compared to traditional cloud providers
 - **Built-in database and SSL** 
 - **Simple scaling and monitoring**
 - See [Railway Quick Start](RAILWAY_QUICKSTART.md) or [Railway Deployment Guide](docs/RAILWAY_DEPLOYMENT_GUIDE.md)
@@ -376,17 +376,11 @@ railway up
 
 > The monitoring dashboard is served automatically at your Railway domain (root path).
 
-**⚡ AWS (For advanced users)**
+**⚡ Self-Hosted (For advanced users)**
 - **Full infrastructure control**
 - **Enterprise features and integrations**
 - **Advanced networking and security**
-- GitHub Actions orchestrates deployments using hardened bash scripts under `bin/`
-
-```text
-main →  staging EC2  (auto)  →  production EC2  (manual promotion)
-```
-
-Read `docs/AWS_DEPLOYMENT_GUIDE.md` for a step-by-step walkthrough.
+- Deploy to your own servers or cloud infrastructure
 
 ---
 

@@ -7,14 +7,6 @@ from config.config_manager import ConfigManager
 from config.providers.env_provider import EnvVarProvider
 from config.providers.dotenv_provider import DotEnvProvider
 
-# Skip AWS tests if boto3 is not available
-boto3_available = True
-try:
-    import boto3
-    from config.providers.aws_secrets_provider import AWSSecretsProvider
-except ImportError:
-    boto3_available = False
-
 
 class TestEnvVarProvider:
     """Test the environment variable provider."""
@@ -93,116 +85,7 @@ class TestDotEnvProvider:
             os.unlink(env_file)
 
 
-@pytest.mark.skipif(not boto3_available, reason="boto3 not available")
-class TestAWSSecretsProvider:
-    """Test the AWS Secrets Manager provider."""
-    
-    @patch('boto3.client')
-    def test_successful_secret_retrieval(self, mock_boto_client):
-        """Test successful secret retrieval from AWS."""
-        mock_client = Mock()
-        mock_boto_client.return_value = mock_client
-        
-        # Mock successful describe_secret call
-        mock_client.describe_secret.return_value = {'Name': 'test-secret'}
-        
-        # Mock successful response
-        mock_client.get_secret_value.return_value = {
-            'SecretString': json.dumps({
-                'BINANCE_API_KEY': 'test_api_key',
-                'BINANCE_API_SECRET': 'test_api_secret',
-                'DATABASE_URL': 'postgresql://test_user:test_pass@localhost:5432/test_db'
-            })
-        }
-        
-        with patch.dict(os.environ, {'ENVIRONMENT': 'test'}):
-            provider = AWSSecretsProvider()
-            assert provider.get('BINANCE_API_KEY') == 'test_api_key'
-            assert provider.get('BINANCE_API_SECRET') == 'test_api_secret'
-            assert provider.get('DATABASE_URL') == 'postgresql://test_user:test_pass@localhost:5432/test_db'
-            assert provider.get('NONEXISTENT') is None
-    
-    @patch('boto3.client')
-    def test_secret_not_found(self, mock_boto_client):
-        """Test handling when secret is not found in AWS."""
-        mock_client = Mock()
-        mock_boto_client.return_value = mock_client
-        
-        # Mock describe_secret to succeed (provider initialization)
-        mock_client.describe_secret.return_value = {'Name': 'test-secret'}
-        
-        from botocore.exceptions import ClientError
-        mock_client.get_secret_value.side_effect = ClientError(
-            {'Error': {'Code': 'ResourceNotFoundException'}}, 'GetSecretValue'
-        )
-        
-        with patch.dict(os.environ, {'ENVIRONMENT': 'test'}):
-            provider = AWSSecretsProvider()
-            assert provider.get('ANY_KEY') is None
-    
-    @patch('boto3.client')
-    def test_aws_credentials_error(self, mock_boto_client):
-        """Test handling when AWS credentials are not available."""
-        mock_client = Mock()
-        mock_boto_client.return_value = mock_client
-        
-        # Mock describe_secret to fail (provider initialization)
-        from botocore.exceptions import NoCredentialsError
-        mock_client.describe_secret.side_effect = NoCredentialsError()
-        
-        with patch.dict(os.environ, {'ENVIRONMENT': 'test'}):
-            provider = AWSSecretsProvider()
-            assert provider.is_available() is False
-            assert provider.get('ANY_KEY') is None
-    
-    @patch('boto3.client')
-    def test_caching_behavior(self, mock_boto_client):
-        """Test that secrets are cached and not fetched repeatedly."""
-        mock_client = Mock()
-        mock_boto_client.return_value = mock_client
-        
-        # Mock describe_secret to succeed
-        mock_client.describe_secret.return_value = {'Name': 'test-secret'}
-        
-        mock_client.get_secret_value.return_value = {
-            'SecretString': json.dumps({'TEST_KEY': 'test_value'})
-        }
-        
-        with patch.dict(os.environ, {'ENVIRONMENT': 'test'}):
-            provider = AWSSecretsProvider()
-            
-            # First call should fetch from AWS
-            result1 = provider.get('TEST_KEY')
-            assert result1 == 'test_value'
-            assert mock_client.get_secret_value.call_count == 1
-            
-            # Second call should use cache
-            result2 = provider.get('TEST_KEY')
-            assert result2 == 'test_value'
-            assert mock_client.get_secret_value.call_count == 1  # No additional calls
-    
-    def test_environment_detection(self):
-        """Test environment detection for secret naming."""
-        # Test with explicit environment
-        with patch.dict(os.environ, {'ENVIRONMENT': 'production'}):
-            provider = AWSSecretsProvider()
-            assert provider.secret_name == 'ai-trading-bot/production'
-        
-        # Test with staging environment
-        with patch.dict(os.environ, {'ENVIRONMENT': 'staging'}):
-            provider = AWSSecretsProvider()
-            assert provider.secret_name == 'ai-trading-bot/staging'
-        
-        # Test default environment (development)
-        env_backup = os.environ.get('ENVIRONMENT')
-        if 'ENVIRONMENT' in os.environ:
-            del os.environ['ENVIRONMENT']
-        try:
-            provider = AWSSecretsProvider()
-            assert provider.secret_name == 'ai-trading-bot/development'
-        finally:
-            if env_backup:
-                os.environ['ENVIRONMENT'] = env_backup
+
 
 
 class TestConfigManager:
@@ -216,9 +99,9 @@ class TestConfigManager:
             env_file = f.name
         
         try:
-            # Set up environment where AWS fails, env var exists, and .env exists
+            # Set up environment where env var exists, and .env exists
             with patch.dict(os.environ, {'FALLBACK_TEST': 'env_value'}):
-                # Create config manager with only env and dotenv providers (skip AWS)
+                # Create config manager with only env and dotenv providers
                 from config.providers.env_provider import EnvVarProvider
                 from config.providers.dotenv_provider import DotEnvProvider
                 

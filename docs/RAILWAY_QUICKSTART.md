@@ -4,12 +4,10 @@ Deploy your AI Trading Bot to Railway in 5 minutes! 🚄
 
 ## What is Railway?
 
-[Railway](https://railway.com) is a modern deployment platform that simplifies infrastructure. It's a great alternative to AWS with:
+[Railway](https://railway.com) is a modern deployment platform that simplifies infrastructure. It's a great alternative to legacy cloud providers:
 
-- **Simpler setup** - No complex EC2, VPC, or IAM configuration
-- **Built-in databases** - PostgreSQL with automatic backups
-- **One-click deploys** - Deploy from Git with zero configuration
-- **Cost-effective** - Pay only for what you use, typically 40-60% cheaper than AWS
+- **Simpler setup** - No complex cloud configuration
+- **Cost-effective** - Pay only for what you use
 - **Auto-scaling** - Automatically scales based on demand
 
 ## Quick Start (5 Minutes)
@@ -117,19 +115,15 @@ curl https://your-app.railway.app/status
 2. **Health Endpoints**: Built-in monitoring
 3. **Database Metrics**: Query performance and storage usage
 
-## Railway vs AWS Comparison
+## Railway vs Other Platforms
 
-| Feature | AWS (Manual Setup) | Railway | Winner |
-|---------|-------------------|---------|---------|
-| **Setup Time** | 2-4 hours | 5 minutes | 🚄 Railway |
-| **Monthly Cost** | $60-100 | $20-40 | 🚄 Railway |
-| **Complexity** | High (EC2, RDS, IAM, etc.) | Low (one config file) | 🚄 Railway |
-| **Databases** | Manual setup, RDS | One-click PostgreSQL | 🚄 Railway |
-| **SSL/Domains** | Manual (Load Balancer, ACM) | Automatic | 🚄 Railway |
-| **Scaling** | Manual (Auto Scaling Groups) | Automatic | 🚄 Railway |
-| **Logs** | CloudWatch (complex) | Built-in | 🚄 Railway |
-| **Control** | Full infrastructure control | Platform abstraction | ⚡ AWS |
-| **Enterprise** | Advanced features | Simplified | ⚡ AWS |
+| Feature | Legacy Cloud (Manual Setup) | Railway | Winner |
+| --- | --- | --- | --- |
+| **Complexity** | High (manual setup) | Low (one config file) | 🚄 Railway |
+| **Databases** | Manual setup | One-click PostgreSQL | 🚄 Railway |
+| **Logs** | Manual setup | Built-in | 🚄 Railway |
+| **Control** | Full infrastructure control | Platform abstraction | ⚡ Legacy |
+| **Enterprise** | Advanced features | Simplified | ⚡ Legacy |
 
 ## Troubleshooting
 
@@ -173,18 +167,6 @@ railway variables | grep BINANCE
 - **Railway Docs**: [docs.railway.app](https://docs.railway.app)
 - **Railway Discord**: [railway.app/discord](https://railway.app/discord)
 - **Full Guide**: [RAILWAY_DEPLOYMENT_GUIDE.md](docs/RAILWAY_DEPLOYMENT_GUIDE.md)
-
-## Migration from AWS
-
-Already using AWS? You can run both in parallel:
-
-1. **Keep AWS running** (no downtime)
-2. **Set up Railway** with staging environment
-3. **Test thoroughly** on Railway staging
-4. **Switch production traffic** when confident
-5. **Decommission AWS** resources
-
-Your existing AWS scripts remain unchanged - Railway is a completely separate deployment option.
 
 ---
 

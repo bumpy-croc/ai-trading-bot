@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AI Trading Bot now uses a flexible configuration system that supports multiple sources (AWS Secrets Manager, environment variables, and .env files) with automatic fallback. This guide helps you migrate from the old system.
+The AI Trading Bot now uses a flexible configuration system that supports multiple sources (Railway environment variables, and .env files) with automatic fallback. This guide helps you migrate from the old system.
 
 ## What Changed?
 
@@ -15,7 +15,7 @@ The AI Trading Bot now uses a flexible configuration system that supports multip
 - Unified `ConfigManager` with multiple providers
 - Automatic source detection and fallback
 - Type-safe configuration access
-- No secrets written to disk on AWS
+- No secrets written to disk on Railway
 
 ## Migration Steps
 
@@ -44,11 +44,11 @@ api_key = config.get_required('BINANCE_API_KEY')
 
 No changes needed to your existing `.env` file. The new system automatically detects and uses it for local development.
 
-### 3. AWS Deployment Changes
+### 3. Deployment Changes
 
 The staging and production deployment scripts no longer create `.env` files. Instead:
 
-- Secrets are read directly from AWS Secrets Manager
+- Secrets are read directly from Railway environment variables
 - More secure (no secrets on disk)
 - Automatic refresh when secrets are updated
 - No need to restart the service after updating secrets
@@ -79,7 +79,7 @@ symbols = config.get_list('TRADING_SYMBOLS', delimiter=',')
 #### Configuration Priority
 
 The system checks in this order:
-1. AWS Secrets Manager (if available)
+1. Railway environment variables (if available)
 2. Environment variables
 3. .env file
 
@@ -105,31 +105,17 @@ The new system is stricter about required values. Make sure all required configu
 - `TRADING_MODE`
 - `INITIAL_BALANCE`
 
-### AWS Secrets Manager Not Working
+### Not Working
 
-1. Check IAM role has permissions:
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["secretsmanager:GetSecretValue"],
-                "Resource": "arn:aws:secretsmanager:*:*:secret:ai-trading-bot/*"
-  }]
-}
-```
+1. Check Railway project variables are set correctly
+2. Verify variable exists in Railway dashboard
 
-2. Verify secret exists:
-```bash
-aws secretsmanager describe-secret --secret-id ai-trading-bot/staging
-```
+### Different Behavior Between Local and Railway
 
-### Different Behavior Between Local and AWS
-
-This is expected! Local uses `.env`, AWS uses Secrets Manager. To test AWS behavior locally:
+This is expected! Local uses `.env`, Railway uses environment variables. To test Railway behavior locally:
 
 ```bash
-# Set environment variable to simulate AWS
+# Set environment variable to simulate Railway
 export ENVIRONMENT=staging
 
 # Run your script
@@ -141,13 +127,13 @@ python your_script.py
 1. **Security**: No secrets in files on production servers
 2. **Flexibility**: Easy to add new config sources (Azure Key Vault, etc.)
 3. **Type Safety**: Built-in type conversion and validation
-4. **Hot Reload**: AWS Secrets refresh without restart (with cache TTL)
+4. **Hot Reload**: Railway environment variable refresh without restart (with cache TTL)
 5. **Debugging**: Clear error messages showing which sources were checked
 
 ## Need Help?
 
 - Run `python scripts/test_config_system.py` to debug
 - Check logs for which configuration source is being used
-- Ensure your IAM role has correct permissions for AWS deployment
+- Ensure your Railway project has correct environment variables for deployment
 
 The new system is designed to be backward compatible while providing better security and flexibility for production deployments! 
