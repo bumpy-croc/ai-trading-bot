@@ -1356,7 +1356,7 @@ class TestDatabaseLogging:
         
         # Log engine stop event
         db_manager.log_event(
-            event_type='engine_stop',
+            event_type=EventType.ENGINE_STOP,
             message='Trading engine stopped',
             session_id=session_id
         )
