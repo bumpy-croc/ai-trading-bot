@@ -50,7 +50,7 @@ def test_environment_config():
 
 def test_database_connection():
     """Test database connection"""
-    print("\n�️  Testing database connection...")
+    print("\n🛢️  Testing database connection...")
     
     try:
         from database.manager import DatabaseManager
