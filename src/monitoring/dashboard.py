@@ -6,11 +6,7 @@ A real-time web dashboard for monitoring the trading bot performance,
 positions, risk metrics, and system health.
 """
 
-# --- eventlet must be patched BEFORE importing networking libraries like Flask/requests
-import eventlet  # type: ignore
-eventlet.monkey_patch()
-_ASYNC_MODE = 'eventlet'
-
+import platform
 import os
 import json
 import logging
@@ -67,6 +63,14 @@ class TradeDict(TypedDict):
     pnl: float
     exit_reason: str
 
+# --- eventlet must be patched BEFORE importing networking libraries like Flask/requests
+if platform.system() == "Darwin":
+    _ASYNC_MODE = 'threading'
+else:
+    import eventlet  # type: ignore
+    eventlet.monkey_patch()
+    _ASYNC_MODE = 'eventlet'
+
 class MonitoringDashboard:
     """
     Real-time monitoring dashboard for the trading bot
@@ -75,7 +79,7 @@ class MonitoringDashboard:
     def __init__(self, db_url: Optional[str] = None, update_interval: int = 3600):
         self.app = Flask(__name__, template_folder='templates', static_folder='static')
         self.app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='eventlet')
+        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
         
         # Initialize database manager – avoid passing None to ease mocking in unit tests
         self.db_manager = DatabaseManager() if db_url is None else DatabaseManager(db_url)
@@ -449,7 +453,7 @@ class MonitoringDashboard:
     def _get_active_positions_count(self) -> int:
         """Get number of active positions"""
         try:
-            query = "SELECT COUNT(*) as count FROM positions WHERE status = 'filled'"
+            query = "SELECT COUNT(*) as count FROM positions WHERE status = 'FILLED'"
             result = self.db_manager.execute_query(query)
             return result[0]['count'] if result else 0
         except Exception as e:
@@ -481,7 +485,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_exposure
             FROM positions 
-            WHERE status = 'filled'
+            WHERE status = 'FILLED'
             """
             result = self.db_manager.execute_query(query)
             exposure = result[0]['total_exposure'] if result else 0.0
@@ -591,7 +595,7 @@ class MonitoringDashboard:
             SELECT COUNT(*) as count 
             FROM system_events 
             WHERE event_type = 'ERROR' 
-            AND timestamp > datetime('now', '-1 day')
+            AND timestamp > NOW() - INTERVAL '1 day'
             """
             result = self.db_manager.execute_query(query)
             return result[0]['count'] if result else 0
@@ -626,7 +630,7 @@ class MonitoringDashboard:
             query = """
             SELECT COUNT(*) as count 
             FROM trades 
-            WHERE DATE(entry_time) = DATE('now')
+            WHERE DATE(entry_time) = CURRENT_DATE
             """
             result = self.db_manager.execute_query(query)
             return result[0]['count'] if result else 0
@@ -764,7 +768,7 @@ class MonitoringDashboard:
                 COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
                 COUNT(*) as total
             FROM system_events 
-            WHERE timestamp > datetime('now', '-1 hour')
+            WHERE timestamp > NOW() - INTERVAL '1 hour'
             """
             result = self.db_manager.execute_query(query)
             if result and result[0]['total'] > 0:
@@ -852,7 +856,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(pnl), 0) as daily_pnl 
             FROM trades 
-            WHERE DATE(exit_time) = DATE('now')
+            WHERE DATE(exit_time) = CURRENT_DATE
             AND exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -867,7 +871,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(pnl), 0) as weekly_pnl 
             FROM trades 
-            WHERE exit_time > datetime('now', '-7 days')
+            WHERE exit_time > NOW() - INTERVAL '7 days'
             AND exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -886,7 +890,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_value
             FROM positions 
-            WHERE status = 'filled'
+            WHERE status = 'FILLED'
             """
             result = self.db_manager.execute_query(query)
             return result[0]['total_value'] if result else 0.0
@@ -904,9 +908,9 @@ class MonitoringDashboard:
             query = """
             SELECT 
                 COUNT(*) as total_orders,
-                COUNT(CASE WHEN status = 'filled' THEN 1 END) as filled_orders
+                COUNT(CASE WHEN status = 'FILLED' THEN 1 END) as filled_orders
             FROM positions
-            WHERE entry_time > datetime('now', '-24 hours')
+            WHERE entry_time > NOW() - INTERVAL '24 hours'
             """
             result = self.db_manager.execute_query(query)
             
@@ -928,7 +932,7 @@ class MonitoringDashboard:
                 exit_price,
                 side
             FROM trades 
-            WHERE exit_time > datetime('now', '-24 hours')
+            WHERE exit_time > NOW() - INTERVAL '24 hours'
             AND exit_time IS NOT NULL
             LIMIT 50
             """
@@ -954,17 +958,14 @@ class MonitoringDashboard:
             return 0.0
     
     def _get_failed_orders(self) -> int:
-        """Get number of failed orders in last 24 hours"""
+        """Get number of failed orders"""
         try:
-            query = """
-            SELECT COUNT(*) as failed_count 
-            FROM system_events 
-            WHERE event_type = 'ERROR' 
-            AND message LIKE '%order%' 
-            AND timestamp > datetime('now', '-24 hours')
-            """
+            query = "SELECT COUNT(*) as failed_count FROM trades WHERE exit_reason = 'failed'"
             result = self.db_manager.execute_query(query)
-            return result[0]['failed_count'] if result else 0
+            if result and 'failed_count' in result[0]:
+                return result[0]['failed_count']
+            else:
+                return 0
         except Exception as e:
             logger.error(f"Error getting failed orders count: {e}")
             return 0
@@ -1007,7 +1008,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity), 0) as total_quantity
             FROM positions 
-            WHERE status = 'filled'
+            WHERE status = 'FILLED'
             """
             result = self.db_manager.execute_query(query)
             
@@ -1058,7 +1059,7 @@ class MonitoringDashboard:
             SELECT 
                 side, entry_price, quantity
             FROM positions 
-            WHERE status = 'filled'
+            WHERE status = 'FILLED'
             """
             result = self.db_manager.execute_query(query)
             
@@ -1172,7 +1173,7 @@ class MonitoringDashboard:
                 symbol, side, entry_price, quantity, entry_time,
                 stop_loss, take_profit, order_id
             FROM positions 
-            WHERE status = 'filled'
+            WHERE status = 'FILLED'
             ORDER BY entry_time DESC
             """
             result = self.db_manager.execute_query(query)
@@ -1233,13 +1234,12 @@ class MonitoringDashboard:
     def _get_performance_chart_data(self, days: int = 7) -> Dict[str, List]:
         """Get performance chart data for the specified number of days"""
         try:
-            query = """
+            query = f"""
             SELECT balance, timestamp
             FROM account_history
-            WHERE timestamp > datetime('now', '-{} days')
+            WHERE timestamp > NOW() - INTERVAL '{days} days'
             ORDER BY timestamp
-            """.format(days)
-            
+            """
             result = self.db_manager.execute_query(query)
             
             timestamps = []
@@ -1303,7 +1303,7 @@ class MonitoringDashboard:
                 COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
                 COUNT(*) as total
             FROM system_events 
-            WHERE timestamp > datetime('now', '-1 hour')
+            WHERE timestamp > NOW() - INTERVAL '1 hour'
             """
             result = self.db_manager.execute_query(query)
             if result and result[0]['total'] > 0:

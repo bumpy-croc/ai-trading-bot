@@ -230,11 +230,11 @@ class TestConfigSystemIntegration:
             try:
                 provider = BinanceProvider()
                 # Check that it was initialized without error
-                assert provider.client is not None
+                assert provider._client is not None
                 # Verify it has the data attribute from parent class
                 assert hasattr(provider, 'data')
             except Exception as e:
-                pytest.fail(f"BinanceDataProvider initialization failed: {e}")
+                pytest.fail(f"BinanceProvider initialization failed: {e}")
     
     def test_live_trading_config_integration(self):
         """Test configuration integration with live trading components."""
