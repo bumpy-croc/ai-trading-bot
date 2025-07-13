@@ -439,11 +439,12 @@ class DatabaseManager:
     def update_position(
         self,
         position_id: int,
-        current_price: float,
+        current_price: Optional[float] = None,
         unrealized_pnl: Optional[float] = None,
         unrealized_pnl_percent: Optional[float] = None,
         stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None
+        take_profit: Optional[float] = None,
+        size: Optional[float] = None
     ):
         """Update an existing position with current market data."""
         with self.get_session() as session:
@@ -452,11 +453,14 @@ class DatabaseManager:
                 logger.error(f"Position {position_id} not found")
                 return
             
-            position.current_price = current_price
+            if current_price is not None:
+                position.current_price = current_price
+            if size is not None:
+                position.size = size
             position.last_update = datetime.utcnow()
             
             # Calculate unrealized P&L if not provided - with division by zero protection
-            if unrealized_pnl is None and position.entry_price > 0:
+            if unrealized_pnl is None and current_price is not None and position.entry_price > 0:
                 if position.side == PositionSide.LONG:
                     unrealized_pnl_percent = ((current_price - position.entry_price) / position.entry_price) * 100
                 else:
@@ -464,7 +468,8 @@ class DatabaseManager:
                 
                 position.unrealized_pnl_percent = unrealized_pnl_percent
             else:
-                position.unrealized_pnl = unrealized_pnl
+                if unrealized_pnl is not None:
+                    position.unrealized_pnl = unrealized_pnl
                 if unrealized_pnl_percent is not None:
                     position.unrealized_pnl_percent = unrealized_pnl_percent
             
@@ -490,6 +495,94 @@ class DatabaseManager:
             
             logger.info(f"Closed position #{position_id}")
             return True
+    
+    def get_open_orders(self, session_id: Optional[int] = None) -> List[Dict]:
+        """Get all open orders for a session."""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return []
+        
+        with self.get_session() as session:
+            orders = session.query(Position).filter(
+                Position.session_id == session_id,
+                Position.status == OrderStatus.PENDING
+            ).all()
+            
+            return [
+                {
+                    'id': order.id,
+                    'order_id': order.order_id,
+                    'symbol': order.symbol,
+                    'side': order.side.value,
+                    'quantity': order.quantity,
+                    'price': order.entry_price,
+                    'status': order.status.value
+                }
+                for order in orders
+            ]
+    
+    def update_order_status(self, order_id: int, status: str) -> bool:
+        """Update the status of an order."""
+        with self.get_session() as session:
+            order = session.query(Position).filter_by(id=order_id).first()
+            if not order:
+                logger.error(f"Order {order_id} not found")
+                return False
+            
+            try:
+                # Map exchange status values to database status values
+                status_mapping = {
+                    'PENDING': 'pending',
+                    'FILLED': 'filled',
+                    'PARTIALLY_FILLED': 'filled',  # Map to filled for simplicity
+                    'CANCELLED': 'cancelled',
+                    'REJECTED': 'failed',
+                    'EXPIRED': 'cancelled'
+                }
+                
+                db_status = status_mapping.get(status.upper(), status.lower())
+                order.status = OrderStatus[db_status.upper()]
+                order.last_update = datetime.utcnow()
+                session.commit()
+                logger.info(f"Updated order {order_id} status to {db_status}")
+                return True
+            except KeyError:
+                logger.error(f"Invalid order status: {status}")
+                return False
+    
+    def get_trades_by_symbol_and_date(
+        self, 
+        symbol: str, 
+        start_date: datetime, 
+        session_id: Optional[int] = None
+    ) -> List[Dict]:
+        """Get trades for a symbol from a specific date onwards."""
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return []
+        
+        with self.get_session() as session:
+            trades = session.query(Trade).filter(
+                Trade.session_id == session_id,
+                Trade.symbol == symbol,
+                Trade.entry_time >= start_date
+            ).all()
+            
+            return [
+                {
+                    'id': trade.id,
+                    'trade_id': trade.trade_id,  # Correctly using trade_id
+                    'symbol': trade.symbol,
+                    'side': trade.side.value,
+                    'entry_price': float(trade.entry_price),
+                    'exit_price': float(trade.exit_price),
+                    'quantity': float(trade.quantity) if trade.quantity else 0,
+                    'pnl': float(trade.pnl),
+                    'entry_time': trade.entry_time,
+                    'exit_time': trade.exit_time
+                }
+                for trade in trades
+            ]
     
     def log_account_snapshot(
         self,

@@ -73,8 +73,8 @@ class TestRSI:
         # Should have same length as input
         assert len(rsi) == len(data)
         
-        # First period-1 values should be NaN
-        assert rsi.iloc[:13].isna().all()
+        # First period-1 values should be NaN (period=10, so first 9 values should be NaN)
+        assert rsi.iloc[:9].isna().all()
 
     def test_rsi_extreme_values(self):
         """Test RSI with extreme price movements"""
@@ -105,10 +105,11 @@ class TestATR:
             'close': [9, 11, 10.5, 12, 13]
         })
         
-        atr = calculate_atr(data, period=3)
+        result = calculate_atr(data, period=3)
+        atr = result['atr']
         
-        # ATR should be positive
-        assert (atr >= 0).all()
+        # ATR should be positive (excluding NaN values)
+        assert (atr.dropna() >= 0).all()
         
         # Should have same length as input
         assert len(atr) == len(data)
@@ -125,7 +126,8 @@ class TestATR:
             'close': [100, 100.05, 100.02, 100.15, 100.1]
         })
         
-        low_vol_atr = calculate_atr(low_vol_data, period=3)
+        low_vol_result = calculate_atr(low_vol_data, period=3)
+        low_vol_atr = low_vol_result['atr']
         
         # High volatility data
         high_vol_data = pd.DataFrame({
@@ -134,7 +136,8 @@ class TestATR:
             'close': [98, 102, 92, 108, 88]
         })
         
-        high_vol_atr = calculate_atr(high_vol_data, period=3)
+        high_vol_result = calculate_atr(high_vol_data, period=3)
+        high_vol_atr = high_vol_result['atr']
         
         # High volatility ATR should be larger
         assert high_vol_atr.iloc[-1] > low_vol_atr.iloc[-1]
@@ -145,40 +148,42 @@ class TestBollingerBands:
 
     def test_bollinger_bands_calculation(self):
         """Test Bollinger Bands calculation"""
-        data = pd.Series([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        data = pd.DataFrame({'close': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]})
         
         bb = calculate_bollinger_bands(data, period=5, std_dev=2)
         
         # Should return DataFrame with upper, middle, lower bands
         assert isinstance(bb, pd.DataFrame)
-        assert 'upper' in bb.columns
-        assert 'middle' in bb.columns
-        assert 'lower' in bb.columns
+        assert 'bb_upper' in bb.columns
+        assert 'bb_middle' in bb.columns
+        assert 'bb_lower' in bb.columns
         
-        # Upper band should be above middle band
-        assert (bb['upper'] >= bb['middle']).all()
+        # Upper band should be above middle band (excluding NaN values)
+        valid_mask = bb['bb_upper'].notna() & bb['bb_middle'].notna()
+        assert (bb.loc[valid_mask, 'bb_upper'] >= bb.loc[valid_mask, 'bb_middle']).all()
         
-        # Lower band should be below middle band
-        assert (bb['lower'] <= bb['middle']).all()
+        # Lower band should be below middle band (excluding NaN values)
+        valid_mask = bb['bb_lower'].notna() & bb['bb_middle'].notna()
+        assert (bb.loc[valid_mask, 'bb_lower'] <= bb.loc[valid_mask, 'bb_middle']).all()
         
         # Middle band should be rolling mean
-        expected_middle = data.rolling(window=5).mean()
-        pd.testing.assert_series_equal(bb['middle'], expected_middle, check_names=False)
+        expected_middle = data['close'].rolling(window=5).mean()
+        pd.testing.assert_series_equal(bb['bb_middle'], expected_middle, check_names=False)
 
     def test_bollinger_bands_volatility(self):
         """Test that Bollinger Bands respond to volatility"""
         # Low volatility data
-        low_vol_data = pd.Series([100, 100.1, 100.05, 100.2, 100.15, 100.1, 100.05])
+        low_vol_data = pd.DataFrame({'close': [100, 100.1, 100.05, 100.2, 100.15, 100.1, 100.05]})
         
         # High volatility data
-        high_vol_data = pd.Series([100, 105, 95, 110, 90, 105, 95])
+        high_vol_data = pd.DataFrame({'close': [100, 105, 95, 110, 90, 105, 95]})
         
         bb_low = calculate_bollinger_bands(low_vol_data, period=5, std_dev=2)
         bb_high = calculate_bollinger_bands(high_vol_data, period=5, std_dev=2)
         
         # High volatility should have wider bands
-        low_width = bb_low['upper'].iloc[-1] - bb_low['lower'].iloc[-1]
-        high_width = bb_high['upper'].iloc[-1] - bb_high['lower'].iloc[-1]
+        low_width = bb_low['bb_upper'].iloc[-1] - bb_low['bb_lower'].iloc[-1]
+        high_width = bb_high['bb_upper'].iloc[-1] - bb_high['bb_lower'].iloc[-1]
         
         assert high_width > low_width
 
@@ -188,19 +193,19 @@ class TestMACD:
 
     def test_macd_calculation(self):
         """Test MACD calculation"""
-        data = pd.Series([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+        data = pd.DataFrame({'close': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]})
         
         macd = calculate_macd(data, fast_period=12, slow_period=26, signal_period=9)
         
         # Should return DataFrame with MACD line, signal line, and histogram
         assert isinstance(macd, pd.DataFrame)
         assert 'macd' in macd.columns
-        assert 'signal' in macd.columns
-        assert 'histogram' in macd.columns
+        assert 'macd_signal' in macd.columns
+        assert 'macd_hist' in macd.columns
         
         # MACD line should be EMA difference
-        ema_fast = calculate_ema(data, period=12)
-        ema_slow = calculate_ema(data, period=26)
+        ema_fast = calculate_ema(data['close'], period=12)
+        ema_slow = calculate_ema(data['close'], period=26)
         expected_macd = ema_fast - ema_slow
         
         # Compare non-NaN values

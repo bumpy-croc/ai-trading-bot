@@ -14,6 +14,7 @@ import tempfile
 import os
 from pathlib import Path
 import sys
+import subprocess
 
 # Add project root and src directory to PYTHONPATH for test imports
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,16 @@ from data_providers.binance_data_provider import BinanceDataProvider
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
 from strategies.adaptive import AdaptiveStrategy
+
+# Import account sync dependencies
+try:
+    from data_providers.exchange_interface import (
+        AccountBalance, Position, Order, Trade,
+        OrderSide, OrderType, OrderStatus as ExchangeOrderStatus
+    )
+    from database.models import PositionSide, TradeSource
+except ImportError as e:
+    print(f"Warning: Could not import account sync dependencies: {e}")
 
 # ---------- Database setup for tests ----------
 # Spin up a temporary PostgreSQL instance via Testcontainers so that modules that
@@ -77,6 +88,18 @@ except Exception as _e:  # pragma: no cover -- fallback if Docker not available
     except Exception:
         # If we can't ensure db creation, tests that need it will fail/skipped.
         pass
+
+
+def pytest_sessionstart(session):
+    """Ensure the database is set up and cleared before running tests."""
+    print("\n[pytest] Running local setup script to reset database...")
+    result = subprocess.run([
+        sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"
+    ], capture_output=True, text=True)
+    print(result.stdout)
+    if result.returncode != 0:
+        print(result.stderr)
+        pytest.exit("Database setup/reset failed before tests.")
 
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: D401
@@ -296,6 +319,230 @@ def market_conditions():
             'volatility': 'very_high',
             'volume': 'high'
         }
+    }
+
+
+# ---------- Account Synchronization Fixtures ----------
+
+@pytest.fixture(scope="session")
+def test_data_dir():
+    """Get the test data directory."""
+    return Path(__file__).parent / "data"
+
+
+@pytest.fixture(scope="session")
+def sample_account_balance():
+    """Create a sample account balance for testing."""
+    return AccountBalance(
+        asset='USDT',
+        free=10000.0,
+        locked=100.0,
+        total=10100.0,
+        last_updated=datetime.utcnow()
+    )
+
+
+@pytest.fixture(scope="session")
+def sample_position():
+    """Create a sample position for testing."""
+    return Position(
+        symbol='BTCUSDT',
+        side='long',
+        size=0.1,
+        entry_price=50000.0,
+        current_price=51000.0,
+        unrealized_pnl=100.0,
+        margin_type='isolated',
+        leverage=10.0,
+        order_id='test_order_123',
+        open_time=datetime.utcnow(),
+        last_update_time=datetime.utcnow()
+    )
+
+
+@pytest.fixture(scope="session")
+def sample_order():
+    """Create a sample order for testing."""
+    return Order(
+        order_id='test_order_123',
+        symbol='BTCUSDT',
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=0.1,
+        price=50000.0,
+        status=ExchangeOrderStatus.PENDING,
+        filled_quantity=0.0,
+        average_price=None,
+        commission=0.0,
+        commission_asset='USDT',
+        create_time=datetime.utcnow(),
+        update_time=datetime.utcnow()
+    )
+
+
+@pytest.fixture(scope="session")
+def sample_trade():
+    """Create a sample trade for testing."""
+    return Trade(
+        trade_id='trade_123',
+        order_id='order_123',
+        symbol='BTCUSDT',
+        side=OrderSide.BUY,
+        quantity=0.1,
+        price=50000.0,
+        commission=0.0,
+        commission_asset='USDT',
+        time=datetime.utcnow()
+    )
+
+
+@pytest.fixture
+def mock_exchange():
+    """Create a mock exchange interface for testing."""
+    exchange = Mock()
+    
+    # Setup default return values
+    exchange.sync_account_data.return_value = {
+        'sync_successful': True,
+        'balances': [],
+        'positions': [],
+        'open_orders': []
+    }
+    
+    exchange.get_recent_trades.return_value = []
+    exchange.get_balances.return_value = []
+    exchange.get_positions.return_value = []
+    exchange.get_open_orders.return_value = []
+    
+    return exchange
+
+
+@pytest.fixture
+def mock_db_manager():
+    """Create a mock database manager for testing."""
+    db_manager = Mock()
+    
+    # Setup default return values
+    db_manager.get_current_balance.return_value = 10000.0
+    db_manager.get_active_positions.return_value = []
+    db_manager.get_open_orders.return_value = []
+    db_manager.get_trades_by_symbol_and_date.return_value = []
+    
+    # Setup method return values
+    db_manager.log_position.return_value = 1
+    db_manager.log_trade.return_value = 1
+    db_manager.update_balance.return_value = True
+    db_manager.update_position.return_value = True
+    db_manager.update_order_status.return_value = True
+    db_manager.close_position.return_value = True
+    
+    return db_manager
+
+
+@pytest.fixture
+def mock_logger():
+    """Create a mock logger for testing."""
+    logger = Mock()
+    logger.info = Mock()
+    logger.warning = Mock()
+    logger.error = Mock()
+    logger.debug = Mock()
+    return logger
+
+@pytest.fixture
+def mock_sentiment_provider():
+    """Mock sentiment provider for testing"""
+    mock_provider = Mock()
+    mock_provider.get_live_sentiment.return_value = {
+        'sentiment_primary': 0.1,
+        'sentiment_momentum': 0.05,
+        'sentiment_volatility': 0.3,
+        'sentiment_extreme_positive': 0,
+        'sentiment_extreme_negative': 0,
+        'sentiment_ma_3': 0.08,
+        'sentiment_ma_7': 0.12,
+        'sentiment_ma_14': 0.15,
+        'sentiment_confidence': 0.8,
+        'sentiment_freshness': 1
+    }
+    # Create a proper DataFrame with datetime index for sentiment data
+    sentiment_df = pd.DataFrame({
+        'sentiment_primary': [0.1, 0.2, -0.1, 0.0, 0.3],
+        'sentiment_momentum': [0.05, 0.1, -0.05, 0.0, 0.15],
+        'sentiment_volatility': [0.3, 0.25, 0.4, 0.35, 0.2]
+    })
+    sentiment_df.index = pd.date_range('2024-01-01', periods=5, freq='D')
+    mock_provider.get_historical_sentiment.return_value = sentiment_df
+    
+    # Mock the aggregate_sentiment method
+    aggregated_sentiment = pd.DataFrame({
+        'sentiment_score': [0.1, 0.2, -0.1, 0.0, 0.3]
+    })
+    aggregated_sentiment.index = pd.date_range('2024-01-01', periods=5, freq='D')
+    mock_provider.aggregate_sentiment.return_value = aggregated_sentiment
+    
+    return mock_provider
+
+
+@pytest.fixture(scope="session")
+def test_session_id():
+    """Get a test session ID."""
+    return 1
+
+
+@pytest.fixture
+def sample_sync_data():
+    """Create sample synchronization data for testing."""
+    return {
+        'sync_successful': True,
+        'balances': [
+            AccountBalance(
+                asset='USDT',
+                free=10000.0,
+                locked=100.0,
+                total=10100.0,
+                last_updated=datetime.utcnow()
+            ),
+            AccountBalance(
+                asset='BTC',
+                free=0.5,
+                locked=0.0,
+                total=0.5,
+                last_updated=datetime.utcnow()
+            )
+        ],
+        'positions': [
+            Position(
+                symbol='BTCUSDT',
+                side='long',
+                size=0.1,
+                entry_price=50000.0,
+                current_price=51000.0,
+                unrealized_pnl=100.0,
+                margin_type='isolated',
+                leverage=10.0,
+                order_id='order_123',
+                open_time=datetime.utcnow(),
+                last_update_time=datetime.utcnow()
+            )
+        ],
+        'open_orders': [
+            Order(
+                order_id='order_456',
+                symbol='ETHUSDT',
+                side=OrderSide.SELL,
+                order_type=OrderType.LIMIT,
+                quantity=1.0,
+                price=3000.0,
+                status=ExchangeOrderStatus.PENDING,
+                filled_quantity=0.0,
+                average_price=None,
+                commission=0.0,
+                commission_asset='USDT',
+                create_time=datetime.utcnow(),
+                update_time=datetime.utcnow()
+            )
+        ]
     }
 
 

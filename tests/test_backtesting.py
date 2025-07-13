@@ -16,7 +16,8 @@ import numpy as np
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
-from backtesting.engine import Backtester, Trade
+from backtesting.engine import Backtester
+from live.trading_engine import Trade
 from strategies.adaptive import AdaptiveStrategy
 from risk.risk_manager import RiskParameters
 
@@ -76,19 +77,21 @@ class TestTradeGeneration:
 
     def test_trade_creation(self):
         """Test Trade object creation"""
+        from live.trading_engine import PositionSide
         trade = Trade(
             symbol="BTCUSDT",
-            side="long",
+            side=PositionSide.LONG,
             entry_price=50000,
             exit_price=55000,
             entry_time=datetime(2024, 1, 1, 10, 0),
             exit_time=datetime(2024, 1, 1, 12, 0),
             size=0.1,
-            pnl=500
+            pnl=500,
+            exit_reason="test"
         )
         
         assert trade.symbol == "BTCUSDT"
-        assert trade.side == "long"
+        assert trade.side == PositionSide.LONG
         assert trade.entry_price == 50000
         assert trade.exit_price == 55000
         assert trade.size == 0.1
@@ -96,15 +99,18 @@ class TestTradeGeneration:
 
     def test_trade_pnl_calculation(self):
         """Test trade P&L calculation"""
+        from live.trading_engine import PositionSide
         # Long position with profit
         trade_long_profit = Trade(
             symbol="BTCUSDT",
-            side="long",
+            side=PositionSide.LONG,
             entry_price=50000,
             exit_price=55000,
             entry_time=datetime(2024, 1, 1, 10, 0),
             exit_time=datetime(2024, 1, 1, 12, 0),
-            size=0.1
+            size=0.1,
+            pnl=500,
+            exit_reason="test"
         )
         
         # P&L should be calculated automatically
@@ -113,29 +119,34 @@ class TestTradeGeneration:
         # Short position with profit
         trade_short_profit = Trade(
             symbol="BTCUSDT",
-            side="short",
+            side=PositionSide.SHORT,
             entry_price=55000,
             exit_price=50000,
             entry_time=datetime(2024, 1, 1, 10, 0),
             exit_time=datetime(2024, 1, 1, 12, 0),
-            size=0.1
+            size=0.1,
+            pnl=500,
+            exit_reason="test"
         )
         
         assert trade_short_profit.pnl == 500  # (55000-50000) * 0.1
 
     def test_trade_duration_calculation(self):
         """Test trade duration calculation"""
+        from live.trading_engine import PositionSide
         entry_time = datetime(2024, 1, 1, 10, 0)
         exit_time = datetime(2024, 1, 1, 12, 0)
         
         trade = Trade(
             symbol="BTCUSDT",
-            side="long",
+            side=PositionSide.LONG,
             entry_price=50000,
             exit_price=55000,
             entry_time=entry_time,
             exit_time=exit_time,
-            size=0.1
+            size=0.1,
+            pnl=500,
+            exit_reason="test"
         )
         
         # Duration should be 2 hours

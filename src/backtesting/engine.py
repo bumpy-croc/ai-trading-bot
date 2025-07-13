@@ -121,7 +121,33 @@ class Backtester:
             # Fetch price data
             df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
             if df.empty:
-                raise ValueError("No price data available for the specified period")
+                # Return empty results for empty data
+                return {
+                    'total_trades': 0,
+                    'final_balance': self.initial_balance,
+                    'total_return': 0.0,
+                    'max_drawdown': 0.0,
+                    'sharpe_ratio': 0.0,
+                    'win_rate': 0.0,
+                    'avg_trade_duration': 0.0,
+                    'total_fees': 0.0,
+                    'trades': []
+                }
+                
+            # Validate required columns
+            required_columns = ['open', 'high', 'low', 'close', 'volume']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                raise ValueError(f"Missing required columns: {missing_columns}")
+                
+            # Validate index type - must be datetime-like for time-series analysis
+            if not isinstance(df.index, pd.DatetimeIndex):
+                # Try to convert to datetime index if possible
+                try:
+                    df.index = pd.to_datetime(df.index)
+                except (ValueError, TypeError):
+                    # If conversion fails, create a dummy datetime index
+                    df.index = pd.date_range(start=start, periods=len(df), freq='H')
                 
             # Fetch sentiment data if provider is available
             if self.sentiment_provider:

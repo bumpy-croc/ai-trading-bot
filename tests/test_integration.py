@@ -9,7 +9,7 @@ import pytest
 import time
 import threading
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 import pandas as pd
 
 from live.trading_engine import LiveTradingEngine
@@ -510,3 +510,73 @@ class TestProductionReadiness:
         
         # Verify logging is working
         # Note: Actual log checking depends on implementation details
+
+
+@pytest.mark.integration
+class TestAccountSyncIntegration:
+    def test_account_sync_triggered_by_live_engine(self, temp_directory):
+        """Test that account sync is triggered and handled by LiveTradingEngine in live mode, and DB is updated"""
+        from strategies.adaptive import AdaptiveStrategy
+        from data_providers.mock_data_provider import MockDataProvider
+        from src.live.account_sync import SyncResult
+        from database.manager import DatabaseManager
+        import threading
+        import time
+        
+        # Patch AccountSynchronizer and config to provide API credentials
+        with patch('live.trading_engine.AccountSynchronizer') as MockSync, \
+             patch('config.get_config') as mock_config, \
+             patch('live.trading_engine.BinanceExchange') as MockExchange:
+            # Setup mock config to provide API credentials
+            mock_config.return_value = {
+                'BINANCE_API_KEY': 'test_key',
+                'BINANCE_API_SECRET': 'test_secret'
+            }
+            
+            # Setup mock synchronizer
+            mock_sync = MockSync.return_value
+            mock_sync.sync_account_data.return_value = SyncResult(
+                success=True,
+                message="Account sync successful",
+                data={
+                    'balance_sync': {'corrected': True, 'new_balance': 12345.0},
+                    'position_sync': {},
+                    'order_sync': {}
+                },
+                timestamp=datetime.utcnow()
+            )
+            # Use a simple strategy and mock data provider
+            strategy = AdaptiveStrategy()
+            data_provider = MockDataProvider()
+            # Patch threading.Thread to run target directly (avoid real threading)
+            with patch('threading.Thread') as MockThread:
+                def run_target(*args, **kwargs):
+                    # Simulate trading loop exit after one step
+                    engine.is_running = False
+                MockThread.return_value = MagicMock(start=run_target, is_alive=lambda: False)
+                # Instantiate engine
+                engine = LiveTradingEngine(
+                    strategy=strategy,
+                    data_provider=data_provider,
+                    enable_live_trading=True,
+                    initial_balance=10000
+                )
+                # Run start (should trigger account sync)
+                engine.start(symbol="BTCUSDT", timeframe="1h", max_steps=1)
+                # Assert sync_account_data was called
+                print(f"sync_account_data called: {mock_sync.sync_account_data.called}")
+                print(f"engine.trading_session_id after start: {engine.trading_session_id}")
+                assert mock_sync.sync_account_data.called, "Account sync was not triggered by engine"
+                # Assert balance was updated in engine
+                print(f"engine.current_balance after sync: {engine.current_balance}")
+                assert engine.current_balance == 12345.0, "Engine did not update balance from sync result"
+                # Give DB a moment to commit
+                time.sleep(0.5)
+                # Use real DatabaseManager to check the latest balance
+                db_manager = DatabaseManager()
+                balances = db_manager.execute_query(
+                    f"SELECT total_balance FROM account_balances WHERE session_id={engine.trading_session_id} ORDER BY last_updated DESC LIMIT 1"
+                )
+                print(f"account_balances query result: {balances}")
+                assert balances, "No balance record found in account_balances"
+                assert float(balances[0]["total_balance"]) == 12345.0, "Balance in account_balances does not match corrected value"

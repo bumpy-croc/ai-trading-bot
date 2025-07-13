@@ -15,9 +15,11 @@ import numpy as np
 from data_providers.data_provider import DataProvider
 from data_providers.binance_data_provider import BinanceDataProvider
 from data_providers.sentiment_provider import SentimentDataProvider
+from data_providers.binance_exchange import BinanceExchange
 from strategies.base import BaseStrategy
 from risk.risk_manager import RiskManager, RiskParameters
 from live.strategy_manager import StrategyManager
+from .account_sync import AccountSynchronizer
 from database.manager import DatabaseManager
 from database.models import TradeSource
 from config.constants import DEFAULT_INITIAL_BALANCE
@@ -143,6 +145,29 @@ class LiveTradingEngine:
         self.db_manager = DatabaseManager(database_url)
         self.trading_session_id: Optional[int] = None
         
+        # Initialize exchange interface and account synchronizer
+        self.exchange_interface = None
+        self.account_synchronizer = None
+        if enable_live_trading:
+            try:
+                from config import get_config
+                config = get_config()
+                api_key = config.get('BINANCE_API_KEY')
+                api_secret = config.get('BINANCE_API_SECRET')
+                
+                if api_key and api_secret:
+                    self.exchange_interface = BinanceExchange(api_key, api_secret, testnet=False)
+                    self.account_synchronizer = AccountSynchronizer(
+                        self.exchange_interface, 
+                        self.db_manager, 
+                        self.trading_session_id
+                    )
+                    logger.info("Exchange interface and account synchronizer initialized")
+                else:
+                    logger.warning("Binance API credentials not found - account sync disabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize exchange interface: {e}")
+        
         # Optionally resume balance from last snapshot
         if self.resume_from_last_balance:
             try:
@@ -248,6 +273,63 @@ class LiveTradingEngine:
                 self.trading_session_id
             )
             
+            # Set session ID on strategy for logging
+            if hasattr(self.strategy, 'session_id'):
+                self.strategy.session_id = self.trading_session_id
+        
+        # Perform account synchronization if available
+        self._pending_balance_correction = False
+        self._pending_corrected_balance = None
+        if self.account_synchronizer and self.enable_live_trading:
+            try:
+                logger.info("🔄 Performing initial account synchronization...")
+                sync_result = self.account_synchronizer.sync_account_data(force=True)
+                if sync_result.success:
+                    logger.info("✅ Account synchronization completed")
+                    # Update session ID for synchronizer
+                    if self.trading_session_id:
+                        self.account_synchronizer.session_id = self.trading_session_id
+                    # Check if balance was corrected
+                    balance_sync = sync_result.data.get('balance_sync', {})
+                    if balance_sync.get('corrected', False):
+                        corrected_balance = balance_sync.get('new_balance', self.current_balance)
+                        self.current_balance = corrected_balance
+                        logger.info(f"💰 Balance corrected from exchange: ${corrected_balance:,.2f}")
+                        # Defer DB update until session is created
+                        self._pending_balance_correction = True
+                        self._pending_corrected_balance = corrected_balance
+                else:
+                    logger.warning(f"⚠️ Account synchronization failed: {sync_result.message}")
+            except Exception as e:
+                logger.error(f"❌ Account synchronization error: {e}")
+        # Create new trading session in database if none exists
+        if self.trading_session_id is None:
+            mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
+            self.trading_session_id = self.db_manager.create_trading_session(
+                strategy_name=self.strategy.__class__.__name__,
+                symbol=symbol,
+                timeframe=timeframe,
+                mode=mode,
+                initial_balance=self.current_balance,  # Use current balance (might be recovered)
+                strategy_config=getattr(self.strategy, 'config', {})
+            )
+            # Initialize balance tracking
+            self.db_manager.update_balance(
+                self.current_balance, 
+                'session_start', 
+                'system', 
+                self.trading_session_id
+            )
+            # If a balance correction was pending, log it now
+            if getattr(self, '_pending_balance_correction', False):
+                self.db_manager.update_balance(
+                    self._pending_corrected_balance,
+                    'account_sync',
+                    'system',
+                    self.trading_session_id
+                )
+                self._pending_balance_correction = False
+                self._pending_corrected_balance = None
             # Set session ID on strategy for logging
             if hasattr(self.strategy, 'session_id'):
                 self.strategy.session_id = self.trading_session_id
@@ -373,6 +455,17 @@ class LiveTradingEngine:
                      (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval)):
                     self._log_account_snapshot()
                     self.last_account_snapshot = now
+                    
+                    # Perform periodic account synchronization
+                    if self.account_synchronizer and self.enable_live_trading:
+                        try:
+                            sync_result = self.account_synchronizer.sync_account_data()
+                            if sync_result.success:
+                                logger.debug("Periodic account sync completed")
+                            else:
+                                logger.warning(f"Periodic account sync failed: {sync_result.message}")
+                        except Exception as e:
+                            logger.error(f"Periodic account sync error: {e}")
                 # Log status periodically
                 if self.total_trades % 10 == 0 or len(self.positions) > 0:
                     self._log_status(symbol, current_price)
