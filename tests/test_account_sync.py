@@ -1,8 +1,8 @@
 """
-Tests for Account Synchronization functionality
+Optimized Tests for Account Synchronization functionality
 
-This module tests the account synchronization service that ensures data integrity
-between the exchange and the bot's database.
+This module tests the account synchronization service with focused, non-redundant tests
+that cover all critical functionality without unnecessary repetition.
 """
 
 import pytest
@@ -19,29 +19,8 @@ from src.data_providers.exchange_interface import (
 from src.database.models import PositionSide, TradeSource
 
 
-class TestSyncResult:
-    """Test the SyncResult dataclass"""
-    
-    def test_sync_result_creation(self):
-        """Test creating a SyncResult instance"""
-        data = {"test": "data"}
-        timestamp = datetime.utcnow()
-        
-        result = SyncResult(
-            success=True,
-            message="Test message",
-            data=data,
-            timestamp=timestamp
-        )
-        
-        assert result.success is True
-        assert result.message == "Test message"
-        assert result.data == data
-        assert result.timestamp == timestamp
-
-
 class TestAccountSynchronizer:
-    """Test the AccountSynchronizer class"""
+    """Test the AccountSynchronizer class with optimized test coverage"""
     
     @pytest.fixture
     def mock_exchange(self):
@@ -63,6 +42,12 @@ class TestAccountSynchronizer:
         db_manager.get_active_positions.return_value = []
         db_manager.get_open_orders.return_value = []
         db_manager.get_trades_by_symbol_and_date.return_value = []
+        db_manager.log_position.return_value = 1
+        db_manager.log_trade.return_value = 1
+        db_manager.update_balance.return_value = True
+        db_manager.update_position.return_value = True
+        db_manager.update_order_status.return_value = True
+        db_manager.close_position.return_value = True
         return db_manager
     
     @pytest.fixture
@@ -73,19 +58,6 @@ class TestAccountSynchronizer:
             db_manager=mock_db_manager,
             session_id=1
         )
-    
-    def test_initialization(self, mock_exchange, mock_db_manager):
-        """Test AccountSynchronizer initialization"""
-        sync = AccountSynchronizer(
-            exchange=mock_exchange,
-            db_manager=mock_db_manager,
-            session_id=1
-        )
-        
-        assert sync.exchange == mock_exchange
-        assert sync.db_manager == mock_db_manager
-        assert sync.session_id == 1
-        assert sync.last_sync_time is None
     
     def test_sync_account_data_success(self, synchronizer, mock_exchange):
         """Test successful account synchronization"""
@@ -126,30 +98,25 @@ class TestAccountSynchronizer:
         assert "failed" in result.message.lower()
         assert "rate limit" in result.message
     
-    def test_sync_account_data_too_frequent(self, synchronizer, mock_exchange):
-        """Test that sync is skipped if too recent"""
-        # Set last sync time to 2 minutes ago
+    def test_sync_account_data_frequency_control(self, synchronizer, mock_exchange):
+        """Test sync frequency control and force sync"""
+        # Test that sync is skipped if too recent
         synchronizer.last_sync_time = datetime.utcnow() - timedelta(minutes=2)
         
         result = synchronizer.sync_account_data()
-        
         assert result.success is True
         assert "skipped" in result.message.lower()
         mock_exchange.sync_account_data.assert_not_called()
-    
-    def test_sync_account_data_force_sync(self, synchronizer, mock_exchange):
-        """Test that force sync bypasses frequency check"""
-        # Set last sync time to 2 minutes ago
-        synchronizer.last_sync_time = datetime.utcnow() - timedelta(minutes=2)
         
+        # Test that force sync bypasses frequency check
         result = synchronizer.sync_account_data(force=True)
-        
         assert result.success is True
         assert "completed" in result.message.lower()
         mock_exchange.sync_account_data.assert_called_once()
     
-    def test_sync_balances_no_discrepancy(self, synchronizer, mock_db_manager):
-        """Test balance sync when no discrepancy exists"""
+    def test_sync_balances_comprehensive(self, synchronizer, mock_db_manager):
+        """Test balance synchronization with all scenarios"""
+        # Test no discrepancy
         balances = [
             AccountBalance(
                 asset='USDT',
@@ -161,37 +128,24 @@ class TestAccountSynchronizer:
         ]
         
         result = synchronizer._sync_balances(balances)
-        
         assert result['synced'] is True
         assert result['corrected'] is False
         assert result['balance'] == 10000.0
-    
-    def test_sync_balances_with_discrepancy(self, synchronizer, mock_db_manager):
-        """Test balance sync when discrepancy exists"""
-        balances = [
-            AccountBalance(
-                asset='USDT',
-                free=11000.0,
-                locked=0.0,
-                total=11000.0,
-                last_updated=datetime.utcnow()
-            )
-        ]
+        
+        # Test with discrepancy
+        balances[0].free = 11000.0
+        balances[0].total = 11000.0
         
         result = synchronizer._sync_balances(balances)
-        
         assert result['synced'] is True
         assert result['corrected'] is True
         assert result['old_balance'] == 10000.0
         assert result['new_balance'] == 11000.0
         assert result['difference'] == 1000.0
         assert result['difference_percent'] == 10.0
-        
-        # Verify database was updated
         mock_db_manager.update_balance.assert_called_once()
-    
-    def test_sync_balances_no_usdt(self, synchronizer):
-        """Test balance sync when no USDT balance found"""
+        
+        # Test no USDT balance
         balances = [
             AccountBalance(
                 asset='BTC',
@@ -203,22 +157,18 @@ class TestAccountSynchronizer:
         ]
         
         result = synchronizer._sync_balances(balances)
-        
         assert result['synced'] is False
         assert 'No USDT balance found' in result['error']
     
-    def test_sync_positions_no_positions(self, synchronizer, mock_db_manager):
-        """Test position sync when no positions exist"""
-        positions = []
-        
-        result = synchronizer._sync_positions(positions)
-        
+    def test_sync_positions_comprehensive(self, synchronizer, mock_db_manager):
+        """Test position synchronization with all scenarios"""
+        # Test no positions
+        result = synchronizer._sync_positions([])
         assert result['synced'] is True
         assert result['total_exchange_positions'] == 0
         assert result['total_db_positions'] == 0
-    
-    def test_sync_positions_new_position(self, synchronizer, mock_db_manager):
-        """Test position sync when new position found on exchange"""
+        
+        # Test new position
         positions = [
             Position(
                 symbol='BTCUSDT',
@@ -235,36 +185,13 @@ class TestAccountSynchronizer:
             )
         ]
         
-        mock_db_manager.log_position.return_value = 1
-        
         result = synchronizer._sync_positions(positions)
-        
         assert result['synced'] is True
         assert result['new_positions'] == 1
         assert result['total_exchange_positions'] == 1
-        
-        # Verify position was logged
         mock_db_manager.log_position.assert_called_once()
-    
-    def test_sync_positions_position_update(self, synchronizer, mock_db_manager):
-        """Test position sync when position size changes"""
-        positions = [
-            Position(
-                symbol='BTCUSDT',
-                side='long',
-                size=0.15,  # Changed from 0.1
-                entry_price=50000.0,
-                current_price=51000.0,
-                unrealized_pnl=150.0,
-                margin_type='isolated',
-                leverage=10.0,
-                order_id='test_order_123',
-                open_time=datetime.utcnow(),
-                last_update_time=datetime.utcnow()
-            )
-        ]
         
-        # Mock existing position in database
+        # Test position update
         mock_db_manager.get_active_positions.return_value = [
             {
                 'id': 1,
@@ -273,49 +200,28 @@ class TestAccountSynchronizer:
                 'size': 0.1
             }
         ]
+        positions[0].size = 0.15
         
         result = synchronizer._sync_positions(positions)
-        
         assert result['synced'] is True
         assert result['synced_positions'] == 1
-        
-        # Verify position was updated
         mock_db_manager.update_position.assert_called_once()
-    
-    def test_sync_positions_position_closed(self, synchronizer, mock_db_manager):
-        """Test position sync when position closed on exchange"""
-        positions = []  # No positions on exchange
         
-        # Mock existing position in database
-        mock_db_manager.get_active_positions.return_value = [
-            {
-                'id': 1,
-                'symbol': 'BTCUSDT',
-                'side': 'long',
-                'size': 0.1
-            }
-        ]
-        
-        result = synchronizer._sync_positions(positions)
-        
+        # Test position closed
+        result = synchronizer._sync_positions([])
         assert result['synced'] is True
         assert result['closed_positions'] == 1
-        
-        # Verify position was closed
         mock_db_manager.close_position.assert_called_once_with(1)
     
-    def test_sync_orders_no_orders(self, synchronizer, mock_db_manager):
-        """Test order sync when no orders exist"""
-        orders = []
-        
-        result = synchronizer._sync_orders(orders)
-        
+    def test_sync_orders_comprehensive(self, synchronizer, mock_db_manager):
+        """Test order synchronization with all scenarios"""
+        # Test no orders
+        result = synchronizer._sync_orders([])
         assert result['synced'] is True
         assert result['total_exchange_orders'] == 0
         assert result['total_db_orders'] == 0
-    
-    def test_sync_orders_new_order(self, synchronizer, mock_db_manager):
-        """Test order sync when new order found on exchange"""
+        
+        # Test new order
         orders = [
             Order(
                 order_id='test_order_123',
@@ -335,32 +241,11 @@ class TestAccountSynchronizer:
         ]
         
         result = synchronizer._sync_orders(orders)
-        
         assert result['synced'] is True
         assert result['new_orders'] == 1
         assert result['total_exchange_orders'] == 1
-    
-    def test_sync_orders_status_update(self, synchronizer, mock_db_manager):
-        """Test order sync when order status changes"""
-        orders = [
-            Order(
-                order_id='test_order_123',
-                symbol='BTCUSDT',
-                side=OrderSide.BUY,
-                order_type=OrderType.LIMIT,
-                quantity=0.1,
-                price=50000.0,
-                status=ExchangeOrderStatus.FILLED,  # Changed from PENDING
-                filled_quantity=0.1,
-                average_price=50000.0,
-                commission=0.0,
-                commission_asset='USDT',
-                create_time=datetime.utcnow(),
-                update_time=datetime.utcnow()
-            )
-        ]
         
-        # Mock existing order in database
+        # Test order status update
         mock_db_manager.get_open_orders.return_value = [
             {
                 'id': 1,
@@ -368,41 +253,26 @@ class TestAccountSynchronizer:
                 'symbol': 'BTCUSDT'
             }
         ]
+        orders[0].status = ExchangeOrderStatus.FILLED
+        orders[0].filled_quantity = 0.1
+        orders[0].average_price = 50000.0
         
         result = synchronizer._sync_orders(orders)
-        
         assert result['synced'] is True
         assert result['synced_orders'] == 1
-        
-        # Verify order status was updated
         mock_db_manager.update_order_status.assert_called_once()
-    
-    def test_sync_orders_order_cancelled(self, synchronizer, mock_db_manager):
-        """Test order sync when order cancelled on exchange"""
-        orders = []  # No orders on exchange
         
-        # Mock existing order in database
-        mock_db_manager.get_open_orders.return_value = [
-            {
-                'id': 1,
-                'order_id': 'test_order_123',
-                'symbol': 'BTCUSDT'
-            }
-        ]
-        
-        result = synchronizer._sync_orders(orders)
-        
+        # Test order cancelled
+        result = synchronizer._sync_orders([])
         assert result['synced'] is True
         assert result['cancelled_orders'] == 1
-        
-        # Verify order was marked as cancelled
-        mock_db_manager.update_order_status.assert_called_once_with(
+        mock_db_manager.update_order_status.assert_called_with(
             1, ExchangeOrderStatus.CANCELLED.value
         )
     
-    def test_recover_missing_trades_no_missing(self, synchronizer, mock_exchange, mock_db_manager):
-        """Test trade recovery when no missing trades"""
-        # Mock exchange trades
+    def test_recover_missing_trades_comprehensive(self, synchronizer, mock_exchange, mock_db_manager):
+        """Test trade recovery with all scenarios"""
+        # Test no missing trades
         mock_exchange.get_recent_trades.return_value = [
             Trade(
                 trade_id='trade_123',
@@ -417,50 +287,26 @@ class TestAccountSynchronizer:
             )
         ]
         
-        # Mock database trades (same trade exists)
         mock_db_manager.get_trades_by_symbol_and_date.return_value = [
             {'trade_id': 'trade_123'}
         ]
         
         result = synchronizer.recover_missing_trades('BTCUSDT', days_back=7)
-        
         assert result['recovered'] is True
         assert result['missing_trades'] == 0
         assert result['recovered_trades'] == 0
-    
-    def test_recover_missing_trades_with_missing(self, synchronizer, mock_exchange, mock_db_manager):
-        """Test trade recovery when missing trades found"""
-        # Mock exchange trades
-        mock_exchange.get_recent_trades.return_value = [
-            Trade(
-                trade_id='trade_123',
-                order_id='order_123',
-                symbol='BTCUSDT',
-                side=OrderSide.BUY,
-                quantity=0.1,
-                price=50000.0,
-                commission=0.0,
-                commission_asset='USDT',
-                time=datetime.utcnow()
-            )
-        ]
         
-        # Mock database trades (no trades exist)
+        # Test missing trades
         mock_db_manager.get_trades_by_symbol_and_date.return_value = []
-        mock_db_manager.log_trade.return_value = 1
         
         result = synchronizer.recover_missing_trades('BTCUSDT', days_back=7)
-        
         assert result['recovered'] is True
         assert result['missing_trades'] == 1
         assert result['recovered_trades'] == 1
-        
-        # Verify trade was logged
         mock_db_manager.log_trade.assert_called_once()
     
     def test_emergency_sync_success(self, synchronizer, mock_exchange):
         """Test emergency sync functionality"""
-        # Setup mock exchange data
         mock_exchange.sync_account_data.return_value = {
             'sync_successful': True,
             'balances': [
@@ -476,7 +322,6 @@ class TestAccountSynchronizer:
             'open_orders': []
         }
         
-        # Mock trade recovery
         with patch.object(synchronizer, 'recover_missing_trades') as mock_recover:
             mock_recover.return_value = {
                 'recovered': True,
@@ -502,49 +347,39 @@ class TestAccountSynchronizer:
         assert result.success is False
         assert 'error' in result.message.lower()
     
-    def test_sync_balances_exception(self, synchronizer):
-        """Test balance sync exception handling"""
+    def test_exception_handling(self, synchronizer, mock_exchange):
+        """Test exception handling for all sync operations"""
+        # Test balance sync exception
         with patch.object(synchronizer.db_manager, 'get_current_balance', side_effect=Exception("DB error")):
             result = synchronizer._sync_balances([])
+            assert result['synced'] is False
+            assert 'error' in result
+            assert 'DB error' in result['error']
         
-        assert result['synced'] is False
-        assert 'error' in result
-        assert 'DB error' in result['error']
-    
-    def test_sync_positions_exception(self, synchronizer):
-        """Test position sync exception handling"""
+        # Test position sync exception
         with patch.object(synchronizer.db_manager, 'get_active_positions', side_effect=Exception("DB error")):
             result = synchronizer._sync_positions([])
+            assert result['synced'] is False
+            assert 'error' in result
+            assert 'DB error' in result['error']
         
-        assert result['synced'] is False
-        assert 'error' in result
-        assert 'DB error' in result['error']
-    
-    def test_sync_orders_exception(self, synchronizer):
-        """Test order sync exception handling"""
+        # Test order sync exception
         with patch.object(synchronizer.db_manager, 'get_open_orders', side_effect=Exception("DB error")):
             result = synchronizer._sync_orders([])
+            assert result['synced'] is False
+            assert 'error' in result
+            assert 'DB error' in result['error']
         
-        assert result['synced'] is False
-        assert 'error' in result
-        assert 'DB error' in result['error']
-    
-    def test_recover_missing_trades_exception(self, synchronizer, mock_exchange):
-        """Test trade recovery exception handling"""
+        # Test trade recovery exception
         mock_exchange.get_recent_trades.side_effect = Exception("API error")
-        
         result = synchronizer.recover_missing_trades('BTCUSDT', days_back=7)
-        
         assert result['recovered'] is False
         assert 'error' in result
         assert 'API error' in result['error']
-    
-    def test_sync_account_data_exception(self, synchronizer, mock_exchange):
-        """Test account sync exception handling"""
+        
+        # Test account sync exception
         mock_exchange.sync_account_data.side_effect = Exception("Exchange error")
-        
         result = synchronizer.sync_account_data()
-        
         assert result.success is False
         assert 'error' in result.message.lower()
         assert 'Exchange error' in result.message

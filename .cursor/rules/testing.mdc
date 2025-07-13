@@ -14,6 +14,7 @@ When working with existing test infrastructure:
 
 • **Never replace** comprehensive test setup files (like `conftest.py`)
 • **Always add** new fixtures to existing infrastructure
+• **Don't add `run_test_` scripts. Use the existing infrastructure to run the tests with `python tests/run_tests.py`
 • **Understand dependencies** before making changes
 • **Test the impact** of changes on existing tests
 • **Preserve database setup** (PostgreSQL containers, connection handling)
