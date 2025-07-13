@@ -1,6 +1,6 @@
 ---
-description:
 globs:
+description: This rule file outlines comprehensive best practices for using pytest in Python projects, covering code organization, testing strategies, performance optimization, security measures, and common pitfalls to avoid.
 alwaysApply: false
 ---
 
