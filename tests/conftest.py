@@ -14,6 +14,7 @@ import tempfile
 import os
 from pathlib import Path
 import sys
+import subprocess
 
 # Add project root and src directory to PYTHONPATH for test imports
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -87,6 +88,18 @@ except Exception as _e:  # pragma: no cover -- fallback if Docker not available
     except Exception:
         # If we can't ensure db creation, tests that need it will fail/skipped.
         pass
+
+
+def pytest_sessionstart(session):
+    """Ensure the database is set up and cleared before running tests."""
+    print("\n[pytest] Running local setup script to reset database...")
+    result = subprocess.run([
+        sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"
+    ], capture_output=True, text=True)
+    print(result.stdout)
+    if result.returncode != 0:
+        print(result.stderr)
+        pytest.exit("Database setup/reset failed before tests.")
 
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: D401
@@ -435,6 +448,40 @@ def mock_logger():
     logger.error = Mock()
     logger.debug = Mock()
     return logger
+
+@pytest.fixture
+def mock_sentiment_provider():
+    """Mock sentiment provider for testing"""
+    mock_provider = Mock()
+    mock_provider.get_live_sentiment.return_value = {
+        'sentiment_primary': 0.1,
+        'sentiment_momentum': 0.05,
+        'sentiment_volatility': 0.3,
+        'sentiment_extreme_positive': 0,
+        'sentiment_extreme_negative': 0,
+        'sentiment_ma_3': 0.08,
+        'sentiment_ma_7': 0.12,
+        'sentiment_ma_14': 0.15,
+        'sentiment_confidence': 0.8,
+        'sentiment_freshness': 1
+    }
+    # Create a proper DataFrame with datetime index for sentiment data
+    sentiment_df = pd.DataFrame({
+        'sentiment_primary': [0.1, 0.2, -0.1, 0.0, 0.3],
+        'sentiment_momentum': [0.05, 0.1, -0.05, 0.0, 0.15],
+        'sentiment_volatility': [0.3, 0.25, 0.4, 0.35, 0.2]
+    })
+    sentiment_df.index = pd.date_range('2024-01-01', periods=5, freq='D')
+    mock_provider.get_historical_sentiment.return_value = sentiment_df
+    
+    # Mock the aggregate_sentiment method
+    aggregated_sentiment = pd.DataFrame({
+        'sentiment_score': [0.1, 0.2, -0.1, 0.0, 0.3]
+    })
+    aggregated_sentiment.index = pd.date_range('2024-01-01', periods=5, freq='D')
+    mock_provider.aggregate_sentiment.return_value = aggregated_sentiment
+    
+    return mock_provider
 
 
 @pytest.fixture(scope="session")

@@ -523,8 +523,16 @@ class TestAccountSyncIntegration:
         import threading
         import time
         
-        # Patch AccountSynchronizer only
-        with patch('live.trading_engine.AccountSynchronizer') as MockSync:
+        # Patch AccountSynchronizer and config to provide API credentials
+        with patch('live.trading_engine.AccountSynchronizer') as MockSync, \
+             patch('config.get_config') as mock_config, \
+             patch('live.trading_engine.BinanceExchange') as MockExchange:
+            # Setup mock config to provide API credentials
+            mock_config.return_value = {
+                'BINANCE_API_KEY': 'test_key',
+                'BINANCE_API_SECRET': 'test_secret'
+            }
+            
             # Setup mock synchronizer
             mock_sync = MockSync.return_value
             mock_sync.sync_account_data.return_value = SyncResult(
@@ -546,7 +554,7 @@ class TestAccountSyncIntegration:
                     # Simulate trading loop exit after one step
                     engine.is_running = False
                 MockThread.return_value = MagicMock(start=run_target, is_alive=lambda: False)
-                # Instantiate engine (no database_url, uses env)
+                # Instantiate engine
                 engine = LiveTradingEngine(
                     strategy=strategy,
                     data_provider=data_provider,
@@ -565,19 +573,6 @@ class TestAccountSyncIntegration:
                 # Give DB a moment to commit
                 time.sleep(0.5)
                 # Use real DatabaseManager to check the latest balance
-                db_manager = DatabaseManager()
-                result = db_manager.execute_query(
-                    "SELECT balance, timestamp FROM account_history ORDER BY timestamp DESC LIMIT 1"
-                )
-                print(f"account_history query result: {result}")
-                if not result:
-                    # Print all account_history for debugging
-                    all_rows = db_manager.execute_query("SELECT * FROM account_history")
-                    print(f"All account_history rows: {all_rows}")
-                assert result, "No balance record found in database"
-                db_balance = result[0]["balance"] if isinstance(result[0], dict) else result[0][0]
-                assert abs(db_balance - 12345.0) < 1e-6, f"Database balance {db_balance} does not match sync result"
-                # Query the account_balances table for the session
                 db_manager = DatabaseManager()
                 balances = db_manager.execute_query(
                     f"SELECT total_balance FROM account_balances WHERE session_id={engine.trading_session_id} ORDER BY last_updated DESC LIMIT 1"

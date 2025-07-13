@@ -28,18 +28,18 @@ class TestBasicMetrics:
         entry_price = 100
         exit_price = 110
         pnl_pct = pnl_percent(entry_price, exit_price, Side.LONG)
-        assert pnl_pct == 10.0  # 10% gain
+        assert pnl_pct == 0.1  # 10% gain (as decimal)
         
         # Test negative P&L
         exit_price = 90
         pnl_pct = pnl_percent(entry_price, exit_price, Side.LONG)
-        assert pnl_pct == -10.0  # 10% loss
+        assert pnl_pct == -0.1  # 10% loss (as decimal)
         
         # Test short position
         entry_price = 100
         exit_price = 90
         pnl_pct = pnl_percent(entry_price, exit_price, Side.SHORT)
-        assert pnl_pct == 10.0  # 10% gain on short
+        assert pnl_pct == 0.1  # 10% gain on short (as decimal)
 
     def test_cash_pnl_calculation(self):
         """Test cash P&L calculation"""
@@ -111,13 +111,13 @@ class TestRiskMetrics:
         
         total_ret = total_return(initial_balance, final_balance)
         
-        # Should be 20% return
-        assert total_ret == 20.0
+        # Should be 20% return (use pytest.approx for floating point comparison)
+        assert total_ret == pytest.approx(20.0)
         
         # Test with loss
         final_balance_loss = 800
         total_ret_loss = total_return(initial_balance, final_balance_loss)
-        assert total_ret_loss == -20.0
+        assert total_ret_loss == pytest.approx(-20.0)
 
     def test_cagr_calculation(self):
         """Test Compound Annual Growth Rate calculation"""

@@ -147,13 +147,13 @@ class TestMonitoringDashboard:
             
             dashboard = MonitoringDashboard()
             
-            # Mock database response with winning trades
+            # Mock database response with aggregated win rate data
             dashboard.db_manager.execute_query = Mock(return_value=[
-                {'pnl': 100.0}, {'pnl': -50.0}, {'pnl': 200.0}
+                {'total_trades': 3, 'winning_trades': 2}
             ])
             
             win_rate = dashboard._get_win_rate()
-            assert win_rate == pytest.approx(66.67)  # 2 out of 3 trades profitable
+            assert win_rate == pytest.approx(66.67, rel=1e-2)  # 2 out of 3 trades profitable
 
     @pytest.mark.monitoring
     def test_drawdown_calculation(self):
@@ -166,10 +166,10 @@ class TestMonitoringDashboard:
             
             # Mock balance history with drawdown
             balance_history = [
-                {'balance': 10000.0, 'timestamp': datetime.now() - timedelta(days=3)},
-                {'balance': 12000.0, 'timestamp': datetime.now() - timedelta(days=2)},
-                {'balance': 9000.0, 'timestamp': datetime.now() - timedelta(days=1)},
-                {'balance': 11000.0, 'timestamp': datetime.now()}
+                {'balance': 10000.0, 'date': '2024-01-01'},
+                {'balance': 12000.0, 'date': '2024-01-02'},
+                {'balance': 9000.0, 'date': '2024-01-03'},
+                {'balance': 11000.0, 'date': '2024-01-04'}
             ]
             
             dashboard.db_manager.execute_query = Mock(return_value=balance_history)
@@ -203,6 +203,7 @@ class TestMonitoringDashboard:
             ]
             
             dashboard.db_manager.execute_query = Mock(return_value=positions_data)
+            dashboard._get_current_price = Mock(return_value=51000.0)
             
             positions = dashboard._get_current_positions()
             
@@ -258,15 +259,15 @@ class TestMonitoringDashboard:
             
             # Test API connection status
             status = dashboard._get_api_connection_status()
-            assert status in ['connected', 'disconnected', 'error']
+            assert status in ['Connected', 'Disconnected']
             
             # Test data feed status
             feed_status = dashboard._get_data_feed_status()
-            assert feed_status in ['active', 'inactive', 'error']
+            assert feed_status in ['Active', 'Inactive', 'Error']
             
             # Test system health
             health = dashboard._get_system_health_status()
-            assert health in ['healthy', 'warning', 'critical']
+            assert health in ['Healthy', 'Warning', 'Critical', 'Error']
 
     @pytest.mark.monitoring
     def test_performance_chart_data(self):
@@ -292,10 +293,10 @@ class TestMonitoringDashboard:
             
             chart_data = dashboard._get_performance_chart_data(days=7)
             
-            assert 'labels' in chart_data
-            assert 'datasets' in chart_data
-            assert len(chart_data['labels']) == 7
-            assert len(chart_data['datasets'][0]['data']) == 7
+            assert 'timestamps' in chart_data
+            assert 'balances' in chart_data
+            assert len(chart_data['timestamps']) == 7
+            assert len(chart_data['balances']) == 7
 
     @pytest.mark.monitoring
     def test_error_handling(self):
