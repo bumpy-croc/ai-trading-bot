@@ -232,6 +232,27 @@ emergency_result = synchronizer.emergency_sync()
 
 ### **Testing the System**
 
+#### **Automated Tests**
+
+```bash
+# Run all account sync tests
+python scripts/run_account_sync_tests.py
+
+# Run unit tests only
+python scripts/run_account_sync_tests.py --type unit
+
+# Run integration tests only
+python scripts/run_account_sync_tests.py --type integration
+
+# Run with verbose output
+python scripts/run_account_sync_tests.py --verbose
+
+# Run with coverage report
+python scripts/run_account_sync_tests.py --coverage
+```
+
+#### **Manual Testing**
+
 ```bash
 # Test account synchronization
 python scripts/test_account_sync.py
@@ -243,6 +264,30 @@ exchange = BinanceExchange('your_key', 'your_secret')
 print('Connection:', exchange.test_connection())
 print('Balances:', len(exchange.get_balances()))
 "
+```
+
+#### **Test Coverage**
+
+The test suite covers:
+
+- **Unit Tests**: Individual component testing with mocked dependencies
+- **Integration Tests**: End-to-end testing with realistic data flows
+- **Error Handling**: Exception scenarios and edge cases
+- **Data Validation**: Balance, position, and order synchronization
+- **Trade Recovery**: Missing trade detection and recovery
+- **Emergency Sync**: Forced synchronization scenarios
+
+#### **Test Structure**
+
+```
+tests/
+├── test_account_sync.py          # Main test file
+├── conftest.py                   # Test configuration and fixtures
+└── data/                         # Test data files (if needed)
+
+scripts/
+├── run_account_sync_tests.py     # Test runner script
+└── test_account_sync.py          # Manual testing script
 ```
 
 ### **Monitoring Synchronization**
