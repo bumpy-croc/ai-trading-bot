@@ -169,6 +169,8 @@ python live_trading_control.py switch ml_basic
 
 > **💾 Persistent Progress**: Your balance and active positions are automatically saved and recovered on restart, so Railway deployments never lose your trading progress.
 
+> **🔄 Account Synchronization**: The bot automatically synchronizes with Binance to ensure data integrity, recovering any positions or trades that may have been missed due to shutdowns or network issues.
+
 ### Training ML Models
 
 ```bash
