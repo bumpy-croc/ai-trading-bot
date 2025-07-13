@@ -331,7 +331,17 @@ class AccountSynchronizer:
                     # New order found on exchange
                     logger.warning(f"New order found on exchange: {exchange_order.order_id} {exchange_order.symbol}")
                     
-                    # Add to database (simplified - just log the order)
+                    # Persist new order to the database
+                    self.db_manager.log_order(
+                        order_id=exchange_order.order_id,
+                        symbol=exchange_order.symbol,
+                        side=exchange_order.side.value,
+                        quantity=exchange_order.quantity,
+                        price=exchange_order.price,
+                        status=exchange_order.status.value
+                    )
+                    
+                    # Add to the new_orders list for reporting
                     new_orders.append({
                         'order_id': exchange_order.order_id,
                         'symbol': exchange_order.symbol,
