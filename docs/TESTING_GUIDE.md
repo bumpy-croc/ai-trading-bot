@@ -98,10 +98,8 @@ pytest tests/test_live_trading.py
 pytest tests/test_risk_management.py
 pytest tests/test_account_sync.py
 
-# Run account sync tests specifically
-python scripts/run_account_sync_tests.py
-python scripts/run_account_sync_tests.py --type unit
-python scripts/run_account_sync_tests.py --type integration --coverage
+# Run account sync tests with coverage
+pytest tests/test_account_sync.py --cov=src.live.account_sync --cov-report=term
 
 # Run with verbose output
 pytest -v

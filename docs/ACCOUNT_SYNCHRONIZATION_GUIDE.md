@@ -232,31 +232,26 @@ emergency_result = synchronizer.emergency_sync()
 
 ### **Testing the System**
 
-#### **Automated Tests**
+#### **Running Tests**
 
 ```bash
-# Run all account sync tests
-python scripts/run_account_sync_tests.py
-
-# Run unit tests only
-python scripts/run_account_sync_tests.py --type unit
-
-# Run integration tests only
-python scripts/run_account_sync_tests.py --type integration
+# Run account sync tests
+pytest tests/test_account_sync.py
 
 # Run with verbose output
-python scripts/run_account_sync_tests.py --verbose
+pytest tests/test_account_sync.py -v
 
-# Run with coverage report
-python scripts/run_account_sync_tests.py --coverage
+# Run with coverage
+pytest tests/test_account_sync.py --cov=src.live.account_sync --cov-report=term
+
+# Run specific test categories
+pytest tests/test_account_sync.py -k "not integration"  # Unit tests only
+pytest tests/test_account_sync.py -k "integration"      # Integration tests only
 ```
 
 #### **Manual Testing**
 
 ```bash
-# Test account synchronization
-python scripts/test_account_sync.py
-
 # Test specific components
 python -c "
 from src.data_providers.binance_exchange import BinanceExchange
@@ -284,10 +279,6 @@ tests/
 ├── test_account_sync.py          # Main test file
 ├── conftest.py                   # Test configuration and fixtures
 └── data/                         # Test data files (if needed)
-
-scripts/
-├── run_account_sync_tests.py     # Test runner script
-└── test_account_sync.py          # Manual testing script
 ```
 
 ### **Monitoring Synchronization**
