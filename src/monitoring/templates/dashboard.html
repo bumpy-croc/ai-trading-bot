@@ -471,7 +471,7 @@
             constructor() {
                 this.socket = io();
                 this.config = {};
-                this.updateInterval = 3600000;
+                this.updateInterval = 5000; // 5 seconds instead of 1 hour
                 this.chart = null;
                 this.lastMetrics = {};
                 
@@ -484,6 +484,33 @@
                 this.loadConfiguration();
                 this.initializeChart();
                 this.hideLoading();
+                
+                // Load initial data immediately
+                this.loadInitialData();
+                
+                // Set up periodic updates as fallback
+                setInterval(() => {
+                    this.loadInitialData();
+                }, this.updateInterval);
+            }
+            
+            async loadInitialData() {
+                try {
+                    // Load metrics
+                    const metricsResponse = await fetch('/api/metrics');
+                    const metrics = await metricsResponse.json();
+                    this.updateMetrics(metrics);
+                    
+                    // Load positions and trades
+                    await this.loadPositions();
+                    await this.loadTrades();
+                    
+                    // Update chart
+                    await this.updatePerformanceChart();
+                    
+                } catch (error) {
+                    console.error('Failed to load initial data:', error);
+                }
             }
 
             setupSocketHandlers() {
@@ -686,7 +713,7 @@
                 }
             }
 
-            calculateChange(key, currentValue) {
+            calculateChange(key, value) {
                 // This would compare with previous values to show trends
                 // For now, return null (no change indicator)
                 return null;

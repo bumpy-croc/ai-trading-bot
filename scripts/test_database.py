@@ -5,12 +5,15 @@ Test script for database logging functionality
 
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pathlib import Path
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
+sys.path.append(str(project_root / 'src'))
 
 import logging
 from datetime import datetime, timedelta
-from database.manager import DatabaseManager
-from database.models import TradeSource, PositionSide
+from src.database.manager import DatabaseManager
+from src.database.models import TradeSource, PositionSide
 
 # Setup logging
 logging.basicConfig(

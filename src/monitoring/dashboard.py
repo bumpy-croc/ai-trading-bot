@@ -57,7 +57,7 @@ class TradeDict(TypedDict):
     side: str
     entry_price: float
     exit_price: float
-    quantity: float
+    quantity: Optional[float]
     entry_time: Any
     exit_time: Any
     pnl: float
@@ -1213,22 +1213,34 @@ class MonitoringDashboard:
     def _get_recent_trades(self, limit: int = 50) -> List[TradeDict]:
         """Get recent completed trades"""
         try:
-            query = """
+            # Use f-string for LIMIT since it's a safe integer value
+            query = f"""
             SELECT 
                 symbol, side, entry_price, exit_price, quantity,
                 entry_time, exit_time, pnl, exit_reason
             FROM trades 
             WHERE exit_time IS NOT NULL
             ORDER BY exit_time DESC
-            LIMIT ?
+            LIMIT {limit}
             """
-            result = self.db_manager.execute_query(query, (limit,))
+            result = self.db_manager.execute_query(query)
+            logger.info(f"Query returned {len(result)} rows")
+            
             trades: List[TradeDict] = []
             for row in result or []:
-                trades.append(TradeDict(**row))  # type: ignore[arg-type]
+                try:
+                    trade = TradeDict(**row)
+                    trades.append(trade)
+                except Exception as e:
+                    logger.error(f"Error converting row to TradeDict: {e}")
+                    logger.error(f"Row data: {row}")
+            
+            logger.info(f"Successfully converted {len(trades)} trades")
             return trades
         except Exception as e:
             logger.error(f"Error getting recent trades: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def _get_performance_chart_data(self, days: int = 7) -> Dict[str, List]:
