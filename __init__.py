@@ -2,7 +2,7 @@
 AI-Trading-Bot - Cryptocurrency Trading Bot Framework
 """
 
-from data_providers import DataProvider, BinanceDataProvider
+from data_providers import DataProvider, BinanceProvider, BinanceDataProvider, BinanceExchange
 from indicators import (
     calculate_moving_averages,
     calculate_rsi,
@@ -19,7 +19,9 @@ __version__ = '0.1.0'
 __all__ = [
     # Data providers
     'DataProvider',
+    'BinanceProvider',
     'BinanceDataProvider',
+    'BinanceExchange',
     
     # Technical indicators
     'calculate_moving_averages',

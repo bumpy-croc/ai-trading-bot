@@ -1,13 +1,18 @@
 """
-Binance Exchange Implementation
+Unified Binance Provider
 
-This module implements the ExchangeInterface for Binance, providing
-real order execution, account synchronization, and position management.
+This module combines both data provider and exchange functionality for Binance,
+providing a single interface for all Binance operations including:
+- Historical and live data fetching
+- Order execution and management
+- Account synchronization
+- Position management
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -26,27 +31,253 @@ except ImportError:
     SIDE_SELL = "SELL"
     BINANCE_AVAILABLE = False
 
+from .data_provider import DataProvider
 from .exchange_interface import (
     ExchangeInterface, OrderSide, OrderType, OrderStatus,
     AccountBalance, Position, Order, Trade
 )
+from config import get_config
 
-class BinanceExchange(ExchangeInterface):
-    """Binance exchange implementation"""
+
+class BinanceProvider(DataProvider, ExchangeInterface):
+    """
+    Unified Binance provider that combines data fetching and exchange operations.
     
+    Inherits from both DataProvider and ExchangeInterface to provide complete
+    Binance functionality in a single class.
+    """
+    
+    TIMEFRAME_MAPPING = {
+        '1m': Client.KLINE_INTERVAL_1MINUTE if BINANCE_AVAILABLE else '1m',
+        '5m': Client.KLINE_INTERVAL_5MINUTE if BINANCE_AVAILABLE else '5m',
+        '15m': Client.KLINE_INTERVAL_15MINUTE if BINANCE_AVAILABLE else '15m',
+        '1h': Client.KLINE_INTERVAL_1HOUR if BINANCE_AVAILABLE else '1h',
+        '4h': Client.KLINE_INTERVAL_4HOUR if BINANCE_AVAILABLE else '4h',
+        '1d': Client.KLINE_INTERVAL_1DAY if BINANCE_AVAILABLE else '1d',
+    }
+    
+    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None, testnet: bool = False):
+        """
+        Initialize the unified Binance provider.
+        
+        Args:
+            api_key: Binance API key (optional, will try to get from config)
+            api_secret: Binance API secret (optional, will try to get from config)
+            testnet: Whether to use testnet/sandbox mode
+        """
+        # Initialize DataProvider
+        DataProvider.__init__(self)
+        
+        # Get credentials from config if not provided
+        if api_key is None or api_secret is None:
+            config = get_config()
+            api_key = api_key or config.get('BINANCE_API_KEY')
+            api_secret = api_secret or config.get('BINANCE_API_SECRET')
+        
+        # Initialize ExchangeInterface
+        if api_key and api_secret:
+            ExchangeInterface.__init__(self, api_key, api_secret, testnet)
+        else:
+            # Initialize with dummy credentials for data-only operations
+            self.api_key = api_key
+            self.api_secret = api_secret
+            self.testnet = testnet
+            self._client = None
+            
+        # Initialize the client
+        self._initialize_client()
+        
+        if not api_key or not api_secret:
+            logger.warning("Binance API credentials not found – running in public-endpoint mode (read-only).")
+
     def _initialize_client(self):
-        """Initialize Binance client"""
+        """Initialize Binance client with error handling"""
         if not BINANCE_AVAILABLE:
             logger.warning("Binance library not available - using mock client")
-            self._client = None
+            self._client = self._create_offline_client()
             return
             
         try:
-            self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
-            logger.info(f"Binance client initialized (testnet: {self.testnet})")
+            if self.api_key and self.api_secret:
+                self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
+                logger.info(f"Binance client initialized with credentials (testnet: {self.testnet})")
+            else:
+                # Public client for data-only operations
+                self._client = Client()
+                logger.info("Binance public client initialized (data-only mode)")
         except Exception as e:
-            logger.error(f"Failed to initialize Binance client: {e}")
+            logger.warning(f"Binance Client initialization failed ({e}). Falling back to offline stub.")
+            self._client = self._create_offline_client()
+    
+    def _create_offline_client(self):
+        """Create offline client stub for testing"""
+        class _OfflineClient:
+            """Lightweight stub mimicking the required Binance Client interface for tests."""
+            
+            def get_historical_klines(self, *args, **kwargs):
+                return []
+            
+            def get_klines(self, *args, **kwargs):
+                return []
+            
+            def get_symbol_ticker(self, *args, **kwargs):
+                return {'price': '0'}
+            
+            def ping(self):
+                return {}
+            
+            def get_server_time(self):
+                return {'serverTime': 1640995200000}
+            
+            def get_account(self):
+                return {'balances': [], 'canTrade': False}
+            
+            def get_open_orders(self, *args, **kwargs):
+                return []
+            
+            def get_order(self, *args, **kwargs):
+                return {}
+            
+            def get_my_trades(self, *args, **kwargs):
+                return []
+            
+            def create_order(self, *args, **kwargs):
+                return {'orderId': '12345'}
+            
+            def cancel_order(self, *args, **kwargs):
+                return {'orderId': '12345'}
+            
+            def cancel_all_orders(self, *args, **kwargs):
+                return []
+            
+            def get_exchange_info(self):
+                return {'symbols': []}
+        
+        return _OfflineClient()
+
+    # ========================================
+    # DataProvider Interface Implementation
+    # ========================================
+    
+    def _convert_timeframe(self, timeframe: str) -> str:
+        """Convert generic timeframe to Binance-specific interval"""
+        if timeframe not in self.TIMEFRAME_MAPPING:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        return self.TIMEFRAME_MAPPING[timeframe]
+        
+    def _process_klines(self, klines: list) -> pd.DataFrame:
+        """Convert raw klines data to DataFrame"""
+        if not klines:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(klines, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+            'taker_buy_quote', 'ignored'
+        ])
+        
+        # Convert types
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+        return df.set_index('timestamp')
+        
+    def get_historical_data(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: Optional[datetime] = None
+    ) -> pd.DataFrame:
+        """Fetch historical klines data from Binance"""
+        try:
+            interval = self._convert_timeframe(timeframe)
+            start_ts = int(start.timestamp() * 1000)
+            end_ts = int(end.timestamp() * 1000) if end else None
+            
+            klines = self._client.get_historical_klines(
+                symbol,
+                interval,
+                start_ts,
+                end_ts
+            )
+            
+            df = self._process_klines(klines)
+            self.data = df
+            
+            logger.info(f"Fetched {len(df)} candles from {df.index.min()} to {df.index.max()}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error fetching historical data: {str(e)}")
             raise
+            
+    def get_live_data(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int = 100
+    ) -> pd.DataFrame:
+        """Fetch current market data"""
+        try:
+            interval = self._convert_timeframe(timeframe)
+            klines = self._client.get_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=limit
+            )
+            
+            df = self._process_klines(klines)
+            self.data = df
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error fetching live data: {str(e)}")
+            raise
+            
+    def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        """Update the latest market data"""
+        try:
+            interval = self._convert_timeframe(timeframe)
+            latest_kline = self._client.get_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=1
+            )
+            
+            if not latest_kline:
+                return self.data if self.data is not None else pd.DataFrame()
+                
+            latest_df = self._process_klines(latest_kline)
+            
+            if self.data is not None:
+                # Update or append the latest candle
+                self.data = pd.concat([
+                    self.data[~self.data.index.isin(latest_df.index)],
+                    latest_df
+                ]).sort_index()
+            else:
+                self.data = latest_df
+                
+            return self.data
+            
+        except Exception as e:
+            logger.error(f"Error updating live data: {str(e)}")
+            raise
+
+    def get_current_price(self, symbol: str) -> float:
+        """Get latest price for a symbol"""
+        try:
+            ticker = self._client.get_symbol_ticker(symbol=symbol)
+            return float(ticker['price'])
+        except Exception as e:
+            logger.error(f"Error fetching current price: {e}")
+            return 0.0
+    
+    # ========================================
+    # ExchangeInterface Implementation  
+    # ========================================
     
     def test_connection(self) -> bool:
         """Test connection to Binance"""
@@ -146,17 +377,13 @@ class BinanceExchange(ExchangeInterface):
             return None
     
     def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
-        """Get open positions (for futures trading)"""
+        """Get open positions (for spot trading, this returns holdings as positions)"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning empty positions")
             return []
             
         try:
-            # Note: This is for futures trading. For spot trading, positions are just holdings
-            # For now, we'll return an empty list for spot trading
-            # In the future, this could be extended for futures/margin trading
-            
-            # For spot trading, we can consider holdings as "positions"
+            # For spot trading, we consider holdings as "positions"
             balances = self.get_balances()
             positions = []
             
@@ -206,7 +433,7 @@ class BinanceExchange(ExchangeInterface):
             orders = []
             for order_data in orders_data:
                 order = Order(
-                    order_id=order_data['orderId'],
+                    order_id=str(order_data['orderId']),
                     symbol=order_data['symbol'],
                     side=OrderSide.BUY if order_data['side'] == SIDE_BUY else OrderSide.SELL,
                     order_type=self._convert_order_type(order_data['type']),
@@ -240,7 +467,7 @@ class BinanceExchange(ExchangeInterface):
             order_data = self._client.get_order(symbol=symbol, orderId=order_id)
             
             order = Order(
-                order_id=order_data['orderId'],
+                order_id=str(order_data['orderId']),
                 symbol=order_data['symbol'],
                 side=OrderSide.BUY if order_data['side'] == SIDE_BUY else OrderSide.SELL,
                 order_type=self._convert_order_type(order_data['type']),
@@ -275,8 +502,8 @@ class BinanceExchange(ExchangeInterface):
             trades = []
             for trade_data in trades_data:
                 trade = Trade(
-                    trade_id=trade_data['id'],
-                    order_id=trade_data['orderId'],
+                    trade_id=str(trade_data['id']),
+                    order_id=str(trade_data['orderId']),
                     symbol=trade_data['symbol'],
                     side=OrderSide.BUY if trade_data['isBuyer'] else OrderSide.SELL,
                     quantity=float(trade_data['qty']),
@@ -458,3 +685,8 @@ class BinanceExchange(ExchangeInterface):
             'EXPIRED': OrderStatus.EXPIRED
         }
         return mapping.get(binance_status, OrderStatus.PENDING)
+
+
+# Aliases for backward compatibility
+BinanceDataProvider = BinanceProvider
+BinanceExchange = BinanceProvider 

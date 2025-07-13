@@ -526,7 +526,7 @@ class TestAccountSyncIntegration:
         # Patch AccountSynchronizer and config to provide API credentials
         with patch('live.trading_engine.AccountSynchronizer') as MockSync, \
              patch('config.get_config') as mock_config, \
-             patch('live.trading_engine.BinanceExchange') as MockExchange:
+             patch('live.trading_engine.BinanceProvider') as MockExchange:
             # Setup mock config to provide API credentials
             mock_config.return_value = {
                 'BINANCE_API_KEY': 'test_key',

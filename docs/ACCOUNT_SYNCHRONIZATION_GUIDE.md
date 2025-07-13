@@ -31,7 +31,7 @@ The Account Synchronization system ensures data integrity between your Binance e
    - Defines common API for all exchanges
    - Handles order execution, balance queries, position management
 
-2. **BinanceExchange** (`src/data_providers/binance_exchange.py`)
+2. **BinanceProvider** (`src/data_providers/binance_provider.py`)
    - Binance-specific implementation
    - Real order execution and account queries
    - Handles Binance API rate limits and errors
@@ -210,12 +210,12 @@ For account synchronization, your Binance API key needs:
 ### **Manual Synchronization**
 
 ```python
-from data_providers.binance_exchange import BinanceExchange
+from data_providers.binance_provider import BinanceProvider
 from database.manager import DatabaseManager
 from src.live.account_sync import AccountSynchronizer
 
 # Initialize components
-exchange = BinanceExchange(api_key, api_secret)
+exchange = BinanceProvider(api_key, api_secret)
 db_manager = DatabaseManager()
 synchronizer = AccountSynchronizer(exchange, db_manager, session_id)
 
@@ -254,8 +254,8 @@ pytest tests/test_account_sync.py -k "integration"      # Integration tests only
 ```bash
 # Test specific components
 python -c "
-from src.data_providers.binance_exchange import BinanceExchange
-exchange = BinanceExchange('your_key', 'your_secret')
+from src.data_providers.binance_provider import BinanceProvider
+exchange = BinanceProvider('your_key', 'your_secret')
 print('Connection:', exchange.test_connection())
 print('Balances:', len(exchange.get_balances()))
 "
@@ -406,7 +406,7 @@ class CoinbaseExchange(ExchangeInterface):
 if exchange_type == 'coinbase':
     self.exchange_interface = CoinbaseExchange(api_key, api_secret)
 elif exchange_type == 'binance':
-    self.exchange_interface = BinanceExchange(api_key, api_secret)
+                    self.exchange_interface = BinanceProvider(api_key, api_secret)
 ```
 
 3. **Test Integration**:

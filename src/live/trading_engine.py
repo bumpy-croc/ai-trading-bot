@@ -13,9 +13,8 @@ import sys
 import numpy as np
 
 from data_providers.data_provider import DataProvider
-from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.binance_provider import BinanceProvider
 from data_providers.sentiment_provider import SentimentDataProvider
-from data_providers.binance_exchange import BinanceExchange
 from strategies.base import BaseStrategy
 from risk.risk_manager import RiskManager, RiskParameters
 from live.strategy_manager import StrategyManager
@@ -156,7 +155,7 @@ class LiveTradingEngine:
                 api_secret = config.get('BINANCE_API_SECRET')
                 
                 if api_key and api_secret:
-                    self.exchange_interface = BinanceExchange(api_key, api_secret, testnet=False)
+                    self.exchange_interface = BinanceProvider(api_key, api_secret, testnet=False)
                     self.account_synchronizer = AccountSynchronizer(
                         self.exchange_interface, 
                         self.db_manager, 
