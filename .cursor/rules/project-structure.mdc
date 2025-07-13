@@ -1,8 +1,3 @@
----
-description: 
-globs: 
-alwaysApply: true
----
 # 📁 Trading Bot Project Structure
 
 ## 🎯 Project Overview
@@ -20,7 +15,7 @@ Sophisticated cryptocurrency trading system with **trend-following risk containm
 src/
 ├── data_providers/          # Market & sentiment data adapters
 │   ├── data_provider.py     # Abstract base class
-│   ├── binance_data_provider.py    # Live/historical price data
+│   ├── binance_provider.py    # Live/historical price data
 │   ├── senticrypt_provider.py      # Sentiment data (SentiCrypt API)
 │   ├── cryptocompare_sentiment.py  # Alternative sentiment source
 │   ├── cached_data_provider.py     # API response caching
@@ -102,7 +97,7 @@ src/
 
 - **Base Class**: `data_provider.py` - Defines the interface all providers must implement
 - **Implementations**:
-  - `binance_data_provider.py` - Live/historical price data from Binance
+  - `binance_provider.py` - Live/historical price data from Binance
   - `senticrypt_provider.py` - Sentiment data from SentiCrypt API
   - `cryptocompare_sentiment.py` - CryptoCompare sentiment integration
   - `cached_data_provider.py` - Caches API responses to reduce load and costs
@@ -280,6 +275,11 @@ python tests/run_tests.py validate
 
 ---
 
+**For detailed implementation guides, use:**
+- `fetch_rules(["architecture"])` - Complete system architecture
+- `fetch_rules(["strategies"])` - Strategy development details
+- `fetch_rules(["ml-models"])` - ML model training & integration
+- `fetch_rules(["commands"])` - Complete command reference 
 **For detailed implementation guides, use:**
 - `fetch_rules(["architecture"])` - Complete system architecture
 - `fetch_rules(["strategies"])` - Strategy development details

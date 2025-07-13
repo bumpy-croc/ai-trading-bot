@@ -25,7 +25,7 @@ for _p in (str(_PROJECT_ROOT), str(_SRC_DIR)):
 
 # Import core components for fixture creation
 from data_providers.data_provider import DataProvider
-from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.binance_provider import BinanceProvider
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
 from strategies.adaptive import AdaptiveStrategy

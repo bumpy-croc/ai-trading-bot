@@ -14,7 +14,7 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.binance_provider import BinanceProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from config.paths import get_cache_dir
 
@@ -33,7 +33,7 @@ def show_cache_info(cache_dir=None):
     """Show cache information"""
     if cache_dir is None:
         cache_dir = str(get_cache_dir())
-    provider = CachedDataProvider(BinanceDataProvider(), cache_dir=cache_dir)
+    provider = CachedDataProvider(BinanceProvider(), cache_dir=cache_dir)
     info = provider.get_cache_info()
     
     print("Cache Information:")

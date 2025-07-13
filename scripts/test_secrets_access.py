@@ -75,9 +75,9 @@ def test_binance_api():
     print("\n📈 Testing Binance API access...")
     
     try:
-        from data_providers.binance_data_provider import BinanceDataProvider
+        from data_providers.binance_provider import BinanceProvider
         
-        provider = BinanceDataProvider()
+        provider = BinanceProvider()
         
         # Test getting current price (doesn't require API keys)
         price = provider.get_current_price('BTCUSDT')

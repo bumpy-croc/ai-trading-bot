@@ -30,7 +30,7 @@ project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from database.manager import DatabaseManager
-from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.binance_provider import BinanceProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from performance.metrics import sharpe as perf_sharpe
 from performance.metrics import max_drawdown as perf_max_drawdown
@@ -83,7 +83,7 @@ class MonitoringDashboard:
         # Initialize data provider for live price data
         # Gracefully degrade if Binance is unreachable (e.g. no outbound DNS in the env)
         try:
-            binance_provider = BinanceDataProvider()
+            binance_provider = BinanceProvider()
             self.data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)
         except Exception as e:
             logger.warning(f"Binance provider unavailable: {e}. Starting dashboard in offline mode.")

@@ -47,8 +47,8 @@ EOF
 ```bash
 # Test that Binance connection works
 python -c "
-from core.data_providers.binance_data_provider import BinanceDataProvider
-provider = BinanceDataProvider()
+from core.data_providers.binance_provider import BinanceProvider
+provider = BinanceProvider()
 price = provider.get_current_price('BTCUSDT')
 print(f'✅ Connection successful! BTC Price: \${price:,.2f}')
 "
@@ -166,7 +166,7 @@ After successful paper trading:
 
 ```bash
 # 1. Check API connection
-python -c "from core.data_providers.binance_data_provider import BinanceDataProvider; print('API OK')"
+python -c "from core.data_providers.binance_provider import BinanceProvider; print('API OK')"
 
 # 2. Start paper trading
 python scripts/run_live_trading.py adaptive --symbol BTCUSDT --paper-trading

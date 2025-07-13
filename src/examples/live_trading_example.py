@@ -15,7 +15,7 @@ from datetime import datetime
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.binance_provider import BinanceProvider
 from data_providers.senticrypt_provider import SentiCryptProvider
 from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
@@ -31,7 +31,7 @@ def setup_paper_trading():
     print(f"Strategy loaded: {strategy.name}")
     
     # Setup data provider
-    data_provider = BinanceDataProvider()
+    data_provider = BinanceProvider()
     print("Data provider initialized")
     
     # Setup sentiment provider (optional)
@@ -103,7 +103,7 @@ def setup_live_trading():
     strategy = AdaptiveStrategy()
     
     # Setup data provider
-    data_provider = BinanceDataProvider()
+    data_provider = BinanceProvider()
     
     # Risk parameters (more conservative for live trading)
     risk_params = RiskParameters(

@@ -31,7 +31,7 @@ sys.path.append(str(src_dir))
 
 from config import get_config
 from config.constants import DEFAULT_INITIAL_BALANCE
-from data_providers.binance_data_provider import BinanceDataProvider
+from data_providers.binance_provider import BinanceProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from data_providers.senticrypt_provider import SentiCryptProvider
 from data_providers.mock_data_provider import MockDataProvider
@@ -228,7 +228,7 @@ def main():
             data_provider = MockDataProvider(interval_seconds=5)  # 5s candles for rapid testing
             logger.info("Using MockDataProvider for rapid testing")
         else:
-            binance_provider = BinanceDataProvider()
+            binance_provider = BinanceProvider()
             if args.no_cache:
                 data_provider = binance_provider
                 logger.info("Data caching disabled")

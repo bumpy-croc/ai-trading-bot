@@ -177,7 +177,8 @@ class LiveTradingEngine:
                     """
                 )
                 if result:
-                    self.current_balance = result[0]["balance"]
+                    # Ensure balance is always a float (fixes Decimal bug)
+                    self.current_balance = float(result[0]["balance"])
                     logger.info(
                         f"Resumed from last recorded balance: ${self.current_balance:,.2f}"
                     )
@@ -300,7 +301,7 @@ class LiveTradingEngine:
                 else:
                     logger.warning(f"⚠️ Account synchronization failed: {sync_result.message}")
             except Exception as e:
-                logger.error(f"❌ Account synchronization error: {e}")
+                logger.error(f"❌ Account synchronization error: {e}", exc_info=True)
         # Create new trading session in database if none exists
         if self.trading_session_id is None:
             mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
@@ -367,7 +368,7 @@ class LiveTradingEngine:
                 try:
                     self._close_position(position, "Engine shutdown")
                 except Exception as e:
-                    logger.error(f"Failed to close position {position.order_id}: {e}")
+                    logger.error(f"Failed to close position {position.order_id}: {e}", exc_info=True)
                     # Force remove from positions dict if close fails
                     if position.order_id in self.positions:
                         del self.positions[position.order_id]
@@ -476,9 +477,9 @@ class LiveTradingEngine:
                 self.consecutive_errors = 0
             except Exception as e:
                 self.consecutive_errors += 1
-                logger.error(f"Error in trading loop (#{self.consecutive_errors}): {e}")
+                logger.error(f"Error in trading loop (#{self.consecutive_errors}): {e}", exc_info=True)
                 if self.consecutive_errors >= self.max_consecutive_errors:
-                    logger.critical(f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.")
+                    logger.critical(f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.", exc_info=True)
                     self.stop()
                     break
                 # Sleep longer after errors
@@ -498,7 +499,7 @@ class LiveTradingEngine:
             self.last_data_update = datetime.now()
             return df
         except Exception as e:
-            logger.error(f"Failed to fetch market data: {e}")
+            logger.error(f"Failed to fetch market data: {e}", exc_info=True)
             return None
             
     def _add_sentiment_data(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -525,7 +526,7 @@ class LiveTradingEngine:
                 logger.debug("Using historical sentiment data")
                 
         except Exception as e:
-            logger.error(f"Failed to add sentiment data: {e}")
+            logger.error(f"Failed to add sentiment data: {e}", exc_info=True)
             
         return df
         
@@ -717,7 +718,7 @@ class LiveTradingEngine:
             self._send_alert(f"Position Opened: {symbol} {side.value} @ ${price:.2f}")
             
         except Exception as e:
-            logger.error(f"Failed to open position: {e}")
+            logger.error(f"Failed to open position: {e}", exc_info=True)
             self.db_manager.log_event(
                 event_type="ERROR",
                 message=f"Failed to open position: {str(e)}",
@@ -840,7 +841,7 @@ class LiveTradingEngine:
                 logger.warning(f"Failed to send alert: {e}")
             
         except Exception as e:
-            logger.error(f"Failed to close position: {e}")
+            logger.error(f"Failed to close position: {e}", exc_info=True)
             try:
                 self.db_manager.log_event(
                     event_type="ERROR",
@@ -851,7 +852,7 @@ class LiveTradingEngine:
                     session_id=self.trading_session_id
                 )
             except Exception as db_e:
-                logger.error(f"Failed to log error to database: {db_e}")
+                logger.error(f"Failed to log error to database: {db_e}", exc_info=True)
             
     def _execute_order(self, symbol: str, side: PositionSide, value: float, price: float) -> Optional[str]:
         """Execute a real market order (implement based on your exchange)"""
@@ -1028,7 +1029,7 @@ class LiveTradingEngine:
                 f.write(json.dumps(trade_data) + '\n')
                 
         except Exception as e:
-            logger.error(f"Failed to log trade: {e}")
+            logger.error(f"Failed to log trade: {e}", exc_info=True)
             
     def _send_alert(self, message: str):
         """Send trading alert (webhook, email, etc.)"""
@@ -1043,7 +1044,7 @@ class LiveTradingEngine:
             }
             requests.post(self.alert_webhook_url, json=payload, timeout=10)
         except Exception as e:
-            logger.error(f"Failed to send alert: {e}")
+            logger.error(f"Failed to send alert: {e}", exc_info=True)
             
     def _sleep_with_interrupt(self, seconds: float):
         """Sleep in small increments to allow for interrupt and float seconds"""
@@ -1121,7 +1122,7 @@ class LiveTradingEngine:
             
             return None
         except Exception as e:
-            logger.error(f"❌ Error recovering session: {e}")
+            logger.error(f"❌ Error recovering session: {e}", exc_info=True)
             return None
     
     def _recover_active_positions(self) -> None:
@@ -1163,7 +1164,7 @@ class LiveTradingEngine:
             logger.info(f"🎯 Successfully recovered {len(db_positions)} positions")
             
         except Exception as e:
-            logger.error(f"❌ Error recovering positions: {e}")
+            logger.error(f"❌ Error recovering positions: {e}", exc_info=True)
 
     def _handle_strategy_change(self, swap_data: Dict[str, Any]):
         """Handle strategy change callback"""

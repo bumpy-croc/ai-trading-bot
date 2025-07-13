@@ -216,7 +216,7 @@ class TestConfigManager:
 class TestConfigSystemIntegration:
     """Integration tests for the configuration system."""
     
-    def test_binance_data_provider_integration(self):
+    def test_binance_provider_integration(self):
         """Test that BinanceDataProvider can use the new config system."""
         with patch.dict(os.environ, {
             'BINANCE_API_KEY': 'test_key',
@@ -224,11 +224,11 @@ class TestConfigSystemIntegration:
             'BINANCE_TESTNET': 'false'
         }):
             # Import here to ensure clean environment
-            from data_providers.binance_data_provider import BinanceDataProvider
+            from data_providers.binance_provider import BinanceProvider
             
             # Should not raise exception during initialization
             try:
-                provider = BinanceDataProvider()
+                provider = BinanceProvider()
                 # Check that it was initialized without error
                 assert provider.client is not None
                 # Verify it has the data attribute from parent class

@@ -74,11 +74,11 @@ db_manager = DatabaseManager("postgresql://username:password@localhost:5432/ai-t
 ```python
 from live.trading_engine import LiveTradingEngine
 from strategies.adaptive import AdaptiveStrategy
-from core.data_providers.binance_data_provider import BinanceDataProvider
+from core.data_providers.binance_provider import BinanceProvider
 
 # Strategy and data provider setup
 strategy = AdaptiveStrategy()
-data_provider = BinanceDataProvider()
+data_provider = BinanceProvider()
 
 # Create engine with database logging
 engine = LiveTradingEngine(
