@@ -6,15 +6,15 @@ alwaysApply: false
 
 # 📊 Trading Bot Strategy Development
 
-## 🎯 Strategy System Overview
+## Strategy System Overview
 
 All strategies inherit from `BaseStrategy` and implement a standardized interface for signal generation, position sizing, and risk management.
 
 ---
 
-## 🏗️ Strategy Base Class
+## Strategy Base Class
 
-### **Required Interface**
+### Required Interface
 ```python
 from abc import ABC, abstractmethod
 import pandas as pd
@@ -55,7 +55,7 @@ class BaseStrategy(ABC):
         pass
 ```
 
-### **Strategy Execution Logging**
+### Strategy Execution Logging
 ```python
 def log_execution(
     self,
@@ -76,15 +76,15 @@ def log_execution(
 
 ---
 
-## 📈 Available Strategies
+## Available Strategies
 
-### **1. Adaptive Strategy** (`adaptive.py`)
+### 1. Adaptive Strategy (`adaptive.py`)
 **Purpose**: Adaptive EMA crossover with market regime detection
 
 **Key Features**:
-- **Adaptive Parameters**: Adjusts based on market volatility
-- **Market Regime Detection**: Different logic for trending vs ranging markets
-- **Dynamic Stop Losses**: ATR-based stop loss calculation
+- Adaptive Parameters: Adjusts based on market volatility
+- Market Regime Detection: Different logic for trending vs ranging markets
+- Dynamic Stop Losses: ATR-based stop loss calculation
 
 **Logic**:
 ```python
@@ -109,13 +109,13 @@ def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
 
 ---
 
-### **2. Enhanced Strategy** (`enhanced.py`)
+### 2. Enhanced Strategy (`enhanced.py`)
 **Purpose**: Multi-indicator confluence for high confirmation
 
 **Key Features**:
-- **Multi-Indicator Confirmation**: RSI + EMA + MACD
-- **Conservative Approach**: Requires multiple confirmations
-- **Volume Confirmation**: Uses volume for signal validation
+- Multi-Indicator Confirmation: RSI + EMA + MACD
+- Conservative Approach: Requires multiple confirmations
+- Volume Confirmation: Uses volume for signal validation
 
 **Logic**:
 ```python
@@ -133,13 +133,13 @@ def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
 
 ---
 
-### **3. ML Basic Strategy** (`ml_basic.py`)
+### 3. ML Basic Strategy (`ml_basic.py`)
 **Purpose**: Uses ML price predictions for entry/exit decisions
 
 **Key Features**:
-- **ML Model Integration**: Real-time ONNX inference
-- **Confidence-Based Sizing**: Position size based on prediction confidence
-- **Price Prediction**: Uses trained neural network for price forecasting
+- ML Model Integration: Real-time ONNX inference
+- Confidence-Based Sizing: Position size based on prediction confidence
+- Price Prediction: Uses trained neural network for price forecasting
 
 **Logic**:
 ```python
@@ -160,13 +160,13 @@ def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
 
 ---
 
-### **4. ML with Sentiment Strategy** (`ml_with_sentiment.py`)
+### 4. ML with Sentiment Strategy (`ml_with_sentiment.py`)
 **Purpose**: Combines ML predictions with sentiment analysis
 
 **Key Features**:
-- **Multi-Modal Predictions**: Price + sentiment data (13 features)
-- **Graceful Fallback**: Works without sentiment data
-- **Sentiment Confidence**: Weights predictions based on sentiment quality
+- Multi-Modal Predictions: Price + sentiment data (13 features)
+- Graceful Fallback: Works without sentiment data
+- Sentiment Confidence: Weights predictions based on sentiment quality
 
 **Logic**:
 ```python
@@ -189,206 +189,138 @@ def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
 
 ---
 
-### **5. High Risk High Reward Strategy** (`high_risk_high_reward.py`)
+### 5. High Risk High Reward Strategy (`high_risk_high_reward.py`)
 **Purpose**: Aggressive trading with higher risk tolerance
 
 **Key Features**:
-- **Larger Position Sizes**: Up to 25% of balance per position
-- **Tighter Stops**: More aggressive stop loss levels
-- **Higher Risk Tolerance**: Designed for experienced traders
+- Larger Position Sizes: Up to 25% of balance per position
+- Tighter Stops: More aggressive stop loss levels
+- Higher Risk Tolerance: Designed for experienced traders
 
 **Logic**:
 ```python
 def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
-    # Aggressive momentum-based entry
+    # Aggressive entry conditions
     rsi = df.iloc[index]['rsi']
-    momentum = df.iloc[index]['close'] / df.iloc[index-1]['close'] - 1
+    ema_trend = df.iloc[index]['ema_9'] > df.iloc[index]['ema_21']
     volume_spike = df.iloc[index]['volume'] > df.iloc[index]['volume'].rolling(10).mean() * 1.5
     
-    return rsi > 30 and rsi < 80 and momentum > 0.005 and volume_spike
+    return rsi < 75 and ema_trend and volume_spike
 ```
 
 **Best For**: Experienced traders seeking higher returns
 
 ---
 
-## 🛠️ Creating New Strategies
+## Strategy Development Workflow
 
-### **Step 1: Create Strategy Class**
+### 1. Create New Strategy
 ```python
-from strategies.base import BaseStrategy
-import pandas as pd
+# Create new file: src/strategies/my_strategy.py
+from src.strategies.base import BaseStrategy
 
 class MyStrategy(BaseStrategy):
-    def __init__(self, name="MyStrategy"):
+    def __init__(self, name: str):
         super().__init__(name)
-        self.trading_pair = 'BTCUSDT'
-        self.stop_loss_pct = 0.02
-        self.take_profit_pct = 0.04
+        # Strategy-specific initialization
         
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        # Add your custom indicators
-        df['my_indicator'] = self._calculate_my_indicator(df)
-        df['my_signal'] = self._calculate_signal_strength(df)
+        # Calculate your indicators
+        df['my_indicator'] = df['close'].rolling(20).mean()
         return df
         
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
         # Your entry logic
-        signal_strength = df.iloc[index]['my_signal']
-        indicator_value = df.iloc[index]['my_indicator']
-        
-        return signal_strength > 0.7 and indicator_value > threshold
+        return df.iloc[index]['my_indicator'] > df.iloc[index]['close']
         
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         # Your exit logic
         current_price = df.iloc[index]['close']
-        signal_strength = df.iloc[index]['my_signal']
-        
-        # Exit on signal reversal or profit target
-        profit_pct = (current_price - entry_price) / entry_price
-        return signal_strength < 0.3 or profit_pct >= self.take_profit_pct
+        return current_price < entry_price * 0.95  # 5% stop loss
         
     def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
-        # Your position sizing logic
-        signal_strength = df.iloc[index]['my_signal']
-        base_size = balance * 0.02  # 2% base risk
-        
-        # Scale position size with signal strength
-        return base_size * signal_strength
+        # Position sizing logic
+        return balance * 0.02  # 2% risk per trade
         
     def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = 'long') -> float:
-        # Your stop loss logic
-        atr = df.iloc[index]['atr']
+        # Stop loss calculation
+        return price * 0.95  # 5% stop loss
         
-        if side == 'long':
-            return price - (atr * 2)  # 2 ATR below entry
-        else:
-            return price + (atr * 2)  # 2 ATR above entry
-            
     def get_parameters(self) -> dict:
-        return {
-            'stop_loss_pct': self.stop_loss_pct,
-            'take_profit_pct': self.take_profit_pct,
-            'trading_pair': self.trading_pair
-        }
-        
-    def _calculate_my_indicator(self, df: pd.DataFrame) -> pd.Series:
-        # Your custom indicator calculation
-        return df['close'].rolling(20).mean() / df['close'] - 1
-        
-    def _calculate_signal_strength(self, df: pd.DataFrame) -> pd.Series:
-        # Your signal strength calculation
-        return df['my_indicator'].rolling(5).mean()
+        return {"strategy_type": "custom", "version": "1.0"}
 ```
 
-### **Step 2: Add to Strategy Registry**
+### 2. Add to Strategy Registry
 ```python
-# In strategies/__init__.py
+# Add to src/strategies/__init__.py
 from .my_strategy import MyStrategy
 
-__all__ = [
-    'AdaptiveStrategy',
-    'EnhancedStrategy', 
-    'MlBasic',
-    'MlWithSentiment',
-    'HighRiskHighRewardStrategy',
-    'MyStrategy',  # Add your strategy
-]
+STRATEGIES = {
+    'my_strategy': MyStrategy,
+    # ... other strategies
+}
 ```
 
-### **Step 3: Test with Backtesting**
+### 3. Test Strategy
 ```bash
-# Quick backtest (development)
+# Quick backtest
 python scripts/run_backtest.py my_strategy --days 30 --no-db
 
-# Production backtest (with database logging)
-python scripts/run_backtest.py my_strategy --days 365
-```
-
-### **Step 4: Test with Paper Trading**
-```bash
-# Paper trading validation
+# Paper trading
 python scripts/run_live_trading.py my_strategy --paper-trading
 ```
 
 ---
 
-## 📊 Strategy Performance Analysis
+## Strategy Testing Best Practices
 
-### **Key Metrics to Monitor**
-- **Win Rate**: Percentage of profitable trades
-- **Profit Factor**: Gross profit / Gross loss
-- **Sharpe Ratio**: Risk-adjusted returns
-- **Max Drawdown**: Largest peak-to-trough decline
-- **Average Trade**: Average P&L per trade
-- **Consecutive Losses**: Maximum losing streak
+### 1. Backtesting Requirements
+- Test on at least 6 months of data
+- Use multiple market conditions (bull, bear, sideways)
+- Validate with out-of-sample data
+- Check for overfitting
 
-### **Strategy Validation**
-```bash
-# Run strategy tests
-python tests/run_tests.py --file test_strategies.py
+### 2. Risk Management
+- Always implement stop losses
+- Limit position size to 2-5% of balance
+- Monitor drawdown (max 20%)
+- Test with realistic slippage and fees
 
-# Performance analysis
-python scripts/analyze_btc_data.py --strategy my_strategy
-
-# Risk analysis
-python tests/run_tests.py --file test_risk_management.py
-```
+### 3. Performance Metrics
+- Sharpe ratio > 1.0
+- Maximum drawdown < 20%
+- Win rate > 50%
+- Profit factor > 1.5
 
 ---
 
-## 🔧 Strategy Optimization
+## Common Patterns
 
-### **Parameter Optimization**
+### Trend Following
 ```python
-# Use grid search or genetic algorithms
-def optimize_strategy_parameters(strategy_class, data, param_ranges):
-    best_params = None
-    best_sharpe = -999
-    
-    for params in generate_param_combinations(param_ranges):
-        strategy = strategy_class(**params)
-        results = backtest_strategy(strategy, data)
-        
-        if results['sharpe_ratio'] > best_sharpe:
-            best_sharpe = results['sharpe_ratio']
-            best_params = params
-    
-    return best_params
+def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+    # Simple trend following
+    ema_short = df.iloc[index]['ema_9']
+    ema_long = df.iloc[index]['ema_21']
+    return ema_short > ema_long
 ```
 
-### **Market Regime Adaptation**
+### Mean Reversion
 ```python
-def adapt_to_market_regime(df: pd.DataFrame) -> str:
-    """Detect market regime and adjust strategy parameters"""
-    volatility = df['close'].rolling(20).std() / df['close'].rolling(20).mean()
-    trend_strength = abs(df['close'] - df['close'].rolling(50).mean()) / df['close']
-    
-    if volatility.mean() > 0.03:
-        return 'volatile'
-    elif trend_strength.mean() > 0.05:
-        return 'trending'
-    else:
-        return 'ranging'
+def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+    # Mean reversion
+    rsi = df.iloc[index]['rsi']
+    return rsi < 30  # Oversold condition
 ```
 
----
-
-## 🚨 Strategy Safety Checklist
-
-### **Before Live Trading**
-- [ ] **Backtesting**: Minimum 6 months of historical data
-- [ ] **Paper Trading**: At least 1 week of paper trading validation
-- [ ] **Risk Limits**: Verify position sizing and stop losses
-- [ ] **Error Handling**: Test with network failures and API errors
-- [ ] **Performance**: Validate against multiple market conditions
-
-### **Ongoing Monitoring**
-- [ ] **Daily P&L**: Monitor daily performance
-- [ ] **Drawdown**: Track maximum drawdown
-- [ ] **Win Rate**: Monitor win rate consistency
-- [ ] **Market Conditions**: Adapt to changing market regimes
-- [ ] **Model Drift**: Retrain ML models if performance degrades
+### Breakout Trading
+```python
+def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+    # Breakout trading
+    current_price = df.iloc[index]['close']
+    resistance = df.iloc[index-20:index]['high'].max()
+    return current_price > resistance
+```
 
 ---
 

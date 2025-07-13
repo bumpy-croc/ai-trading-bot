@@ -4,11 +4,11 @@ globs:
 alwaysApply: false
 ---
 
-# 🔧 Trading Bot Commands & Workflows
+# 🔧 Trading Bot Commands
 
-## 🚀 Quick Start Commands
+## Backtesting Commands
 
-### **Backtesting**
+### Quick Development
 ```bash
 # Quick backtest (development - no database logging)
 python scripts/run_backtest.py adaptive --days 30 --no-db
@@ -23,22 +23,62 @@ python scripts/run_backtest.py enhanced --symbol ETHUSDT --days 100 --initial-ba
 python scripts/run_backtest.py ml_with_sentiment --use-sentiment --days 90
 ```
 
-### **Live Trading**
+### Advanced Backtesting
 ```bash
-# Paper trading (safe - no real money)
+# Multi-strategy comparison
+python scripts/run_backtest.py adaptive,enhanced,ml_basic --days 100 --compare
+
+# Custom risk parameters
+python scripts/run_backtest.py adaptive --risk-per-trade 0.01 --max-drawdown 0.15
+
+# Export results
+python scripts/run_backtest.py adaptive --days 30 --export-results --format csv
+```
+
+---
+
+## Live Trading Commands
+
+### Paper Trading (Safe)
+```bash
+# Paper trading (no real money)
 python scripts/run_live_trading.py adaptive --paper-trading
 
+# Paper trading with custom settings
+python scripts/run_live_trading.py adaptive --balance 5000 --max-position 0.05
+
+# Paper trading with specific strategy config
+python scripts/run_live_trading.py ml_with_sentiment --paper-trading --config custom_config.json
+```
+
+### Live Trading (Real Money)
+```bash
 # Live trading (requires explicit confirmation)
 python scripts/run_live_trading.py ml_with_sentiment --live-trading --i-understand-the-risks
 
-# With custom settings
-python scripts/run_live_trading.py adaptive --balance 5000 --max-position 0.05
+# Live trading with custom balance
+python scripts/run_live_trading.py adaptive --live-trading --balance 1000 --i-understand-the-risks
 
-# Monitor trading dashboard
-python scripts/start_dashboard.py
+# Emergency stop
+python scripts/run_live_trading.py --stop
 ```
 
-### **Model Training**
+### Monitoring
+```bash
+# Start monitoring dashboard
+python scripts/start_dashboard.py
+
+# Dashboard with custom settings
+python scripts/start_dashboard.py --host 0.0.0.0 --port 8080
+
+# Access at: http://localhost:8080
+```
+
+---
+
+## Model Training Commands
+
+### Training
 ```bash
 # Train new models
 python scripts/train_model.py BTCUSDT --force-sentiment
@@ -46,15 +86,27 @@ python scripts/train_model.py BTCUSDT --force-sentiment
 # Safe training (staging environment)
 python scripts/safe_model_trainer.py
 
+# Train with custom parameters
+python scripts/train_model.py BTCUSDT --epochs 100 --batch-size 32 --validation-split 0.2
+```
+
+### Validation
+```bash
 # Validate models
 python scripts/simple_model_validator.py
+
+# Model performance analysis
+python scripts/analyze_model_performance.py
+
+# Compare model versions
+python scripts/compare_models.py --model1 v1 --model2 v2
 ```
 
 ---
 
-## 🧪 Testing Commands
+## Testing Commands
 
-### **Test Categories**
+### Test Categories
 ```bash
 # Quick smoke tests (fastest)
 python tests/run_tests.py smoke
@@ -75,7 +127,7 @@ python tests/run_tests.py all
 python tests/run_tests.py validate
 ```
 
-### **Specific Test Files**
+### Specific Test Files
 ```bash
 # Test specific components
 python tests/run_tests.py --file test_strategies.py
@@ -89,7 +141,7 @@ python tests/run_tests.py --file test_integration.py
 python tests/run_tests.py -f test_strategies.py
 ```
 
-### **Test with Coverage**
+### Test with Coverage
 ```bash
 # Generate coverage report
 python tests/run_tests.py --coverage
@@ -99,18 +151,7 @@ python tests/run_tests.py -c
 python tests/run_tests.py --file test_strategies.py --coverage
 ```
 
-### **Test Output Control**
-```bash
-# Verbose output (default)
-python tests/run_tests.py unit --verbose
-python tests/run_tests.py unit -v
-
-# Quiet output
-python tests/run_tests.py unit --quiet
-python tests/run_tests.py unit -q
-```
-
-### **Advanced Testing**
+### Advanced Testing
 ```bash
 # Run tests with markers
 python tests/run_tests.py --markers "not integration"
@@ -126,9 +167,9 @@ python tests/run_tests.py smoke --no-deps-check
 
 ---
 
-## 📊 Monitoring & Health Checks
+## Monitoring & Health Commands
 
-### **System Health**
+### System Health
 ```bash
 # Quick health check
 python scripts/health_check.py
@@ -143,18 +184,7 @@ python scripts/health_check.py --positions
 python scripts/test_database.py
 ```
 
-### **Monitoring Dashboard**
-```bash
-# Start monitoring dashboard
-python scripts/start_dashboard.py
-
-# Access at: http://localhost:8080
-
-# With custom settings
-python scripts/start_dashboard.py --host 0.0.0.0 --port 8080
-```
-
-### **Cache Management**
+### Cache Management
 ```bash
 # Check cache status
 python scripts/cache_manager.py --check
@@ -171,9 +201,9 @@ python scripts/cache_manager.py --validate
 
 ---
 
-## 🗄️ Database Commands
+## Database Commands
 
-### **Database Setup**
+### Database Setup
 ```bash
 # Test database connection
 python scripts/test_database.py
@@ -188,7 +218,7 @@ python scripts/backup_database.py
 python scripts/backup_database.py --emergency
 ```
 
-### **Database Migration**
+### Database Migration
 ```bash
 # Run database migrations
 python scripts/migrate_database.py migrate
@@ -202,328 +232,115 @@ python scripts/migrate_database.py downgrade
 
 ---
 
-## 🔄 Data Management
+## Data Management Commands
 
-### **Data Download**
+### Data Providers
 ```bash
-# Download Binance data
-python scripts/download_binance_data.py BTCUSDT --days 365
-
-# Download sentiment data
-python scripts/download_binance_data.py --sentiment --days 90
+# Test data providers
+python scripts/test_data_providers.py
 
 # Update cached data
-python scripts/cache_manager.py --update
+python scripts/update_cached_data.py
+
+# Validate data quality
+python scripts/validate_data_quality.py
 ```
 
-### **Data Analysis**
+### Sentiment Data
 ```bash
-# Analyze BTC data
-python scripts/analyze_btc_data.py
+# Fetch sentiment data
+python scripts/fetch_sentiment_data.py
 
-# Analyze with specific strategy
-python scripts/analyze_btc_data.py --strategy adaptive
+# Update sentiment cache
+python scripts/update_sentiment_cache.py
 
-# Generate data report
-python scripts/analyze_btc_data.py --report
-```
-
----
-
-## 🧠 ML Model Commands
-
-### **Model Training**
-```bash
-# Basic model training
-python scripts/train_model.py BTCUSDT
-
-# Train with sentiment
-python scripts/train_model.py BTCUSDT --force-sentiment
-
-# Custom training parameters
-python scripts/train_model.py BTCUSDT --epochs 100 --batch-size 32
-
-# Safe training (staging)
-python scripts/safe_model_trainer.py
-```
-
-### **Model Validation**
-```bash
-# Validate model performance
-python scripts/simple_model_validator.py
-
-# Check model files
-ls -la ml/btcusdt_*
-
-# View model metadata
-cat ml/btcusdt_sentiment_metadata.json
-
-# Model performance analysis
-python scripts/simple_model_validator.py --detailed
-```
-
-### **Model Management**
-```bash
-# List available models
-ls -la ml/
-
-# Check model compatibility
-python scripts/simple_model_validator.py --compatibility
-
-# Backup models
-cp ml/btcusdt_sentiment.* ml/backup/
-
-# Restore models
-cp ml/backup/btcusdt_sentiment.* ml/
+# Validate sentiment data
+python scripts/validate_sentiment_data.py
 ```
 
 ---
 
-## 🛡️ Safety & Emergency Commands
+## Performance Analysis Commands
 
-### **Emergency Procedures**
+### Performance Metrics
 ```bash
-# Stop live trading immediately
-python scripts/run_live_trading.py --stop
+# Generate performance report
+python scripts/generate_performance_report.py
 
-# Check current positions
-python scripts/health_check.py --positions
-
-# Emergency database backup
-python scripts/backup_database.py --emergency
-
-# Force stop all processes
-pkill -f "run_live_trading"
-```
-
-### **Risk Management**
-```bash
-# Check risk metrics
-python scripts/health_check.py --risk
-
-# Validate risk parameters
-python tests/run_tests.py --file test_risk_management.py
-
-# Check position sizes
-python scripts/health_check.py --positions --detailed
-```
-
----
-
-## 🔧 Development Commands
-
-### **Environment Setup**
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Setup local development
-python scripts/setup_local_development.py
-
-# Verify environment
-python scripts/verify_database_connection.py
-```
-
-### **Code Quality**
-```bash
-# Run linting
-python -m flake8 src/
-
-# Run type checking
-python -m mypy src/
-
-# Run security checks
-python scripts/security_demo.sh
-```
-
-### **Debugging**
-```bash
-# Verbose backtesting
-python scripts/run_backtest.py adaptive --days 7 --no-db --verbose
-
-# Debug live trading
-python scripts/run_live_trading.py adaptive --paper-trading --debug
-
-# Check logs
-tail -f logs/trading.log
-
-# Monitor system resources
-python scripts/health_check.py --detailed
-```
-
----
-
-## 📈 Performance Analysis
-
-### **Backtest Analysis**
-```bash
-# Run performance analysis
-python scripts/analyze_btc_data.py --performance
+# Analyze strategy performance
+python scripts/analyze_strategy_performance.py --strategy adaptive
 
 # Compare strategies
-python scripts/run_backtest.py adaptive --days 90 --no-db
-python scripts/run_backtest.py enhanced --days 90 --no-db
-python scripts/run_backtest.py ml_with_sentiment --days 90 --no-db
-
-# Generate performance report
-python scripts/analyze_btc_data.py --report --output performance_report.html
+python scripts/compare_strategies.py --strategies adaptive,enhanced,ml_basic
 ```
 
-### **Live Performance**
+### Risk Analysis
 ```bash
-# Monitor live performance
-python scripts/start_dashboard.py
+# Risk analysis report
+python scripts/risk_analysis.py
 
-# Check performance metrics
-python scripts/health_check.py --performance
+# Drawdown analysis
+python scripts/drawdown_analysis.py
 
-# Export performance data
-python scripts/analyze_btc_data.py --export --format csv
+# Position sizing analysis
+python scripts/position_sizing_analysis.py
 ```
 
 ---
 
-## 🚀 Deployment Commands
+## Configuration Commands
 
-### **Railway Deployment**
+### Config Management
 ```bash
-# Deploy to Railway
-railway up
-
-# Check deployment status
-railway status
-
-# View logs
-railway logs
-
-# Connect to Railway database
-railway connect
-```
-
-### **Local Deployment**
-```bash
-# Start with Docker
-docker-compose up -d
-
-# Check container status
-docker-compose ps
-
-# View container logs
-docker-compose logs trading-bot
-
-# Stop containers
-docker-compose down
-```
-
----
-
-## 🔍 Troubleshooting Commands
-
-### **Common Issues**
-```bash
-# Check API connectivity
-python scripts/test_database.py
-
 # Validate configuration
-python scripts/test_config_system.py
+python scripts/validate_config.py
 
-# Check file permissions
-ls -la scripts/run_live_trading.py
+# Update configuration
+python scripts/update_config.py
 
-# Verify Python path
-python -c "import sys; print(sys.path)"
+# Backup configuration
+python scripts/backup_config.py
 ```
 
-### **Debug Mode**
+### Environment Setup
 ```bash
-# Enable debug logging
-export LOG_LEVEL=DEBUG
-python scripts/run_live_trading.py adaptive --paper-trading
+# Setup environment
+python scripts/setup_environment.py
 
-# Show print statements in tests
-python -m pytest tests/test_strategies.py -s
+# Install dependencies
+python scripts/install_dependencies.py
 
-# Debug specific test
-python -m pytest tests/test_strategies.py::TestAdaptiveStrategy::test_entry_conditions --pdb
+# Update dependencies
+python scripts/update_dependencies.py
 ```
 
 ---
 
-## 📋 Command Reference by Category
+## Debugging Commands
 
-### **Quick Development Workflow**
+### Debug Mode
 ```bash
-# 1. Test changes
-python tests/run_tests.py smoke
+# Run with debug logging
+python scripts/run_live_trading.py adaptive --debug
 
-# 2. Backtest strategy
-python scripts/run_backtest.py my_strategy --days 30 --no-db
+# Debug specific component
+python scripts/debug_component.py --component strategy
 
-# 3. Paper trading validation
-python scripts/run_live_trading.py my_strategy --paper-trading
-
-# 4. Monitor performance
-python scripts/start_dashboard.py
+# Memory usage analysis
+python scripts/memory_analysis.py
 ```
 
-### **Production Deployment Workflow**
+### Log Analysis
 ```bash
-# 1. Run all tests
-python tests/run_tests.py all --coverage
+# Analyze logs
+python scripts/analyze_logs.py
 
-# 2. Production backtest
-python scripts/run_backtest.py strategy --days 365
+# Log cleanup
+python scripts/cleanup_logs.py
 
-# 3. Validate models
-python scripts/simple_model_validator.py
-
-# 4. Deploy to production
-python scripts/run_live_trading.py strategy --live-trading --i-understand-the-risks
+# Log rotation
+python scripts/rotate_logs.py
 ```
-
-### **Emergency Response Workflow**
-```bash
-# 1. Stop trading
-python scripts/run_live_trading.py --stop
-
-# 2. Check positions
-python scripts/health_check.py --positions
-
-# 3. Backup data
-python scripts/backup_database.py --emergency
-
-# 4. Investigate issue
-python scripts/health_check.py --detailed
-```
-
----
-
-## 🎯 Natural Language Commands
-
-When you say these phrases, I'll run the corresponding commands:
-
-### **Testing**
-- "run smoke tests" → `python tests/run_tests.py smoke`
-- "run unit tests" → `python tests/run_tests.py unit`
-- "run critical tests" → `python tests/run_tests.py critical`
-- "run all tests" → `python tests/run_tests.py all`
-- "test strategies" → `python tests/run_tests.py --file test_strategies.py`
-- "test with coverage" → `python tests/run_tests.py --coverage`
-
-### **Backtesting**
-- "run backtest" → `python scripts/run_backtest.py adaptive --days 30 --no-db`
-- "run backtest for [strategy]" → `python scripts/run_backtest.py [strategy] --days 30 --no-db`
-- "run production backtest" → `python scripts/run_backtest.py adaptive --days 30`
-
-### **Live Trading**
-- "start paper trading" → `python scripts/run_live_trading.py adaptive --paper-trading`
-- "start live trading" → `python scripts/run_live_trading.py adaptive --live-trading --i-understand-the-risks`
-- "start dashboard" → `python scripts/start_dashboard.py`
-
-### **Health & Monitoring**
-- "check health" → `python scripts/health_check.py`
-- "check positions" → `python scripts/health_check.py --positions`
-- "check cache" → `python scripts/cache_manager.py --check`
 
 ---
 

@@ -4,19 +4,18 @@ globs:
 alwaysApply: false
 ---
 
-# 🏗️ Trading Bot Core Architecture
+# 🏗️ Trading Bot Architecture
 
-## 🎯 System Overview
+## System Overview
+Cryptocurrency trading system with trend-following risk containment. Supports backtesting, live trading, ML models, and multiple data sources.
 
-Sophisticated cryptocurrency trading system with **trend-following risk containment**. Supports backtesting, live trading, ML models, and multiple data sources.
-
-**Core Philosophy**: Trade with the trend, not against it. Protect capital above all else.
+**Philosophy**: Trade with the trend, not against it. Protect capital above all else.
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
-### **High-Level Data Flow**
+### High-Level Data Flow
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Data Layer    │───▶│ Indicator Layer │───▶│ Strategy Layer  │
@@ -36,7 +35,7 @@ Sophisticated cryptocurrency trading system with **trend-following risk containm
                        └─────────────────┘    └─────────────────┘
 ```
 
-### **Component Architecture**
+### Component Architecture
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        AI Trading Bot                           │
@@ -60,19 +59,19 @@ Sophisticated cryptocurrency trading system with **trend-following risk containm
 
 ---
 
-##  Live Trading Engine (Core Component)
+## Live Trading Engine
 
-### **Key Features**
-- **Real-time data streaming** from Binance API
-- **Strategy execution** with ML model integration
-- **Risk management** with position sizing & stop-losses
-- **Sentiment data integration** (SentiCrypt API)
-- **Database logging** for all trades & positions
-- **Graceful error handling** & recovery
-- **Hot-swapping strategies** without stopping
-- **Performance monitoring** & alerts
+### Key Features
+- Real-time data streaming from Binance API
+- Strategy execution with ML model integration
+- Risk management with position sizing & stop-losses
+- Sentiment data integration (SentiCrypt API)
+- Database logging for all trades & positions
+- Graceful error handling & recovery
+- Hot-swapping strategies without stopping
+- Performance monitoring & alerts
 
-### **Safety Features**
+### Safety Features
 - **Paper Trading Mode** (default) - No real money at risk
 - **Explicit Risk Acknowledgment** - Must confirm for live trading
 - **Position Size Limits** - Maximum 10% of balance per position
@@ -81,9 +80,9 @@ Sophisticated cryptocurrency trading system with **trend-following risk containm
 
 ---
 
-## 🧠 Machine Learning Integration
+## Machine Learning Integration
 
-### **Model Types**
+### Model Types
 1. **Price Prediction Models** (`btcusdt_price.*`)
    - Input: 120 time steps × 5 features (OHLCV)
    - Architecture: CNN + LSTM + Dense layers
@@ -92,23 +91,23 @@ Sophisticated cryptocurrency trading system with **trend-following risk containm
    - Input: 120 time steps × 13 features (5 price + 8 sentiment)
    - Architecture: CNN + LSTM + Dense layers
 
-### **Live Trading Integration**
-- **Real-time ONNX inference**
-- **Confidence-based position sizing**
-- **Graceful fallback** when sentiment data unavailable
+### Live Trading Integration
+- Real-time ONNX inference
+- Confidence-based position sizing
+- Graceful fallback when sentiment data unavailable
 
 ---
 
-## 📊 Strategy System
+## Strategy System
 
-### **Available Strategies**
+### Available Strategies
 - **Adaptive Strategy**: Adaptive EMA crossover with market regime detection
 - **Enhanced Strategy**: Multi-indicator confluence (RSI + EMA + MACD)
 - **ML Basic Strategy**: Uses ML price predictions for entry/exit decisions
 - **ML with Sentiment Strategy**: Combines ML predictions with sentiment analysis
 - **High Risk High Reward Strategy**: Aggressive trading with higher risk tolerance
 
-### **Strategy Base Class**
+### Strategy Base Class
 All strategies implement:
 - `calculate_indicators()` - Strategy-specific indicators
 - `check_entry_conditions()` - Entry signal logic
@@ -117,9 +116,9 @@ All strategies implement:
 
 ---
 
-## 🗄️ Database Architecture
+## Database Architecture
 
-### **Core Tables**
+### Core Tables
 - **trading_sessions**: Track trading sessions with strategy configuration
 - **trades**: Complete trade history with entry/exit prices and P&L
 - **positions**: Active positions with real-time unrealized P&L
@@ -127,7 +126,7 @@ All strategies implement:
 - **performance_metrics**: Aggregated metrics (win rate, Sharpe ratio, drawdown)
 - **strategy_executions**: Detailed strategy decision logs
 
-### **Database Features**
+### Database Features
 - **ACID Transactions**: Critical for financial data integrity
 - **Connection Pooling**: Efficient resource management
 - **Indexed Queries**: Fast performance for time-series data
@@ -135,9 +134,9 @@ All strategies implement:
 
 ---
 
-## 🔄 Data Flow
+## Data Flow
 
-### **Live Trading Data Flow**
+### Live Trading Data Flow
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │ Binance API │───▶│ Data Cache  │───▶│ Indicators  │───▶│ Strategy    │
@@ -164,7 +163,7 @@ All strategies implement:
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
-### **ML Model Training Flow**
+### ML Model Training Flow
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │ Historical  │───▶│ Feature     │───▶│ Model       │───▶│ Model       │
