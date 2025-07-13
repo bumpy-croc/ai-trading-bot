@@ -36,8 +36,24 @@ tests/
 ├── test_strategies.py          # Strategy testing
 ├── test_data_providers.py      # Data provider tests
 ├── test_strategy_manager.py    # Hot-swapping tests
+├── test_account_sync.py        # Account synchronization tests
 └── test_integration.py         # End-to-end tests
 ```
+
+### Test Infrastructure Best Practices
+
+**⚠️ CRITICAL: Preserve Existing Test Infrastructure**
+
+When working with existing test infrastructure:
+
+• **Never replace** comprehensive test setup files (like `conftest.py`)
+• **Always add** new fixtures to existing infrastructure
+• **Understand dependencies** before making changes
+• **Test the impact** of changes on existing tests
+• **Preserve database setup** (PostgreSQL containers, connection handling)
+• **Maintain existing fixtures** (OHLCV data, strategies, risk parameters)
+• **Follow established patterns** for consistency
+• **Document new fixtures** with clear docstrings
 
 ### Test Markers
 
@@ -80,6 +96,12 @@ pytest -m "not integration"     # Skip slower integration tests
 # Run specific test files
 pytest tests/test_live_trading.py
 pytest tests/test_risk_management.py
+pytest tests/test_account_sync.py
+
+# Run account sync tests specifically
+python scripts/run_account_sync_tests.py
+python scripts/run_account_sync_tests.py --type unit
+python scripts/run_account_sync_tests.py --type integration --coverage
 
 # Run with verbose output
 pytest -v
@@ -198,6 +220,42 @@ test_missing_indicator_data()
 test_bull_market_conditions()
 test_bear_market_conditions()
 test_volatile_market_conditions()
+```
+
+### 4. Account Synchronization Tests
+
+**Purpose**: Ensure data integrity between exchange and database.
+
+**Key Test Areas**:
+- Balance synchronization
+- Position synchronization
+- Order synchronization
+- Trade recovery
+- Emergency sync procedures
+- Error handling and recovery
+
+**Critical Tests**:
+```python
+# Test core synchronization
+test_sync_account_data_success()
+test_sync_balances_with_discrepancy()
+test_sync_positions_new_position()
+test_sync_orders_status_update()
+
+# Test recovery mechanisms
+test_recover_missing_trades_with_missing()
+test_emergency_sync_success()
+test_emergency_sync_failure()
+
+# Test error handling
+test_sync_balances_exception()
+test_sync_positions_exception()
+test_sync_orders_exception()
+test_recover_missing_trades_exception()
+
+# Test integration
+test_full_sync_integration()
+test_emergency_sync_integration()
 ```
 
 ### 4. Data Provider Tests
