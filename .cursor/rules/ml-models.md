@@ -462,4 +462,8 @@ python scripts/run_live_trading.py ml_with_sentiment --paper-trading
 
 ---
 
-**For detailed implementation, see the actual model training scripts in `scripts/`**
+**For detailed implementation guides, use:**
+- `fetch_rules(["architecture"])` - Complete system architecture
+- `fetch_rules(["project-structure"])` - Directory structure & organization
+- `fetch_rules(["strategies"])` - Strategy development details
+- `fetch_rules(["commands"])` - Complete command reference

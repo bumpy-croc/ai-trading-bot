@@ -60,37 +60,7 @@ Sophisticated cryptocurrency trading system with **trend-following risk containm
 
 ---
 
-## 📁 Directory Structure
-
-### **Core Application (`src/`)**
-```
-src/
-├── data_providers/          # Market & sentiment data adapters
-├── indicators/              # Technical indicator calculations
-├── strategies/              # Trading strategy implementations
-├── risk/                    # Risk management system
-├── live/                    # Live trading engine
-├── backtesting/             # Historical simulation engine
-├── database/                # Database management & models
-├── config/                  # Configuration management
-├── performance/             # Performance metrics calculation
-└── monitoring/              # Real-time monitoring dashboard
-```
-
-### **Supporting Directories**
-```
-├── ml/                      # Trained ML models & metadata
-├── data/                    # Cached market & sentiment data
-├── scripts/                 # CLI utilities & automation
-├── tests/                   # Comprehensive test suite
-├── docs/                    # Documentation & guides
-├── migrations/              # Database schema migrations
-└── logs/                    # Application logs
-```
-
----
-
-## 🚀 Live Trading Engine (Core Component)
+##  Live Trading Engine (Core Component)
 
 ### **Key Features**
 - **Real-time data streaming** from Binance API
@@ -194,9 +164,30 @@ All strategies implement:
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
+### **ML Model Training Flow**
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ Historical  │───▶│ Feature     │───▶│ Model       │───▶│ Model       │
+│ Price Data  │    │ Engineering │    │ Training    │    │ Validation  │
+│             │    │             │    │             │    │             │
+│ OHLCV +     │    │ Normalize   │    │ CNN + LSTM  │    │ Backtest    │
+│ Sentiment   │    │ Features    │    │ + Dense     │    │ Performance │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+                                                              │
+                                                              ▼
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ Model       │◀───│ ONNX Export │◀───│ Model       │◀───│ Performance │
+│ Deployment  │    │             │    │ Selection   │    │ Analysis    │
+│             │    │ Optimize    │    │             │    │             │
+│ Live        │    │ Inference   │    │ Best Model  │    │ Sharpe,     │
+│ Trading     │    │ Speed       │    │ Selection   │    │ Drawdown    │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+```
+
 ---
 
 **For detailed implementation guides, use:**
-- `fetch_rules(["trading-bot-strategies"])` - Strategy development
-- `fetch_rules(["trading-bot-ml-models"])` - ML model details
-- `fetch_rules(["trading-bot-commands"])` - Complete command reference
+- `fetch_rules(["project-structure"])` - Directory structure & organization
+- `fetch_rules(["strategies"])` - Strategy development details
+- `fetch_rules(["ml-models"])` - ML model training & integration
+- `fetch_rules(["commands"])` - Complete command reference

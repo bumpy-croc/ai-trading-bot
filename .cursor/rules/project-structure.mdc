@@ -3,21 +3,107 @@ description:
 globs: 
 alwaysApply: true
 ---
-# Crypto Trading Bot - Project Architecture & Development Guide
+# 📁 Trading Bot Project Structure
 
-## Project Overview
-This is a sophisticated cryptocurrency trading system inspired by Ray Dalio's principles, focusing on trend-following with risk containment. The system supports both backtesting and live trading with multiple data sources, ML models, and trading strategies.
+## 🎯 Project Overview
 
-## Core Architecture
+Sophisticated cryptocurrency trading system with **trend-following risk containment**. Supports backtesting, live trading, ML models, and multiple data sources.
 
-### 1. Data Layer (`/core/data_providers/`)
+**Core Philosophy**: Trade with the trend, not against it. Protect capital above all else.
+
+---
+
+## 📁 Directory Structure & Purpose
+
+### **Core Application (`src/`)**
+```
+src/
+├── data_providers/          # Market & sentiment data adapters
+│   ├── data_provider.py     # Abstract base class
+│   ├── binance_data_provider.py    # Live/historical price data
+│   ├── senticrypt_provider.py      # Sentiment data (SentiCrypt API)
+│   ├── cryptocompare_sentiment.py  # Alternative sentiment source
+│   ├── cached_data_provider.py     # API response caching
+│   └── mock_data_provider.py       # Test data provider
+│
+├── indicators/              # Technical indicator calculations
+│   └── technical.py         # RSI, EMA, MACD, ATR, Bollinger Bands
+│
+├── strategies/              # Trading strategy implementations
+│   ├── base.py              # Abstract base class
+│   ├── adaptive.py          # Adaptive EMA strategy
+│   ├── enhanced.py          # Multi-indicator strategy
+│   ├── ml_basic.py          # ML price prediction strategy
+│   ├── ml_with_sentiment.py # Advanced ML + sentiment strategy
+│   └── high_risk_high_reward.py # Aggressive trading strategy
+│
+├── risk/                    # Risk management system
+│   └── risk_manager.py      # Position sizing, stop-loss, exposure limits
+│
+├── live/                    # Live trading engine
+│   ├── trading_engine.py    # Main live trading orchestrator
+│   └── strategy_manager.py  # Strategy hot-swapping & management
+│
+├── backtesting/             # Historical simulation engine
+│   └── engine.py            # Vectorized backtesting with sentiment
+│
+├── database/                # Database management & models
+│   ├── manager.py           # Database connection & operations
+│   └── models.py            # SQLAlchemy models (trades, positions, etc.)
+│
+├── config/                  # Configuration management
+│   ├── config_manager.py    # Multi-provider config system
+│   ├── constants.py         # System constants
+│   └── providers/           # Config providers (env, Railway, etc.)
+│
+├── performance/             # Performance metrics calculation
+│   └── metrics.py           # Sharpe ratio, drawdown, returns
+│
+└── monitoring/              # Real-time monitoring dashboard
+    ├── dashboard.py         # Web dashboard application
+    └── templates/           # Dashboard HTML templates
+```
+
+### **Supporting Directories**
+```
+├── ml/                      # Trained ML models & metadata
+│   ├── btcusdt_price.*      # Price prediction models (.h5/.keras/.onnx)
+│   ├── btcusdt_sentiment.*  # Sentiment-enhanced models
+│   └── *_metadata.json      # Model training metadata
+│
+├── data/                    # Cached market & sentiment data
+│   ├── BTCUSDT_1d.csv       # Historical price data
+│   └── senticrypt_sentiment_data.csv  # Cached sentiment data
+│
+├── scripts/                 # CLI utilities & automation
+│   ├── run_backtest.py      # Backtesting runner
+│   ├── run_live_trading.py  # Live trading launcher
+│   ├── train_model.py       # ML model training
+│   ├── cache_manager.py     # Data cache management
+│   └── start_dashboard.py   # Monitoring dashboard launcher
+│
+├── tests/                   # Comprehensive test suite
+│   ├── run_tests.py         # Enhanced test runner
+│   ├── test_live_trading.py # Live trading tests (CRITICAL)
+│   ├── test_risk_management.py # Risk management tests
+│   └── test_strategies.py   # Strategy logic tests
+│
+├── docs/                    # Documentation & guides
+├── migrations/              # Database schema migrations
+└── logs/                    # Application logs
+```
+
+---
+
+## 🏗️ Core Architecture Components
+
+### **1. Data Layer (`src/data_providers/`)**
 **Purpose**: Abstracts data acquisition from multiple sources
 
 - **Base Class**: `data_provider.py` - Defines the interface all providers must implement
 - **Implementations**:
   - `binance_data_provider.py` - Live/historical price data from Binance
   - `senticrypt_provider.py` - Sentiment data from SentiCrypt API
-  - `augmento_provider.py` - Alternative sentiment data source
   - `cryptocompare_sentiment.py` - CryptoCompare sentiment integration
   - `cached_data_provider.py` - Caches API responses to reduce load and costs
 
@@ -28,14 +114,58 @@ provider = CachedDataProvider(BinanceDataProvider())
 data = provider.get_historical_data('BTCUSDT', start_date, end_date)
 ```
 
-### 2. Indicator Layer (`/core/indicators/`)
+### **2. Indicator Layer (`src/indicators/`)**
 **Purpose**: Calculate technical indicators for trading signals
 
 - `technical.py` - Contains all technical indicator calculations (RSI, EMA, Bollinger Bands, etc.)
 - Indicators should be pure functions that operate on price/volume data
 - Always return pandas Series or DataFrames
 
-### 3. ML Layer (`/ml/`)
+### **3. Strategy Layer (`src/strategies/`)**
+**Purpose**: Implement trading logic
+
+**Base Class Pattern**:
+```python
+class YourStrategy(BaseStrategy):
+    def __init__(self, name):
+        super().__init__(name)
+        # Strategy-specific initialization
+    
+    def calculate_indicators(self, df):
+        # Calculate strategy-specific indicators
+        pass
+    
+    def check_entry_conditions(self, df, index):
+        # Entry signal logic
+        pass
+    
+    def check_exit_conditions(self, df, index, entry_price):
+        # Exit signal logic
+        pass
+```
+
+**Strategy Types**:
+- `adaptive.py` - Adjusts to market conditions
+- `enhanced.py` - Combines multiple indicators
+- `ml_basic.py` - Uses ML price predictions
+- `ml_with_sentiment.py` - Advanced ML with sentiment
+- `high_risk_high_reward.py` - Aggressive trading
+
+### **4. Execution Layer**
+
+**Backtesting (`src/backtesting/`)**: 
+- `engine.py` - Simulates trades on historical data
+- Tracks performance metrics, drawdowns, and generates reports
+
+**Live Trading (`src/live/`)**: 
+- `trading_engine.py` - Executes real trades via exchange APIs
+- `strategy_manager.py` - Manages strategy lifecycle and switching
+
+**Risk Management (`src/risk/`)**: 
+- `risk_manager.py` - Position sizing, stop-loss management, exposure limits
+- Always enforces max risk per trade (1-2% of capital)
+
+### **5. ML Layer (`ml/`)**
 **Purpose**: Store trained models and metadata
 
 - Models are saved in multiple formats: `.h5`, `.keras`, `.onnx`
@@ -44,109 +174,47 @@ data = provider.get_historical_data('BTCUSDT', start_date, end_date)
   - Price prediction models (`btcusdt_price.*`)
   - Sentiment-based models (`btcusdt_sentiment.*`)
 
-### 4. Strategy Layer (`/strategies/`)
-**Purpose**: Implement trading logic
+---
 
-**Base Class Pattern**:
-```python
-class YourStrategy(BaseStrategy):
-    def __init__(self, config):
-        super().__init__(config)
-        # Strategy-specific initialization
-    
-    def generate_signals(self, data):
-        # Must return: signals, confidence, metadata
-        pass
-    
-    def calculate_position_size(self, signal, confidence, current_price, account_balance):
-        # Risk management logic
-        pass
-```
+## 🔧 Development Workflows
 
-**Strategy Types**:
-- `adaptive.py` - Adjusts to market conditions
-- `enhanced.py` - Combines multiple indicators
-- `high_risk_high_reward.py` - Aggressive trading
-- `ml_basic.py` - Uses ML price predictions
-- `ml_with_sentiment.py` - Advanced ML with sentiment
-
-### 5. Execution Layer
-
-**Backtesting (`/backtesting/`)**: 
-- `engine.py` - Simulates trades on historical data
-- Tracks performance metrics, drawdowns, and generates reports
-
-**Live Trading (`/live/`)**: 
-- `trading_engine.py` - Executes real trades via exchange APIs
-- `strategy_manager.py` - Manages strategy lifecycle and switching
-
-**Risk Management (`/core/risk/`)**: 
-- `risk_manager.py` - Position sizing, stop-loss management, exposure limits
-- Always enforces max risk per trade (1-2% of capital)
-
-## Development Workflows & Best Practices
-
-### 1. Creating a New Strategy
-1. Create new file in `/strategies/` extending `BaseStrategy`
-2. Implement required methods: `generate_signals()`, `calculate_position_size()`
-3. Add strategy to `/strategies/__init__.py`
+### **1. Creating a New Strategy**
+1. Create new file in `src/strategies/` extending `BaseStrategy`
+2. Implement required methods: `calculate_indicators()`, `check_entry_conditions()`, etc.
+3. Add strategy to `src/strategies/__init__.py`
 4. Test with backtesting before live deployment
 
-### 2. Running Backtests
-```bash
-# Standard backtest (for development - no database logging)
-python scripts/run_backtest.py <strategy_name> --days <num_days> --no-db
+### **2. Adding New Data Sources**
+1. Create new provider in `src/data_providers/` extending `DataProvider`
+2. Implement required methods: `get_historical_data()`, `get_live_data()`
+3. Add caching wrapper if needed
+4. Test with existing strategies
 
-# Production backtest (with database logging for analysis)
-python scripts/run_backtest.py <strategy_name> --days <num_days>
+### **3. Adding New Indicators**
+1. Add function to `src/indicators/technical.py`
+2. Ensure it's a pure function operating on pandas DataFrames
+3. Add tests in `tests/test_indicators.py`
+4. Update strategy implementations to use new indicator
 
-# Examples
-python scripts/run_backtest.py adaptive --days 100 --no-db      # Development
-python scripts/run_backtest.py adaptive --days 100              # Production
-python scripts/run_backtest.py ml_with_sentiment --days 365     # Full year with DB
+---
 
-# With custom parameters
-python scripts/run_backtest.py enhanced --days 30 --no-db --initial-balance 50000
-```
+## 📊 Data Management
 
-#### Natural Language Commands (for local development)
-When user says "run backtest" or "run the backtest" → `python scripts/run_backtest.py adaptive --days 30 --no-db`
-When user says "run backtest for [strategy]" → `python scripts/run_backtest.py [strategy] --days 30 --no-db`
-When user says "run production backtest" → `python scripts/run_backtest.py adaptive --days 30` (with DB logging)
-
-### 3. Training ML Models
-```bash
-# Train new models with latest data
-python scripts/train_model.py
-
-# Safe training with validation
-python scripts/safe_model_trainer.py
-```
-
-### 4. Live Trading
-```bash
-# Start live trading with specific strategy
-python scripts/run_live_trading.py <strategy_name>
-
-# Control panel for monitoring
-python live_trading_control.py
-```
-
-## Data Management
-
-### CSV Files (`/data/`)
+### **CSV Files (`data/`)**
 - `BTCUSDT_1d.csv` - Historical daily price data
 - `senticrypt_sentiment_data.csv` - Cached sentiment data
 - Update regularly for accurate backtesting
 
-### Caching Strategy
+### **Caching Strategy**
 - Use `CachedDataProvider` wrapper for expensive API calls
 - Cache invalidation handled by `scripts/cache_manager.py`
-- Cached data stored in `/data/` directory
+- Cached data stored in `data/` directory
 
-## Important Conventions
+---
 
-### 1. Error Handling
+## 🛡️ Important Conventions
+
+### **1. Error Handling**
 ```python
 try:
     # Risky operation
@@ -157,38 +225,32 @@ except SpecificException as e:
     return default_value
 ```
 
-### 2. Logging
+### **2. Logging**
 - Use Python's logging module, not print statements
 - Log levels: DEBUG (dev only), INFO (important events), WARNING (issues), ERROR (failures)
 - Include context in log messages
 
-### 3. Security
+### **3. Security**
 - NEVER commit API keys or secrets
 - Use environment variables for credentials
 - Validate all external data inputs
 - Implement rate limiting for API calls
 
-### 4. Configuration
+### **4. Configuration**
 - Strategy configs passed via constructor
 - Use sensible defaults for all parameters
 - Document all configuration options
 
-### 5. Testing
+### **5. Testing**
 - Backtest new strategies on multiple market conditions
 - Validate ML models with out-of-sample data
 - Paper trade before real money
 
-## Testing Commands & Workflows
+---
 
-### Quick Test Commands (Natural Language)
-When user says "run smoke tests" → `python tests/run_tests.py smoke`
-When user says "run unit tests" → `python tests/run_tests.py unit`
-When user says "run critical tests" → `python tests/run_tests.py critical`
-When user says "run all tests" → `python tests/run_tests.py all`
-When user says "test strategies" → `python tests/run_tests.py --file test_strategies.py`
-When user says "test with coverage" → `python tests/run_tests.py --coverage`
+## 🧪 Testing Structure
 
-### Test Categories
+### **Test Categories**
 ```bash
 # Smoke Tests - Quick validation (fastest)
 python tests/run_tests.py smoke
@@ -209,158 +271,17 @@ python tests/run_tests.py all
 python tests/run_tests.py validate
 ```
 
-### Specific Test Files
-```bash
-# Test specific components
-python tests/run_tests.py --file test_strategies.py
-python tests/run_tests.py --file test_data_providers.py
-python tests/run_tests.py --file test_risk_management.py
-python tests/run_tests.py --file test_live_trading.py
-python tests/run_tests.py --file test_config_system.py
-python tests/run_tests.py --file test_integration.py
-
-# Short form
-python tests/run_tests.py -f test_strategies.py
-```
-
-### Custom Test Selection
-```bash
-# Run tests with markers
-python tests/run_tests.py --markers "not integration"
-python tests/run_tests.py -m "live_trading or risk_management"
-python tests/run_tests.py -m "strategy and not slow"
-
-# Exclude slow tests
-python tests/run_tests.py -m "not slow"
-```
-
-### Coverage Analysis
-```bash
-# Generate coverage reports
-python tests/run_tests.py --coverage
-python tests/run_tests.py -c
-
-# Coverage for specific files
-python tests/run_tests.py --file test_strategies.py --coverage
-```
-
-### Output Control
-```bash
-# Verbose output (default)
-python tests/run_tests.py unit --verbose
-python tests/run_tests.py unit -v
-
-# Quiet output
-python tests/run_tests.py unit --quiet
-python tests/run_tests.py unit -q
-```
-
-### Advanced Testing Options
-```bash
-# Skip dependency checks (for CI/CD)
-python tests/run_tests.py smoke --no-deps-check
-
-# Force interactive mode
-python tests/run_tests.py --interactive
-python tests/run_tests.py -i
-
-# Get help
-python tests/run_tests.py --help
-```
-
-### Direct pytest Commands (for debugging)
-```bash
-# Run specific test method
-python -m pytest tests/test_strategies.py::TestAdaptiveStrategy::test_entry_conditions -v
-
-# Debug mode
-python -m pytest tests/test_strategies.py --pdb
-
-# Show print statements
-python -m pytest tests/test_strategies.py -s
-```
-
-### CI/CD Testing Commands
-```bash
-# Fast feedback loop
-python tests/run_tests.py smoke --no-deps-check
-
-# Full test suite with coverage
-python tests/run_tests.py all --coverage
-
-# Critical tests only (for production checks)
-python tests/run_tests.py critical --quiet
-```
-
-## Common Patterns
-
-### Getting Market Data
-```python
-# For backtesting
-provider = CachedDataProvider(BinanceDataProvider())
-df = provider.get_historical_data('BTCUSDT', start_date, end_date)
-
-# For live trading
-provider = BinanceDataProvider()
-current_price = provider.get_current_price('BTCUSDT')
-```
-
-### Using Indicators
-```python
-from core.indicators.technical import calculate_rsi, calculate_ema
-
-# Always check data has enough history
-if len(df) > 20:
-    df['rsi'] = calculate_rsi(df['close'], period=14)
-    df['ema_short'] = calculate_ema(df['close'], period=9)
-```
-
-### Risk Management Integration
-```python
-# In strategy
-position_size = self.calculate_position_size(
-    signal, confidence, current_price, account_balance
-)
-
-# Risk manager validates
-validated_size = risk_manager.validate_position_size(
-    position_size, current_exposure, account_balance
-)
-```
-
-## Project Philosophy
-- **Trend Following**: Trade with the trend, not against it
-- **Risk First**: Protect capital above all else
-- **Data Driven**: Let data guide decisions, not emotions
-- **Modular Design**: Each component should have a single responsibility
-- **Fail Gracefully**: Always have fallbacks for external dependencies
-
-## Troubleshooting Guide
-
-### Common Issues
-1. **Stale Data**: Check data provider timestamps, refresh caches
-2. **API Limits**: Implement exponential backoff, use cached providers
-3. **Model Drift**: Retrain models monthly or when performance degrades
-4. **Memory Issues**: Use data chunking for large datasets
-
-### Debug Commands
-```bash
-# Check data freshness
-python scripts/cache_manager.py --check
-
-# Validate models
-python scripts/simple_model_validator.py
-
-# Test specific strategy signals
-python -m strategies.<strategy_name> --test
-```
-
-## Future Considerations
-- Multi-exchange support planned
-- Real-time sentiment aggregation from multiple sources
-- Advanced portfolio management across strategies
-- Automated model retraining pipelines
+### **Test Files**
+- `test_strategies.py` - Strategy logic tests
+- `test_data_providers.py` - Data provider tests
+- `test_risk_management.py` - Risk management tests
+- `test_live_trading.py` - Live trading tests (CRITICAL)
+- `test_integration.py` - End-to-end tests
 
 ---
 
-**Remember**: This is real money. Always validate changes thoroughly. When in doubt, backtest more. 
+**For detailed implementation guides, use:**
+- `fetch_rules(["architecture"])` - Complete system architecture
+- `fetch_rules(["strategies"])` - Strategy development details
+- `fetch_rules(["ml-models"])` - ML model training & integration
+- `fetch_rules(["commands"])` - Complete command reference 

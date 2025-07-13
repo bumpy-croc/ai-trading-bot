@@ -158,10 +158,10 @@ When you say these phrases, I'll run the corresponding commands:
 ## 📚 Detailed Guides (Fetch as Needed)
 
 For detailed implementation guides, use:
-- `fetch_rules(["trading-bot-architecture"])` - Complete system architecture
-- `fetch_rules(["trading-bot-strategies"])` - Strategy development details
-- `fetch_rules(["trading-bot-ml-models"])` - ML model training & integration
-- `fetch_rules(["trading-bot-commands"])` - Complete command reference
+- `fetch_rules(["architecture"])` - Complete system architecture
+- `fetch_rules(["strategies"])` - Strategy development details
+- `fetch_rules(["ml-models"])` - ML model training & integration
+- `fetch_rules(["commands"])` - Complete command reference
 
 ---
 

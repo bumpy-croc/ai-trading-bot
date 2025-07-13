@@ -528,3 +528,11 @@ When you say these phrases, I'll run the corresponding commands:
 ---
 
 **Remember**: Always run tests before deploying changes, and use paper trading for validation! 🛡️
+
+---
+
+**For detailed implementation guides, use:**
+- `fetch_rules(["architecture"])` - Complete system architecture
+- `fetch_rules(["project-structure"])` - Directory structure & organization
+- `fetch_rules(["strategies"])` - Strategy development details
+- `fetch_rules(["ml-models"])` - ML model training & integration

@@ -392,4 +392,8 @@ def adapt_to_market_regime(df: pd.DataFrame) -> str:
 
 ---
 
-**For detailed implementation examples, see the actual strategy files in `src/strategies/`**
+**For detailed implementation guides, use:**
+- `fetch_rules(["architecture"])` - Complete system architecture
+- `fetch_rules(["project-structure"])` - Directory structure & organization
+- `fetch_rules(["ml-models"])` - ML model training & integration
+- `fetch_rules(["commands"])` - Complete command reference
