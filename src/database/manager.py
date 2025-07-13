@@ -571,7 +571,7 @@ class DatabaseManager:
             return [
                 {
                     'id': trade.id,
-                    'trade_id': trade.order_id,  # Using order_id as trade_id for now
+                    'trade_id': trade.trade_id,  # Correctly using trade_id
                     'symbol': trade.symbol,
                     'side': trade.side.value,
                     'entry_price': float(trade.entry_price),
