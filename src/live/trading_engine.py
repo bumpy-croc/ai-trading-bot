@@ -254,31 +254,30 @@ class LiveTradingEngine:
                 logger.info("🆕 No existing session found, starting fresh")
         
         # Perform account synchronization if available
+        self._pending_balance_correction = False
+        self._pending_corrected_balance = None
         if self.account_synchronizer and self.enable_live_trading:
             try:
                 logger.info("🔄 Performing initial account synchronization...")
                 sync_result = self.account_synchronizer.sync_account_data(force=True)
-                
                 if sync_result.success:
                     logger.info("✅ Account synchronization completed")
-                    
                     # Update session ID for synchronizer
                     if self.trading_session_id:
                         self.account_synchronizer.session_id = self.trading_session_id
-                    
                     # Check if balance was corrected
                     balance_sync = sync_result.data.get('balance_sync', {})
                     if balance_sync.get('corrected', False):
                         corrected_balance = balance_sync.get('new_balance', self.current_balance)
                         self.current_balance = corrected_balance
                         logger.info(f"💰 Balance corrected from exchange: ${corrected_balance:,.2f}")
-                        
+                        # Defer DB update until session is created
+                        self._pending_balance_correction = True
+                        self._pending_corrected_balance = corrected_balance
                 else:
                     logger.warning(f"⚠️ Account synchronization failed: {sync_result.message}")
-                    
             except Exception as e:
                 logger.error(f"❌ Account synchronization error: {e}")
-        
         # Create new trading session in database if none exists
         if self.trading_session_id is None:
             mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
@@ -290,7 +289,6 @@ class LiveTradingEngine:
                 initial_balance=self.current_balance,  # Use current balance (might be recovered)
                 strategy_config=getattr(self.strategy, 'config', {})
             )
-            
             # Initialize balance tracking
             self.db_manager.update_balance(
                 self.current_balance, 
@@ -298,7 +296,16 @@ class LiveTradingEngine:
                 'system', 
                 self.trading_session_id
             )
-            
+            # If a balance correction was pending, log it now
+            if getattr(self, '_pending_balance_correction', False):
+                self.db_manager.update_balance(
+                    self._pending_corrected_balance,
+                    'account_sync',
+                    'system',
+                    self.trading_session_id
+                )
+                self._pending_balance_correction = False
+                self._pending_corrected_balance = None
             # Set session ID on strategy for logging
             if hasattr(self.strategy, 'session_id'):
                 self.strategy.session_id = self.trading_session_id

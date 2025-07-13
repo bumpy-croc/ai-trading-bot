@@ -18,6 +18,61 @@ from src.data_providers.exchange_interface import (
 )
 from src.database.models import PositionSide, TradeSource
 
+# Remove pytestmark and binance_ fixtures, restoring the file to its previous state.
+
+@pytest.fixture
+def binance_account_balance_fixture():
+    """Binance-style account balance fixture (USDT)"""
+    return {
+        'asset': 'USDT',
+        'walletBalance': '10000.00',
+        'unrealizedProfit': '0.00',
+        'marginBalance': '10000.00',
+        'maintMargin': '0.00',
+        'initialMargin': '0.00',
+        'positionInitialMargin': '0.00',
+        'openOrderInitialMargin': '0.00',
+        'crossWalletBalance': '10000.00',
+        'crossUnPnl': '0.00',
+        'availableBalance': '10000.00',
+        'maxWithdrawAmount': '10000.00',
+        'updateTime': 1625474304765
+    }
+
+@pytest.fixture
+def binance_position_fixture():
+    """Binance-style position fixture (BTCUSDT long)"""
+    return {
+        'symbol': 'BTCUSDT',
+        'positionSide': 'LONG',
+        'positionAmt': '0.100',
+        'unrealizedProfit': '100.00',
+        'isolatedMargin': '0.00',
+        'notional': '5100.00',
+        'isolatedWallet': '0.00',
+        'initialMargin': '0.00',
+        'maintMargin': '0.00',
+        'updateTime': 1625474304765
+    }
+
+@pytest.fixture
+def binance_order_fixture():
+    """Binance-style open order fixture (ETHUSDT limit sell)"""
+    return {
+        'orderId': 456,
+        'symbol': 'ETHUSDT',
+        'side': 'SELL',
+        'type': 'LIMIT',
+        'quantity': '1.0',
+        'price': '3000.00',
+        'status': 'NEW',
+        'filledQuantity': '0.0',
+        'avgPrice': None,
+        'commission': '0.0',
+        'commissionAsset': 'USDT',
+        'createTime': 1625474304765,
+        'updateTime': 1625474304765
+    }
 
 class TestAccountSynchronizer:
     """Test the AccountSynchronizer class with optimized test coverage"""
@@ -400,9 +455,9 @@ class TestAccountSynchronizerIntegration:
             'balances': [
                 AccountBalance(
                     asset='USDT',
-                    free=10000.0,
-                    locked=100.0,
-                    total=10100.0,
+                    free=10200.0,
+                    locked=0.0,
+                    total=10200.0,
                     last_updated=datetime.utcnow()
                 ),
                 AccountBalance(
