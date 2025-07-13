@@ -320,19 +320,23 @@ class LiveTradingEngine:
                 'system', 
                 self.trading_session_id
             )
-            # If a balance correction was pending, log it now
-            if getattr(self, '_pending_balance_correction', False):
-                self.db_manager.update_balance(
-                    self._pending_corrected_balance,
-                    'account_sync',
-                    'system',
-                    self.trading_session_id
-                )
-                self._pending_balance_correction = False
-                self._pending_corrected_balance = None
-            # Set session ID on strategy for logging
-            if hasattr(self.strategy, 'session_id'):
-                self.strategy.session_id = self.trading_session_id
+        
+        # If a balance correction was pending, log it now (outside session creation conditional)
+        if getattr(self, '_pending_balance_correction', False):
+            corrected_balance = self._pending_corrected_balance
+            self.db_manager.update_balance(
+                corrected_balance,
+                'account_sync',
+                'system',
+                self.trading_session_id
+            )
+            self._pending_balance_correction = False
+            self._pending_corrected_balance = None
+            logger.info(f"💰 Balance corrected in database: ${corrected_balance:,.2f}")
+            
+        # Set session ID on strategy for logging
+        if hasattr(self.strategy, 'session_id'):
+            self.strategy.session_id = self.trading_session_id
         
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(target=self._trading_loop, args=(symbol, timeframe, max_steps))

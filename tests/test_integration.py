@@ -545,38 +545,73 @@ class TestAccountSyncIntegration:
                 },
                 timestamp=datetime.utcnow()
             )
+            
             # Use a simple strategy and mock data provider
             strategy = AdaptiveStrategy()
             data_provider = MockDataProvider()
-            # Patch threading.Thread to run target directly (avoid real threading)
-            with patch('threading.Thread') as MockThread:
-                def run_target(*args, **kwargs):
-                    # Simulate trading loop exit after one step
+            
+            # Create engine without starting the thread
+            engine = LiveTradingEngine(
+                strategy=strategy,
+                data_provider=data_provider,
+                enable_live_trading=True,
+                initial_balance=10000
+            )
+            
+            # Mock the thread creation but allow start() to complete synchronously
+            original_thread = threading.Thread
+            
+            def mock_thread_constructor(*args, **kwargs):
+                # Create a real thread object but override its start method
+                thread = original_thread(*args, **kwargs)
+                original_start = thread.start
+                
+                def mock_start():
+                    # Set engine as not running to prevent actual trading loop
                     engine.is_running = False
-                MockThread.return_value = MagicMock(start=run_target, is_alive=lambda: False)
-                # Instantiate engine
-                engine = LiveTradingEngine(
-                    strategy=strategy,
-                    data_provider=data_provider,
-                    enable_live_trading=True,
-                    initial_balance=10000
-                )
-                # Run start (should trigger account sync)
+                    # Don't actually start the thread
+                    pass
+                
+                thread.start = mock_start
+                thread.is_alive = lambda: False
+                return thread
+                
+            with patch('threading.Thread', side_effect=mock_thread_constructor):
+                # Run start (should trigger account sync and deferred balance update)
                 engine.start(symbol="BTCUSDT", timeframe="1h", max_steps=1)
-                # Assert sync_account_data was called
+                
+                # Debug output
                 print(f"sync_account_data called: {mock_sync.sync_account_data.called}")
                 print(f"engine.trading_session_id after start: {engine.trading_session_id}")
-                assert mock_sync.sync_account_data.called, "Account sync was not triggered by engine"
-                # Assert balance was updated in engine
                 print(f"engine.current_balance after sync: {engine.current_balance}")
+                print(f"engine._pending_balance_correction: {getattr(engine, '_pending_balance_correction', 'NOT_SET')}")
+                print(f"engine._pending_corrected_balance: {getattr(engine, '_pending_corrected_balance', 'NOT_SET')}")
+                
+                # Assert sync_account_data was called
+                assert mock_sync.sync_account_data.called, "Account sync was not triggered by engine"
+                
+                # Assert balance was updated in engine
                 assert engine.current_balance == 12345.0, "Engine did not update balance from sync result"
-                # Give DB a moment to commit
-                time.sleep(0.5)
-                # Use real DatabaseManager to check the latest balance
+                
+                # Ensure database has time to process
+                time.sleep(0.1)
+                
+                # Use real DatabaseManager to check all balance records for debugging
                 db_manager = DatabaseManager()
-                balances = db_manager.execute_query(
+                all_balances = db_manager.execute_query(
+                    f"SELECT total_balance, update_reason, last_updated FROM account_balances WHERE session_id={engine.trading_session_id} ORDER BY last_updated ASC"
+                )
+                print(f"All balance records: {all_balances}")
+                
+                # Check the latest balance record
+                latest_balance = db_manager.execute_query(
                     f"SELECT total_balance FROM account_balances WHERE session_id={engine.trading_session_id} ORDER BY last_updated DESC LIMIT 1"
                 )
-                print(f"account_balances query result: {balances}")
-                assert balances, "No balance record found in account_balances"
-                assert float(balances[0]["total_balance"]) == 12345.0, "Balance in account_balances does not match corrected value"
+                print(f"Latest balance query result: {latest_balance}")
+                
+                # Should have at least 2 balance records: initial and corrected
+                assert len(all_balances) >= 2, f"Expected at least 2 balance records, got {len(all_balances)}"
+                
+                # The latest balance should be the corrected one
+                assert latest_balance, "No balance record found in account_balances"
+                assert float(latest_balance[0]["total_balance"]) == 12345.0, f"Balance in account_balances ({latest_balance[0]['total_balance']}) does not match corrected value (12345.0)"
