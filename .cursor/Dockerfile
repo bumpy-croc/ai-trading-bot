@@ -17,7 +17,7 @@ RUN useradd -ms /bin/bash ubuntu
 WORKDIR /home/ubuntu
 
 # Copy requirements and install dependencies (dev + prod)
-COPY ../requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 RUN pip install --upgrade pip --no-cache-dir && \
     pip install --no-cache-dir -r requirements.txt
 
