@@ -212,7 +212,7 @@ For account synchronization, your Binance API key needs:
 ```python
 from data_providers.binance_exchange import BinanceExchange
 from database.manager import DatabaseManager
-from live.account_sync import AccountSynchronizer
+from src.live.account_sync import AccountSynchronizer
 
 # Initialize components
 exchange = BinanceExchange(api_key, api_secret)

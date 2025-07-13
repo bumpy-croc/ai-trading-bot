@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 from data_providers.exchange_interface import ExchangeInterface, AccountBalance, Position, Order, Trade
 from database.manager import DatabaseManager
-from database.models import PositionSide, OrderStatus, TradeSource
+from database.models import PositionSide, TradeSource
+from data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +314,7 @@ class AccountSynchronizer:
                 
                 if db_order:
                     # Order exists in both - check for updates
-                    if exchange_order.status != OrderStatus.PENDING:
+                    if exchange_order.status != ExchangeOrderStatus.PENDING:
                         logger.info(f"Order status changed: {exchange_order.order_id} - {exchange_order.status.value}")
                         # Update order status in database
                         self.db_manager.update_order_status(
@@ -354,7 +355,7 @@ class AccountSynchronizer:
                     # Mark as cancelled in database
                     self.db_manager.update_order_status(
                         db_order['id'],
-                        OrderStatus.CANCELLED.value
+                        ExchangeOrderStatus.CANCELLED.value
                     )
                     
                     cancelled_orders.append({

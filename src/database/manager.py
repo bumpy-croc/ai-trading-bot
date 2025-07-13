@@ -530,10 +530,21 @@ class DatabaseManager:
                 return False
             
             try:
-                order.status = OrderStatus[status.upper()]
+                # Map exchange status values to database status values
+                status_mapping = {
+                    'PENDING': 'pending',
+                    'FILLED': 'filled',
+                    'PARTIALLY_FILLED': 'filled',  # Map to filled for simplicity
+                    'CANCELLED': 'cancelled',
+                    'REJECTED': 'failed',
+                    'EXPIRED': 'cancelled'
+                }
+                
+                db_status = status_mapping.get(status.upper(), status.lower())
+                order.status = OrderStatus[db_status.upper()]
                 order.last_update = datetime.utcnow()
                 session.commit()
-                logger.info(f"Updated order {order_id} status to {status}")
+                logger.info(f"Updated order {order_id} status to {db_status}")
                 return True
             except KeyError:
                 logger.error(f"Invalid order status: {status}")

@@ -19,7 +19,7 @@ from data_providers.binance_exchange import BinanceExchange
 from strategies.base import BaseStrategy
 from risk.risk_manager import RiskManager, RiskParameters
 from live.strategy_manager import StrategyManager
-from live.account_sync import AccountSynchronizer
+from .account_sync import AccountSynchronizer
 from database.manager import DatabaseManager
 from database.models import TradeSource
 from config.constants import DEFAULT_INITIAL_BALANCE

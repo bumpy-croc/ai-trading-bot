@@ -116,7 +116,7 @@ def test_account_synchronization():
             strategy_name="account_sync_test",
             symbol="BTCUSDT",
             timeframe="1h",
-            mode="test",
+            mode="paper",
             initial_balance=10000.0
         )
         
@@ -207,7 +207,7 @@ def test_emergency_sync():
             strategy_name="emergency_sync_test",
             symbol="BTCUSDT",
             timeframe="1h",
-            mode="test",
+            mode="paper",
             initial_balance=10000.0
         )
         
