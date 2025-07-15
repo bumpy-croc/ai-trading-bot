@@ -259,18 +259,21 @@ class TradingDashboard {
             return;
         }
 
-        tbody.innerHTML = positions.map(position => `
+        tbody.innerHTML = positions.map(position => {
+            const unrealizedPnl = typeof position.unrealized_pnl === 'number' ? position.unrealized_pnl : 0.0;
+            return `
             <tr>
                 <td>${position.symbol}</td>
                 <td><span class="badge ${position.side === 'long' ? 'bg-success' : 'bg-danger'}">${position.side}</span></td>
                 <td>${position.size}</td>
                 <td>$${position.entry_price}</td>
                 <td>$${position.current_price}</td>
-                <td class="${position.unrealized_pnl >= 0 ? 'text-success' : 'text-danger'}">
-                    $${position.unrealized_pnl.toFixed(2)}
+                <td class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">
+                    $${unrealizedPnl.toFixed(2)}
                 </td>
             </tr>
-        `).join('');
+            `;
+        }).join('');
     }
 
     updateTrades(trades) {
@@ -282,18 +285,21 @@ class TradingDashboard {
             return;
         }
 
-        tbody.innerHTML = trades.map(trade => `
+        tbody.innerHTML = trades.map(trade => {
+            const pnl = typeof trade.pnl === 'number' ? trade.pnl : 0.0;
+            return `
             <tr>
                 <td>${trade.symbol}</td>
                 <td><span class="badge ${trade.side === 'buy' ? 'bg-success' : 'bg-danger'}">${trade.side}</span></td>
                 <td>${trade.quantity}</td>
                 <td>$${trade.entry_price}</td>
                 <td>$${trade.exit_price}</td>
-                <td class="${trade.pnl >= 0 ? 'text-success' : 'text-danger'}">
-                    $${trade.pnl.toFixed(2)}
+                <td class="${pnl >= 0 ? 'text-success' : 'text-danger'}">
+                    $${pnl.toFixed(2)}
                 </td>
             </tr>
-        `).join('');
+            `;
+        }).join('');
     }
 
     initializeChart() {

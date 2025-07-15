@@ -1229,6 +1229,12 @@ class MonitoringDashboard:
             trades: List[TradeDict] = []
             for row in result or []:
                 try:
+                    # * Ensure pnl is always a float
+                    pnl_val = row.get('pnl')
+                    if pnl_val is None or not isinstance(pnl_val, (int, float)):
+                        row['pnl'] = 0.0
+                    else:
+                        row['pnl'] = float(pnl_val)
                     trade = TradeDict(**row)
                     trades.append(trade)
                 except Exception as e:
