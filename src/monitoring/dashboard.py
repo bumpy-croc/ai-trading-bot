@@ -1182,11 +1182,15 @@ class MonitoringDashboard:
             current_price = self._get_current_price()
             
             for row in result:
+                # Ensure quantity is float
+                quantity_val = row.get('quantity')
+                quantity = float(quantity_val) if quantity_val is not None and isinstance(quantity_val, (int, float)) else 0.0
+                
                 # Calculate unrealized PnL
                 entry_price = row['entry_price']
-                quantity = row['quantity']
+                side = row['side'].lower()
                 
-                if row['side'].lower() == 'long':
+                if side == 'long':
                     unrealized_pnl = (current_price - entry_price) * quantity
                 else:
                     unrealized_pnl = (entry_price - current_price) * quantity
@@ -1213,7 +1217,6 @@ class MonitoringDashboard:
     def _get_recent_trades(self, limit: int = 50) -> List[TradeDict]:
         """Get recent completed trades"""
         try:
-            # Use f-string for LIMIT since it's a safe integer value
             query = f"""
             SELECT 
                 symbol, side, entry_price, exit_price, quantity,
@@ -1235,6 +1238,14 @@ class MonitoringDashboard:
                         row['pnl'] = 0.0
                     else:
                         row['pnl'] = float(pnl_val)
+                    
+                    # Ensure quantity is float
+                    quantity_val = row.get('quantity')
+                    if quantity_val is None or not isinstance(quantity_val, (int, float)):
+                        row['quantity'] = 0.0
+                    else:
+                        row['quantity'] = float(quantity_val)
+                    
                     trade = TradeDict(**row)
                     trades.append(trade)
                 except Exception as e:

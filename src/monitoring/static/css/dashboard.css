@@ -135,13 +135,15 @@ body {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    overflow: hidden;
+    overflow: auto;  /* Changed from hidden to auto to prevent content cutting */
     margin-bottom: 1.5rem;
 }
 
 .table {
     color: var(--text-primary);
     margin-bottom: 0;
+    table-layout: auto;  /* Allow columns to auto-adjust based on content */
+    width: 100%;
 }
 
 .table th {
@@ -171,6 +173,7 @@ body {
     border-radius: 6px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    color: #fff;  /* Set to white for better contrast on colored backgrounds */
 }
 
 .badge.bg-success {
@@ -180,7 +183,7 @@ body {
 
 .badge.bg-danger {
     background: rgba(239, 68, 68, 0.2);
-    color: var(--danger-color);
+    color: #fff !important;  /* White text for readability on red background */
 }
 
 .badge.bg-warning {

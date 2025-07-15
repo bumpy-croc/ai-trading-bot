@@ -131,17 +131,19 @@ class TradingDashboard {
         metricsContainer.innerHTML = '';
 
         // Create checkboxes for available metrics
-        Object.entries(this.config.metrics || {}).forEach(([key, metric]) => {
-            const div = document.createElement('div');
-            div.className = 'form-check';
-            div.innerHTML = `
-                <input class="form-check-input" type="checkbox" id="metric_${key}" 
-                       value="${key}" ${metric.enabled ? 'checked' : ''}>
-                <label class="form-check-label" for="metric_${key}">
-                    ${metric.display_name}
-                </label>
-            `;
-            metricsContainer.appendChild(div);
+        Object.entries(this.config || {}).forEach(([key, metric]) => {
+            if (metric && typeof metric === 'object' && 'enabled' in metric) {  // Ensure it's a metric object
+                const div = document.createElement('div');
+                div.className = 'form-check';
+                div.innerHTML = `
+                    <input class="form-check-input" type="checkbox" id="metric_${key}" 
+                           value="${key}" ${metric.enabled ? 'checked' : ''}>
+                    <label class="form-check-label" for="metric_${key}">
+                        ${key.replace(/_/g, ' ').toUpperCase()}
+                    </label>
+                `;
+                metricsContainer.appendChild(div);
+            }
         });
     }
 
@@ -155,13 +157,13 @@ class TradingDashboard {
         };
 
         // Get selected metrics
-        const checkboxes = form.querySelectorAll('.form-check-input');
-        checkboxes.forEach(checkbox => {
-            const metricKey = checkbox.value;
-            if (this.config.metrics[metricKey]) {
-                config.metrics[metricKey] = {
-                    ...this.config.metrics[metricKey],
-                    enabled: checkbox.checked
+        Object.keys(this.config).forEach(key => {
+            if (key !== 'update_interval') {  // Skip non-metric keys
+                const checkbox = document.getElementById(`metric_${key}`);
+                const enabled = checkbox ? checkbox.checked : this.config[key].enabled;
+                config.metrics[key] = {
+                    ...this.config[key],
+                    enabled: enabled
                 };
             }
         });
@@ -172,14 +174,18 @@ class TradingDashboard {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(config)
+                body: JSON.stringify(config.metrics)  // Send only metrics
             });
 
             if (response.ok) {
-                this.config = config;
+                this.config = { ...config, ...config.metrics };  // Update local config
                 this.updateInterval = config.update_interval * 1000;
                 this.toggleConfigPanel();
                 this.showSuccessMessage('Configuration saved successfully');
+                // Reload metrics to reflect changes
+                const metricsResponse = await fetch('/api/metrics');
+                const metrics = await metricsResponse.json();
+                this.updateMetrics(metrics);
             } else {
                 throw new Error('Failed to save configuration');
             }
@@ -190,11 +196,23 @@ class TradingDashboard {
     }
 
     updateMetrics(data) {
-        if (!this.config.metrics) return;
+        const container = document.getElementById('keyMetrics');
+        if (!container) return;
+        container.innerHTML = '';
 
         Object.entries(data).forEach(([key, value]) => {
-            const metric = this.config.metrics[key];
+            const metric = this.config[key];
             if (metric && metric.enabled) {
+                const col = document.createElement('div');
+                col.className = 'col-md-3 mb-3';
+                col.innerHTML = `
+                    <div class="metric-card" id="metric_${key}">
+                        <div class="metric-title">${key.replace(/_/g, ' ').toUpperCase()}</div>
+                        <div class="metric-value">${this.formatMetricValue(value, metric.format)}</div>
+                        <div class="metric-change"></div>
+                    </div>
+                `;
+                container.appendChild(col);
                 this.updateMetricCard(key, value, metric);
             }
         });
@@ -261,11 +279,12 @@ class TradingDashboard {
 
         tbody.innerHTML = positions.map(position => {
             const unrealizedPnl = typeof position.unrealized_pnl === 'number' ? position.unrealized_pnl : 0.0;
+            const quantity = typeof position.quantity === 'number' ? position.quantity : 0;
             return `
             <tr>
                 <td>${position.symbol}</td>
                 <td><span class="badge ${position.side === 'long' ? 'bg-success' : 'bg-danger'}">${position.side}</span></td>
-                <td>${position.size}</td>
+                <td>${quantity}</td>
                 <td>$${position.entry_price}</td>
                 <td>$${position.current_price}</td>
                 <td class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">
@@ -287,11 +306,12 @@ class TradingDashboard {
 
         tbody.innerHTML = trades.map(trade => {
             const pnl = typeof trade.pnl === 'number' ? trade.pnl : 0.0;
+            const quantity = typeof trade.quantity === 'number' ? trade.quantity : 0;
             return `
             <tr>
                 <td>${trade.symbol}</td>
                 <td><span class="badge ${trade.side === 'buy' ? 'bg-success' : 'bg-danger'}">${trade.side}</span></td>
-                <td>${trade.quantity}</td>
+                <td>${quantity}</td>
                 <td>$${trade.entry_price}</td>
                 <td>$${trade.exit_price}</td>
                 <td class="${pnl >= 0 ? 'text-success' : 'text-danger'}">
@@ -341,13 +361,16 @@ class TradingDashboard {
     }
 
     updatePerformanceChart(data) {
-        if (!this.chart || !data || !data.length) return;
+        if (!this.chart) return;
+        if (!data || !data.timestamps || !data.balances || data.timestamps.length === 0) {
+            this.chart.data.labels = [];
+            this.chart.data.datasets[0].data = [];
+            this.chart.update();
+            return;
+        }
 
-        const labels = data.map(point => new Date(point.timestamp).toLocaleDateString());
-        const values = data.map(point => point.value);
-
-        this.chart.data.labels = labels;
-        this.chart.data.datasets[0].data = values;
+        this.chart.data.labels = data.timestamps.map(ts => new Date(ts).toLocaleDateString());
+        this.chart.data.datasets[0].data = data.balances;
         this.chart.update();
     }
 
