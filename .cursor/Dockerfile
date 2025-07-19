@@ -21,12 +21,11 @@ WORKDIR /workspace
 COPY requirements.txt ./requirements.txt
 
 # Install Python dependencies
-RUN pip install --upgrade pip --no-cache-dir
+RUN pip install --upgrade pip --no-cache-dir && \
+    pip install --no-cache-dir -r requirements.txt
+
 # Create necessary directories
 RUN mkdir -p logs ml data /var/lib/postgresql/data /var/run/postgresql
-
-# Make scripts executable
-RUN chmod +x scripts/*.py
 
 # Set up PostgreSQL
 RUN chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql && \
