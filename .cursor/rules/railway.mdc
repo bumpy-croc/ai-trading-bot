@@ -5,7 +5,17 @@ alwaysApply: false
 
 Project name: innovative-transformation
 Service: ai-trading-bot
-Environment: production
+Environments: staging or production
+
+## Staging Environment
+
+- The monitoring dashboard can be accessed at https://monitor-dashboard-staging.up.railway.app/
+- Use the environment variable `RAILWAY_STAGING_DATABASE_URL` to access the staging databae.
+
+## Production Environment
+- The monitoring dashboard can be accessed at https://monitor-dashboard-staging.up.railway.app/
+- Use the environment variable `RAILWAY_PRODUCTION_DATABASE_URL` to access the staging databae.
+
 
 This app is hosted on Railway (https://railway.com/)
 
