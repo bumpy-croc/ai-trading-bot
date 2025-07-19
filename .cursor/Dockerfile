@@ -19,15 +19,9 @@ WORKDIR /workspace
 
 # Copy requirements files
 COPY requirements.txt ./requirements.txt
-COPY requirements-server.txt ./requirements-server.txt
 
 # Install Python dependencies
-RUN pip install --upgrade pip --no-cache-dir && \
-    pip install --no-cache-dir -r requirements-server.txt
-
-# Copy application code
-COPY . .
-
+RUN pip install --upgrade pip --no-cache-dir
 # Create necessary directories
 RUN mkdir -p logs ml data /var/lib/postgresql/data /var/run/postgresql
 
