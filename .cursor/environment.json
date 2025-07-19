@@ -3,5 +3,6 @@
     "dockerfile": "Dockerfile",
     "context": "."
   },
+  "install": "pip install --upgrade pip --no-cache-dir && pip install --no-cache-dir -r requirements.txt",
   "terminals": []
 }
