@@ -40,7 +40,7 @@ RUN echo "CREATE DATABASE trading_bot;" > /tmp/init.sql && \
     echo "ALTER USER postgres CREATEDB;" >> /tmp/init.sql
 
 # Copy supervisor configuration
-COPY .cursor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY ./supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Set environment variables
 ENV PYTHONPATH=/workspace
