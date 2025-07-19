@@ -24,6 +24,7 @@ alwaysApply: true
 - **Rigorous Explanations:** For complex implementations, non-obvious logic, or significant architectural decisions, provide explanation in the 'Rationale for significant deviations' section. This may include historical context or multi-layered analysis where relevant.
 - **Preservation of Effort:** Iterative backtracking is a valid part of the development process. However, if all attempted paths fail, the final state of your work must be preserved. Do not revert all changes; instead, document the final failed attempt in your report.
 - **No Disposable Code:** All code verification must be conducted using the project's unit testing framework. Temporary validation scripts are prohibited.
+- **No scripts to prove functionality works** Don't create any scripts unless explicitely asked to. 
 
 ## 2. Security & Sensitive Information
 

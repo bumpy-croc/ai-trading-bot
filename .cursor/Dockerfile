@@ -1,38 +1,64 @@
-# syntax=docker/dockerfile:1.4
+# Background Agent Dockerfile - Self-contained with PostgreSQL
 FROM python:3.11-slim
 
-# Install system dependencies and PostgreSQL
+# Install system dependencies including PostgreSQL
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
+        git \
+        build-essential \
+        libpq-dev \
         postgresql \
         postgresql-contrib \
         supervisor \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create a non-root user
-RUN useradd -ms /bin/bash ubuntu
+        && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
-WORKDIR /home/ubuntu
+WORKDIR /workspace
 
-# Copy requirements and install dependencies (dev + prod)
+# Copy requirements files
+COPY requirements.txt ./requirements.txt
+COPY requirements-server.txt ./requirements-server.txt
+
+# Install Python dependencies
 RUN pip install --upgrade pip --no-cache-dir && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements-server.txt
 
-# Do NOT copy application code from parent directory (agent will clone code at runtime)
+# Copy application code
+COPY . .
 
-# Create PostgreSQL data directory
-RUN mkdir -p /var/lib/postgresql/data
+# Create necessary directories
+RUN mkdir -p logs ml data /var/lib/postgresql/data /var/run/postgresql
 
-# Add supervisord config
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+# Make scripts executable
+RUN chmod +x scripts/*.py
 
-# Expose app and database ports
-EXPOSE 8000 5432
+# Set up PostgreSQL
+RUN chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql && \
+    su - postgres -c "initdb -D /var/lib/postgresql/data" && \
+    echo "host all all 0.0.0.0/0 md5" >> /var/lib/postgresql/data/pg_hba.conf && \
+    echo "listen_addresses='*'" >> /var/lib/postgresql/data/postgresql.conf
 
-# Switch to non-root user
-USER ubuntu
+# Create database and user
+RUN echo "CREATE DATABASE trading_bot;" > /tmp/init.sql && \
+    echo "CREATE USER postgres WITH PASSWORD 'password';" >> /tmp/init.sql && \
+    echo "GRANT ALL PRIVILEGES ON DATABASE trading_bot TO postgres;" >> /tmp/init.sql && \
+    echo "ALTER USER postgres CREATEDB;" >> /tmp/init.sql
 
-# Default command: run supervisord
+# Copy supervisor configuration
+COPY .cursor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Set environment variables
+ENV PYTHONPATH=/workspace
+ENV PYTHONUNBUFFERED=1
+ENV DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
+ENV RAILWAY_STAGING_DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
+ENV RAILWAY_PRODUCTION_DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
+ENV PGDATA=/var/lib/postgresql/data
+
+# Expose PostgreSQL and dashboard ports
+EXPOSE 5432 5000
+
+# Start supervisor to manage PostgreSQL, dashboard, and the application
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
