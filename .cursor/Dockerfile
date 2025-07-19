@@ -17,6 +17,9 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /workspace
 
+# Copy requirements files
+COPY ../requirements.txt ./requirements.txt
+
 # Install Python dependencies
 RUN pip install --upgrade pip --no-cache-dir && \
     pip install --no-cache-dir -r requirements.txt
