@@ -246,6 +246,9 @@ class TradingDashboard {
         if (typeof value !== 'number') {
             if (format === 'datetime') {
                 const date = new Date(value);
+                if (isNaN(date.getTime())) {
+                    return "Invalid Date";
+                }
                 const weekday = date.toLocaleDateString('en-US', { weekday: 'short' });
                 const day = date.toLocaleDateString('en-US', { day: '2-digit' });
                 const month = date.toLocaleDateString('en-US', { month: 'short' });
