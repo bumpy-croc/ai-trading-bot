@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, TypedDict
 from pathlib import Path
 import pandas as pd  # type: ignore
+from decimal import Decimal
 
 from flask import Flask, render_template, jsonify, request  # type: ignore
 from flask_socketio import SocketIO, emit  # type: ignore
@@ -164,6 +165,17 @@ class MonitoringDashboard:
         self._setup_routes()
         self._setup_websocket_handlers()
     
+    def _safe_float(self, value) -> float:
+        """Safely convert any value to float, handling Decimal types"""
+        if value is None:
+            return 0.0
+        if isinstance(value, Decimal):
+            return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _setup_routes(self):
         """Setup Flask routes"""
         
@@ -469,6 +481,8 @@ class MonitoringDashboard:
             if len(result) < 2:
                 return 0.0
             df = pd.DataFrame(result)
+            # Convert balance column to float to handle Decimal types
+            df['balance'] = df['balance'].apply(self._safe_float)
             daily_balance = df.set_index('date')['balance']
             return perf_max_drawdown(daily_balance)
         except Exception as e:
@@ -489,7 +503,7 @@ class MonitoringDashboard:
             WHERE status = 'FILLED'
             """
             result = self.db_manager.execute_query(query)
-            exposure = result[0]['total_exposure'] if result else 0.0
+            exposure = self._safe_float(result[0]['total_exposure']) if result else 0.0
             return (exposure / balance) * 100
         except Exception as e:
             logger.error(f"Error calculating current exposure: {e}")
@@ -516,6 +530,8 @@ class MonitoringDashboard:
             
             # Calculate daily returns
             df = pd.DataFrame(result)
+            # Convert balance column to float to handle Decimal types
+            df['balance'] = df['balance'].apply(self._safe_float)
             daily_balance = df.set_index('date')['balance']
             return perf_sharpe(daily_balance)
             
@@ -538,6 +554,8 @@ class MonitoringDashboard:
                 return 0.0
             
             df = pd.DataFrame(result)
+            # Convert balance column to float to handle Decimal types
+            df['balance'] = df['balance'].apply(self._safe_float)
             df['daily_return'] = df['balance'].pct_change()
             df = df.dropna()
             
@@ -1002,7 +1020,7 @@ class MonitoringDashboard:
             result = self.db_manager.execute_query(query)
             
             if result:
-                total_quantity = result[0]['total_quantity']
+                total_quantity = self._safe_float(result[0]['total_quantity'])
                 return total_quantity * current_price
             return 0.0
             
@@ -1054,8 +1072,8 @@ class MonitoringDashboard:
             
             total_unrealized = 0.0
             for position in result:
-                entry_price = position['entry_price']
-                quantity = position['quantity']
+                entry_price = self._safe_float(position['entry_price'])
+                quantity = self._safe_float(position['quantity'])
                 side = position['side'].lower()
                 
                 if side == 'long':
@@ -1090,7 +1108,7 @@ class MonitoringDashboard:
             
             outcomes = []
             for trade in result:
-                pnl_val = trade.get('pnl')
+                pnl_val = self._safe_float(trade.get('pnl'))
                 if pnl_val is None:
                     continue
                 outcomes.append("W" if pnl_val > 0 else "L")
@@ -1116,8 +1134,8 @@ class MonitoringDashboard:
             if not result:
                 return 0.0
 
-            gross_profit = result[0].get('gross_profit') or 0.0
-            gross_loss = result[0].get('gross_loss') or 0.0
+            gross_profit = self._safe_float(result[0].get('gross_profit') or 0.0)
+            gross_loss = self._safe_float(result[0].get('gross_loss') or 0.0)
 
             if gross_loss == 0:
                 # Avoid division by zero; if no losses yet, profit factor is undefined -> return 0
@@ -1143,8 +1161,8 @@ class MonitoringDashboard:
             if not result:
                 return 0.0
 
-            avg_win = result[0].get('avg_win') or 0.0
-            avg_loss = result[0].get('avg_loss') or 0.0
+            avg_win = self._safe_float(result[0].get('avg_win') or 0.0)
+            avg_loss = self._safe_float(result[0].get('avg_loss') or 0.0)
 
             if avg_loss == 0:
                 return 0.0
@@ -1173,10 +1191,10 @@ class MonitoringDashboard:
             for row in result:
                 # Ensure quantity is float
                 quantity_val = row.get('quantity')
-                quantity = float(quantity_val) if quantity_val is not None and isinstance(quantity_val, (int, float)) else 0.0
+                quantity = self._safe_float(quantity_val)
                 
-                # Calculate unrealized PnL
-                entry_price = row['entry_price']
+                # Calculate unrealized PnL - convert entry_price to float
+                entry_price = self._safe_float(row['entry_price'])
                 side = row['side'].lower()
                 
                 if side == 'long':
@@ -1192,8 +1210,8 @@ class MonitoringDashboard:
                     'quantity': quantity,
                     'unrealized_pnl': unrealized_pnl,
                     'entry_time': row['entry_time'],
-                    'stop_loss': row['stop_loss'],
-                    'take_profit': row['take_profit'],
+                    'stop_loss': self._safe_float(row['stop_loss']) if row['stop_loss'] is not None else None,
+                    'take_profit': self._safe_float(row['take_profit']) if row['take_profit'] is not None else None,
                     'order_id': row['order_id']
                 }))
             

@@ -206,7 +206,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             df = self._process_klines(klines)
             self.data = df
             
-            logger.info(f"Fetched {len(df)} candles from {df.index.min()} to {df.index.max()}")
+            if len(df) > 0:
+                logger.info(f"Fetched {len(df)} candles from {df.index.min()} to {df.index.max()}")
+            else:
+                logger.info(f"Fetched 0 candles from {start} to {end}")
             return df
             
         except Exception as e:

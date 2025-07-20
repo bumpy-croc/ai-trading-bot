@@ -146,6 +146,12 @@ class CachedDataProvider(DataProvider):
         Returns:
             DataFrame for the year or None if failed
         """
+        # Check if we're trying to fetch future data
+        current_year = datetime.now().year
+        if year > current_year:
+            logger.warning(f"Cannot fetch data for future year {year} (current year: {current_year})")
+            return None
+            
         cache_key = self._generate_year_cache_key(symbol, timeframe, year)
         cache_path = self._get_cache_path(cache_key)
         
@@ -166,6 +172,11 @@ class CachedDataProvider(DataProvider):
         # Fetch the entire year to maximize cache efficiency
         fetch_start = datetime(year, 1, 1)
         fetch_end = datetime(year + 1, 1, 1) - timedelta(seconds=1)
+        
+        # Don't fetch beyond current time
+        current_time = datetime.now()
+        if fetch_end > current_time:
+            fetch_end = current_time
         
         try:
             year_data = self.data_provider.get_historical_data(symbol, timeframe, fetch_start, fetch_end)
@@ -214,6 +225,16 @@ class CachedDataProvider(DataProvider):
             timeframe = '1d'  # default to daily
         if end is None:
             end = datetime.now()
+            
+        # Don't fetch future data
+        current_time = datetime.now()
+        if end > current_time:
+            logger.info(f"Adjusting end time from {end} to {current_time} to avoid future data")
+            end = current_time
+            
+        if start > current_time:
+            logger.warning(f"Start time {start} is in the future, returning empty DataFrame")
+            return pd.DataFrame()
             
         # Get year ranges for the requested period
         year_ranges = self._get_year_ranges(start, end)
