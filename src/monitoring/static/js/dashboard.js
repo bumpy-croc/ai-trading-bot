@@ -243,18 +243,35 @@ class TradingDashboard {
     }
 
     formatMetricValue(value, format) {
-        if (typeof value !== 'number') return value;
+        if (typeof value !== 'number') {
+            if (format === 'datetime') {
+                const date = new Date(value);
+                if (isNaN(date.getTime())) {
+                    return "Invalid Date";
+                }
+                const weekday = date.toLocaleDateString('en-US', { weekday: 'short' });
+                const day = date.toLocaleDateString('en-US', { day: '2-digit' });
+                const month = date.toLocaleDateString('en-US', { month: 'short' });
+                const time = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+                return `${time} on ${weekday}, ${day} ${month}`;
+            }
+            return value;
+        }
 
         switch (format) {
             case 'currency':
                 return new Intl.NumberFormat('en-US', {
                     style: 'currency',
-                    currency: 'USD'
+                    currency: 'USD',
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
                 }).format(value);
             case 'percentage':
-                return `${(value * 100).toFixed(2)}%`;
+                return `${Math.round(value * 100)}%`;
             case 'integer':
                 return Math.round(value).toLocaleString();
+            case 'number':
+                // falls through
             case 'decimal':
                 return value.toFixed(2);
             default:
@@ -284,9 +301,9 @@ class TradingDashboard {
             <tr>
                 <td>${position.symbol}</td>
                 <td><span class="badge ${position.side === 'long' ? 'bg-success' : 'bg-danger'}">${position.side}</span></td>
-                <td>${quantity}</td>
-                <td>$${position.entry_price}</td>
-                <td>$${position.current_price}</td>
+                <td>${quantity.toFixed(4)}</td>
+                <td>$${position.entry_price.toFixed(2)}</td>
+                <td>$${position.current_price.toFixed(2)}</td>
                 <td class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">
                     $${unrealizedPnl.toFixed(2)}
                 </td>
@@ -311,9 +328,9 @@ class TradingDashboard {
             <tr>
                 <td>${trade.symbol}</td>
                 <td><span class="badge ${trade.side === 'buy' ? 'bg-success' : 'bg-danger'}">${trade.side}</span></td>
-                <td>${quantity}</td>
-                <td>$${trade.entry_price}</td>
-                <td>$${trade.exit_price}</td>
+                <td>${quantity.toFixed(4)}</td>
+                <td>$${trade.entry_price.toFixed(2)}</td>
+                <td>$${trade.exit_price.toFixed(2)}</td>
                 <td class="${pnl >= 0 ? 'text-success' : 'text-danger'}">
                     $${pnl.toFixed(2)}
                 </td>

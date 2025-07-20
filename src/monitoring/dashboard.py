@@ -108,6 +108,7 @@ class MonitoringDashboard:
         self.update_interval = update_interval
         self.is_running = False
         self.update_thread = None
+        self.start_time = datetime.now()
         
         # Configurable monitoring parameters
         self.monitoring_config = {
@@ -609,7 +610,6 @@ class MonitoringDashboard:
             query = """
             SELECT strategy_name 
             FROM trading_sessions 
-            WHERE end_time IS NULL 
             ORDER BY start_time DESC 
             LIMIT 1
             """
@@ -794,22 +794,11 @@ class MonitoringDashboard:
     def _get_system_uptime(self) -> str:
         """Get system uptime"""
         try:
-            # Get the earliest trading session start time as proxy for uptime
-            query = """
-            SELECT MIN(start_time) as earliest_start 
-            FROM trading_sessions 
-            WHERE end_time IS NULL
-            """
-            result = self.db_manager.execute_query(query)
-            
-            if result and result[0]['earliest_start']:
-                start_time = pd.to_datetime(result[0]['earliest_start'])
-                uptime = datetime.now() - start_time
-                days = uptime.days
-                hours, remainder = divmod(uptime.seconds, 3600)
-                minutes, _ = divmod(remainder, 60)
-                return f"{days}d {hours}h {minutes}m"
-            return "Unknown"
+            uptime = datetime.now() - self.start_time
+            days = uptime.days
+            hours, remainder = divmod(uptime.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            return f"{days}d {hours}h {minutes}m"
         except Exception as e:
             logger.error(f"Error getting system uptime: {e}")
             return "Unknown"
