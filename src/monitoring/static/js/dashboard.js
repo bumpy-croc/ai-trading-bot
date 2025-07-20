@@ -271,6 +271,7 @@ class TradingDashboard {
             case 'integer':
                 return Math.round(value).toLocaleString();
             case 'number':
+                // falls through
             case 'decimal':
                 return value.toFixed(2);
             default:
