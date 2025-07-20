@@ -145,6 +145,16 @@ class MlBasic(BaseStrategy):
         
         return entry_signal
 
+    def check_short_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+        if index < 1 or index >= len(df):
+            return False
+        pred = df['onnx_pred'].iloc[index]
+        close = df['close'].iloc[index]
+        if pd.isna(pred):
+            return False
+        predicted_return = (pred - close) / close if close > 0 else 0
+        return predicted_return < -0.0005
+
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         if index < 1 or index >= len(df):
             return False
@@ -152,13 +162,25 @@ class MlBasic(BaseStrategy):
         returns = (current_price - entry_price) / entry_price
         hit_stop_loss = returns <= -self.stop_loss_pct
         hit_take_profit = returns >= self.take_profit_pct
-        return hit_stop_loss or hit_take_profit
+        pred = df['onnx_pred'].iloc[index]
+        if pd.isna(pred):
+            return hit_stop_loss or hit_take_profit
+        predicted_return = (pred - current_price) / current_price if current_price > 0 else 0
+        unfavorable_prediction = predicted_return < 0
+        return hit_stop_loss or hit_take_profit or unfavorable_prediction
 
     def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
-        # Simple fixed position size: 10% of balance
         if index >= len(df) or balance <= 0:
             return 0.0
-        return balance * 0.10
+        pred = df['onnx_pred'].iloc[index]
+        close = df['close'].iloc[index]
+        if pd.isna(pred):
+            return 0.0
+        predicted_return = abs(pred - close) / close if close > 0 else 0
+        confidence = min(1.0, predicted_return * 10)
+        base_size = 0.1
+        dynamic_size = base_size * confidence
+        return max(0.05, min(0.2, dynamic_size)) * balance
 
     def get_parameters(self) -> dict:
         return {

@@ -667,6 +667,18 @@ class TestMlBasicStrategy:
         assert 'stop_loss_pct' in params
         assert 'take_profit_pct' in params
 
+    @pytest.mark.strategy
+    def test_ml_basic_exit_conditions(self, sample_ohlcv_data):
+        strategy = MlBasic()
+        df = strategy.calculate_indicators(sample_ohlcv_data)
+        entry_price = 100
+        # Test not exit
+        df.at[df.index[-1], 'onnx_pred'] = 105
+        assert not strategy.check_exit_conditions(df, len(df)-1, entry_price)
+        # Test exit on unfavorable prediction
+        df.at[df.index[-1], 'onnx_pred'] = 95
+        assert strategy.check_exit_conditions(df, len(df)-1, entry_price)
+
 
 class TestMlWithSentimentStrategy:
     """Test the ML with sentiment strategy implementation and logging"""

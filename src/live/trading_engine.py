@@ -450,6 +450,16 @@ class LiveTradingEngine:
                 # Check entry conditions if not at maximum positions
                 if len(self.positions) < self.risk_manager.get_max_concurrent_positions():
                     self._check_entry_conditions(df, current_index, symbol, current_price)
+                    # Check for short entry if strategy supports it
+                    if hasattr(self.strategy, 'check_short_entry_conditions'):
+                        short_entry_signal = self.strategy.check_short_entry_conditions(df, current_index)
+                        if short_entry_signal:
+                            short_position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+                            short_position_size = min(short_position_size, self.max_position_size)
+                            if short_position_size > 0:
+                                short_stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, 'short')
+                                short_take_profit = current_price * 0.96  # 4% take profit for short
+                                self._open_position(symbol, PositionSide.SHORT, short_position_size, current_price, short_stop_loss, short_take_profit)
                 # Update performance metrics
                 self._update_performance_metrics()
                 # Log account snapshot to database periodically (configurable interval)
@@ -575,9 +585,9 @@ class LiveTradingEngine:
             if self.db_manager:
                 # Calculate current P&L for context
                 if position.side == PositionSide.LONG:
-                    current_pnl = (current_price - position.entry_price) / position.entry_price
+                    current_pnl = (float(current_price) - float(position.entry_price)) / float(position.entry_price)
                 else:
-                    current_pnl = (position.entry_price - current_price) / position.entry_price
+                    current_pnl = (float(position.entry_price) - float(current_price)) / float(position.entry_price)
                 
                 self.db_manager.log_strategy_execution(
                     strategy_name=self.strategy.__class__.__name__,
