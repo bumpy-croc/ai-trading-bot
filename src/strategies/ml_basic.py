@@ -25,6 +25,13 @@ import onnxruntime as ort
 from strategies.base import BaseStrategy
 
 class MlBasic(BaseStrategy):
+    # * Strategy configuration constants
+    SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
+    CONFIDENCE_MULTIPLIER = 10  # Multiplier for confidence calculation
+    BASE_POSITION_SIZE = 0.1  # Base position size (10% of balance)
+    MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
+    MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
+    
     def __init__(self, name="MlBasic", model_path="ml/btcusdt_price.onnx", sequence_length=120):
         super().__init__(name)
         
@@ -153,7 +160,7 @@ class MlBasic(BaseStrategy):
         if pd.isna(pred):
             return False
         predicted_return = (pred - close) / close if close > 0 else 0
-        return predicted_return < -0.0005
+        return predicted_return < self.SHORT_ENTRY_THRESHOLD
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         if index < 1 or index >= len(df):
@@ -162,12 +169,21 @@ class MlBasic(BaseStrategy):
         returns = (current_price - entry_price) / entry_price
         hit_stop_loss = returns <= -self.stop_loss_pct
         hit_take_profit = returns >= self.take_profit_pct
+        
+        # * Basic exit conditions (stop loss and take profit)
+        basic_exit = hit_stop_loss or hit_take_profit
+        
+        # * ML-based exit signal for unfavorable predictions
         pred = df['onnx_pred'].iloc[index]
-        if pd.isna(pred):
-            return hit_stop_loss or hit_take_profit
-        predicted_return = (pred - current_price) / current_price if current_price > 0 else 0
-        unfavorable_prediction = predicted_return < 0
-        return hit_stop_loss or hit_take_profit or unfavorable_prediction
+        if not pd.isna(pred):
+            # * For long positions: exit if prediction suggests significant price drop
+            # * Only exit if prediction is significantly unfavorable (>2% drop predicted)
+            predicted_return = (pred - current_price) / current_price if current_price > 0 else 0
+            significant_unfavorable_prediction = predicted_return < -0.02  # 2% threshold
+            
+            return basic_exit or significant_unfavorable_prediction
+        
+        return basic_exit
 
     def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
         if index >= len(df) or balance <= 0:
@@ -177,10 +193,9 @@ class MlBasic(BaseStrategy):
         if pd.isna(pred):
             return 0.0
         predicted_return = abs(pred - close) / close if close > 0 else 0
-        confidence = min(1.0, predicted_return * 10)
-        base_size = 0.1
-        dynamic_size = base_size * confidence
-        return max(0.05, min(0.2, dynamic_size)) * balance
+        confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
+        dynamic_size = self.BASE_POSITION_SIZE * confidence
+        return max(self.MIN_POSITION_SIZE_RATIO, min(self.MAX_POSITION_SIZE_RATIO, dynamic_size)) * balance
 
     def get_parameters(self) -> dict:
         return {
@@ -191,9 +206,12 @@ class MlBasic(BaseStrategy):
             'take_profit_pct': self.take_profit_pct
         }
 
-    def calculate_stop_loss(self, df, index, price, side: str = 'long') -> float:
+    def calculate_stop_loss(self, df, index, price, side) -> float:
         """Calculate stop loss price"""
-        if side == 'long':
+        # * Handle both string and enum inputs for backward compatibility
+        side_str = side.value if hasattr(side, 'value') else str(side)
+        
+        if side_str == 'long':
             return price * (1 - self.stop_loss_pct)
         else:  # short
             return price * (1 + self.stop_loss_pct)

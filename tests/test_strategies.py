@@ -671,12 +671,17 @@ class TestMlBasicStrategy:
     def test_ml_basic_exit_conditions(self, sample_ohlcv_data):
         strategy = MlBasic()
         df = strategy.calculate_indicators(sample_ohlcv_data)
-        entry_price = 100
-        # Test not exit
-        df.at[df.index[-1], 'onnx_pred'] = 105
+        
+        # * Use realistic entry price close to current price
+        current_price = df['close'].iloc[-1]
+        entry_price = current_price * 0.98  # Entry at 2% below current price
+        
+        # Test not exit (predicted price higher than current)
+        df.at[df.index[-1], 'onnx_pred'] = current_price * 1.05  # 5% above current
         assert not strategy.check_exit_conditions(df, len(df)-1, entry_price)
-        # Test exit on unfavorable prediction
-        df.at[df.index[-1], 'onnx_pred'] = 95
+        
+        # Test exit on unfavorable prediction (predicted price lower than current)
+        df.at[df.index[-1], 'onnx_pred'] = current_price * 0.95  # 5% below current
         assert strategy.check_exit_conditions(df, len(df)-1, entry_price)
 
 
