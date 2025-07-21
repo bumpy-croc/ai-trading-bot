@@ -24,6 +24,7 @@ from risk import RiskParameters
 from backtesting import Backtester
 
 from strategies import AdaptiveStrategy, EnhancedStrategy, HighRiskHighRewardStrategy, MlBasic  # Direct imports
+from strategies.ml_adaptive import MlAdaptive
 
 # Set up logging
 logging.basicConfig(
@@ -52,9 +53,12 @@ def load_strategy(strategy_name: str):
         elif strategy_name == 'ml_with_sentiment':
             from strategies.ml_with_sentiment import MlWithSentiment
             strategy = MlWithSentiment(use_sentiment=True)
+        elif strategy_name == 'ml_adaptive':
+            from strategies.ml_adaptive import MlAdaptive
+            strategy = MlAdaptive()
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ['adaptive', 'enhanced', 'high_risk_high_reward', 'ml_basic', 'ml_with_sentiment']
+            available_strategies = ['adaptive', 'enhanced', 'high_risk_high_reward', 'ml_basic', 'ml_with_sentiment', 'ml_adaptive']
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
         
