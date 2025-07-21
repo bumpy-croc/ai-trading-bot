@@ -24,7 +24,6 @@ from risk import RiskParameters
 from backtesting import Backtester
 
 from strategies import AdaptiveStrategy, EnhancedStrategy, HighRiskHighRewardStrategy, MlBasic  # Direct imports
-from strategies.ml_adaptive import MlAdaptive
 
 # Set up logging
 logging.basicConfig(
@@ -53,12 +52,9 @@ def load_strategy(strategy_name: str):
         elif strategy_name == 'ml_with_sentiment':
             from strategies.ml_with_sentiment import MlWithSentiment
             strategy = MlWithSentiment(use_sentiment=True)
-        elif strategy_name == 'ml_adaptive':
-            from strategies.ml_adaptive import MlAdaptive
-            strategy = MlAdaptive()
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ['adaptive', 'enhanced', 'high_risk_high_reward', 'ml_basic', 'ml_with_sentiment', 'ml_adaptive']
+            available_strategies = ['adaptive', 'enhanced', 'high_risk_high_reward', 'ml_basic', 'ml_with_sentiment']
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
         
@@ -190,6 +186,14 @@ def main():
             print(f"Database Session ID: {results['session_id']}")
             print("=" * 50)
 
+        # Print early stop information if backtest was stopped early
+        if results.get('early_stop_reason'):
+            print("⚠️  BACKTEST STOPPED EARLY ⚠️")
+            print(f"Reason: {results['early_stop_reason']}")
+            print(f"Date: {results['early_stop_date']}")
+            print(f"Candle: {results['early_stop_candle_index']} of {len(df) if 'df' in locals() else 'unknown'}")
+            print("=" * 50)
+        
         # Print yearly returns if available
         if 'yearly_returns' in results and results['yearly_returns']:
             print("Yearly Returns:")
