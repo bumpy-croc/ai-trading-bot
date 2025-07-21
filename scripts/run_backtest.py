@@ -186,6 +186,14 @@ def main():
             print(f"Database Session ID: {results['session_id']}")
             print("=" * 50)
 
+        # Print early stop information if backtest was stopped early
+        if results.get('early_stop_reason'):
+            print("⚠️  BACKTEST STOPPED EARLY ⚠️")
+            print(f"Reason: {results['early_stop_reason']}")
+            print(f"Date: {results['early_stop_date']}")
+            print(f"Candle: {results['early_stop_candle_index']} of {len(df) if 'df' in locals() else 'unknown'}")
+            print("=" * 50)
+        
         # Print yearly returns if available
         if 'yearly_returns' in results and results['yearly_returns']:
             print("Yearly Returns:")

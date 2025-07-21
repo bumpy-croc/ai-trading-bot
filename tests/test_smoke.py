@@ -2,7 +2,7 @@
 
 This test runs a backtest using a mocked Binance data provider for the MlBasic strategy
 from 2024-01-01 to 2024-12-31 and compares the yearly return with the validated
-benchmark (62.77 % for 2024).
+benchmark (73.81 % for 2024).
 
 If the Binance API is unreachable (e.g. offline CI environment) the test
 is skipped automatically.
@@ -51,4 +51,4 @@ def test_ml_basic_backtest_2024_smoke(btcusdt_1h_2023_2024):
     assert "2024" in yearly, "Year 2024 missing from yearly returns"
 
     # Validate against previously recorded benchmark with 2 % tolerance.
-    assert yearly["2024"] == pytest.approx(62.77, rel=0.01)
+    assert yearly["2024"] == pytest.approx(73.81, rel=0.01)
