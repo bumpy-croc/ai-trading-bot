@@ -57,7 +57,7 @@ class MlAdaptive(BaseStrategy):
         # Market regime thresholds
         self.volatility_low_threshold = 0.02  # 2% daily volatility
         self.volatility_high_threshold = 0.05  # 5% daily volatility
-        self.volatility_crisis_threshold = 0.10  # 10% daily volatility (crisis mode)
+        self.volatility_crisis_threshold = 0.20  # 10% daily volatility (crisis mode)
         
         # Risk limits
         self.max_daily_loss_pct = 0.05  # 5% maximum daily loss
@@ -71,8 +71,18 @@ class MlAdaptive(BaseStrategy):
         self.in_crisis_mode = False
         
         # ML confidence thresholds
-        self.min_prediction_confidence = 0.01  # 1% minimum predicted move
+        # * Lower minimum confidence slightly to allow more frequent trades
+        self.min_prediction_confidence = 0.007  # 0.7% minimum predicted move
         self.crisis_confidence_multiplier = 2.0  # Double confidence requirement in crisis
+
+        # * Expose a generic take_profit_pct attribute expected by the trading engine
+        self.take_profit_pct = self.base_take_profit_pct  # For short positions handled by engine
+
+        # * Rebound detection parameters
+        self.rebound_confidence_multiplier = 0.5  # Reduce confidence threshold by 50% on rebounds
+
+        # * Bear market detection parameters
+        self.bear_trend_threshold = -0.05  # 5% negative trend strength considered bear
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
@@ -90,12 +100,27 @@ class MlAdaptive(BaseStrategy):
         df['volatility_50'] = df['returns'].rolling(window=50).std()
         df['atr_pct'] = df['atr'] / df['close']  # ATR as percentage of price
         
-        # Detect market regime
-        df['market_regime'] = self._detect_market_regime(df)
-        
+        # We need trend and bear/rebound information before detecting regime
         # Calculate trend strength
         df['trend_strength'] = (df['close'] - df['ma_50']) / df['ma_50']
         df['trend_direction'] = np.where(df['ma_20'] > df['ma_50'], 1, -1)
+
+        # * Bear market flag – MA50 below MA200 and significant negative trend strength
+        df['bear_market'] = np.where(
+            (df['ma_50'] < df['ma_200']) & (df['trend_strength'] < self.bear_trend_threshold),
+            1,
+            0
+        )
+
+        # * Rebound signal – previous candle in bear market but current trend turns positive (ma_20 > ma_50)
+        df['rebound_signal'] = (
+            (df['bear_market'].shift(1) == 1) &  # Previously in bear
+            (df['trend_direction'] > 0) &        # Trend flips positive
+            (df['close'] > df['ma_50'])           # Price reclaims MA50
+        ).astype(int)
+
+        # * Now that we have bear/rebound flags, detect market regime
+        df['market_regime'] = self._detect_market_regime(df)
         
         # Normalize price features for ML model
         price_features = ['close', 'volume', 'high', 'low', 'open']
@@ -151,7 +176,7 @@ class MlAdaptive(BaseStrategy):
         return df
 
     def _detect_market_regime(self, df: pd.DataFrame) -> pd.Series:
-        """Detect market regime: normal, volatile, crisis, or recovery"""
+        """Detect market regime including bear and bull phases"""
         regimes = []
         
         for i in range(len(df)):
@@ -162,19 +187,24 @@ class MlAdaptive(BaseStrategy):
             volatility = df['volatility_20'].iloc[i] if not pd.isna(df['volatility_20'].iloc[i]) else 0
             atr_pct = df['atr_pct'].iloc[i] if not pd.isna(df['atr_pct'].iloc[i]) else 0
             
-            # Check for crisis conditions
+            # * Crisis overrides all other regimes
             if volatility > self.volatility_crisis_threshold or atr_pct > 0.15:
                 regimes.append('crisis')
                 self.in_crisis_mode = True
                 self.last_crisis_time = df.index[i]
-            # Check for high volatility
+            # * High volatility
             elif volatility > self.volatility_high_threshold or atr_pct > 0.08:
                 regimes.append('volatile')
-            # Check for recovery (post-crisis)
+            # * Recovery phase directly after crisis (within 24h)
             elif self.last_crisis_time and (df.index[i] - self.last_crisis_time).total_seconds() < 86400:
                 regimes.append('recovery')
             else:
-                regimes.append('normal')
+                # * Trend-based classification
+                is_bear = (df['bear_market'].iloc[i] == 1)
+                if is_bear:
+                    regimes.append('bear')
+                else:
+                    regimes.append('bull')
                 self.in_crisis_mode = False
         
         return pd.Series(regimes, index=df.index)
@@ -220,20 +250,28 @@ class MlAdaptive(BaseStrategy):
         # Calculate predicted return
         predicted_return = (pred - close) / close if close > 0 else 0
         
-        # Adjust confidence threshold based on market regime
+        # * Base confidence threshold adjustments
         min_confidence = self.min_prediction_confidence
         if regime == 'crisis':
             min_confidence *= self.crisis_confidence_multiplier
         elif regime == 'volatile':
             min_confidence *= 1.5
+        elif regime == 'bull':
+            # * Be more aggressive in confirmed bull runs
+            min_confidence *= 0.75  # Reduce threshold by 25 %
+
+        # * Rebound – be more aggressive (lower confidence threshold)
+        rebound = df['rebound_signal'].iloc[index] == 1
+        if rebound:
+            min_confidence *= self.rebound_confidence_multiplier
         
         # Entry conditions
         entry_conditions = [
-            pred > close,  # Positive prediction
+            pred > close,  # Positive prediction (expecting price rise)
             confidence >= min_confidence,  # Sufficient confidence
-            regime != 'crisis' or confidence >= min_confidence * 2,  # Extra caution in crisis
+            regime not in ['crisis', 'bear'] or confidence >= min_confidence * 2,  # Extra caution in crisis/bear
             rsi < 70,  # Not overbought
-            trend_direction > 0 or regime == 'recovery',  # Positive trend or recovery
+            (trend_direction > 0) or rebound or regime in ['bull', 'recovery'],  # Positive trend or rebound/bull
         ]
         
         # Additional filters for volatile markets
@@ -286,6 +324,60 @@ class MlAdaptive(BaseStrategy):
         )
         
         return entry_signal
+
+    # * ------------------------------------------------------------------
+    # * Short entry conditions for bear markets
+    # * ------------------------------------------------------------------
+    def check_short_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+        if index < 1 or index >= len(df):
+            return False
+
+        pred = df['onnx_pred'].iloc[index]
+        close = df['close'].iloc[index]
+        regime = df['market_regime'].iloc[index]
+        rsi = df['rsi'].iloc[index]
+        trend_direction = df['trend_direction'].iloc[index]
+
+        # * Validate prediction availability
+        if pd.isna(pred):
+            return False
+
+        # * Expected downward move for short
+        predicted_return = (close - pred) / close if close > 0 else 0
+        confidence = predicted_return  # Use magnitude as confidence proxy
+
+        # * Minimum confidence requirement (reuse long threshold)
+        min_confidence = self.min_prediction_confidence
+        if regime in ['crisis', 'volatile']:
+            min_confidence *= 1.5
+
+        # * Entry rules
+        entry_conditions = [
+            pred < close,               # Model predicts lower price
+            confidence >= min_confidence,  # Enough expected drop
+            regime in ['bear', 'crisis', 'volatile'],  # Only short in non-bull phases
+            rsi > 30,                   # Not oversold
+            trend_direction < 0,        # Downward trend
+        ]
+
+        short_entry = all(entry_conditions)
+
+        # * Simple logging (re-use BaseStrategy logger)
+        self.log_execution(
+            signal_type='entry_short',
+            action_taken='entry_signal' if short_entry else 'no_action',
+            price=close,
+            signal_strength=confidence if short_entry else 0.0,
+            confidence_score=min(1.0, confidence * 10),
+            reasons=[
+                f'regime_{regime}',
+                f'predicted_return_{-predicted_return:.4f}',  # Negative means drop
+                'short_entry_signal_met' if short_entry else 'short_entry_conditions_not_met'
+            ],
+            additional_context={'model_type': 'ml_adaptive'}
+        )
+
+        return short_entry
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         if index < 1 or index >= len(df):
@@ -341,9 +433,11 @@ class MlAdaptive(BaseStrategy):
         # Adjust for market regime
         regime_multipliers = {
             'normal': 1.0,
+            'bull': 1.2,  # Increase size in bull markets
             'volatile': 0.5,
             'crisis': 0.25,
-            'recovery': 0.75
+            'recovery': 0.75,
+            'bear': 0.75  # Slightly reduce size in bear markets
         }
         position_size *= regime_multipliers.get(regime, 1.0)
         
@@ -394,11 +488,14 @@ class MlAdaptive(BaseStrategy):
         return take_profit
 
     def calculate_stop_loss(self, df, index, price, side: str = 'long') -> float:
-        """Calculate stop loss price"""
+        """Calculate stop loss price (handle enum or string)"""
+        # * Normalize side to string value ('long' / 'short') to handle PositionSide enum
+        side_str = side.value if hasattr(side, 'value') else str(side)
+
         regime = df['market_regime'].iloc[index] if 'market_regime' in df.columns else 'normal'
         stop_loss_pct = self._get_dynamic_stop_loss(df, index, regime)
         
-        if side == 'long':
+        if side_str == 'long':
             return price * (1 - stop_loss_pct)
         else:  # short
             return price * (1 + stop_loss_pct)
@@ -410,6 +507,7 @@ class MlAdaptive(BaseStrategy):
             'sequence_length': self.sequence_length,
             'base_stop_loss_pct': self.base_stop_loss_pct,
             'base_take_profit_pct': self.base_take_profit_pct,
+            'take_profit_pct': self.take_profit_pct,
             'base_position_size': self.base_position_size,
             'max_daily_loss_pct': self.max_daily_loss_pct,
             'volatility_thresholds': {
