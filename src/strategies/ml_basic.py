@@ -32,41 +32,36 @@ class MlBasic(BaseStrategy):
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
     
-    def __init__(self, name="MlBasic", model_path="ml/btcusdt_price.onnx", sequence_length=120):
+    def __init__(self, name="MlBasic", model_name: str = "btc_price_minmax", sequence_length: int = 120):
         super().__init__(name)
         
         # Set strategy-specific trading pair - ML model trained on BTC
         self.trading_pair = 'BTCUSDT'
         
-        self.model_path = model_path
+        # Load model via registry
+        from strategies.model_registry import ModelRegistry  # Local import to avoid circular deps
+
         self.sequence_length = sequence_length
-        self.ort_session = ort.InferenceSession(self.model_path)
-        self.input_name = self.ort_session.get_inputs()[0].name
+        self.model = ModelRegistry.load_model(model_name)
+
+        self.model_path = self.model.path
+        self.ort_session = self.model.session
+        self.input_name = self.model.input_name
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         
-        # Normalize price features (same as training)
-        price_features = ['close', 'volume', 'high', 'low', 'open']
-        for feature in price_features:
-            if feature in df.columns:
-                # Simple min-max normalization within the sequence window
-                df[f'{feature}_normalized'] = df[feature].rolling(
-                    window=self.sequence_length, min_periods=1
-                ).apply(
-                    lambda x: (x[-1] - np.min(x)) / (np.max(x) - np.min(x)) if np.max(x) != np.min(x) else 0.5,
-                    raw=True
-                )
+        # Use model-specific normalisation
+        df, feature_columns = self.model.normalise(df, self.sequence_length)
         
         # Prepare predictions column
         df['onnx_pred'] = np.nan
         
         # Generate predictions for each row that has enough history
         for i in range(self.sequence_length, len(df)):
-            # Prepare input features
-            feature_columns = [f'{feature}_normalized' for feature in price_features]
+            # Prepare input features (already normalised)
             input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
             
             # Reshape for ONNX model: (batch_size, sequence_length, features)

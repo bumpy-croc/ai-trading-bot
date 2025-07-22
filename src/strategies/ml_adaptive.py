@@ -37,16 +37,21 @@ class MlAdaptive(BaseStrategy):
     SECONDS_PER_DAY = 86400  # * Number of seconds in a day
     LOSS_REDUCTION_FACTOR = 0.2  # * 20% reduction per consecutive loss
 
-    def __init__(self, name="MlAdaptive", model_path="ml/btcusdt_price.onnx", sequence_length=120):
+    def __init__(self, name="MlAdaptive", model_name: str = "btc_price_minmax", sequence_length: int = 120):
         super().__init__(name)
         
         # Set strategy-specific trading pair - ML model trained on BTC
         self.trading_pair = 'BTCUSDT'
         
-        self.model_path = model_path
+        # Load model via registry (supports different normalisation schemes)
+        from strategies.model_registry import ModelRegistry  # Local import to avoid circular deps
+
         self.sequence_length = sequence_length
-        self.ort_session = ort.InferenceSession(self.model_path)
-        self.input_name = self.ort_session.get_inputs()[0].name
+        self.model = ModelRegistry.load_model(model_name)
+
+        self.model_path = self.model.path
+        self.ort_session = self.model.session
+        self.input_name = self.model.input_name
         
         # Adaptive risk management parameters
         self.base_stop_loss_pct = 0.02  # 2% base stop loss
@@ -127,16 +132,8 @@ class MlAdaptive(BaseStrategy):
         # * Now that we have bear/rebound flags, detect market regime
         df['market_regime'] = self._detect_market_regime(df)
         
-        # Normalize price features for ML model
-        price_features = ['close', 'volume', 'high', 'low', 'open']
-        for feature in price_features:
-            if feature in df.columns:
-                df[f'{feature}_normalized'] = df[feature].rolling(
-                    window=self.sequence_length, min_periods=1
-                ).apply(
-                    lambda x: (x[-1] - np.min(x)) / (np.max(x) - np.min(x)) if np.max(x) != np.min(x) else 0.5,
-                    raw=True
-                )
+        # Apply model-specific normalisation (adds columns & returns feature list)
+        df, feature_columns = self.model.normalise(df, self.sequence_length)
         
         # Generate ML predictions
         df['onnx_pred'] = np.nan
@@ -144,7 +141,6 @@ class MlAdaptive(BaseStrategy):
         
         for i in range(self.sequence_length, len(df)):
             # Prepare input features
-            feature_columns = [f'{feature}_normalized' for feature in price_features]
             input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
             
             # Reshape for ONNX model
