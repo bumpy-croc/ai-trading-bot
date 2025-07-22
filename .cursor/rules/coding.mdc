@@ -54,6 +54,7 @@ alwaysApply: true
 ### 4.1. General Principles
 - **Configuration Variables:** Place all user-customizable configuration variables at the beginning of scripts.
 - When a task requires disabling functionality without its removal, this must be implemented using a configuration variable (i.e., a feature flag).
+- **Constants:** When a number is used for a calculation, place it in a well named constant to indicate what it represents and use the constant instead in the calculation code.
 - **CLI Support:** If a script lacks a GUI (and GUI creation isn't requested), provide full CLI support. This includes:
 	- Intuitive argument parsing.
 	- Clear help messages.
@@ -112,3 +113,10 @@ alwaysApply: true
 
 ### 4.11. Git
 - Important: Never commit to git unless specifically asked to!
+
+# 5. Pull Request (PR) Reviews
+
+When I ask you to review a pull request:
+- Always use the github MCP server to get the details of a pull request I mention. 
+- Investigate existing comments and address the feedback where appropriate. If you disagree with a comment, say so and why instead of making the change.
+- Review the pull request like you were a senior software engineer. Add a github review with your comments, and summarize the changes requested for me before implementing anything.
