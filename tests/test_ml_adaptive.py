@@ -10,6 +10,7 @@ from strategies.ml_adaptive import MlAdaptive
 
 class TestMlAdaptive:
     """Test ML Adaptive strategy functionality"""
+    CRASH_START_DIVISOR = 3  # * Used to determine crash start index in test data
     
     @pytest.fixture
     def strategy(self):
@@ -29,7 +30,7 @@ class TestMlAdaptive:
         prices = base_price + trend + noise
         
         # Add a crash period (similar to COVID crash)
-        crash_start = len(dates) // 3
+        crash_start = len(dates) // self.CRASH_START_DIVISOR
         crash_end = crash_start + 96  # 4 days
         crash_magnitude = 0.35  # 35% drop
         prices[crash_start:crash_end] *= (1 - crash_magnitude)
@@ -78,7 +79,7 @@ class TestMlAdaptive:
         assert len(regimes) > 1  # Should detect at least normal and volatile/crisis
         
         # Check crisis detection during crash period
-        crash_period = df.iloc[len(df)//3:len(df)//3 + 96]
+        crash_period = df.iloc[len(df)//self.CRASH_START_DIVISOR:len(df)//self.CRASH_START_DIVISOR + 96]
         crisis_regimes = crash_period['market_regime'].value_counts()
         
         # Should detect crisis or volatile during crash
@@ -94,8 +95,8 @@ class TestMlAdaptive:
         assert 'atr_pct' in df.columns
         
         # Volatility should be higher during crash period
-        normal_period = df.iloc[:len(df)//3]
-        crash_period = df.iloc[len(df)//3:len(df)//3 + 96]
+        normal_period = df.iloc[:len(df)//self.CRASH_START_DIVISOR]
+        crash_period = df.iloc[len(df)//self.CRASH_START_DIVISOR:len(df)//self.CRASH_START_DIVISOR + 96]
         
         normal_vol = normal_period['volatility_20'].mean()
         crash_vol = crash_period['volatility_20'].mean()

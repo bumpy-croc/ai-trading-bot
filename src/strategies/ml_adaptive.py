@@ -32,6 +32,11 @@ from indicators.technical import (
 from datetime import datetime, timedelta
 
 class MlAdaptive(BaseStrategy):
+    # * Constants for magic numbers
+    MIN_PREDICTION_CONFIDENCE = 0.007  # 0.7% minimum predicted move
+    SECONDS_PER_DAY = 86400  # * Number of seconds in a day
+    LOSS_REDUCTION_FACTOR = 0.2  # * 20% reduction per consecutive loss
+
     def __init__(self, name="MlAdaptive", model_path="ml/btcusdt_price.onnx", sequence_length=120):
         super().__init__(name)
         
@@ -57,7 +62,7 @@ class MlAdaptive(BaseStrategy):
         # Market regime thresholds
         self.volatility_low_threshold = 0.02  # 2% daily volatility
         self.volatility_high_threshold = 0.05  # 5% daily volatility
-        self.volatility_crisis_threshold = 0.20  # 10% daily volatility (crisis mode)
+        self.volatility_crisis_threshold = 0.20  # 20% daily volatility (crisis mode)
         
         # Risk limits
         self.max_daily_loss_pct = 0.05  # 5% maximum daily loss
@@ -72,7 +77,7 @@ class MlAdaptive(BaseStrategy):
         
         # ML confidence thresholds
         # * Lower minimum confidence slightly to allow more frequent trades
-        self.min_prediction_confidence = 0.007  # 0.7% minimum predicted move
+        self.min_prediction_confidence = self.MIN_PREDICTION_CONFIDENCE  # 0.7% minimum predicted move
         self.crisis_confidence_multiplier = 2.0  # Double confidence requirement in crisis
 
         # * Expose a generic take_profit_pct attribute expected by the trading engine
@@ -196,7 +201,7 @@ class MlAdaptive(BaseStrategy):
             elif volatility > self.volatility_high_threshold or atr_pct > 0.08:
                 regimes.append('volatile')
             # * Recovery phase directly after crisis (within 24h)
-            elif self.last_crisis_time and (df.index[i] - self.last_crisis_time).total_seconds() < 86400:
+            elif self.last_crisis_time and (df.index[i] - self.last_crisis_time).total_seconds() < self.SECONDS_PER_DAY:
                 regimes.append('recovery')
             else:
                 # * Trend-based classification
@@ -450,7 +455,7 @@ class MlAdaptive(BaseStrategy):
         
         # Further reduce if consecutive losses
         if self.consecutive_losses > 0:
-            position_size *= (1 - 0.2 * self.consecutive_losses)  # 20% reduction per loss
+            position_size *= (1 - self.LOSS_REDUCTION_FACTOR * self.consecutive_losses)  # Apply reduction factor
         
         return balance * position_size
 
