@@ -6,11 +6,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const comparisonContainer = document.getElementById('comparisonContainer');
 
     let backtests = [];
-    let selectedFiles = new Set();
+    const selectedFiles = new Set();
 
-    // Fetch all backtests
+    // Fetch backtests
     fetch('/api/backtests')
-        .then(res => res.json())
+        .then(r => r.json())
         .then(data => {
             backtests = data;
             renderTable(backtests);
@@ -27,66 +27,46 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${bt.symbol}</td>
                 <td>${bt.duration_years}</td>
                 <td>${bt.total_trades}</td>
-                <td>${formatNum(bt.win_rate)}</td>
-                <td>${formatNum(bt.total_return)}</td>
-                <td>${formatNum(bt.annualized_return)}</td>
-                <td>${formatNum(bt.max_drawdown)}</td>
-                <td>${formatNum(bt.sharpe_ratio)}</td>
-            `;
+                <td>${format(bt.win_rate)}</td>
+                <td>${format(bt.total_return)}</td>
+                <td>${format(bt.annualized_return)}</td>
+                <td>${format(bt.max_drawdown)}</td>
+                <td>${format(bt.sharpe_ratio)}</td>`;
             tableBody.appendChild(tr);
         });
-
-        // Attach checkbox listeners
         tableBody.querySelectorAll('input[type="checkbox"]').forEach(cb => {
             cb.addEventListener('change', e => {
                 const file = e.target.getAttribute('data-file');
-                if (e.target.checked) {
-                    selectedFiles.add(file);
-                } else {
-                    selectedFiles.delete(file);
-                }
+                e.target.checked ? selectedFiles.add(file) : selectedFiles.delete(file);
                 compareBtn.disabled = selectedFiles.size !== 2;
             });
         });
     }
 
-    function formatNum(val) {
-        return val === undefined || val === null ? '' : Number(val).toFixed(2);
-    }
+    function format(v) { return v == null ? '' : Number(v).toFixed(2); }
 
-    // Search filtering
+    // Search
     searchInput.addEventListener('input', () => {
-        const term = searchInput.value.toLowerCase();
-        const filtered = backtests.filter(bt => {
-            return (
-                (bt.strategy || '').toLowerCase().includes(term) ||
-                (bt.symbol || '').toLowerCase().includes(term) ||
-                (bt.file || '').toLowerCase().includes(term)
-            );
-        });
-        renderTable(filtered);
+        const t = searchInput.value.toLowerCase();
+        renderTable(backtests.filter(bt => (bt.strategy || '').toLowerCase().includes(t) || (bt.symbol || '').toLowerCase().includes(t) || (bt.file || '').toLowerCase().includes(t)));
     });
 
-    // Compare button click
+    // Compare
     compareBtn.addEventListener('click', () => {
         if (selectedFiles.size !== 2) return;
-        const [first, second] = Array.from(selectedFiles);
-        fetch(`/api/compare?first=${encodeURIComponent(first)}&second=${encodeURIComponent(second)}`)
-            .then(res => res.json())
-            .then(data => {
-                showComparison(data);
-            });
+        const [f, s] = [...selectedFiles];
+        fetch(`/api/compare?first=${encodeURIComponent(f)}&second=${encodeURIComponent(s)}`)
+            .then(r => r.json())
+            .then(showComparison);
     });
 
     function showComparison(data) {
         compareTitle.style.display = 'block';
-        // build comparison table
         const diff = data.diff || {};
         let html = '<table><thead><tr><th>Metric</th><th>First</th><th>Second</th></tr></thead><tbody>';
-        Object.keys(diff).forEach(key => {
-            html += `<tr><td>${key}</td><td>${formatNum(diff[key].first)}</td><td>${formatNum(diff[key].second)}</td></tr>`;
+        Object.keys(diff).forEach(k => {
+            html += `<tr><td>${k}</td><td>${format(diff[k].first)}</td><td>${format(diff[k].second)}</td></tr>`;
         });
-        html += '</tbody></table>';
-        comparisonContainer.innerHTML = html;
+        comparisonContainer.innerHTML = html + '</tbody></table>';
     }
 });

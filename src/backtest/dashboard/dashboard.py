@@ -1,51 +1,54 @@
+# flake8: noqa
+from __future__ import annotations
+
+"""Backtest dashboard web server.
+
+This module was relocated from ``src/backtest_dashboard`` to
+``src/backtest/dashboard``. Functionality is identical: run with::
+
+    python -m backtest.dashboard.dashboard
+"""
+
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Optional, Union
 
 from flask import Flask, jsonify, render_template, request  # type: ignore
 
-# Reuse project logger configuration
 logger = logging.getLogger(__name__)
 
 
 class BacktestDashboard:
     """Simple dashboard to visualise historical backtest runs stored as JSON files."""
 
-    def __init__(self, logs_dir: 'Union[str, Path]' = 'logs/backtest'):
+    def __init__(self, logs_dir: Union[str, Path] = 'logs/backtest'):
         self.logs_dir = Path(logs_dir)
-        # Ensure directory exists so that the UI loads even when no logs are present
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Flask application – templates/static live in a sibling directory of this file
+        # Template/static folders live next to this file
+        base_path = Path(__file__).parent
         self.app = Flask(
             __name__,
-            template_folder=str(Path(__file__).parent / 'templates'),
-            static_folder=str(Path(__file__).parent / 'static')
+            template_folder=str(base_path / 'templates'),
+            static_folder=str(base_path / 'static')
         )
         self._setup_routes()
 
-    # ------------------------------------------------------------------
-    # Routes & helpers
-    # ------------------------------------------------------------------
+    # -------------------------- routes ---------------------------------
     def _setup_routes(self):
         @self.app.route('/')
-        def index():  # noqa: D401 – simple route
+        def index():
             return render_template('backtest_dashboard.html')
 
         @self.app.route('/api/backtests')
         def list_backtests():
-            """Return a JSON list with summary of every backtest log file."""
-            summaries = self._load_backtest_summaries()
-            return jsonify(summaries)
+            return jsonify(self._load_backtest_summaries())
 
         @self.app.route('/api/backtests/<string:filename>')
         def get_backtest(filename: str):
             data = self._load_single_backtest(filename)
-            if data is None:
-                return jsonify({'error': 'not found'}), 404
-            return jsonify(data)
+            return (jsonify(data) if data else (jsonify({'error': 'not found'}), 404))
 
         @self.app.route('/api/compare')
         def compare_backtests():
@@ -57,25 +60,21 @@ class BacktestDashboard:
             second_data = self._load_single_backtest(second)
             if not first_data or not second_data:
                 return jsonify({'error': 'one or both backtests not found'}), 404
-            comparison = {
+            return jsonify({
                 'first': first_data,
                 'second': second_data,
                 'diff': self._compute_diff(first_data.get('results', {}), second_data.get('results', {}))
-            }
-            return jsonify(comparison)
+            })
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    # ------------------------ helpers ----------------------------------
     def _load_backtest_summaries(self) -> List[Dict[str, Any]]:
-        """Return a list of dictionaries with key information for each backtest log."""
         summaries: List[Dict[str, Any]] = []
-        for file_path in sorted(self.logs_dir.glob('*.json')):
+        for fp in sorted(self.logs_dir.glob('*.json')):
             try:
-                with open(file_path, 'r') as f:
+                with open(fp, 'r') as f:
                     data = json.load(f)
-                summary = {
-                    'file': file_path.name,
+                summaries.append({
+                    'file': fp.name,
                     'timestamp': data.get('timestamp'),
                     'strategy': data.get('strategy'),
                     'symbol': data.get('symbol'),
@@ -87,11 +86,9 @@ class BacktestDashboard:
                     'annualized_return': data.get('results', {}).get('annualized_return'),
                     'max_drawdown': data.get('results', {}).get('max_drawdown'),
                     'sharpe_ratio': data.get('results', {}).get('sharpe_ratio'),
-                }
-                summaries.append(summary)
-            except Exception as e:
-                logger.warning(f"Failed to read backtest log {file_path}: {e}")
-        # Sort newest first
+                })
+            except Exception as exc:
+                logger.warning(f'Could not read backtest log {fp}: {exc}')
         summaries.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
         return summaries
 
@@ -102,29 +99,20 @@ class BacktestDashboard:
         try:
             with open(path, 'r') as f:
                 return json.load(f)
-        except Exception as e:
-            logger.error(f"Could not load backtest file {filename}: {e}")
+        except Exception as exc:
+            logger.error(f'Failed to load {filename}: {exc}')
             return None
 
-    def _compute_diff(self, first: Dict[str, Any], second: Dict[str, Any]) -> Dict[str, Any]:
-        keys = set(first.keys()) | set(second.keys())
-        diff = {}
-        for k in keys:
-            diff[k] = {
-                'first': first.get(k),
-                'second': second.get(k),
-            }
-        return diff
+    @staticmethod
+    def _compute_diff(first: Dict[str, Any], second: Dict[str, Any]) -> Dict[str, Any]:
+        keys = set(first) | set(second)
+        return {k: {'first': first.get(k), 'second': second.get(k)} for k in keys}
 
-    # ------------------------------------------------------------------
-    # Public entrypoint
-    # ------------------------------------------------------------------
+    # ------------------------- run ------------------------------------
     def run(self, host: str = '0.0.0.0', port: int = 8001, debug: bool = False):
-        logger.info(f"Starting BacktestDashboard on http://{host}:{port}")
+        logger.info(f'BacktestDashboard available at http://{host}:{port}')
         self.app.run(host=host, port=port, debug=debug)
 
 
-# Allow running directly: python -m backtest_dashboard.dashboard
 if __name__ == '__main__':
-    dashboard = BacktestDashboard()
-    dashboard.run(debug=True)
+    BacktestDashboard().run(debug=True)
