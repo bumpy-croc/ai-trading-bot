@@ -83,6 +83,11 @@ class Backtester:
         self.trades: List[Trade] = []
         self.current_trade: Optional[Trade] = None
         
+        # Early stop tracking
+        self.early_stop_reason: Optional[str] = None
+        self.early_stop_date: Optional[datetime] = None
+        self.early_stop_candle_index: Optional[int] = None
+        
         # Database logging
         self.log_to_database = log_to_database
         self.db_manager = None
@@ -299,7 +304,10 @@ class Backtester:
                         
                         # Check if maximum drawdown exceeded
                         if current_drawdown > 0.5:  # 50% max drawdown
-                            logger.warning("Maximum drawdown exceeded. Stopping backtest.")
+                            self.early_stop_reason = f"Maximum drawdown exceeded ({current_drawdown:.1%})"
+                            self.early_stop_date = candle.name
+                            self.early_stop_candle_index = i
+                            logger.warning(f"Maximum drawdown exceeded ({current_drawdown:.1%}). Stopping backtest.")
                             break
                 
                 # Check for entry if not in position
@@ -428,7 +436,10 @@ class Backtester:
                 'final_balance': self.balance,
                 'annualized_return': annualized_return,
                 'yearly_returns': yearly_returns,
-                'session_id': self.trading_session_id if self.log_to_database else None
+                'session_id': self.trading_session_id if self.log_to_database else None,
+                'early_stop_reason': self.early_stop_reason,
+                'early_stop_date': self.early_stop_date,
+                'early_stop_candle_index': self.early_stop_candle_index
             }
             
         except Exception as e:

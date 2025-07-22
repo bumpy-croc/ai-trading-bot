@@ -8,7 +8,8 @@ except ModuleNotFoundError:
     # TA-Lib may be missing in some environments; skip importing to avoid crashes
     HighRiskHighRewardStrategy = None
 from .ml_basic import MlBasic
+from .ml_adaptive import MlAdaptive
 from .ml_with_sentiment import MlWithSentiment
 from .test_high_frequency import TestHighFrequencyStrategy
 
-__all__ = ['BaseStrategy', 'AdaptiveStrategy', 'EnhancedStrategy', 'HighRiskHighRewardStrategy', 'MlBasic', 'MlWithSentiment', 'TestHighFrequencyStrategy'] 
+__all__ = ['BaseStrategy', 'AdaptiveStrategy', 'EnhancedStrategy', 'HighRiskHighRewardStrategy', 'MlBasic', 'MlAdaptive', 'MlWithSentiment', 'TestHighFrequencyStrategy'] 
