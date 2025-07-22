@@ -18,12 +18,17 @@ Ideal for:
 - Simple deployment scenarios
 """
 
+import sys
+import os
+src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 import numpy as np
 import pandas as pd
 import onnx
 import onnxruntime as ort
 from strategies.base import BaseStrategy
-from src.ml.model_registry import ModelRegistry  # Local import to avoid circular deps
+from ml.model_registry import ModelRegistry  # Local import to avoid circular deps
 
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants

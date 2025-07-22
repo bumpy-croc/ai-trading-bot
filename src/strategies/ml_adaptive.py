@@ -20,6 +20,11 @@ Ideal for:
 - Risk-conscious trading
 """
 
+import sys
+import os
+src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 import numpy as np
 import pandas as pd
 import onnx
@@ -30,7 +35,7 @@ from indicators.technical import (
     calculate_moving_averages, calculate_macd
 )
 from datetime import datetime, timedelta
-from src.ml.model_registry import ModelRegistry  # Local import to avoid circular deps
+from ml.model_registry import ModelRegistry  # Local import to avoid circular deps
 
 class MlAdaptive(BaseStrategy):
     # * Constants for magic numbers

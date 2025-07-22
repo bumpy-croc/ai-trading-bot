@@ -7,6 +7,7 @@ from typing import Callable, Dict, Tuple, List
 import numpy as np
 import pandas as pd
 import onnxruntime as ort
+import threading
 
 __all__ = [
     "ModelInfo",
@@ -41,7 +42,7 @@ def _minmax_price_normalize(
         if norm_col not in df.columns:
             df[norm_col] = df[feat].rolling(seq_len, min_periods=1).apply(
                 lambda x: (
-                    (x[-1] - (min_val := np.min(x))) / ((max_val := np.max(x)) - min_val)
+                    (x[-1] - min_val) / (max_val - min_val)
                     if (max_val := np.max(x)) != (min_val := np.min(x)) else 0.5
                 ),
                 raw=True,
@@ -122,12 +123,14 @@ class ModelInfo:
 
 class ModelRegistry:
     """Singleton registry holding all ML models and their metadata."""
-
     _instance: "ModelRegistry" | None = None
+    _lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
-            cls._instance = super(ModelRegistry, cls).__new__(cls, *args, **kwargs)
+            with cls._lock:
+                if not cls._instance:
+                    cls._instance = super(ModelRegistry, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
     def __init__(self):
