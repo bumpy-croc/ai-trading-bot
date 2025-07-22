@@ -42,7 +42,7 @@ class StrategyManager:
     
     def __init__(self, 
                  strategies_dir: str = "strategies",
-                 models_dir: str = "ml",
+                 models_dir: str = "src/ml",
                  staging_dir: str = "/tmp/ai-trading-bot-staging"):
         
         self.strategies_dir = Path(strategies_dir)

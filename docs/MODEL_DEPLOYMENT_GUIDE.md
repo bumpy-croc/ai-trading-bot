@@ -51,7 +51,7 @@ python scripts/run_live_trading.py ml_with_sentiment --paper-trading
 
 ### 2. Model Packaging
 ```bash
-# Models are automatically saved to ml/ directory:
+# Models are automatically saved to src/ml/ directory:
 # - btcusdt_sentiment.onnx (model file)
 # - btcusdt_sentiment_metadata.json (training metadata)
 # - BTCUSDT_sentiment_training.png (training visualization)
@@ -60,7 +60,7 @@ python scripts/run_live_trading.py ml_with_sentiment --paper-trading
 ### 3. Deployment to Production
 ```bash
 # 1. Upload model files to production server
-scp ml/btcusdt_sentiment.* production-server:/opt/ai-trading-bot/ml/
+scp src/ml/btcusdt_sentiment.* production-server:/opt/ai-trading-bot/src/ml/
 
 # 2. Restart trading engine with new model
 ssh production-server "sudo systemctl restart ai-trading-bot"
@@ -132,10 +132,10 @@ If you have existing code that relied on the old staging directory:
 ### Model Loading Issues
 ```bash
 # Check model file exists and is readable
-ls -la ml/btcusdt_sentiment.*
+ls -la src/ml/btcusdt_sentiment.*
 
 # Verify model metadata
-cat ml/btcusdt_sentiment_metadata.json | jq '.'
+cat src/ml/btcusdt_sentiment_metadata.json | jq '.'
 
 # Test model loading manually
 python -c "import onnxruntime; print('Model loads successfully')"
@@ -150,7 +150,7 @@ sudo systemctl status ai-trading-bot
 sudo journalctl -u ai-trading-bot -n 50
 
 # Rollback to previous model
-cp ml/btcusdt_sentiment.onnx.backup ml/btcusdt_sentiment.onnx
+cp src/ml/btcusdt_sentiment.onnx.backup src/ml/btcusdt_sentiment.onnx
 sudo systemctl restart ai-trading-bot
 ```
 

@@ -84,7 +84,7 @@ Each component is completely decoupled and can be swapped out or extended withou
 │   ├── risk/             # Central risk-management utilities
 │   └── config/           # Typed configuration objects & loaders
 ├── live/                # Real-time trading engine & strategy manager
-├── ml/                  # Trained models (.h5 / .keras / .onnx) + metadata
+├── src/ml/                  # Trained models (.h5 / .keras / .onnx) + metadata
 ├── strategies/          # All built-in trading strategies
 ├── scripts/             # CLI utilities (model training, cache tools, etc.)
 ├── data/                # Cached market & sentiment datasets

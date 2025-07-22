@@ -24,7 +24,7 @@ Data Providers → Indicators → Strategies → Risk Manager → Execution Laye
 - `src/backtesting/` - Historical simulation engine
 - `src/risk/` - Risk management system
 - `src/data_providers/` - Market & sentiment data adapters
-- `ml/` - Trained ML models (.h5/.keras/.onnx)
+- `src/ml/` - Trained ML models (.h5/.keras/.onnx)
 - `scripts/` - CLI utilities & automation
 - `tests/` - Comprehensive test suite
 

@@ -51,7 +51,7 @@ class MlWithSentiment(BaseStrategy):
         # Determine model path
         if model_path is None:
             model_suffix = "sentiment" if use_sentiment else "price"
-            model_path = f"ml/{self.trading_pair.lower()}_{model_suffix}.onnx"
+            model_path = f"src/ml/{self.trading_pair.lower()}_{model_suffix}.onnx"
         
         self.model_path = model_path
         

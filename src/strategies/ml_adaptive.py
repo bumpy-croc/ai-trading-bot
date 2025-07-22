@@ -20,6 +20,11 @@ Ideal for:
 - Risk-conscious trading
 """
 
+import sys
+import os
+src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 import numpy as np
 import pandas as pd
 import onnx
@@ -30,6 +35,7 @@ from indicators.technical import (
     calculate_moving_averages, calculate_macd
 )
 from datetime import datetime, timedelta
+from ml.model_registry import ModelRegistry  # Local import to avoid circular deps
 
 class MlAdaptive(BaseStrategy):
     # * Constants for magic numbers
@@ -37,7 +43,7 @@ class MlAdaptive(BaseStrategy):
     SECONDS_PER_DAY = 86400  # * Number of seconds in a day
     LOSS_REDUCTION_FACTOR = 0.2  # * 20% reduction per consecutive loss
 
-    def __init__(self, name="MlAdaptive", model_path="ml/btcusdt_price.onnx", sequence_length=120):
+    def __init__(self, name="MlAdaptive", model_path="src/ml/btcusdt_price.onnx", sequence_length=120):
         super().__init__(name)
         
         # Set strategy-specific trading pair - ML model trained on BTC
