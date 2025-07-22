@@ -131,7 +131,7 @@ from strategies.ml_adaptive import MlAdaptive
 # Initialize strategy
 strategy = MlAdaptive(
     name="MlAdaptive",
-    model_path="ml/btcusdt_price.onnx",
+    model_path="src/ml/btcusdt_price.onnx",
     sequence_length=120
 )
 

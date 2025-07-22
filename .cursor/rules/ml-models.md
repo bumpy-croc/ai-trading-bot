@@ -135,7 +135,7 @@ import tf2onnx
 
 # Convert TensorFlow model to ONNX
 onnx_model, _ = tf2onnx.convert.from_keras(model)
-onnx.save(onnx_model, "ml/btcusdt_price.onnx")
+onnx.save(onnx_model, "src/ml/btcusdt_price.onnx")
 ```
 
 ### Real-time Inference
@@ -179,7 +179,7 @@ def get_ml_prediction(df: pd.DataFrame, index: int) -> tuple:
 
 ### Model Files
 ```
-ml/
+src/ml/
 ├── btcusdt_price.h5              # TensorFlow model
 ├── btcusdt_price.onnx            # ONNX model (for inference)
 ├── btcusdt_price_metadata.json   # Training metadata

@@ -111,8 +111,8 @@ temp/
 *.rar
 
 # ML models - shipped ONNX runtime models only
-ml/*
-!ml/*.onnx
+src/ml/*
+!src/ml/*.onnx
 
 # Exclude test suite
 tests/

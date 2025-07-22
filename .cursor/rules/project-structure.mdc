@@ -61,7 +61,7 @@ src/
 
 ### **Supporting Directories**
 ```
-├── ml/                      # Trained ML models & metadata
+├── src/ml/                      # Trained ML models & metadata
 │   ├── btcusdt_price.*      # Price prediction models (.h5/.keras/.onnx)
 │   ├── btcusdt_sentiment.*  # Sentiment-enhanced models
 │   └── *_metadata.json      # Model training metadata
@@ -160,7 +160,7 @@ class YourStrategy(BaseStrategy):
 - `risk_manager.py` - Position sizing, stop-loss management, exposure limits
 - Always enforces max risk per trade (1-2% of capital)
 
-### **5. ML Layer (`ml/`)**
+### **5. ML Layer (`src/ml/`)**
 **Purpose**: Store trained models and metadata
 
 - Models are saved in multiple formats: `.h5`, `.keras`, `.onnx`

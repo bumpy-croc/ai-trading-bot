@@ -23,6 +23,7 @@ import pandas as pd
 import onnx
 import onnxruntime as ort
 from strategies.base import BaseStrategy
+from src.ml.model_registry import ModelRegistry  # Local import to avoid circular deps
 
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants
@@ -32,7 +33,7 @@ class MlBasic(BaseStrategy):
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
     
-    def __init__(self, name="MlBasic", model_path="ml/btcusdt_price.onnx", sequence_length=120):
+    def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120):
         super().__init__(name)
         
         # Set strategy-specific trading pair - ML model trained on BTC

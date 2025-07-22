@@ -5,7 +5,7 @@ and optionally different candle timeframes.
 
 Usage:
     python scripts/train_price_model.py --symbol BTCUSDT --timeframe 1h \
-        --start 2018-01-01 --end 2024-12-31 --epochs 10 --output ml/btcusdt_price_v2.onnx
+        --start 2018-01-01 --end 2024-12-31 --epochs 10 --output src/ml/btcusdt_price_v2.onnx
 
 The script:
 1. Pulls historical OHLCV data via the existing data-provider utilities
@@ -135,7 +135,7 @@ def parse_args():
     p.add_argument("--start", default="2018-01-01")
     p.add_argument("--end", default=datetime.utcnow().strftime("%Y-%m-%d"))
     p.add_argument("--epochs", type=int, default=10)
-    p.add_argument("--output", default="ml/btcusdt_price_v2.onnx")
+    p.add_argument("--output", default="src/ml/btcusdt_price_v2.onnx")
     return p.parse_args()
 
 
