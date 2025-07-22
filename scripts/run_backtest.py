@@ -210,7 +210,62 @@ def main():
         if not args.no_cache:
             final_cache_info = data_provider.get_cache_info()
             logger.info(f"Final cache info: {final_cache_info['total_files']} files, {final_cache_info['total_size_mb']} MB")
-        
+
+        # --------------------------------------
+        # NEW: Persist backtest run to log file
+        # --------------------------------------
+        try:
+            import json
+            import subprocess
+            from pathlib import Path
+            # Calculate duration in years (float with 2 decimals)
+            duration_years = round((end_date - start_date).days / 365.25, 2)
+
+            # Resolve git information (commit & branch) – fallback to 'unknown'
+            try:
+                commit_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD'], stderr=subprocess.DEVNULL).decode().strip()
+            except Exception:
+                commit_hash = 'unknown'
+            try:
+                branch_name = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], stderr=subprocess.DEVNULL).decode().strip()
+            except Exception:
+                branch_name = 'unknown'
+
+            # Prepare payload
+            log_payload = {
+                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                'strategy': strategy.name,
+                'symbol': trading_symbol,
+                'timeframe': args.timeframe,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'duration_years': duration_years,
+                'initial_balance': args.initial_balance,
+                'use_sentiment': args.use_sentiment,
+                'use_cache': not args.no_cache,
+                'database_logging': not args.no_db,
+                'risk_per_trade': args.risk_per_trade,
+                'max_risk_per_trade': args.max_risk_per_trade,
+                'cache_ttl_hours': None if args.no_cache else args.cache_ttl,
+                'git_commit': commit_hash,
+                'git_branch': branch_name,
+                'results': results,
+                'strategy_config': getattr(strategy, 'config', {})
+            }
+
+            # Build filename and ensure directory exists
+            timestamp_for_file = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{timestamp_for_file}_{strategy.name}_{duration_years}yrs.json"
+            logs_dir = Path(project_root) / 'logs' / 'backtest'
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            filepath = logs_dir / filename
+
+            with open(filepath, 'w') as f:
+                json.dump(log_payload, f, indent=2)
+            logger.info(f"Backtest log saved to {filepath.relative_to(project_root)}")
+        except Exception as log_err:
+            logger.warning(f"Failed to write backtest log: {log_err}")
+
         # --- Save aligned sentiment data to file if sentiment is used ---
         if sentiment_provider is not None:
             # Fetch price data

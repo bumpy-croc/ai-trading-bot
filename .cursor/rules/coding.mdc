@@ -73,6 +73,7 @@ alwaysApply: true
 	- **Good:** `// * Fetches user data from the v2 API.`
 	- **Bad:** `// TODO: This was a temporary fix, will rewrite later.`
 	- **Good:** `// TODO: Refactor this logic to be more efficient.`
+- Don't add words like "new" or "now we are adding this".
 - Only comment what is truly useful and ads value
 - When writting comments, avoid referencing points in time, PRs, chats or reasons for the code change. Use simple language that describes the context
 
