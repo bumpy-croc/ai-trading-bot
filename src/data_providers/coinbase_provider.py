@@ -343,6 +343,19 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             formatted = formatted[-limit:]
         return formatted
 
+    def _fetch_candles_range(self, product_id: str, granularity: int, start: datetime, end: datetime) -> List[List[Any]]:
+        """Fetch candles over a range, respecting Coinbase 300-candle limit per request."""
+        max_points = 300
+        delta_sec = granularity * max_points
+        results: List[List[Any]] = []
+        chunk_start = start
+        while chunk_start < end:
+            chunk_end = min(end, chunk_start + __import__('datetime').timedelta(seconds=delta_sec))
+            results.extend(self._fetch_candles(product_id, granularity, chunk_start, chunk_end))
+            # API returns inclusive candles → move start forward by granularity to avoid duplicates
+            chunk_start = chunk_end + __import__('datetime').timedelta(seconds=granularity)
+        return results
+
     def get_historical_data(
         self,
         symbol: str,
@@ -353,7 +366,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         try:
             granularity = self._convert_timeframe(timeframe)
             product_id = symbol.upper()
-            candles = self._fetch_candles(product_id, granularity, start=start, end=end)
+            candles = self._fetch_candles_range(product_id, granularity, start, end or datetime.utcnow())
             df = self._process_ohlcv(candles, timestamp_unit="s")
             self.data = df
             if not df.empty:
