@@ -1,0 +1,50 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background: #f5f7fa;
+}
+
+h1 {
+    margin-bottom: 10px;
+}
+
+#controls {
+    margin-bottom: 10px;
+}
+
+#searchInput {
+    padding: 5px 8px;
+    width: 200px;
+}
+
+#compareBtn {
+    padding: 6px 10px;
+    margin-left: 10px;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    background: #fff;
+}
+
+thead {
+    background: #343a40;
+    color: #fff;
+}
+
+thead th {
+    padding: 8px;
+    font-size: 14px;
+}
+
+tbody td {
+    border: 1px solid #dee2e6;
+    padding: 6px;
+    font-size: 13px;
+    text-align: center;
+}
+
+tr:nth-child(even) {
+    background: #f1f3f5;
+}

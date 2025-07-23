@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Backtest Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/backtest_dashboard.css') }}" />
+</head>
+<body>
+    <h1>Backtest Runs</h1>
+
+    <div id="controls">
+        <input type="text" id="searchInput" placeholder="Search..." />
+        <button id="compareBtn" disabled>Compare Selected</button>
+    </div>
+
+    <table id="backtestTable">
+        <thead>
+            <tr>
+                <th>Select</th>
+                <th>Timestamp</th>
+                <th>Strategy</th>
+                <th>Symbol</th>
+                <th>Years</th>
+                <th>Total Trades</th>
+                <th>Win Rate (%)</th>
+                <th>Total Return (%)</th>
+                <th>Annualized Return (%)</th>
+                <th>Max Drawdown (%)</th>
+                <th>Sharpe</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <h2 id="compareTitle" style="display:none;">Comparison</h2>
+    <div id="comparisonContainer"></div>
+
+    <script src="{{ url_for('static', filename='js/backtest_dashboard.js') }}"></script>
+</body>
+</html>
