@@ -17,6 +17,8 @@ from src.data_providers.exchange_interface import (
     OrderSide, OrderType, OrderStatus as ExchangeOrderStatus
 )
 from src.database.models import PositionSide, TradeSource
+from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.coinbase_provider import CoinbaseProvider
 
 # Remove pytestmark and binance_ fixtures, restoring the file to its previous state.
 
@@ -443,14 +445,17 @@ class TestAccountSynchronizer:
 class TestAccountSynchronizerIntegration:
     """Integration tests for AccountSynchronizer"""
     
-    @pytest.fixture
-    def real_synchronizer(self):
-        """Create a real AccountSynchronizer with mocked dependencies"""
-        exchange = Mock()
+    @pytest.fixture(params=["binance", "coinbase"])
+    def real_synchronizer(self, request):
+        """Create a real AccountSynchronizer with mocked dependencies for both providers"""
+        provider = request.param
+        if provider == "binance":
+            exchange = BinanceProvider(api_key="test", api_secret="test", testnet=True)
+        else:
+            exchange = CoinbaseProvider(api_key="test", api_secret="test", testnet=True)
         db_manager = Mock()
-        
         # Setup realistic mock data
-        exchange.sync_account_data.return_value = {
+        exchange.sync_account_data = Mock(return_value={
             'sync_successful': True,
             'balances': [
                 AccountBalance(
@@ -500,40 +505,33 @@ class TestAccountSynchronizerIntegration:
                     update_time=datetime.utcnow()
                 )
             ]
-        }
-        
+        })
         db_manager.get_current_balance.return_value = 10000.0
         db_manager.get_active_positions.return_value = []
         db_manager.get_open_orders.return_value = []
         db_manager.log_position.return_value = 1
         db_manager.log_trade.return_value = 1
-        
         return AccountSynchronizer(exchange, db_manager, session_id=1)
     
     def test_full_sync_integration(self, real_synchronizer):
-        """Test a complete synchronization cycle"""
+        """Test a complete synchronization cycle for both providers"""
         result = real_synchronizer.sync_account_data()
-        
         assert result.success is True
         assert result.data['balance_sync']['corrected'] is True
         assert result.data['position_sync']['new_positions'] == 1
         assert result.data['order_sync']['new_orders'] == 1
     
     def test_emergency_sync_integration(self, real_synchronizer):
-        """Test emergency sync with trade recovery"""
+        """Test emergency sync with trade recovery for both providers"""
         with patch.object(real_synchronizer, 'recover_missing_trades') as mock_recover:
             mock_recover.return_value = {
                 'recovered': True,
                 'missing_trades': 2,
                 'recovered_trades': 2
             }
-            
             result = real_synchronizer.emergency_sync()
-        
         assert result.success is True
         assert 'emergency_trade_recovery' in result.data
-        
-        # Verify trade recovery was called for all common symbols
         assert mock_recover.call_count == 4  # BTCUSDT, ETHUSDT, SOLUSDT, AVAXUSDT
 
 

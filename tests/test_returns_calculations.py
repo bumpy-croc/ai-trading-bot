@@ -24,6 +24,10 @@ class DummyDataProvider(DataProvider):
     def update_live_data(self, symbol: str, timeframe: str):
         raise NotImplementedError
 
+    def get_current_price(self, symbol: str) -> float:
+        # Return the last close price in the DataFrame
+        return float(self._df['close'].iloc[-1])
+
 
 class BuyEveryYearStrategy(BaseStrategy):
     """Enter at first candle of a year, exit at last candle of that same year."""

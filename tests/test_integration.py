@@ -514,7 +514,11 @@ class TestProductionReadiness:
 
 @pytest.mark.integration
 class TestAccountSyncIntegration:
-    def test_account_sync_triggered_by_live_engine(self, temp_directory):
+    @pytest.mark.parametrize("provider, cred_keys, provider_patch", [
+        ("coinbase", {"COINBASE_API_KEY": "test_key", "COINBASE_API_SECRET": "test_secret"}, "live.trading_engine.CoinbaseProvider"),
+        ("binance", {"BINANCE_API_KEY": "test_key", "BINANCE_API_SECRET": "test_secret"}, "live.trading_engine.BinanceProvider"),
+    ])
+    def test_account_sync_triggered_by_live_engine(self, temp_directory, provider, cred_keys, provider_patch):
         """Test that account sync is triggered and handled by LiveTradingEngine in live mode, and DB is updated"""
         from strategies.adaptive import AdaptiveStrategy
         from data_providers.mock_data_provider import MockDataProvider
@@ -526,12 +530,9 @@ class TestAccountSyncIntegration:
         # Patch AccountSynchronizer and config to provide API credentials
         with patch('live.trading_engine.AccountSynchronizer') as MockSync, \
              patch('config.get_config') as mock_config, \
-             patch('live.trading_engine.BinanceProvider') as MockExchange:
+             patch(provider_patch) as MockExchange:
             # Setup mock config to provide API credentials
-            mock_config.return_value = {
-                'BINANCE_API_KEY': 'test_key',
-                'BINANCE_API_SECRET': 'test_secret'
-            }
+            mock_config.return_value = cred_keys
             
             # Setup mock synchronizer
             mock_sync = MockSync.return_value
@@ -551,11 +552,13 @@ class TestAccountSyncIntegration:
             data_provider = MockDataProvider()
             
             # Create engine without starting the thread
+            from live.trading_engine import LiveTradingEngine
             engine = LiveTradingEngine(
                 strategy=strategy,
                 data_provider=data_provider,
                 enable_live_trading=True,
-                initial_balance=10000
+                initial_balance=10000,
+                provider=provider
             )
             
             # Mock the thread creation but allow start() to complete synchronously
@@ -588,10 +591,10 @@ class TestAccountSyncIntegration:
                 print(f"engine._pending_corrected_balance: {getattr(engine, '_pending_corrected_balance', 'NOT_SET')}")
                 
                 # Assert sync_account_data was called
-                assert mock_sync.sync_account_data.called, "Account sync was not triggered by engine"
+                assert mock_sync.sync_account_data.called, f"Account sync was not triggered by engine for provider {provider}"
                 
                 # Assert balance was updated in engine
-                assert engine.current_balance == 12345.0, "Engine did not update balance from sync result"
+                assert engine.current_balance == 12345.0, f"Engine did not update balance from sync result for provider {provider}"
                 
                 # Ensure database has time to process
                 time.sleep(0.1)

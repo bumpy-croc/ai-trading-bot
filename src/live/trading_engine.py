@@ -13,6 +13,8 @@ import sys
 import numpy as np
 
 from data_providers.data_provider import DataProvider
+# Replaced BinanceProvider with CoinbaseProvider
+from data_providers.coinbase_provider import CoinbaseProvider
 from data_providers.binance_provider import BinanceProvider
 from data_providers.sentiment_provider import SentimentDataProvider
 from strategies.base import BaseStrategy
@@ -98,6 +100,7 @@ class LiveTradingEngine:
         database_url: Optional[str] = None,  # Database connection URL
         max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
         account_snapshot_interval: int = 1800,  # Account snapshot interval in seconds (30 minutes)
+        provider: str = 'coinbase',  # 'coinbase' (default) or 'binance'
     ):
         """
         Initialize the live trading engine.
@@ -151,19 +154,32 @@ class LiveTradingEngine:
             try:
                 from config import get_config
                 config = get_config()
-                api_key = config.get('BINANCE_API_KEY')
-                api_secret = config.get('BINANCE_API_SECRET')
-                
-                if api_key and api_secret:
-                    self.exchange_interface = BinanceProvider(api_key, api_secret, testnet=False)
-                    self.account_synchronizer = AccountSynchronizer(
-                        self.exchange_interface, 
-                        self.db_manager, 
-                        self.trading_session_id
-                    )
-                    logger.info("Exchange interface and account synchronizer initialized")
+                if provider == 'binance':
+                    api_key = config.get('BINANCE_API_KEY')
+                    api_secret = config.get('BINANCE_API_SECRET')
+                    if api_key and api_secret:
+                        self.exchange_interface = BinanceProvider(api_key, api_secret, testnet=False)
+                        self.account_synchronizer = AccountSynchronizer(
+                            self.exchange_interface, 
+                            self.db_manager, 
+                            self.trading_session_id
+                        )
+                        logger.info("Binance exchange interface and account synchronizer initialized")
+                    else:
+                        logger.warning("Binance API credentials not found - account sync disabled")
                 else:
-                    logger.warning("Binance API credentials not found - account sync disabled")
+                    api_key = config.get('COINBASE_API_KEY')
+                    api_secret = config.get('COINBASE_API_SECRET')
+                    if api_key and api_secret:
+                        self.exchange_interface = CoinbaseProvider(api_key, api_secret, testnet=False)
+                        self.account_synchronizer = AccountSynchronizer(
+                            self.exchange_interface, 
+                            self.db_manager, 
+                            self.trading_session_id
+                        )
+                        logger.info("Coinbase exchange interface and account synchronizer initialized")
+                    else:
+                        logger.warning("Coinbase API credentials not found - account sync disabled")
             except Exception as e:
                 logger.warning(f"Failed to initialize exchange interface: {e}")
         
