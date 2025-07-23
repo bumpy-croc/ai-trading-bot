@@ -10,10 +10,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Fetch backtests
     fetch('/api/backtests')
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) {
+                throw new Error(`Failed to fetch backtests: ${r.status} ${r.statusText}`);
+            }
+            return r.json();
+        })
         .then(data => {
             backtests = data;
             renderTable(backtests);
+        })
+        .catch(error => {
+            console.error(error);
+            tableBody.innerHTML = '<tr><td colspan="11">Failed to load backtests. Please try again later.</td></tr>';
         });
 
     function renderTable(list) {
@@ -48,16 +57,30 @@ document.addEventListener('DOMContentLoaded', () => {
     // Search
     searchInput.addEventListener('input', () => {
         const t = searchInput.value.toLowerCase();
-        renderTable(backtests.filter(bt => (bt.strategy || '').toLowerCase().includes(t) || (bt.symbol || '').toLowerCase().includes(t) || (bt.file || '').toLowerCase().includes(t)));
+        renderTable(backtests.filter(bt => matchesSearchQuery(bt, t)));
     });
 
+    function matchesSearchQuery(backtest, query) {
+        return (backtest.strategy || '').toLowerCase().includes(query) ||
+               (backtest.symbol || '').toLowerCase().includes(query) ||
+               (backtest.file || '').toLowerCase().includes(query);
+    }
     // Compare
     compareBtn.addEventListener('click', () => {
         if (selectedFiles.size !== 2) return;
         const [f, s] = [...selectedFiles];
         fetch(`/api/compare?first=${encodeURIComponent(f)}&second=${encodeURIComponent(s)}`)
-            .then(r => r.json())
-            .then(showComparison);
+            .then(r => {
+                if (!r.ok) {
+                    throw new Error(`Failed to fetch comparison: ${r.status} ${r.statusText}`);
+                }
+                return r.json();
+            })
+            .then(showComparison)
+            .catch(error => {
+                console.error(error);
+                comparisonContainer.innerHTML = '<p class="error">Failed to load comparison. Please try again later.</p>';
+            });
     });
 
     function showComparison(data) {

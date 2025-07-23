@@ -254,8 +254,10 @@ def main():
             }
 
             # Build filename and ensure directory exists
+            import re
             timestamp_for_file = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"{timestamp_for_file}_{strategy.name}_{duration_years}yrs.json"
+            sanitized_strategy_name = re.sub(r'[^a-zA-Z0-9_-]', '_', strategy.name)
+            filename = f"{timestamp_for_file}_{sanitized_strategy_name}_{duration_years}yrs.json"
             logs_dir = Path(project_root) / 'logs' / 'backtest'
             logs_dir.mkdir(parents=True, exist_ok=True)
             filepath = logs_dir / filename
