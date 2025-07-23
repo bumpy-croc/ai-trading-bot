@@ -67,4 +67,10 @@ class MockDataProvider(DataProvider):
         self.data = pd.concat([self.data, new_row])
         # Keep only the last num_candles
         self.data = self.data.iloc[-self.num_candles:]
-        return self.data.copy() 
+        return self.data.copy()
+
+    def get_current_price(self, symbol: str) -> float:
+        """Return the latest close price from generated mock data"""
+        if self.data is not None and not self.data.empty:
+            return float(self.data.iloc[-1]['close'])
+        return 0.0 

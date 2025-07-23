@@ -13,7 +13,8 @@ import sys
 import numpy as np
 
 from data_providers.data_provider import DataProvider
-from data_providers.binance_provider import BinanceProvider
+# Replaced BinanceProvider with CoinbaseProvider
+from data_providers.coinbase_provider import CoinbaseProvider
 from data_providers.sentiment_provider import SentimentDataProvider
 from strategies.base import BaseStrategy
 from risk.risk_manager import RiskManager, RiskParameters
@@ -151,11 +152,11 @@ class LiveTradingEngine:
             try:
                 from config import get_config
                 config = get_config()
-                api_key = config.get('BINANCE_API_KEY')
-                api_secret = config.get('BINANCE_API_SECRET')
+                api_key = config.get('COINBASE_API_KEY')
+                api_secret = config.get('COINBASE_API_SECRET')
                 
                 if api_key and api_secret:
-                    self.exchange_interface = BinanceProvider(api_key, api_secret, testnet=False)
+                    self.exchange_interface = CoinbaseProvider(api_key, api_secret, testnet=False)
                     self.account_synchronizer = AccountSynchronizer(
                         self.exchange_interface, 
                         self.db_manager, 
@@ -163,7 +164,7 @@ class LiveTradingEngine:
                     )
                     logger.info("Exchange interface and account synchronizer initialized")
                 else:
-                    logger.warning("Binance API credentials not found - account sync disabled")
+                    logger.warning("Coinbase API credentials not found - account sync disabled")
             except Exception as e:
                 logger.warning(f"Failed to initialize exchange interface: {e}")
         

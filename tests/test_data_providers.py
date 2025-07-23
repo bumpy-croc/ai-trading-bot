@@ -57,7 +57,8 @@ class TestDataProviderInterface:
         required_methods = [
             'get_historical_data',
             'get_live_data', 
-            'update_live_data'
+            'update_live_data',
+            'get_current_price'
         ]
         
         for method in required_methods:

@@ -166,22 +166,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         return self.TIMEFRAME_MAPPING[timeframe]
         
     def _process_klines(self, klines: list) -> pd.DataFrame:
-        """Convert raw klines data to DataFrame"""
-        if not klines:
-            return pd.DataFrame()
-            
-        df = pd.DataFrame(klines, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
-            'taker_buy_quote', 'ignored'
-        ])
-        
-        # Convert types
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-        return df.set_index('timestamp')
+        """Convert raw klines data to standardized DataFrame using base helper"""
+        # Binance timestamps are in milliseconds
+        # We keep only the first 6 columns which correspond to timestamp and OHLCV
+        return self._process_ohlcv([k[:6] for k in klines], timestamp_unit='ms')
         
     def get_historical_data(
         self,
