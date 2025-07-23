@@ -84,6 +84,7 @@ def parse_args():
     parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
     parser.add_argument('--cache-ttl', type=int, default=24, help='Cache TTL in hours (default: 24)')
     parser.add_argument('--no-db', action='store_true', help='Disable database logging for this backtest')
+    parser.add_argument('--provider', choices=['coinbase', 'binance'], default='coinbase', help='Exchange provider to use (default: coinbase)')
     return parser.parse_args()
 
 def get_date_range(args):
@@ -113,15 +114,18 @@ def main():
         logger.info(f"Loaded strategy: {strategy.name}")
         
         # Initialize data provider with caching
-        binance_provider = BinanceDataProvider()
+        if args.provider == 'binance':
+            from data_providers.binance_provider import BinanceProvider
+            provider = BinanceProvider()
+        else:
+            from data_providers.coinbase_provider import CoinbaseProvider
+            provider = CoinbaseProvider()
         if args.no_cache:
-            data_provider = binance_provider
+            data_provider = provider
             logger.info("Data caching disabled")
         else:
-            data_provider = CachedDataProvider(
-                binance_provider, 
-                cache_ttl_hours=args.cache_ttl
-            )
+            from data_providers.cached_data_provider import CachedDataProvider
+            data_provider = CachedDataProvider(provider, cache_ttl_hours=args.cache_ttl)
             logger.info(f"Using cached data provider (TTL: {args.cache_ttl} hours)")
             
             # Show cache info

@@ -121,6 +121,7 @@ def parse_args():
     parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis')
     parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
     parser.add_argument('--mock-data', action='store_true', help='Use mock data provider for rapid testing')
+    parser.add_argument('--provider', choices=['coinbase', 'binance'], default='coinbase', help='Exchange provider to use (default: coinbase)')
     
     # Monitoring
     parser.add_argument('--webhook-url', help='Webhook URL for alerts')
@@ -228,12 +229,18 @@ def main():
             data_provider = MockDataProvider(interval_seconds=5)  # 5s candles for rapid testing
             logger.info("Using MockDataProvider for rapid testing")
         else:
-            binance_provider = BinanceProvider()
+            if args.provider == 'binance':
+                from data_providers.binance_provider import BinanceProvider
+                provider = BinanceProvider()
+            else:
+                from data_providers.coinbase_provider import CoinbaseProvider
+                provider = CoinbaseProvider()
             if args.no_cache:
-                data_provider = binance_provider
+                data_provider = provider
                 logger.info("Data caching disabled")
             else:
-                data_provider = CachedDataProvider(binance_provider, cache_ttl_hours=1)  # Short TTL for live trading
+                from data_providers.cached_data_provider import CachedDataProvider
+                data_provider = CachedDataProvider(provider, cache_ttl_hours=1)
                 logger.info("Data caching enabled (1 hour TTL)")
         
         # Initialize sentiment provider if requested
@@ -270,7 +277,8 @@ def main():
             enable_live_trading=args.live_trading,
             log_trades=args.log_trades,
             alert_webhook_url=args.webhook_url,
-            account_snapshot_interval=args.snapshot_interval
+            account_snapshot_interval=args.snapshot_interval,
+            provider=args.provider
         )
         
         # Final safety check for live trading
