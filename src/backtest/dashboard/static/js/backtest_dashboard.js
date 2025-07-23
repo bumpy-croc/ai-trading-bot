@@ -65,8 +65,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedFiles.size !== 2) return;
         const [f, s] = [...selectedFiles];
         fetch(`/api/compare?first=${encodeURIComponent(f)}&second=${encodeURIComponent(s)}`)
-            .then(r => r.json())
-            .then(showComparison);
+            .then(r => {
+                if (!r.ok) {
+                    throw new Error(`Failed to fetch comparison: ${r.status} ${r.statusText}`);
+                }
+                return r.json();
+            })
+            .then(showComparison)
+            .catch(error => {
+                console.error(error);
+                comparisonContainer.innerHTML = '<p class="error">Failed to load comparison. Please try again later.</p>';
+            });
     });
 
     function showComparison(data) {
