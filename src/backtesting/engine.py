@@ -98,15 +98,14 @@ class Backtester:
                 # Set up strategy logging
                 if self.db_manager:
                     self.strategy.set_database_manager(self.db_manager)
-            except Exception as db_err:
+            except SQLAlchemyError as db_err:
                 # Fallback to in-memory SQLite to satisfy tests that expect db_manager presence
                 logger.warning(f"Database connection failed ({db_err}). Falling back to in-memory SQLite database for logging.")
                 try:
-                    from sqlalchemy.exc import SQLAlchemyError
                     self.db_manager = DatabaseManager('sqlite:///:memory:')
                     if self.db_manager:
                         self.strategy.set_database_manager(self.db_manager)
-                except Exception as sqlite_err:
+                except SQLAlchemyError as sqlite_err:
                     logger.warning(f"Fallback SQLite initialization failed ({sqlite_err}). Disabling database logging.")
                     self.log_to_database = False
                     class _DummyDBManager:
