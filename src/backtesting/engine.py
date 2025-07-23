@@ -109,13 +109,13 @@ class Backtester:
                 except Exception as sqlite_err:
                     logger.warning(f"Fallback SQLite initialization failed ({sqlite_err}). Disabling database logging.")
                     self.log_to_database = False
-                    class _DummyDBManager:
+                    class DummyDBManager:
                         def __getattr__(self, _):
                             def _noop(*args, **kwargs):
                                 return None
                             return _noop
 
-                    self.db_manager = _DummyDBManager()
+                    self.db_manager = DummyDBManager()
         
     def run(
         self,
