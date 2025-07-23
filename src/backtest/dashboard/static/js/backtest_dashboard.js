@@ -57,9 +57,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Search
     searchInput.addEventListener('input', () => {
         const t = searchInput.value.toLowerCase();
-        renderTable(backtests.filter(bt => (bt.strategy || '').toLowerCase().includes(t) || (bt.symbol || '').toLowerCase().includes(t) || (bt.file || '').toLowerCase().includes(t)));
+        renderTable(backtests.filter(bt => matchesSearchQuery(bt, t)));
     });
 
+    function matchesSearchQuery(backtest, query) {
+        return (backtest.strategy || '').toLowerCase().includes(query) ||
+               (backtest.symbol || '').toLowerCase().includes(query) ||
+               (backtest.file || '').toLowerCase().includes(query);
+    }
     // Compare
     compareBtn.addEventListener('click', () => {
         if (selectedFiles.size !== 2) return;
