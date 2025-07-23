@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import hmac
 import hashlib
@@ -9,6 +9,7 @@ import os
 import logging
 import requests
 import pandas as pd
+import re
 
 from .data_provider import DataProvider
 from .exchange_interface import (
@@ -348,10 +349,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         results: List[List[Any]] = []
         chunk_start = start
         while chunk_start < end:
-            chunk_end = min(end, chunk_start + __import__('datetime').timedelta(seconds=delta_sec))
+            chunk_end = min(end, chunk_start + timedelta(seconds=delta_sec))
             results.extend(self._fetch_candles(product_id, granularity, chunk_start, chunk_end))
             # API returns inclusive candles → move start forward by granularity to avoid duplicates
-            chunk_start = chunk_end + __import__('datetime').timedelta(seconds=granularity)
+            chunk_start = chunk_end + timedelta(seconds=granularity)
         return results
 
     def get_historical_data(
@@ -450,11 +451,22 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         return mapping.get(order_type, "market")
 
     def _coinbase_symbol(self, symbol: str) -> str:
-        """Convert internal symbol format to Coinbase symbol format."""
-        if "-" in symbol:
-            return symbol
-        base, quote = symbol[:3], symbol[3:]
-        return f"{base}-{quote}"
+        """Convert generic symbol (e.g., BTCUSDT) to Coinbase product_id (e.g., BTC-USDT)."""
+        # Try to split using known asset list or regex
+        known_assets = [
+            'BTC', 'ETH', 'USDT', 'USDC', 'SOL', 'AVAX', 'BNB', 'ADA', 'DOGE', 'XRP', 'MATIC', 'DOT', 'LTC', 'BCH', 'LINK', 'TRX', 'SHIB', 'WBTC', 'DAI', 'ATOM', 'FIL', 'ETC', 'XLM', 'APT', 'ARB', 'OP', 'SUI', 'PEPE', 'RNDR', 'UNI', 'ICP', 'LDO', 'TUSD', 'FDUSD', 'TON', 'SEI', 'PYTH', 'INJ', 'TIA', 'JUP', 'MEME', 'WIF', 'ORDI', '1000SATS', 'GRT', 'AAVE', 'SNX', 'SAND', 'AXS', 'MKR', 'CRV', 'COMP', 'GMX', 'DYDX', 'BLUR', 'LUNA', 'UST', 'FTT', 'SRM', 'YFI', 'ALGO', 'EOS', 'XTZ', 'ZEC', 'ZRX', 'BAT', 'ENJ', 'CHZ', 'MANA', '1INCH', 'REN', 'BAL', 'CVC', 'BNT', 'KNC', 'OMG', 'NMR', 'OXT', 'REP', 'UMA', 'WBTC', 'ZRX', 'BUSD', 'USD', 'EUR', 'GBP', 'TRY', 'RUB', 'AUD', 'BRL', 'CAD', 'CHF', 'CLP', 'CZK', 'DKK', 'HKD', 'HUF', 'IDR', 'ILS', 'INR', 'JPY', 'KRW', 'MXN', 'NOK', 'NZD', 'PLN', 'RON', 'SEK', 'SGD', 'THB', 'UAH', 'VEF', 'ZAR'
+        ]
+        symbol = symbol.upper()
+        for base in known_assets:
+            if symbol.startswith(base):
+                quote = symbol[len(base):]
+                if quote in known_assets:
+                    return f"{base}-{quote}"
+        # Fallback: try regex for 3-4 letter base/quote
+        m = re.match(r"([A-Z]{3,5})([A-Z]{3,5})", symbol)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}"
+        raise ValueError(f"Could not parse symbol '{symbol}' into Coinbase product_id format.")
 
 # Aliases for convenience
 CoinbaseDataProvider = CoinbaseProvider

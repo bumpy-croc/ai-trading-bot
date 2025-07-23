@@ -68,6 +68,23 @@ class Trade:
     pnl: float
     exit_reason: str
     
+def _create_exchange_provider(provider: str, config: dict):
+    """Factory to create exchange provider and return (provider_instance, provider_name)."""
+    if provider == 'binance':
+        api_key = config.get('BINANCE_API_KEY')
+        api_secret = config.get('BINANCE_API_SECRET')
+        if api_key and api_secret:
+            return BinanceProvider(api_key, api_secret, testnet=False), 'Binance'
+        else:
+            return None, 'Binance (no credentials)'
+    else:
+        api_key = config.get('COINBASE_API_KEY')
+        api_secret = config.get('COINBASE_API_SECRET')
+        if api_key and api_secret:
+            return CoinbaseProvider(api_key, api_secret, testnet=False), 'Coinbase'
+        else:
+            return None, 'Coinbase (no credentials)'
+
 class LiveTradingEngine:
     """
     Advanced live trading engine that executes strategies in real-time.
@@ -154,32 +171,16 @@ class LiveTradingEngine:
             try:
                 from config import get_config
                 config = get_config()
-                if provider == 'binance':
-                    api_key = config.get('BINANCE_API_KEY')
-                    api_secret = config.get('BINANCE_API_SECRET')
-                    if api_key and api_secret:
-                        self.exchange_interface = BinanceProvider(api_key, api_secret, testnet=False)
-                        self.account_synchronizer = AccountSynchronizer(
-                            self.exchange_interface, 
-                            self.db_manager, 
-                            self.trading_session_id
-                        )
-                        logger.info("Binance exchange interface and account synchronizer initialized")
-                    else:
-                        logger.warning("Binance API credentials not found - account sync disabled")
+                self.exchange_interface, provider_name = _create_exchange_provider(provider, config)
+                if self.exchange_interface:
+                    self.account_synchronizer = AccountSynchronizer(
+                        self.exchange_interface, 
+                        self.db_manager, 
+                        self.trading_session_id
+                    )
+                    logger.info(f"{provider_name} exchange interface and account synchronizer initialized")
                 else:
-                    api_key = config.get('COINBASE_API_KEY')
-                    api_secret = config.get('COINBASE_API_SECRET')
-                    if api_key and api_secret:
-                        self.exchange_interface = CoinbaseProvider(api_key, api_secret, testnet=False)
-                        self.account_synchronizer = AccountSynchronizer(
-                            self.exchange_interface, 
-                            self.db_manager, 
-                            self.trading_session_id
-                        )
-                        logger.info("Coinbase exchange interface and account synchronizer initialized")
-                    else:
-                        logger.warning("Coinbase API credentials not found - account sync disabled")
+                    logger.warning(f"{provider_name} API credentials not found - account sync disabled")
             except Exception as e:
                 logger.warning(f"Failed to initialize exchange interface: {e}")
         
