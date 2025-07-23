@@ -63,7 +63,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     # ---------------------- ExchangeInterface ---------------------
     def _initialize_client(self):
-        """Initialise Coinbase client & prepare auth parameters."""
+        """Initialize Coinbase client & prepare auth parameters."""
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": "CoinbaseProvider/1.0"})
         # Prepare decoded secret for HMAC
