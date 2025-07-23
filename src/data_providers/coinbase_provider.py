@@ -1,5 +1,10 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+import time
+import hmac
+import hashlib
+import base64
+import json
 import logging
 import requests
 import pandas as pd
@@ -51,11 +56,53 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     # ---------------------- ExchangeInterface ---------------------
     def _initialize_client(self):
-        """Initialise Coinbase client. We primarily use public REST calls so keep simple."""
-        # Placeholder for real client (e.g., cbpro.PublicClient / AuthenticatedClient).
-        # We will simply store session for HTTP requests.
+        """Initialise Coinbase client & prepare auth parameters."""
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": "CoinbaseProvider/1.0"})
+        # Prepare decoded secret for HMAC
+        try:
+            self._decoded_secret = base64.b64decode(self.api_secret) if self.api_secret else None
+        except Exception:
+            self._decoded_secret = None
+
+    # ------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------
+
+    def _sign_request(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+        """Create CB-ACCESS-SIGN header value"""
+        if not self._decoded_secret:
+            raise ValueError("API secret not configured – cannot sign requests")
+        message = f"{timestamp}{method.upper()}{request_path}{body}".encode()
+        signature = hmac.new(self._decoded_secret, message, hashlib.sha256).digest()
+        return base64.b64encode(signature).decode()
+
+    def _request(self, method: str, path: str, params: Dict[str, Any] = None, body: Dict[str, Any] = None, auth: bool = False):
+        """Helper to perform HTTP request with optional Coinbase authentication."""
+        url = f"{self.BASE_URL}{path}"
+        body_str = json.dumps(body) if body else ""
+        headers = {}
+        if auth:
+            if not (self.api_key and self.api_secret and self.passphrase):
+                raise ValueError("Authenticated request requested but API credentials not set")
+            timestamp = str(int(time.time()))
+            signature = self._sign_request(timestamp, method, path, body_str)
+            headers.update({
+                "CB-ACCESS-KEY": self.api_key,
+                "CB-ACCESS-SIGN": signature,
+                "CB-ACCESS-TIMESTAMP": timestamp,
+                "CB-ACCESS-PASSPHRASE": self.passphrase,
+                "Content-Type": "application/json",
+            })
+        try:
+            response = self._session.request(method, url, params=params, data=body_str if body else None, headers=headers, timeout=15)
+            response.raise_for_status()
+            if response.text:
+                return response.json()
+            return {}
+        except Exception as e:
+            logger.error(f"Coinbase API request error {method} {path}: {e}")
+            raise
 
     def test_connection(self) -> bool:
         try:
@@ -69,16 +116,44 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
     # We create stubs to satisfy interface but mark as unimplemented.
 
     def get_account_info(self) -> Dict[str, Any]:
-        """Not implemented for Coinbase public provider."""
-        logger.info("get_account_info not implemented for Coinbase public API")
-        return {}
+        try:
+            data = self._request("GET", "/accounts", auth=True)
+            account_info = {
+                "total_accounts": len(data),
+                "timestamp": datetime.utcnow(),
+            }
+            return account_info
+        except Exception:
+            return {}
 
     def get_balances(self) -> List[AccountBalance]:
-        logger.info("get_balances not implemented for Coinbase public API")
-        return []
+        try:
+            accounts = self._request("GET", "/accounts", auth=True)
+            balances: List[AccountBalance] = []
+            for acct in accounts:
+                balance = float(acct.get("balance", "0"))
+                available = float(acct.get("available", "0"))
+                if balance == 0 and available == 0:
+                    continue
+                balances.append(
+                    AccountBalance(
+                        asset=acct.get("currency"),
+                        free=available,
+                        locked=balance - available,
+                        total=balance,
+                        last_updated=datetime.utcnow(),
+                    )
+                )
+            return balances
+        except Exception as e:
+            logger.error(f"Failed to fetch balances: {e}")
+            return []
 
     def get_balance(self, asset: str) -> Optional[AccountBalance]:
-        logger.info("get_balance not implemented for Coinbase public API")
+        balances = self.get_balances()
+        for bal in balances:
+            if bal.asset.upper() == asset.upper():
+                return bal
         return None
 
     def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
@@ -86,16 +161,84 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         return []
 
     def get_open_orders(self, symbol: Optional[str] = None) -> List[Order]:
-        logger.info("get_open_orders not implemented for Coinbase public API")
-        return []
+        try:
+            params = {"status": "open"}
+            if symbol:
+                params["product_id"] = self._coinbase_symbol(symbol)
+            data = self._request("GET", "/orders", params=params, auth=True)
+            orders: List[Order] = []
+            for od in data:
+                orders.append(
+                    Order(
+                        order_id=od.get("id"),
+                        symbol=od.get("product_id"),
+                        side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
+                        order_type=self._convert_order_type(od.get("type")),
+                        quantity=float(od.get("size", 0)),
+                        price=float(od.get("price")) if od.get("price") else None,
+                        status=self._convert_order_status(od.get("status")),
+                        filled_quantity=float(od.get("filled_size", 0)),
+                        average_price=float(od.get("executed_value", 0)) / float(od.get("filled_size", 1)) if float(od.get("filled_size", 0)) > 0 else None,
+                        commission=0.0,
+                        commission_asset="",
+                        create_time=datetime.fromisoformat(od.get("created_at")),
+                        update_time=datetime.fromisoformat(od.get("done_at")) if od.get("done_at") else datetime.utcnow(),
+                        stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
+                        time_in_force=od.get("time_in_force", "GTC"),
+                    )
+                )
+            return orders
+        except Exception as e:
+            logger.error(f"Failed to get open orders: {e}")
+            return []
 
     def get_order(self, order_id: str, symbol: str) -> Optional[Order]:
-        logger.info("get_order not implemented for Coinbase public API")
-        return None
+        try:
+            od = self._request("GET", f"/orders/{order_id}", auth=True)
+            return Order(
+                order_id=od.get("id"),
+                symbol=od.get("product_id"),
+                side=OrderSide.BUY if od.get("side") == "buy" else OrderSide.SELL,
+                order_type=self._convert_order_type(od.get("type")),
+                quantity=float(od.get("size", 0)),
+                price=float(od.get("price")) if od.get("price") else None,
+                status=self._convert_order_status(od.get("status")),
+                filled_quantity=float(od.get("filled_size", 0)),
+                average_price=float(od.get("executed_value", 0)) / float(od.get("filled_size", 1)) if float(od.get("filled_size", 0)) > 0 else None,
+                commission=0.0,
+                commission_asset="",
+                create_time=datetime.fromisoformat(od.get("created_at")),
+                update_time=datetime.fromisoformat(od.get("done_at")) if od.get("done_at") else datetime.utcnow(),
+                stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
+                time_in_force=od.get("time_in_force", "GTC"),
+            )
+        except Exception as e:
+            logger.error(f"Failed to get order {order_id}: {e}")
+            return None
 
     def get_recent_trades(self, symbol: str, limit: int = 100) -> List[Trade]:
-        logger.info("get_recent_trades not implemented for Coinbase public API")
-        return []
+        try:
+            params = {"product_id": self._coinbase_symbol(symbol), "limit": limit}
+            fills = self._request("GET", "/fills", params=params, auth=True)
+            trades: List[Trade] = []
+            for fl in fills:
+                trades.append(
+                    Trade(
+                        trade_id=fl.get("trade_id"),
+                        order_id=fl.get("order_id"),
+                        symbol=fl.get("product_id"),
+                        side=OrderSide.BUY if fl.get("side") == "buy" else OrderSide.SELL,
+                        quantity=float(fl.get("size")),
+                        price=float(fl.get("price")),
+                        commission=float(fl.get("fee")),
+                        commission_asset=fl.get("product_id").split("-")[1],
+                        time=datetime.fromisoformat(fl.get("created_at")),
+                    )
+                )
+            return trades
+        except Exception as e:
+            logger.error(f"Failed to fetch recent trades: {e}")
+            return []
 
     def place_order(
         self,
@@ -107,25 +250,65 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         stop_price: Optional[float] = None,
         time_in_force: str = "GTC",
     ) -> Optional[str]:
-        logger.info("place_order not implemented for Coinbase public API")
-        return None
+        try:
+            cb_type = self._convert_to_cb_type(order_type)
+            body: Dict[str, Any] = {
+                "product_id": self._coinbase_symbol(symbol),
+                "side": side.value.lower(),
+                "type": cb_type,
+            }
+            if cb_type == "market":
+                body["size"] = str(quantity)
+            else:
+                body.update({
+                    "size": str(quantity),
+                    "price": str(price) if price else None,
+                    "time_in_force": time_in_force,
+                })
+            if cb_type == "stop":
+                body["stop_price"] = str(stop_price) if stop_price else None
+                body["stop"] = "loss"  # default stop loss
+
+            order = self._request("POST", "/orders", body=body, auth=True)
+            return order.get("id")
+        except Exception as e:
+            logger.error(f"Failed to place order: {e}")
+            return None
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
-        logger.info("cancel_order not implemented for Coinbase public API")
-        return False
+        try:
+            self._request("DELETE", f"/orders/{order_id}", auth=True)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cancel order {order_id}: {e}")
+            return False
 
     def cancel_all_orders(self, symbol: Optional[str] = None) -> bool:
-        logger.info("cancel_all_orders not implemented for Coinbase public API")
-        return False
+        try:
+            params = {"product_id": self._coinbase_symbol(symbol)} if symbol else None
+            self._request("DELETE", "/orders", params=params, auth=True)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cancel all orders: {e}")
+            return False
 
     def get_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
-        # Coinbase does not provide rich symbol metadata via a single endpoint like Binance.
-        # We'll return basic placeholder info.
-        return {
-            "symbol": symbol,
-            "base_asset": symbol[:-3],
-            "quote_asset": symbol[-3:],
-        }
+        try:
+            product = self._request("GET", f"/products/{self._coinbase_symbol(symbol)}")
+            return {
+                "symbol": product.get("id"),
+                "base_asset": product.get("base_currency"),
+                "quote_asset": product.get("quote_currency"),
+                "status": product.get("status"),
+                "min_qty": float(product.get("base_min_size", 0)),
+                "max_qty": float(product.get("base_max_size", 0)),
+                "min_price": float(product.get("min_market_funds", 0)),
+                "max_price": float(product.get("max_market_funds", 0)),
+                "tick_size": float(product.get("quote_increment", 0)),
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch symbol info: {e}")
+            return None
 
     # --------------------------- DataProvider --------------------------
 
