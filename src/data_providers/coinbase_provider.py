@@ -73,7 +73,8 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             self._decoded_secret = None
 
     # ------------------------------------------------------------
-    # Internal helpers
+    # The following methods provide implementations for authenticated endpoints of the Coinbase Exchange API.
+    # These methods interact with the API to fetch account information and balances.
     # ------------------------------------------------------------
 
     def _sign_request(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
@@ -118,9 +119,6 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         except Exception as e:
             logger.error(f"Coinbase connection test failed: {e}")
             return False
-
-    # The following authenticated endpoints are NOT implemented (Coinbase Advanced Trade API differs).
-    # We create stubs to satisfy interface but mark as unimplemented.
 
     def get_account_info(self) -> Dict[str, Any]:
         try:
@@ -211,7 +209,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 price=float(od.get("price")) if od.get("price") else None,
                 status=self._convert_order_status(od.get("status")),
                 filled_quantity=float(od.get("filled_size", 0)),
-                average_price=float(od.get("executed_value", 0)) / float(od.get("filled_size", 0)) if float(od.get("filled_size", 0)) > 0 else None,
+                average_price=(float(od.get("executed_value", 0)) / float(od.get("filled_size", 0))) if float(od.get("filled_size", 0)) > 0 else None,
                 commission=0.0,
                 commission_asset="",
                 create_time=datetime.fromisoformat(od.get("created_at")),
@@ -418,6 +416,45 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         except Exception as e:
             logger.error(f"Error fetching current price for {symbol} from Coinbase: {e}")
             return 0.0
+
+    # --------------------------- DataProvider --------------------------
+
+    def _convert_order_type(self, order_type: str) -> str:
+        """Convert Coinbase order type to internal order type."""
+        mapping = {
+            "market": "market",
+            "limit": "limit",
+            "stop": "stop",
+        }
+        return mapping.get(order_type, "unknown")
+
+    def _convert_order_status(self, status: str) -> str:
+        """Convert Coinbase order status to internal order status."""
+        mapping = {
+            "open": "open",
+            "pending": "pending",
+            "done": "closed",
+            "active": "active",
+        }
+        return mapping.get(status, "unknown")
+
+    def _convert_to_cb_type(self, order_type: str) -> str:
+        """Convert internal order type to Coinbase order type."""
+        mapping = {
+            "market": "market",
+            "limit": "limit",
+            "stop": "stop",
+        }
+        if isinstance(order_type, OrderType):
+            order_type = order_type.value
+        return mapping.get(order_type, "market")
+
+    def _coinbase_symbol(self, symbol: str) -> str:
+        """Convert internal symbol format to Coinbase symbol format."""
+        if "-" in symbol:
+            return symbol
+        base, quote = symbol[:3], symbol[3:]
+        return f"{base}-{quote}"
 
 # Aliases for convenience
 CoinbaseDataProvider = CoinbaseProvider
