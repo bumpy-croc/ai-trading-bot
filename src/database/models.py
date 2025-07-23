@@ -7,7 +7,23 @@ from sqlalchemy import (
     Enum, ForeignKey, Index, UniqueConstraint, Float, JSON  # Added Float and JSON
 )
 from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
+# * JSONB is PostgreSQL specific. Provide graceful fallback & SQLite compilation
+from sqlalchemy.types import JSON
+
+try:
+    from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
+except ImportError:  # pragma: no cover – fallback when dialect unavailable
+    JSONB = JSON  # type: ignore
+
+# Ensure SQLite can compile JSONB columns by mapping them to generic JSON.
+from sqlalchemy.ext.compiler import compiles  # type: ignore
+
+
+@compiles(JSONB, "sqlite")  # type: ignore
+def _compile_jsonb_for_sqlite(_type, compiler, **kw):  # noqa: D401
+    """Compile JSONB as JSON for SQLite fallback."""
+    return "JSON"
+
 from datetime import datetime
 import enum
 
