@@ -1,0 +1,37 @@
+{
+  "timestamp": "2025-07-23T17:33:03",
+  "strategy": "MlAdaptive",
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "start_date": "2023-07-21T00:00:00",
+  "end_date": "2025-07-21T00:00:00",
+  "duration_years": 2.0,
+  "initial_balance": 10000.0,
+  "use_sentiment": false,
+  "use_cache": true,
+  "database_logging": false,
+  "risk_per_trade": 0.01,
+  "max_risk_per_trade": 0.02,
+  "cache_ttl_hours": 24,
+  "git_commit": "ebc66ec509fa00d1e086c5d1c41941a77759d0df",
+  "git_branch": "main",
+  "results": {
+    "total_trades": 3,
+    "win_rate": 0.0,
+    "total_return": -10.1605281886744,
+    "max_drawdown": 10.160528188674398,
+    "sharpe_ratio": -0.706622958494809,
+    "final_balance": 8983.94718113256,
+    "annualized_return": -5.209367062493597,
+    "yearly_returns": {
+      "2023": -10.1605281886744,
+      "2024": 0.0,
+      "2025": 0.0
+    },
+    "session_id": null,
+    "early_stop_reason": null,
+    "early_stop_date": null,
+    "early_stop_candle_index": null
+  },
+  "strategy_config": {}
+}

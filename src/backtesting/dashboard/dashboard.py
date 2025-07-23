@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class BacktestDashboard:
     """Simple dashboard to visualise historical backtest runs stored as JSON files."""
 
-    def __init__(self, logs_dir: Union[str, Path] = 'logs/backtest'):
+    def __init__(self, logs_dir: Union[str, Path] = 'src/backtesting/runs'):
         self.logs_dir = Path(logs_dir)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
