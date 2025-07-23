@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import base64
 import json
+import os
 import logging
 import requests
 import pandas as pd
@@ -27,7 +28,13 @@ logger = logging.getLogger(__name__)
 class CoinbaseProvider(DataProvider, ExchangeInterface):
     """Coinbase data and exchange provider (spot). Implements DataProvider & ExchangeInterface."""
 
-    BASE_URL = "https://api.exchange.coinbase.com"
+    # Determine environment (sandbox vs production) via env variable
+    COINBASE_API_ENV = os.getenv("COINBASE_API_ENV", "sandbox").lower()
+
+    if COINBASE_API_ENV == "sandbox":
+        BASE_URL = "https://api-public.sandbox.exchange.coinbase.com"
+    else:
+        BASE_URL = "https://api.exchange.coinbase.com"
 
     # Mapping of generic timeframe to Coinbase granularity (seconds)
     TIMEFRAME_MAPPING = {
