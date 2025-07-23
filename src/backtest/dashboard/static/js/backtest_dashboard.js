@@ -10,10 +10,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Fetch backtests
     fetch('/api/backtests')
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) {
+                throw new Error(`Failed to fetch backtests: ${r.status} ${r.statusText}`);
+            }
+            return r.json();
+        })
         .then(data => {
             backtests = data;
             renderTable(backtests);
+        })
+        .catch(error => {
+            console.error(error);
+            tableBody.innerHTML = '<tr><td colspan="11">Failed to load backtests. Please try again later.</td></tr>';
         });
 
     function renderTable(list) {
