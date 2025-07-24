@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import talib
 import logging
-from utils_symbol_factory import SymbolFactory
+from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 

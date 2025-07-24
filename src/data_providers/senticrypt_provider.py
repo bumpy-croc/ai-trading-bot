@@ -404,6 +404,6 @@ class SentiCryptProvider(SentimentDataProvider):
         resampled = self.data.resample(timeframe).agg(agg_methods)
         
         # Forward fill missing values
-        resampled = resampled.fillna(method='ffill')
+        resampled = resampled.ffill()
         
         return resampled 

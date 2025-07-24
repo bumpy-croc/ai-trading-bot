@@ -207,7 +207,7 @@ class CryptoCompareSentimentProvider(SentimentDataProvider):
             'sentiment_score': 'mean',
             'engagement_score': 'mean',
             'weighted_sentiment': 'mean'
-        }).fillna(method='ffill')
+        }).ffill()
         
         # Calculate sentiment momentum
         aggregated['sentiment_momentum'] = aggregated['weighted_sentiment'].diff()

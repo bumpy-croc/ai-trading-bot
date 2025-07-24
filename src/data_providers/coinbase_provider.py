@@ -23,7 +23,7 @@ from .exchange_interface import (
     OrderStatus,
 )
 from config import get_config
-from utils_symbol_factory import SymbolFactory
+from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 

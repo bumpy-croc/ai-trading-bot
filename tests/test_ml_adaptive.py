@@ -20,7 +20,7 @@ class TestMlAdaptive:
     @pytest.fixture
     def sample_data(self):
         """Create sample OHLCV data for testing"""
-        dates = pd.date_range(start='2020-01-01', end='2020-06-01', freq='H')
+        dates = pd.date_range(start='2020-01-01', end='2020-06-01', freq='h')
         np.random.seed(42)
         
         # Create realistic price data with trend and volatility
@@ -57,7 +57,7 @@ class TestMlAdaptive:
     def test_initialization(self, strategy):
         """Test strategy initialization"""
         assert strategy.name == "MlAdaptive"
-        assert strategy.trading_pair == 'BTCUSDT'
+        assert strategy.trading_pair == 'BTC-USD'
         assert strategy.base_stop_loss_pct == 0.02
         assert strategy.base_take_profit_pct == 0.04
         assert strategy.base_position_size == 0.10
@@ -170,7 +170,7 @@ class TestMlAdaptive:
         strategy.daily_losses[test_date] = -0.06  # 6% loss (exceeds limit)
         
         # Create minimal test data
-        dates = pd.date_range(start='2020-03-15', periods=200, freq='H')
+        dates = pd.date_range(start='2020-03-15', periods=200, freq='h')
         df = pd.DataFrame({
             'close': 10000,
             'open': 10000,
@@ -190,7 +190,7 @@ class TestMlAdaptive:
         strategy.consecutive_losses = 3
         
         # Create minimal test data
-        dates = pd.date_range(start='2020-01-01', periods=200, freq='H')
+        dates = pd.date_range(start='2020-01-01', periods=200, freq='h')
         df = pd.DataFrame({
             'close': 10000,
             'open': 10000,

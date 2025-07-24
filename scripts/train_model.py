@@ -531,7 +531,7 @@ def get_price_data(symbol, timeframe='1d', start_date='2000-01-01T00:00:00Z', en
 def merge_price_sentiment_data(price_df, sentiment_df, timeframe='1d'):
     """Merge price and sentiment data"""
     if timeframe != '1d':
-        sentiment_resampled = sentiment_df.resample(timeframe).fillna(method='ffill')
+        sentiment_resampled = sentiment_df.resample(timeframe).ffill()
     else:
         sentiment_resampled = sentiment_df
     

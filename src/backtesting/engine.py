@@ -171,7 +171,7 @@ class Backtester:
                     df.index = pd.to_datetime(df.index)
                 except (ValueError, TypeError):
                     # If conversion fails, create a dummy datetime index
-                    df.index = pd.date_range(start=start, periods=len(df), freq='H')
+                    df.index = pd.date_range(start=start, periods=len(df), freq='h')
                 
             # Fetch sentiment data if provider is available
             if self.sentiment_provider:
@@ -186,7 +186,7 @@ class Backtester:
                     # Merge sentiment data with price data
                     df = df.join(sentiment_df, how='left')
                     # Forward fill sentiment scores
-                    df['sentiment_score'] = df['sentiment_score'].fillna(method='ffill')
+                    df['sentiment_score'] = df['sentiment_score'].ffill()
                     # Fill any remaining NaN values with 0
                     df['sentiment_score'] = df['sentiment_score'].fillna(0)
             

@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import time
 import logging
 from .sentiment_provider import SentimentDataProvider
-from utils_symbol_factory import SymbolFactory
+from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 

@@ -37,7 +37,7 @@ from .exchange_interface import (
     AccountBalance, Position, Order, Trade
 )
 from config import get_config
-from utils_symbol_factory import SymbolFactory
+from src.utils.symbol_factory import SymbolFactory
 
 
 class BinanceProvider(DataProvider, ExchangeInterface):

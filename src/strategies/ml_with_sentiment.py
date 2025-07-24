@@ -242,7 +242,7 @@ class MlWithSentiment(BaseStrategy):
                         # Resample sentiment to match price data frequency
                         if len(df) > len(sentiment_df):
                             # Upsample sentiment data
-                            sentiment_resampled = sentiment_df.resample('1h').fillna(method='ffill')
+                            sentiment_resampled = sentiment_df.resample('1h').ffill()
                         else:
                             sentiment_resampled = sentiment_df
                         
@@ -287,7 +287,7 @@ class MlWithSentiment(BaseStrategy):
             # Forward fill existing sentiment columns
             sentiment_cols = [col for col in df.columns if col.startswith('sentiment_')]
             if sentiment_cols:
-                df[sentiment_cols] = df[sentiment_cols].fillna(method='ffill')
+                df[sentiment_cols] = df[sentiment_cols].ffill()
             
             # Calculate derived sentiment features if base sentiment exists
             if 'sentiment_primary' in df.columns:

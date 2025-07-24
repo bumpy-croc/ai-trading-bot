@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import logging
 from typing import Dict, Optional
-from utils_symbol_factory import SymbolFactory
+from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 

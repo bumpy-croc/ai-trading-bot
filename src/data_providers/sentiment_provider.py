@@ -63,6 +63,6 @@ class SentimentDataProvider(ABC):
         aggregated = df.resample(window).agg({
             'sentiment_score': 'mean',
             'volume': 'sum'  # If volume of sentiment data is available
-        }).fillna(method='ffill')
+        }).ffill()
         
         return aggregated 
