@@ -11,6 +11,7 @@ from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource, PositionSide
 from config.constants import DEFAULT_INITIAL_BALANCE
+from src.utils.symbol_factory import SymbolFactory
 
 # Shared performance metrics
 from performance.metrics import (

@@ -23,6 +23,7 @@ from .exchange_interface import (
     OrderStatus,
 )
 from config import get_config
+from utils_symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +171,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         try:
             params = {"status": "open"}
             if symbol:
-                params["product_id"] = self._coinbase_symbol(symbol)
+                params["product_id"] = SymbolFactory.to_exchange_symbol(symbol, 'coinbase')
             data = self._request("GET", "/orders", params=params, auth=True)
             orders: List[Order] = []
             for od in data:
@@ -224,7 +225,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     def get_recent_trades(self, symbol: str, limit: int = 100) -> List[Trade]:
         try:
-            params = {"product_id": self._coinbase_symbol(symbol), "limit": limit}
+            params = {"product_id": SymbolFactory.to_exchange_symbol(symbol, 'coinbase'), "limit": limit}
             fills = self._request("GET", "/fills", params=params, auth=True)
             trades: List[Trade] = []
             for fl in fills:
@@ -259,7 +260,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         try:
             cb_type = self._convert_to_cb_type(order_type)
             body: Dict[str, Any] = {
-                "product_id": self._coinbase_symbol(symbol),
+                "product_id": SymbolFactory.to_exchange_symbol(symbol, 'coinbase'),
                 "side": side.value.lower(),
                 "type": cb_type,
             }
@@ -291,7 +292,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     def cancel_all_orders(self, symbol: Optional[str] = None) -> bool:
         try:
-            params = {"product_id": self._coinbase_symbol(symbol)} if symbol else None
+            params = {"product_id": SymbolFactory.to_exchange_symbol(symbol, 'coinbase')} if symbol else None
             self._request("DELETE", "/orders", params=params, auth=True)
             return True
         except Exception as e:
@@ -300,7 +301,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     def get_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         try:
-            product = self._request("GET", f"/products/{self._coinbase_symbol(symbol)}")
+            product = self._request("GET", f"/products/{SymbolFactory.to_exchange_symbol(symbol, 'coinbase')}")
             return {
                 "symbol": product.get("id"),
                 "base_asset": product.get("base_currency"),
@@ -364,7 +365,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
     ) -> pd.DataFrame:
         try:
             granularity = self._convert_timeframe(timeframe)
-            product_id = symbol.upper()
+            product_id = SymbolFactory.to_exchange_symbol(symbol, 'coinbase')
             candles = self._fetch_candles_range(product_id, granularity, start, end or datetime.utcnow())
             df = self._process_ohlcv(candles, timestamp_unit="s")
             self.data = df
@@ -378,7 +379,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         try:
             granularity = self._convert_timeframe(timeframe)
-            product_id = symbol.upper()
+            product_id = SymbolFactory.to_exchange_symbol(symbol, 'coinbase')
             candles = self._fetch_candles(product_id, granularity, limit=limit)
             df = self._process_ohlcv(candles, timestamp_unit="s")
             self.data = df
@@ -392,7 +393,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             if self.data is None or self.data.empty:
                 return self.get_live_data(symbol, timeframe, limit=200)
             granularity = self._convert_timeframe(timeframe)
-            product_id = symbol.upper()
+            product_id = SymbolFactory.to_exchange_symbol(symbol, 'coinbase')
             candles = self._fetch_candles(product_id, granularity, limit=1)
             if not candles:
                 return self.data
@@ -408,7 +409,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     def get_current_price(self, symbol: str) -> float:
         try:
-            product_id = symbol.upper()
+            product_id = SymbolFactory.to_exchange_symbol(symbol, 'coinbase')
             url = f"{self.BASE_URL}/products/{product_id}/ticker"
             r = self._session.get(url, timeout=10)
             r.raise_for_status()
@@ -449,24 +450,6 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         if isinstance(order_type, OrderType):
             order_type = order_type.value
         return mapping.get(order_type, "market")
-
-    def _coinbase_symbol(self, symbol: str) -> str:
-        """Convert generic symbol (e.g., BTCUSDT) to Coinbase product_id (e.g., BTC-USDT)."""
-        # Try to split using known asset list or regex
-        known_assets = [
-            'BTC', 'ETH', 'USDT', 'USDC', 'SOL', 'AVAX', 'BNB', 'ADA', 'DOGE', 'XRP', 'MATIC', 'DOT', 'LTC', 'BCH', 'LINK', 'TRX', 'SHIB', 'WBTC', 'DAI', 'ATOM', 'FIL', 'ETC', 'XLM', 'APT', 'ARB', 'OP', 'SUI', 'PEPE', 'RNDR', 'UNI', 'ICP', 'LDO', 'TUSD', 'FDUSD', 'TON', 'SEI', 'PYTH', 'INJ', 'TIA', 'JUP', 'MEME', 'WIF', 'ORDI', '1000SATS', 'GRT', 'AAVE', 'SNX', 'SAND', 'AXS', 'MKR', 'CRV', 'COMP', 'GMX', 'DYDX', 'BLUR', 'LUNA', 'UST', 'FTT', 'SRM', 'YFI', 'ALGO', 'EOS', 'XTZ', 'ZEC', 'ZRX', 'BAT', 'ENJ', 'CHZ', 'MANA', '1INCH', 'REN', 'BAL', 'CVC', 'BNT', 'KNC', 'OMG', 'NMR', 'OXT', 'REP', 'UMA', 'WBTC', 'ZRX', 'BUSD', 'USD', 'EUR', 'GBP', 'TRY', 'RUB', 'AUD', 'BRL', 'CAD', 'CHF', 'CLP', 'CZK', 'DKK', 'HKD', 'HUF', 'IDR', 'ILS', 'INR', 'JPY', 'KRW', 'MXN', 'NOK', 'NZD', 'PLN', 'RON', 'SEK', 'SGD', 'THB', 'UAH', 'VEF', 'ZAR'
-        ]
-        symbol = symbol.upper()
-        for base in known_assets:
-            if symbol.startswith(base):
-                quote = symbol[len(base):]
-                if quote in known_assets:
-                    return f"{base}-{quote}"
-        # Fallback: try regex for 3-4 letter base/quote
-        m = re.match(r"([A-Z]{3,5})([A-Z]{3,5})", symbol)
-        if m:
-            return f"{m.group(1)}-{m.group(2)}"
-        raise ValueError(f"Could not parse symbol '{symbol}' into Coinbase product_id format.")
 
 # Aliases for convenience
 CoinbaseDataProvider = CoinbaseProvider

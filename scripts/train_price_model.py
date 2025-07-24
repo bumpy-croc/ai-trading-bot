@@ -4,8 +4,8 @@ Train an updated price-prediction model (v2) with log-return / EMA normalization
 and optionally different candle timeframes.
 
 Usage:
-    python scripts/train_price_model.py --symbol BTCUSDT --timeframe 1h \
-        --start 2018-01-01 --end 2024-12-31 --epochs 10 --output src/ml/btcusdt_price_v2.onnx
+    python scripts/train_price_model.py --symbol BTC-USD --timeframe 1h \
+        --start 2018-01-01 --end 2024-12-31 --epochs 10 --output src/ml/btcusd_price_v2.onnx
 
 The script:
 1. Pulls historical OHLCV data via the existing data-provider utilities
@@ -15,6 +15,7 @@ The script:
 5. Exports the network to ONNX for inference in production strategies
 
 Note: Designed for quick experimentation ‑ not heavy hyper-parameter tuning.
+Note: Use SymbolFactory for symbol conversion if needed.
 """
 import argparse
 from datetime import datetime
@@ -129,13 +130,13 @@ def export_onnx(model: nn.Module, seq_len: int, output_path: Path):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--symbol", default="BTCUSDT")
+    p.add_argument("--symbol", default="BTC-USD")
     p.add_argument("--timeframe", default="1h", choices=["1h", "4h"], help="Candle timeframe for training")
     p.add_argument("--seq_len", type=int, default=120)
     p.add_argument("--start", default="2018-01-01")
     p.add_argument("--end", default=datetime.utcnow().strftime("%Y-%m-%d"))
     p.add_argument("--epochs", type=int, default=10)
-    p.add_argument("--output", default="src/ml/btcusdt_price_v2.onnx")
+    p.add_argument("--output", default="src/ml/btcusd_price_v2.onnx")
     return p.parse_args()
 
 

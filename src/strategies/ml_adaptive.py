@@ -36,18 +36,22 @@ from indicators.technical import (
 )
 from datetime import datetime, timedelta
 from ml.model_registry import ModelRegistry  # Local import to avoid circular deps
+from utils_symbol_factory import SymbolFactory
 
 class MlAdaptive(BaseStrategy):
+    """
+    Adaptive ML-based strategy for BTC-USD (Coinbase style symbol).
+    """
     # * Constants for magic numbers
     MIN_PREDICTION_CONFIDENCE = 0.007  # 0.7% minimum predicted move
     SECONDS_PER_DAY = 86400  # * Number of seconds in a day
     LOSS_REDUCTION_FACTOR = 0.2  # * 20% reduction per consecutive loss
 
-    def __init__(self, name="MlAdaptive", model_path="src/ml/btcusdt_price.onnx", sequence_length=120):
+    def __init__(self, name="MlAdaptive", model_path="src/ml/btcusd_price.onnx", sequence_length=120):
         super().__init__(name)
         
-        # Set strategy-specific trading pair - ML model trained on BTC
-        self.trading_pair = 'BTCUSDT'
+        # Set strategy-specific trading pair - ML model trained on BTC-USD
+        self.trading_pair = 'BTC-USD'
         
         self.model_path = model_path
         self.sequence_length = sequence_length

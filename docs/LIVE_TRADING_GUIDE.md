@@ -77,10 +77,10 @@ export BINANCE_API_SECRET="your_api_secret"
 
 ```bash
 # Safe paper trading - no real money
-python scripts/run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
+python scripts/run_live_trading.py adaptive --symbol BTC-USD --paper-trading
 
 # With sentiment analysis
-python scripts/run_live_trading.py ml_sentiment_strategy --symbol BTCUSDT --paper-trading --use-sentiment
+python scripts/run_live_trading.py ml_sentiment_strategy --symbol BTC-USD --paper-trading --use-sentiment
 
 # Custom configuration
 python scripts/run_live_trading.py adaptive --balance 5000 --max-position 0.05 --check-interval 30
@@ -90,7 +90,7 @@ python scripts/run_live_trading.py adaptive --balance 5000 --max-position 0.05 -
 
 ```bash
 # DANGER: Real money trading
-python scripts/run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
+python scripts/run_live_trading.py adaptive --symbol BTC-USD --live-trading --i-understand-the-risks
 
 # The system will ask for additional confirmation
 ```
@@ -101,7 +101,7 @@ python scripts/run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-
 
 ### **Basic Parameters:**
 ```bash
---symbol BTCUSDT              # Trading pair
+--symbol BTC-USD              # Trading pair
 --timeframe 1h                # Candle timeframe (1m, 5m, 15m, 1h, 4h, 1d)
 --balance 10000              # Initial balance
 --max-position 0.1           # Max 10% of balance per position

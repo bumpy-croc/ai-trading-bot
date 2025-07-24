@@ -37,6 +37,7 @@ from .exchange_interface import (
     AccountBalance, Position, Order, Trade
 )
 from config import get_config
+from utils_symbol_factory import SymbolFactory
 
 
 class BinanceProvider(DataProvider, ExchangeInterface):
@@ -382,7 +383,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 if balance.asset != 'USDT' and balance.total > 0:
                     # Get current price for the asset
                     try:
-                        ticker = self._client.get_symbol_ticker(symbol=f"{balance.asset}USDT")
+                        ticker = self._client.get_symbol_ticker(symbol=SymbolFactory.to_exchange_symbol(f"{balance.asset}-USD", 'binance'))
                         current_price = float(ticker['price'])
                         
                         position = Position(
@@ -619,7 +620,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             exchange_info = self._client.get_exchange_info()
             
             for symbol_info in exchange_info['symbols']:
-                if symbol_info['symbol'] == symbol:
+                if symbol_info['symbol'] == SymbolFactory.to_exchange_symbol(symbol, 'binance'):
                     # Extract relevant information
                     filters = {f['filterType']: f for f in symbol_info['filters']}
                     

@@ -13,7 +13,6 @@ import sys
 import numpy as np
 
 from data_providers.data_provider import DataProvider
-# Replaced BinanceProvider with CoinbaseProvider
 from data_providers.coinbase_provider import CoinbaseProvider
 from data_providers.binance_provider import BinanceProvider
 from data_providers.sentiment_provider import SentimentDataProvider
@@ -29,6 +28,7 @@ from performance.metrics import (
     pnl_percent,
     cash_pnl,
 )
+from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 

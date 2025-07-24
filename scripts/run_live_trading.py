@@ -7,13 +7,13 @@ It supports both paper trading (simulation) and live trading with real money.
 
 Usage:
     # Paper trading (default - safe)
-    python run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
+    python run_live_trading.py adaptive --symbol BTC-USD --paper-trading
     
     # Live trading (requires explicit confirmation)
-    python run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
+    python run_live_trading.py adaptive --symbol BTC-USD --live-trading --i-understand-the-risks
     
     # With custom settings
-    python run_live_trading.py ml_with_sentiment --symbol BTCUSDT --balance 5000 --max-position 0.05
+    python run_live_trading.py ml_with_sentiment --symbol BTC-USD --balance 5000 --max-position 0.05
 """
 
 import argparse
@@ -100,7 +100,7 @@ def parse_args():
     parser.add_argument('strategy', help='Strategy name (e.g., adaptive, ml_with_sentiment)')
     
     # Trading parameters
-    parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')
+    parser.add_argument('--symbol', default='BTC-USD', help='Trading pair symbol (e.g., BTC-USD, ETH-USD)')
     parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
     parser.add_argument('--balance', type=float, default=DEFAULT_INITIAL_BALANCE, help='Initial balance')
     parser.add_argument('--max-position', type=float, default=0.1, help='Max position size (0.1 = 10% of balance)')

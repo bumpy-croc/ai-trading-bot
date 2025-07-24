@@ -2,11 +2,13 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import logging
 from typing import Optional, Dict, List, Any
+from utils_symbol_factory import SymbolFactory
 
 class BaseStrategy(ABC):
     """
     Abstract base class for all trading strategies.
     All concrete strategy implementations must inherit from this class.
+    Default trading pair is Coinbase style (e.g., BTC-USD).
     """
     
     def __init__(self, name: str):
@@ -14,7 +16,7 @@ class BaseStrategy(ABC):
         self.logger = logging.getLogger(name)
         
         # Default trading pair - strategies can override this
-        self.trading_pair = 'BTCUSDT'
+        self.trading_pair = 'BTC-USD'
         
         # Strategy execution logging
         self.db_manager = None

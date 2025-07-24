@@ -29,6 +29,7 @@ import json
 
 # Import the download function from our new script
 from download_binance_data import download_data as download_binance_data
+from src.utils.symbol_factory import SymbolFactory
 
 # Import sentiment provider
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -515,9 +516,9 @@ def main():
 def get_price_data(symbol, timeframe='1d', start_date='2000-01-01T00:00:00Z', end_date='2024-12-01T00:00:00Z'):
     """Get price data using download script"""
     data_dir = os.path.join(PROJECT_ROOT, 'data')
-    
+    symbol = SymbolFactory.to_exchange_symbol(symbol, 'binance')
     csv_file = download_binance_data(
-        symbol=symbol.replace('USDT', '/USDT'),
+        symbol=symbol,
         timeframe=timeframe,
         start_date=start_date,
         end_date=end_date,

@@ -14,11 +14,11 @@ def test_downloads():
     print("🚀 Testing Binance Data Download Script")
     print("=" * 50)
     
-    # Test 1: Download ETH/USDT daily data for last 30 days
-    print("\n📊 Test 1: ETH/USDT Daily Data (30 days)")
+    # Test 1: Download ETH-USD daily data for last 30 days
+    print("\n📊 Test 1: ETH-USD Daily Data (30 days)")
     try:
         csv_file = download_data(
-            symbol='ETH/USDT',
+            symbol='ETH-USD',
             timeframe='1d',
             start_date='2024-11-25T00:00:00Z',
             end_date='2024-12-25T00:00:00Z',
@@ -34,11 +34,11 @@ def test_downloads():
     except Exception as e:
         print(f"❌ Error: {e}")
     
-    # Test 2: Download BTC/USDT hourly data for last 7 days
-    print("\n📊 Test 2: BTC/USDT Hourly Data (7 days)")
+    # Test 2: Download BTC-USD hourly data for last 7 days
+    print("\n📊 Test 2: BTC-USD Hourly Data (7 days)")
     try:
         csv_file = download_data(
-            symbol='BTC/USDT',
+            symbol='BTC-USD',
             timeframe='1h',
             start_date='2024-12-18T00:00:00Z',
             end_date='2024-12-25T00:00:00Z',
@@ -57,8 +57,8 @@ def test_downloads():
     
     print("\n🎉 Testing complete!")
     print("\nUsage examples:")
-    print("python download_binance_data.py BTCUSDT --days 365")
-    print("python download_binance_data.py ETHUSDT --timeframe 1h --start 2024-01-01 --end 2024-06-01")
+    print("python download_binance_data.py BTC-USD --days 365  # Use SymbolFactory for conversion if needed")
+    print("python download_binance_data.py ETH-USD --timeframe 1h --start 2024-01-01 --end 2024-06-01  # Use SymbolFactory for conversion if needed")
     print("python download_binance_data.py SOLUSDT --timeframe 4h --days 90 --output-dir ../data/sol")
 
 if __name__ == '__main__':

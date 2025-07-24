@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import time
 import logging
 from .sentiment_provider import SentimentDataProvider
+from utils_symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 
@@ -78,30 +79,28 @@ class AugmentoProvider(SentimentDataProvider):
         return self._coins_cache
     
     def _map_symbol_to_coin(self, symbol: str) -> str:
-        """Map trading symbol to Augmento coin name"""
-        # Common mappings
+        # Normalize symbol to Coinbase style for mapping
+        normalized = SymbolFactory.to_exchange_symbol(symbol, 'coinbase')
         symbol_map = {
-            'BTCUSDT': 'bitcoin',
-            'ETHUSDT': 'ethereum', 
-            'SOLUSDT': 'solana',
-            'ADAUSDT': 'cardano',
-            'DOTUSDT': 'polkadot',
-            'LINKUSDT': 'chainlink',
-            'MATICUSDT': 'polygon',
-            'AVAXUSDT': 'avalanche'
+            'BTC-USD': 'bitcoin',
+            'ETH-USD': 'ethereum',
+            'SOL-USD': 'solana',
+            'ADA-USD': 'cardano',
+            'DOT-USD': 'polkadot',
+            'LINK-USD': 'chainlink',
+            'MATIC-USD': 'polygon',
+            'AVAX-USD': 'avalanche'
         }
-        
-        coin = symbol_map.get(symbol.upper())
+        coin = symbol_map.get(normalized)
         if not coin:
             # Try to extract base currency and convert to lowercase
-            base = symbol.replace('USDT', '').replace('USD', '').replace('BTC', '').lower()
+            base = normalized.split('-')[0].lower()
             available_coins = self.get_available_coins()
             if base in available_coins:
                 coin = base
             else:
                 logger.warning(f"Could not map symbol {symbol} to Augmento coin")
                 return 'bitcoin'  # Default fallback
-        
         return coin
     
     def get_historical_sentiment(

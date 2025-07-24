@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 from typing import Optional, Union
+from src.utils.symbol_factory import SymbolFactory
 
 
 def download_data(symbol: str,
@@ -37,11 +38,12 @@ def download_data(symbol: str,
     """
     """
     Download OHLCV data from Binance and save as CSV. Returns the CSV file path.
+    Symbol should be in generic format (e.g., 'BTC-USD', 'ETH-USD') and will be converted using SymbolFactory.
     """
     binance = ccxt.binance()
-    symbol = symbol.replace('/', '') if '/' in symbol else symbol
+    symbol = SymbolFactory.to_exchange_symbol(symbol, 'binance')
     if not symbol.endswith('USDT'):
-        raise ValueError('Only USDT pairs are supported (e.g., ETHUSDT, BTCUSDT)')
+        raise ValueError('Only USDT pairs are supported (e.g., ETH-USD, BTC-USD, ETHUSDT, BTCUSDT)')
     symbol = symbol.replace('USDT', '/USDT')
 
     since = int(pd.Timestamp(start_date).timestamp() * 1000) if start_date else None
@@ -79,7 +81,7 @@ def download_data(symbol: str,
 
 def main():
     parser = argparse.ArgumentParser(description='Download Binance OHLCV data and save as CSV')
-    parser.add_argument('symbol', help='Trading pair symbol (e.g., ETHUSDT, BTCUSDT)')
+    parser.add_argument('symbol', help='Trading pair symbol (e.g., BTC-USD, ETH-USD, BTCUSDT, ETHUSDT)')
     parser.add_argument('--timeframe', default='1h', help='Candle timeframe (default: 1h)')
     parser.add_argument('--start_date', default=None, help='Start date (YYYY-MM-DD or ISO format)')
     parser.add_argument('--end_date', default=None, help='End date (YYYY-MM-DD or ISO format)')

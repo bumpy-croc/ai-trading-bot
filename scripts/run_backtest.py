@@ -25,6 +25,7 @@ from backtesting import Backtester
 
 from strategies import AdaptiveStrategy, EnhancedStrategy, HighRiskHighRewardStrategy, MlBasic  # Direct imports
 from strategies.ml_adaptive import MlAdaptive
+from src.utils.symbol_factory import SymbolFactory
 
 # Set up logging
 logging.basicConfig(
@@ -156,8 +157,8 @@ def main():
         
         # Use strategy-specific trading pair if not overridden by command line
         # If user provided a symbol explicitly, use it; otherwise use strategy's default
-        if args.symbol != 'BTCUSDT':  # User provided a specific symbol
-            trading_symbol = args.symbol
+        if args.symbol != 'BTC-USD':  # User provided a specific symbol
+            trading_symbol = SymbolFactory.to_exchange_symbol(args.symbol, args.provider)
         else:  # Use strategy's default trading pair
             trading_symbol = strategy.get_trading_pair()
         

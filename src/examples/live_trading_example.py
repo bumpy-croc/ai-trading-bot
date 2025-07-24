@@ -70,7 +70,7 @@ def setup_paper_trading():
     print("📄 PAPER TRADING MODE CONFIGURED")
     print("="*60)
     print("- Strategy: Adaptive")
-    print("- Symbol: BTCUSDT")
+    print("- Symbol: BTC-USD")
     print(f"- Balance: ${DEFAULT_INITIAL_BALANCE:,.0f} (virtual)")
     print("- Risk per trade: 1%")
     print("- Max position: 10%")
@@ -129,7 +129,7 @@ def setup_live_trading():
     print("🔴 LIVE TRADING MODE CONFIGURED")
     print("="*60)
     print("- Strategy: Adaptive")
-    print("- Symbol: BTCUSDT")
+    print("- Symbol: BTC-USD")
     print(f"- Balance: ${DEFAULT_INITIAL_BALANCE:,.0f} (REAL MONEY)")
     print("- Risk per trade: 0.5%")
     print("- Max position: 5%")
@@ -187,7 +187,7 @@ def main():
                 # Start trading in a separate thread for monitoring
                 import threading
                 trading_thread = threading.Thread(
-                    target=lambda: engine.start('BTCUSDT', '1h')
+                    target=lambda: engine.start('BTC-USD', '1h')
                 )
                 trading_thread.daemon = True
                 trading_thread.start()
@@ -215,7 +215,7 @@ def main():
                     time.sleep(1)
                 
                 # Start trading
-                engine.start('BTCUSDT', '1h')
+                engine.start('BTC-USD', '1h')
                 
             except KeyboardInterrupt:
                 print("\n🛑 Stopping live trading...")

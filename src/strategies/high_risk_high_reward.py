@@ -3,15 +3,19 @@ import pandas as pd
 import numpy as np
 import talib
 import logging
+from utils_symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 
 class HighRiskHighRewardStrategy(BaseStrategy):
+    """
+    High risk, high reward strategy for ETH-USD (Coinbase style symbol).
+    """
     def __init__(self, name="HighRiskHighRewardStrategy"):
         super().__init__(name)
         
         # Set strategy-specific trading pair - this strategy focuses on ETH
-        self.trading_pair = 'ETHUSDT'
+        self.trading_pair = 'ETH-USD'
         
         # Risk parameters
         self.stop_loss_pct = 0.0005  # 0.05% stop loss

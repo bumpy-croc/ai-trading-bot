@@ -3,15 +3,19 @@ import pandas as pd
 import numpy as np
 import logging
 from typing import Dict, Optional
+from utils_symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 
 class EnhancedStrategy(BaseStrategy):
+    """
+    Enhanced strategy for BTC-USD (Coinbase style symbol).
+    """
     def __init__(self, name: str = "EnhancedStrategy"):
         super().__init__(name)
         
         # Set strategy-specific trading pair
-        self.trading_pair = 'BTCUSDT'
+        self.trading_pair = 'BTC-USD'
         
         # Risk Management Parameters
         self.risk_per_trade = 0.01  # 1% risk per trade

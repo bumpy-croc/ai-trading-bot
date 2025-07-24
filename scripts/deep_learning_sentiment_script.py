@@ -52,7 +52,7 @@ def get_news_sentiment(symbol, api_key, date):
 binance = ccxt.binance()
 
 # Define the market symbol and timeframe
-symbol = 'ETH/USDT'
+symbol = 'ETH-USD'  # Use SymbolFactory for conversion if needed
 timeframe = '1d'
 limit = 1000
 

@@ -31,6 +31,7 @@ from data_providers.binance_provider import BinanceProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from performance.metrics import sharpe as perf_sharpe
 from performance.metrics import max_drawdown as perf_max_drawdown
+from src.utils.symbol_factory import SymbolFactory
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
