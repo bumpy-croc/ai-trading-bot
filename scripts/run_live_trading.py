@@ -7,13 +7,13 @@ It supports both paper trading (simulation) and live trading with real money.
 
 Usage:
     # Paper trading (default - safe)
-    python run_live_trading.py adaptive --symbol BTC-USD --paper-trading
+    python run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
     
     # Live trading (requires explicit confirmation)
-    python run_live_trading.py adaptive --symbol BTC-USD --live-trading --i-understand-the-risks
+    python run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
     
     # With custom settings
-    python run_live_trading.py ml_with_sentiment --symbol BTC-USD --balance 5000 --max-position 0.05
+    python run_live_trading.py ml_with_sentiment --symbol BTCUSDT --balance 5000 --max-position 0.05
 """
 
 import argparse
@@ -100,7 +100,7 @@ def parse_args():
     parser.add_argument('strategy', help='Strategy name (e.g., adaptive, ml_with_sentiment)')
     
     # Trading parameters
-    parser.add_argument('--symbol', default='BTC-USD', help='Trading pair symbol (e.g., BTC-USD, ETH-USD)')
+    parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol (e.g., BTCUSDT, ETHUSDT)')
     parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
     parser.add_argument('--balance', type=float, default=DEFAULT_INITIAL_BALANCE, help='Initial balance')
     parser.add_argument('--max-position', type=float, default=0.1, help='Max position size (0.1 = 10% of balance)')
@@ -121,7 +121,7 @@ def parse_args():
     parser.add_argument('--use-sentiment', action='store_true', help='Use sentiment analysis')
     parser.add_argument('--no-cache', action='store_true', help='Disable data caching')
     parser.add_argument('--mock-data', action='store_true', help='Use mock data provider for rapid testing')
-    parser.add_argument('--provider', choices=['coinbase', 'binance'], default='coinbase', help='Exchange provider to use (default: coinbase)')
+    parser.add_argument('--provider', choices=['coinbase', 'binance'], default='binance', help='Exchange provider to use (default: binance)')
     
     # Monitoring
     parser.add_argument('--webhook-url', help='Webhook URL for alerts')
@@ -229,12 +229,12 @@ def main():
             data_provider = MockDataProvider(interval_seconds=5)  # 5s candles for rapid testing
             logger.info("Using MockDataProvider for rapid testing")
         else:
-            if args.provider == 'binance':
-                from data_providers.binance_provider import BinanceProvider
-                provider = BinanceProvider()
-            else:
+            if args.provider == 'coinbase':
                 from data_providers.coinbase_provider import CoinbaseProvider
                 provider = CoinbaseProvider()
+            else:
+                from data_providers.binance_provider import BinanceProvider
+                provider = BinanceProvider()
             if args.no_cache:
                 data_provider = provider
                 logger.info("Data caching disabled")

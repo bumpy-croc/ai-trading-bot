@@ -70,20 +70,20 @@ class Trade:
     
 def _create_exchange_provider(provider: str, config: dict):
     """Factory to create exchange provider and return (provider_instance, provider_name)."""
-    if provider == 'binance':
-        api_key = config.get('BINANCE_API_KEY')
-        api_secret = config.get('BINANCE_API_SECRET')
-        if api_key and api_secret:
-            return BinanceProvider(api_key, api_secret, testnet=False), 'Binance'
-        else:
-            return None, 'Binance (no credentials)'
-    else:
+    if provider == 'coinbase':
         api_key = config.get('COINBASE_API_KEY')
         api_secret = config.get('COINBASE_API_SECRET')
         if api_key and api_secret:
             return CoinbaseProvider(api_key, api_secret, testnet=False), 'Coinbase'
         else:
             return None, 'Coinbase (no credentials)'
+    else:
+        api_key = config.get('BINANCE_API_KEY')
+        api_secret = config.get('BINANCE_API_SECRET')
+        if api_key and api_secret:
+            return BinanceProvider(api_key, api_secret, testnet=False), 'Binance'
+        else:
+            return None, 'Binance (no credentials)'
 
 class LiveTradingEngine:
     """
@@ -117,7 +117,7 @@ class LiveTradingEngine:
         database_url: Optional[str] = None,  # Database connection URL
         max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
         account_snapshot_interval: int = 1800,  # Account snapshot interval in seconds (30 minutes)
-        provider: str = 'coinbase',  # 'coinbase' (default) or 'binance'
+        provider: str = 'binance',  # 'binance' (default) or 'coinbase'
     ):
         """
         Initialize the live trading engine.
