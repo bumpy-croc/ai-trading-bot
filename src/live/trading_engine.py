@@ -161,7 +161,11 @@ class LiveTradingEngine:
         self.account_snapshot_interval = account_snapshot_interval
         
         # Initialize database manager
-        self.db_manager = DatabaseManager(database_url)
+        try:
+            self.db_manager = DatabaseManager(database_url)
+        except Exception as e:
+            logger.critical(f"❌ Could not connect to the PostgreSQL database: {e}\nThe trading engine cannot start without a database connection. Exiting.")
+            raise RuntimeError("Database connection required. Service stopped.")
         self.trading_session_id: Optional[int] = None
         
         # Initialize exchange interface and account synchronizer

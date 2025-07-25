@@ -22,7 +22,7 @@ from .models import (
     PositionSide, OrderStatus, TradeSource, EventType
 )
 from config.config_manager import get_config
-from src.utils.symbol_factory import SymbolFactory
+from utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger(__name__)
 
