@@ -106,7 +106,7 @@ class TestAdaptiveStrategy:
                 base_price = new_price
             
             additional_df = pd.DataFrame(additional_data, index=pd.date_range(
-                last_date + timedelta(hours=1), periods=len(additional_data), freq='1H'
+                last_date + timedelta(hours=1), periods=len(additional_data), freq='1h'
             ))
             sample_ohlcv_data = pd.concat([sample_ohlcv_data, additional_df])
         
@@ -252,7 +252,7 @@ class TestStrategyEdgeCases:
             'low': [49800, 49900],
             'close': [50100, 50200],
             'volume': [1000, 1100]
-        }, index=pd.date_range('2024-01-01', periods=2, freq='1H'))
+        }, index=pd.date_range('2024-01-01', periods=2, freq='1h'))
         
         # Should handle gracefully - either work or fail with meaningful error
         try:
@@ -313,7 +313,7 @@ class TestStrategyEdgeCases:
             'low': [49800, 49900, 50000],
             'close': [50100, 50200, 50300],
             'volume': [1000, 1100, 1200]
-        }, index=pd.date_range('2024-01-01', periods=3, freq='1H'))
+        }, index=pd.date_range('2024-01-01', periods=3, freq='1h'))
         
         # Should handle NaN values gracefully
         try:
@@ -336,7 +336,7 @@ class TestStrategyMarketConditions:
         strategy = AdaptiveStrategy()
         
         # Create uptrending data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1H')
+        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
         closes = [50000 * (1.01 ** i) for i in range(50)]  # 1% hourly growth
         
         bull_data = pd.DataFrame({
@@ -364,7 +364,7 @@ class TestStrategyMarketConditions:
         strategy = AdaptiveStrategy()
         
         # Create downtrending data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1H')
+        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
         closes = [50000 * (0.99 ** i) for i in range(50)]  # 1% hourly decline
         
         bear_data = pd.DataFrame({
@@ -393,7 +393,7 @@ class TestStrategyMarketConditions:
         strategy = AdaptiveStrategy()
         
         # Create sideways/ranging data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1H')
+        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
         base_price = 50000
         closes = [base_price + 1000 * np.sin(i * 0.3) for i in range(50)]  # Oscillating around base
         
@@ -420,7 +420,7 @@ class TestStrategyMarketConditions:
         strategy = AdaptiveStrategy()
         
         # Create highly volatile data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1H')
+        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
         base_price = 50000
         closes = [base_price * (1 + np.random.uniform(-0.05, 0.05)) for _ in range(50)]  # 5% random moves
         

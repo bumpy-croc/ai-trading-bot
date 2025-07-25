@@ -200,7 +200,7 @@ class TestBacktestingExecution:
             'low': [99, 99, 99, 99, 99],
             'close': [100, 100, 100, 100, 100],
             'volume': [1000, 1000, 1000, 1000, 1000]
-        }, index=pd.date_range('2024-01-01', periods=5, freq='1H'))
+        }, index=pd.date_range('2024-01-01', periods=5, freq='1h'))
         
         mock_data_provider.get_historical_data.return_value = no_signal_data
         
@@ -408,7 +408,7 @@ class TestBacktestingEdgeCases:
             'low': np.random.randn(n_points) + 99,
             'close': np.random.randn(n_points) + 100,
             'volume': np.random.randint(1000, 10000, n_points)
-        }, index=pd.date_range('2024-01-01', periods=n_points, freq='1H'))
+        }, index=pd.date_range('2024-01-01', periods=n_points, freq='1h'))
         
         mock_data_provider.get_historical_data.return_value = large_data
         

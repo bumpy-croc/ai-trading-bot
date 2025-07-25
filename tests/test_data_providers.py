@@ -586,7 +586,7 @@ class TestDataProviderPerformance:
             'low': np.random.uniform(48000, 50000, 10000),
             'close': np.random.uniform(49000, 51000, 10000),
             'volume': np.random.uniform(1000, 10000, 10000)
-        }, index=pd.date_range('2020-01-01', periods=10000, freq='1H'))
+        }, index=pd.date_range('2020-01-01', periods=10000, freq='1h'))
         
         mock_data_provider.get_historical_data.return_value = large_data
         

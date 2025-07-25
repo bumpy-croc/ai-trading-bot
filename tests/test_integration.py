@@ -82,7 +82,7 @@ class TestEndToEndWorkflows:
             'low': [49800, 49900, 50000],
             'close': [50100, 50200, 50300],
             'volume': [1000, 1100, 1200]
-        }, index=pd.date_range('2024-01-01', periods=3, freq='1H'))
+        }, index=pd.date_range('2024-01-01', periods=3, freq='1h'))
         
         backtest_results = backtester.run("BTCUSDT", "1h", datetime(2024, 1, 1))
         assert backtest_results['total_return'] is not None
@@ -117,7 +117,7 @@ class TestEndToEndWorkflows:
             'low': [49800, 49900, 50000, 50100],
             'close': [50100, 50200, 50300, 50400],
             'volume': [1000, 1100, 1200, 1300]
-        }, index=pd.date_range('2024-01-01', periods=4, freq='1H'))
+        }, index=pd.date_range('2024-01-01', periods=4, freq='1h'))
         
         mock_data_provider.get_live_data.return_value = market_data.tail(1)
         
@@ -227,7 +227,7 @@ class TestComponentInteractions:
             'low': [49800, 49900],
             'close': [50100, 50200],
             'volume': [1000, 1100]
-        }, index=pd.date_range('2024-01-01', periods=2, freq='1H'))
+        }, index=pd.date_range('2024-01-01', periods=2, freq='1h'))
         
         mock_data_provider.get_historical_data.return_value = market_data
         
@@ -332,7 +332,7 @@ class TestRealTimeScenarios:
             })
             base_price = new_price
         
-        df = pd.DataFrame(volatile_data, index=pd.date_range('2024-01-01', periods=10, freq='1H'))
+        df = pd.DataFrame(volatile_data, index=pd.date_range('2024-01-01', periods=10, freq='1h'))
         mock_data_provider.get_live_data.return_value = df.tail(1)
         
         # System should handle volatility without crashing

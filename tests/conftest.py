@@ -117,7 +117,7 @@ def sample_ohlcv_data():
     """Generate realistic OHLCV data for testing"""
     np.random.seed(42)  # For reproducible tests
     
-    dates = pd.date_range('2024-01-01', periods=100, freq='1H')
+    dates = pd.date_range('2024-01-01', periods=100, freq='1h')
     
     # Generate realistic price data with some trends and volatility
     base_price = 50000
@@ -162,7 +162,7 @@ def mock_data_provider():
         'low': [49800, 49900, 50000],
         'close': [50100, 50200, 50300],
         'volume': [1000, 1100, 1200]
-    }, index=pd.date_range('2024-01-01', periods=3, freq='1H'))
+    }, index=pd.date_range('2024-01-01', periods=3, freq='1h'))
     
     mock_provider.get_live_data.return_value = pd.DataFrame({
         'open': [50300],

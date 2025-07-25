@@ -787,7 +787,7 @@ class TestLiveTradingFallbacks:
             'volume': [1000, 1100],
             'rsi': [45, 55],
             'atr': [500, 510]
-        }, index=pd.date_range('2024-01-01', periods=2, freq='1H'))
+        }, index=pd.date_range('2024-01-01', periods=2, freq='1h'))
         mock_data_provider.get_live_data.return_value = market_data.tail(1)
         mock_strategy.calculate_indicators.return_value = market_data
         mock_strategy.check_entry_conditions.return_value = True
