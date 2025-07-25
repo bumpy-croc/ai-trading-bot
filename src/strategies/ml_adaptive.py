@@ -35,7 +35,7 @@ from indicators.technical import (
     calculate_moving_averages, calculate_macd
 )
 from datetime import datetime, timedelta
-from ..ml.model_registry import ModelRegistry  # Local import to avoid circular deps
+from ml.model_registry import ModelRegistry  # Local import to avoid circular deps
 from src.utils.symbol_factory import SymbolFactory
 
 class MlAdaptive(BaseStrategy):

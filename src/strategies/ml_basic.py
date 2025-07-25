@@ -28,7 +28,7 @@ import pandas as pd
 import onnx
 import onnxruntime as ort
 from strategies.base import BaseStrategy
-from ..ml.model_registry import ModelRegistry  # Local import to avoid circular deps
+from ml.model_registry import ModelRegistry  # Local import to avoid circular deps
 
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants
