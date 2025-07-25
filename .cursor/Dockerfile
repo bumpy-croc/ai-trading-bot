@@ -21,7 +21,7 @@ WORKDIR /workspace
 RUN mkdir -p logs ml data /var/lib/postgresql/data /var/run/postgresql
 
 # Set environment variables
-ENV PYTHONPATH=/workspace
+ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 ENV DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
 ENV RAILWAY_STAGING_DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot

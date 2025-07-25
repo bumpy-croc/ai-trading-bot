@@ -9,6 +9,9 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
+# Set Python path for absolute imports from src
+ENV PYTHONPATH=/app/src
+
 # Copy production requirements and install dependencies
 COPY requirements-server.txt ./requirements-server.txt
 
