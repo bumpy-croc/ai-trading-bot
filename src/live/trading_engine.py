@@ -187,18 +187,16 @@ class LiveTradingEngine:
         # Optionally resume balance from last snapshot
         if self.resume_from_last_balance:
             try:
-                result = self.db_manager.execute_query(
-                    """
-                    SELECT balance FROM account_history
-                    ORDER BY timestamp DESC LIMIT 1
-                    """
-                )
-                if result:
-                    # Ensure balance is always a float (fixes Decimal bug)
-                    self.current_balance = float(result[0]["balance"])
-                    logger.info(
-                        f"Resumed from last recorded balance: ${self.current_balance:,.2f}"
-                    )
+                # Get the latest active session ID
+                active_session_id = self.db_manager.get_active_session_id()
+                if active_session_id:
+                    latest_balance = self.db_manager.get_current_balance(active_session_id)
+                    if latest_balance and latest_balance > 0:
+                        self.current_balance = latest_balance
+                        self.initial_balance = latest_balance
+                        logger.info(
+                            f"Resumed from last recorded balance (account_balances): ${self.current_balance:,.2f}"
+                        )
             except Exception as e:
                 logger.warning(f"Could not resume from last balance: {e}")
         
