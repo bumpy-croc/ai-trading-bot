@@ -130,7 +130,7 @@ def export_onnx(model: nn.Module, seq_len: int, output_path: Path):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--symbol", default="BTC-USD")
+    p.add_argument("--symbol", default="BTCUSDT")
     p.add_argument("--timeframe", default="1h", choices=["1h", "4h"], help="Candle timeframe for training")
     p.add_argument("--seq_len", type=int, default=120)
     p.add_argument("--start", default="2018-01-01")
