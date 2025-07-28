@@ -48,6 +48,6 @@ jobs:
 
       - name: Run test suite
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test
         run: |
           python tests/run_tests.py all -q
