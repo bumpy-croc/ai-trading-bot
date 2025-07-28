@@ -25,10 +25,8 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 import numpy as np
 import pandas as pd
-import onnx
 import onnxruntime as ort
 from strategies.base import BaseStrategy
-from ml.model_registry import ModelRegistry  # Local import to avoid circular deps
 
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants
