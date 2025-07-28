@@ -1,4 +1,4 @@
-name: Deploy to Production
+name: Deploy to Staging
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
+    environment: staging
     timeout-minutes: 30
     steps:
       - name: Checkout code
@@ -26,20 +26,20 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Deploy to Railway (production)
+      - name: Deploy to Railway (staging)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           SERVICE_ID: ${{ inputs.service_id }}
         run: |
           if [ -n "$SERVICE_ID" ]; then
-            railway up --project $RAILWAY_PROJECT_ID --service $SERVICE_ID --environment production --detach
+            railway up --project $RAILWAY_PROJECT_ID --service $SERVICE_ID --environment staging --detach
           else
-            railway up --project $RAILWAY_PROJECT_ID --environment production --detach
+            railway up --project $RAILWAY_PROJECT_ID --environment staging --detach
           fi
 
       - name: Post deployment info
         run: |
-          echo "Deployment triggered for production environment."
+          echo "Deployment triggered for staging environment."
           echo "Commit SHA: ${{ inputs.commit_sha || github.sha }}"
-          echo "Service ID: ${{ inputs.service_id || 'default' }}"
+          echo "Service ID: ${{ inputs.service_id || 'default' }}" 
