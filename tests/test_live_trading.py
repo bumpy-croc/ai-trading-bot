@@ -74,7 +74,8 @@ class TestLiveTradingEngine:
             strategy=mock_strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
-            enable_live_trading=False
+            enable_live_trading=False,
+            resume_from_last_balance=False  # Don't resume from database for tests
         )
         
         assert engine.strategy == mock_strategy
@@ -385,7 +386,8 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(
             strategy=mock_strategy,
             data_provider=mock_data_provider,
-            initial_balance=10000
+            initial_balance=10000,
+            resume_from_last_balance=False  # Don't resume from database for tests
         )
         
         # Simulate some trades
