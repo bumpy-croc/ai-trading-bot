@@ -22,9 +22,6 @@ python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-bal
 
 - `ml_basic` - Machine Learning Basic Strategy (recommended for 1h timeframe)
 - `ml_with_sentiment` - ML Strategy with sentiment analysis
-- `adaptive` - Adaptive Strategy
-- `enhanced` - Enhanced Strategy
-- `high_risk_high_reward` - High Risk High Reward Strategy
 
 ## Timeframe Recommendations
 

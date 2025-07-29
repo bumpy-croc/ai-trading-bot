@@ -205,9 +205,6 @@ python -m core.risk.risk_manager --symbol BTCUSDT --qty 0.05
 
 | File                               | Description                                             |
 |------------------------------------|---------------------------------------------------------|
-| `adaptive.py`                      | EMA-based adaptive trend-follower                       |
-| `enhanced.py`                      | Combines multiple indicators for stronger confirmation |
-| `high_risk_high_reward.py`         | Aggressive breakout strategy (for small allocations)    |
 | `ml_basic.py`                      | Utilises ML price predictions for entry/exit            |
 | `ml_with_sentiment.py`             | ML + sentiment, confidence-weighted sizing             |
 
@@ -390,7 +387,7 @@ railway up
 
 ```bash
 pytest -q          # unit tests
-python -m strategies.adaptive --test   # quick strategy smoke-test
+python -m strategies.ml_basic --test   # quick strategy smoke-test
 ```
 
 ---

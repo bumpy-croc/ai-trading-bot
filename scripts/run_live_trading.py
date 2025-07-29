@@ -39,13 +39,7 @@ from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
 
 # Import strategies
-from strategies.adaptive import AdaptiveStrategy
-from strategies.enhanced import EnhancedStrategy
-# Optional high-risk strategy depends on TA-Lib
-try:
-    from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
-except ModuleNotFoundError:
-    HighRiskHighRewardStrategy = None
+# Removed deprecated strategies (Adaptive, Enhanced, HighRiskHighReward)
 from strategies.ml_basic import MlBasic
 from strategies.ml_with_sentiment import MlWithSentiment
 from strategies.test_high_frequency import TestHighFrequencyStrategy
@@ -69,15 +63,11 @@ logger = logging.getLogger('live_trading')
 def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
-        'adaptive': AdaptiveStrategy,
-        'enhanced': EnhancedStrategy,
         'ml_basic': MlBasic,
         'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True),
         'test_high_frequency': TestHighFrequencyStrategy
     }
-    # Register high-risk strategy only if available
-    if HighRiskHighRewardStrategy is not None:
-        strategies['high_risk_high_reward'] = HighRiskHighRewardStrategy
+    #
     
     if strategy_name not in strategies:
         logger.error(f"Unknown strategy: {strategy_name}")
@@ -97,7 +87,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Run live trading bot')
     
     # Strategy selection
-    parser.add_argument('strategy', help='Strategy name (e.g., adaptive, ml_with_sentiment)')
+    parser.add_argument('strategy', help='Strategy name (e.g., ml_basic, ml_with_sentiment)')
     
     # Trading parameters
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol (e.g., BTCUSDT, ETHUSDT)')
