@@ -47,7 +47,7 @@ jobs:
 
     - name: Wait for PostgreSQL
       run: |
-        until pg_isready -h localhost -p 5432 -U trading_bot; do
+        until curl --silent --output /dev/null localhost:5432; do
           echo "Waiting for PostgreSQL..."
           sleep 2
         done
