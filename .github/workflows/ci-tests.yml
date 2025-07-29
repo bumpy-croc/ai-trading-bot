@@ -15,9 +15,9 @@ jobs:
       postgres:
         image: postgres:15-alpine
         env:
-          POSTGRES_DB: ai_trading_bot_test
           POSTGRES_USER: trading_bot
           POSTGRES_PASSWORD: dev_password_123
+          POSTGRES_DB: ai_trading_bot_test
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
