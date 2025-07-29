@@ -47,16 +47,16 @@ class MyStrategy(BaseStrategy):
 
 | Strategy | Default Trading Pair |
 |----------|---------------------|
-| `ml_model_strategy` | ETH-USD |
+| `ml_basic` | ETH-USD |
 
 ## Usage Examples
 
 ```bash
 # Uses strategy's default trading pair
-python scripts/run_backtest.py ml_model_strategy --days 100          # Uses ETH-USD
+python scripts/run_backtest.py ml_basic --days 100          # Uses ETH-USD
 
 # Override with specific symbol
-python scripts/run_backtest.py ml_model_strategy --symbol SOL-USD --days 100  # Use SymbolFactory for conversion if needed
+python scripts/run_backtest.py ml_basic --symbol SOL-USD --days 100  # Use SymbolFactory for conversion if needed
 ```
 
 ## Benefits

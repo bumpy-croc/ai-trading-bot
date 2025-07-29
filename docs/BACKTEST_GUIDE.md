@@ -111,8 +111,7 @@ python scripts/run_backtest.py ml_with_sentiment --days 365 --timeframe 1h --ini
 ```bash
 # Test multiple strategies
 python scripts/run_backtest.py ml_basic --days 365 --timeframe 1h --initial-balance 10000
-python scripts/run_backtest.py adaptive --days 365 --timeframe 1h --initial-balance 10000
-python scripts/run_backtest.py enhanced --days 365 --timeframe 1h --initial-balance 10000
+python scripts/run_backtest.py ml_with_sentiment --days 365 --timeframe 1h --initial-balance 10000
 ```
 
 ## Troubleshooting

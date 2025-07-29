@@ -31,7 +31,7 @@ The codebase supports **backtesting**, **live trading**, **machine-learning pric
 ## Features
 
 - 🔌 **Pluggable Architecture** – Separate Data, Indicator, ML, Risk, Strategy, and Execution layers.
-- 🎯 **Multiple Trading Strategies** – Adaptive EMA, ML-driven, sentiment-enhanced, and high-risk-high-reward templates (see below).
+- 🎯 **Multiple Trading Strategies** – ML-driven (basic & adaptive) and sentiment-enhanced templates (see below).
 - ♻️ **Fast Backtesting Engine** – Vectorised simulation with intelligent on-disk caching of historical data.
 - 🤖 **Live Trading Engine** – Robust real-time execution on Binance with position sizing, trailing stops, and exposure limits.
 - 💾 **Persistent Balance & Positions** – Never lose progress on restarts; automatic balance recovery and position restoration.
@@ -141,7 +141,7 @@ python scripts/test_config_system.py
 
 ```bash
 # Generic backtest (most recent 90 days)
-python scripts/run_backtest.py adaptive --days 90
+python scripts/run_backtest.py ml_basic --days 90
 
 # Full-history backtest with cache disabled and a custom start date
 python scripts/run_backtest.py ml_with_sentiment \
@@ -153,7 +153,7 @@ python scripts/run_backtest.py ml_with_sentiment \
 ```bash
 # Start live trading (paper-mode by default) 
 # Balance and positions automatically recovered from last session
-python scripts/run_live_trading.py adaptive --balance 1000
+python scripts/run_live_trading.py ml_basic --balance 1000
 
 # The bot will display recovery information:
 # 💾 Recovered balance from previous session: $1,250.00
@@ -443,10 +443,10 @@ python scripts/train_model_with_sentiment.py BTCUSDT --no-sentiment --start-date
 #### **Running Sentiment-Enhanced Backtests**
 ```bash
 # Use sentiment-enhanced ML strategy
-python scripts/run_backtest.py ml_sentiment_strategy --days 365
+python scripts/run_backtest.py ml_with_sentiment --days 365
 
 # Compare with price-only ML strategy
-python scripts/run_backtest.py ml_model_strategy --days 365
+python scripts/run_backtest.py ml_basic --days 365
 ```
 
 #### **Downloading Fresh Sentiment Data**

@@ -7,10 +7,10 @@ It supports both paper trading (simulation) and live trading with real money.
 
 Usage:
     # Paper trading (default - safe)
-    python run_live_trading.py adaptive --symbol BTCUSDT --paper-trading
+    python run_live_trading.py ml_basic --symbol BTCUSDT --paper-trading
     
     # Live trading (requires explicit confirmation)
-    python run_live_trading.py adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
+    python run_live_trading.py ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
     
     # With custom settings
     python run_live_trading.py ml_with_sentiment --symbol BTCUSDT --balance 5000 --max-position 0.05
