@@ -19,7 +19,7 @@ jobs:
         env:
           POSTGRES_USER: trading_bot
           POSTGRES_PASSWORD: dev_password_123
-          POSTGRES_DB: ai_trading_bot_test
+          POSTGRES_DB: trading_bot
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
@@ -56,7 +56,7 @@ jobs:
 
     - name: Run unit tests (parallel)
       env:
-        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test
+        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
       run: |
         python tests/run_tests.py unit -q
 
@@ -73,7 +73,7 @@ jobs:
         env:
           POSTGRES_USER: trading_bot
           POSTGRES_PASSWORD: dev_password_123
-          POSTGRES_DB: ai_trading_bot_test
+          POSTGRES_DB: trading_bot
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
@@ -109,7 +109,7 @@ jobs:
 
     - name: Run integration tests (with DB & external providers)
       env:
-        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test
+        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
         ENABLE_INTEGRATION_TESTS: '1'
       run: |
         python tests/run_tests.py integration -q
