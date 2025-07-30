@@ -155,7 +155,7 @@ class TestEndToEndWorkflows:
         
         # Test hot-swap workflow
         # 1. Prepare new strategy
-        swap_success = manager.hot_swap_strategy("ml_adaptive", new_config={"fast_ma": 12})
+        swap_success = manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
         assert swap_success == True
         
         # 2. Engine detects pending update

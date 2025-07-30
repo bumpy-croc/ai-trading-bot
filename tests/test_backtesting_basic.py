@@ -22,5 +22,6 @@ def test_backtester_initialization_and_run(mock_data_provider):
     results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)
 
     # Assert minimal keys exist in results
-    assert "equity_curve" in results
+    assert "total_trades" in results
+    assert "final_balance" in results
     assert backtester.balance >= 0

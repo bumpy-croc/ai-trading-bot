@@ -61,16 +61,14 @@ class TestStrategyManager:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         config = {
-            "base_risk_per_trade": 0.015,
-            "fast_ma": 9,
-            "slow_ma": 22
+            "name": "CustomMlAdaptive",
+            "sequence_length": 60
         }
         
         strategy = manager.load_strategy("ml_adaptive", config=config)
         
-        assert strategy.base_risk_per_trade == 0.015
-        assert strategy.fast_ma == 9
-        assert strategy.slow_ma == 22
+        assert strategy.name == "CustomMlAdaptive"
+        assert strategy.sequence_length == 60
 
     def test_invalid_strategy_loading(self, temp_directory):
         """Test loading invalid strategy"""
@@ -88,7 +86,7 @@ class TestStrategyManager:
         initial_strategy = manager.load_strategy("ml_adaptive", version="v1")
         
         # Prepare hot swap
-        success = manager.hot_swap_strategy("ml_adaptive", new_config={"fast_ma": 10})
+        success = manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
         
         assert success == True
         assert manager.pending_update is not None
@@ -104,14 +102,14 @@ class TestStrategyManager:
         initial_name = initial_strategy.name
         
         # Prepare and apply hot swap
-        manager.hot_swap_strategy("ml_adaptive", new_config={"fast_ma": 15})
+        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
         
         # Apply the update
         success = manager.apply_pending_update()
         
         assert success == True
         assert manager.current_strategy != initial_strategy
-        assert manager.current_strategy.fast_ma == 15
+        assert manager.current_strategy.sequence_length == 60
         assert manager.pending_update is None
 
     @pytest.mark.live_trading
@@ -165,7 +163,7 @@ class TestStrategyManager:
         
         # Prepare update
         manager.load_strategy("ml_adaptive")
-        manager.hot_swap_strategy("ml_adaptive", new_config={"fast_ma": 12})
+        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
         
         # Should detect pending update
         assert manager.has_pending_update() == True
@@ -186,8 +184,8 @@ class TestStrategyManager:
         
         # Check version history
         assert len(manager.version_history) >= 2
-        assert "adaptive_v1" in manager.version_history
-        assert "adaptive_v2" in manager.version_history
+        assert "ml_adaptive_v1" in manager.version_history
+        assert "ml_adaptive_v2" in manager.version_history
 
     def test_strategy_registry(self, temp_directory):
         """Test strategy registry functionality"""
@@ -197,7 +195,7 @@ class TestStrategyManager:
         available = manager.list_available_strategies()
         
         assert 'available_strategies' in available
-        assert 'adaptive' in available['available_strategies']
+        assert 'ml_adaptive' in available['available_strategies']
         assert isinstance(available['available_strategies'], list)
 
 
@@ -246,7 +244,7 @@ class TestStrategyManagerThreadSafety:
         
         def attempt_hot_swap(config_variant):
             try:
-                success = manager.hot_swap_strategy("ml_adaptive", new_config={"fast_ma": config_variant})
+                success = manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": config_variant})
                 swap_results.append(success)
             except Exception as e:
                 swap_results.append(False)
