@@ -28,7 +28,6 @@ from data_providers.data_provider import DataProvider
 from data_providers.binance_provider import BinanceProvider
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
-from strategies.adaptive import AdaptiveStrategy
 
 # Import account sync dependencies
 try:
@@ -228,12 +227,6 @@ def mock_strategy():
     mock_strategy.get_parameters.return_value = {"test": "params"}
     
     return mock_strategy
-
-
-@pytest.fixture
-def real_adaptive_strategy():
-    """Create a real adaptive strategy instance for integration tests"""
-    return AdaptiveStrategy()
 
 
 @pytest.fixture

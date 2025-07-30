@@ -23,7 +23,7 @@ from data_providers.cryptocompare_sentiment import CryptoCompareSentimentProvide
 from risk import RiskParameters
 from backtesting import Backtester
 
-from strategies import AdaptiveStrategy, EnhancedStrategy, HighRiskHighRewardStrategy, MlBasic  # Direct imports
+from strategies import MlBasic  # Direct import after removing deprecated strategies
 from strategies.ml_adaptive import MlAdaptive
 from src.utils.symbol_factory import SymbolFactory
 
@@ -38,17 +38,7 @@ def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     try:
         # Import strategies
-        if strategy_name == 'adaptive':
-            from strategies.adaptive import AdaptiveStrategy
-            strategy = AdaptiveStrategy()
-
-        elif strategy_name == 'enhanced':
-            from strategies.enhanced import EnhancedStrategy
-            strategy = EnhancedStrategy()
-        elif strategy_name == 'high_risk_high_reward':
-            from strategies.high_risk_high_reward import HighRiskHighRewardStrategy
-            strategy = HighRiskHighRewardStrategy()
-        elif strategy_name == 'ml_basic':
+        if strategy_name == 'ml_basic':
             from strategies.ml_basic import MlBasic
             strategy = MlBasic()
         elif strategy_name == 'ml_with_sentiment':
@@ -59,7 +49,7 @@ def load_strategy(strategy_name: str):
             strategy = MlAdaptive()
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ['adaptive', 'enhanced', 'high_risk_high_reward', 'ml_basic', 'ml_with_sentiment', 'ml_adaptive']
+            available_strategies = ['ml_basic', 'ml_with_sentiment', 'ml_adaptive']
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
         
@@ -72,7 +62,7 @@ def load_strategy(strategy_name: str):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Run strategy backtest')
-    parser.add_argument('strategy', help='Strategy name (e.g., adaptive, enhanced)')
+    parser.add_argument('strategy', help='Strategy name (e.g., ml_basic, ml_with_sentiment)')
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')
     parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
     parser.add_argument('--days', type=int, default=30, help='Number of days to backtest')
