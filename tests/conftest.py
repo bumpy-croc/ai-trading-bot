@@ -43,22 +43,34 @@ except ImportError as e:
 # Spin up a temporary PostgreSQL instance via Testcontainers so that modules that
 # require a valid DATABASE_URL can import successfully.  This happens at import
 # time, so we do it at module import as well.
+#
+# To prevent spawning heavyweight containers during the normal (unit-only) test
+# run, we guard this section behind the environment flag
+# `ENABLE_INTEGRATION_TESTS=1`.  The CI pipeline sets this flag only in the
+# nightly integration job.  When the flag is NOT set, we fall back to an
+# in-memory SQLite database which satisfies imports but is extremely fast.
+
+_RUN_INTEGRATION = os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
 
 _POSTGRES_CONTAINER = None
-try:
-    from testcontainers.postgres import PostgresContainer  # type: ignore
-    _POSTGRES_CONTAINER = PostgresContainer("postgres:15-alpine")
-    _POSTGRES_CONTAINER.start()
-    os.environ["DATABASE_URL"] = _POSTGRES_CONTAINER.get_connection_url()
-except Exception as _e:  # pragma: no cover -- fallback if Docker not available
-    # Provide a dummy URL so the code can still import, but mark that Postgres is
-    # unavailable.  Tests that actually require DB connectivity should handle the
-    # failure or be skipped.
-    os.environ.setdefault(
-        "DATABASE_URL",
-        "postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test"
-    )
-    _POSTGRES_CONTAINER = None
+if _RUN_INTEGRATION:
+    try:
+        from testcontainers.postgres import PostgresContainer  # type: ignore
+        _POSTGRES_CONTAINER = PostgresContainer("postgres:15-alpine")
+        _POSTGRES_CONTAINER.start()
+        os.environ["DATABASE_URL"] = _POSTGRES_CONTAINER.get_connection_url()
+    except Exception as _e:  # pragma: no cover -- fallback if Docker not available
+        # Provide a dummy URL so the code can still import, but mark that Postgres is
+        # unavailable.  Tests that actually require DB connectivity should handle the
+        # failure or be skipped.
+        os.environ.setdefault(
+            "DATABASE_URL",
+            "postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test"
+        )
+        _POSTGRES_CONTAINER = None
+else:
+    # Unit-test run ⇒ use super-light SQLite in-memory
+    os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
     # --- Ensure the fallback local test database exists (for developers without Docker) ---
     try:
@@ -90,8 +102,11 @@ except Exception as _e:  # pragma: no cover -- fallback if Docker not available
 
 
 def pytest_sessionstart(session):
-    """Ensure the database is set up and cleared before running tests."""
-    print("\n[pytest] Running local setup script to reset database...")
+    """Optional database reset for integration tests."""
+    if not _RUN_INTEGRATION:
+        # No heavy DB work for unit tests
+        return
+    print("\n[pytest] Running local setup script to reset database (integration run)...")
     result = subprocess.run([
         sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"
     ], capture_output=True, text=True)
@@ -103,6 +118,8 @@ def pytest_sessionstart(session):
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: D401
     """Cleanup the Postgres container after the entire test session."""
+    if not _RUN_INTEGRATION:
+        return
     global _POSTGRES_CONTAINER
     if _POSTGRES_CONTAINER is not None:
         try:
