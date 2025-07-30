@@ -392,7 +392,7 @@ class TestStrategyManagerIntegration:
         engine.strategy_manager = manager
         
         # Test hot swap integration
-        manager.hot_swap_strategy("ml_adaptive", new_config={"fast_ma": 15})
+        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
         
         # Simulate engine checking for updates
         has_update = manager.has_pending_update()
@@ -420,7 +420,7 @@ class TestStrategyManagerIntegration:
         
         # Load strategy and trigger swap
         manager.load_strategy("ml_adaptive")
-        manager.hot_swap_strategy("ml_adaptive", new_config={"fast_ma": 20})
+        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
         
         # Should have called strategy change callback
         strategy_calls = [call for call in callback_calls if call[0] == "strategy_change"]
@@ -457,12 +457,12 @@ class TestStrategyVersioning:
             strategy_name="ml_adaptive",
             version="v1.0",
             timestamp=datetime.now(),
-            config={"fast_ma": 10}
+            config={"sequence_length": 60}
         )
         
         assert version.strategy_name == "ml_adaptive"
         assert version.version == "v1.0"
-        assert version.config["fast_ma"] == 10
+        assert version.config["sequence_length"] == 60
         assert isinstance(version.timestamp, datetime)
 
     def test_version_comparison_capability(self, temp_directory):
