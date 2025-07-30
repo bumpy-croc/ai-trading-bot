@@ -77,20 +77,20 @@ export BINANCE_API_SECRET="your_api_secret"
 
 ```bash
 # Safe paper trading - no real money
-python scripts/run_live_trading.py adaptive --symbol BTC-USD --paper-trading
+python scripts/run_live_trading.py ml_basic --symbol BTC-USD --paper-trading
 
 # With sentiment analysis
-python scripts/run_live_trading.py ml_sentiment_strategy --symbol BTC-USD --paper-trading --use-sentiment
+python scripts/run_live_trading.py ml_with_sentiment --symbol BTC-USD --paper-trading --use-sentiment
 
 # Custom configuration
-python scripts/run_live_trading.py adaptive --balance 5000 --max-position 0.05 --check-interval 30
+python scripts/run_live_trading.py ml_basic --balance 5000 --max-position 0.05 --check-interval 30
 ```
 
 ### **3. Live Trading (Advanced)**
 
 ```bash
 # DANGER: Real money trading
-python scripts/run_live_trading.py adaptive --symbol BTC-USD --live-trading --i-understand-the-risks
+python scripts/run_live_trading.py ml_basic --symbol BTC-USD --live-trading --i-understand-the-risks
 
 # The system will ask for additional confirmation
 ```
@@ -171,200 +171,4 @@ python scripts/run_live_trading.py adaptive --symbol BTC-USD --live-trading --i-
 ## 📈 **Strategy Integration**
 
 ### **Supported Strategies:**
-- **`adaptive`** - Adaptive trend following
-- **`enhanced`** - Enhanced technical analysis
-- **`ml_model_strategy`** - Machine learning predictions
-- **`ml_sentiment_strategy`** - ML with sentiment analysis
-- **`high_risk_high_reward`** - Aggressive trading
-
-### **Adding Custom Strategies:**
-1. Extend `BaseStrategy` class
-2. Implement required methods:
-   - `calculate_indicators()`
-   - `check_entry_conditions()`
-   - `check_exit_conditions()`
-   - `calculate_position_size()`
-
----
-
-## 🚨 **Error Handling & Recovery**
-
-### **Common Issues:**
-
-1. **Network Connectivity**
-   - Automatic retry with exponential backoff
-   - Fallback to cached data if available
-
-2. **API Rate Limits**
-   - Intelligent request throttling
-   - Cache frequently accessed data
-
-3. **Insufficient Balance**
-   - Skip trades if insufficient funds
-   - Log warnings for manual review
-
-4. **Market Volatility**
-   - Wider stop losses during high volatility
-   - Reduce position sizes in uncertain conditions
-
-### **Emergency Procedures:**
-- **Ctrl+C** - Graceful shutdown, closes all positions
-- **Kill Signal** - System catches SIGTERM and closes positions
-- **Manual Override** - Stop trading engine via API
-
----
-
-## 📊 **Performance Tracking**
-
-### **Real-time Metrics:**
-```python
-{
-    'current_balance': 10245.67,
-    'total_return_pct': 2.46,
-    'total_pnl': 245.67,
-    'max_drawdown_pct': 5.2,
-    'total_trades': 15,
-    'win_rate_pct': 66.7,
-    'active_positions': 1,
-    'is_running': True
-}
-```
-
-### **Trade History:**
-```json
-{
-    "timestamp": "2025-01-27T15:30:00Z",
-    "symbol": "BTCUSDT",
-    "side": "long",
-    "entry_price": 95234.56,
-    "exit_price": 96123.45,
-    "pnl": 123.45,
-    "exit_reason": "Take profit",
-    "duration_minutes": 240
-}
-```
-
----
-
-## 🛠️ **Advanced Configuration**
-
-### **Environment Variables:**
-```bash
-# Required
-BINANCE_API_KEY=your_api_key
-BINANCE_API_SECRET=your_api_secret
-
-# Optional
-SLACK_WEBHOOK_URL=https://hooks.slack.com/...
-MAX_CONCURRENT_POSITIONS=3
-DEFAULT_STOP_LOSS_PCT=0.02
-```
-
-### **Custom Risk Parameters:**
-```python
-risk_params = RiskParameters(
-    base_risk_per_trade=0.01,      # 1% base risk
-    max_risk_per_trade=0.02,       # 2% maximum risk
-    max_drawdown=0.2,              # 20% max drawdown
-    position_size_method='kelly',   # Kelly criterion
-    stop_loss_multiplier=2.0       # 2x ATR stop loss
-)
-```
-
----
-
-## 🔐 **Security Best Practices**
-
-### **API Key Security:**
-1. **Create Binance API Key** with trading permissions only
-2. **Restrict IP Access** to your trading server
-3. **Use Environment Variables** - Never hardcode keys
-4. **Regular Key Rotation** - Update keys periodically
-
-### **Risk Management:**
-1. **Start Small** - Begin with small position sizes
-2. **Monitor Closely** - Watch first few days of trading
-3. **Set Limits** - Use stop losses and position limits
-4. **Paper Trade First** - Always test strategies in paper mode
-
----
-
-## 🚀 **Deployment Options**
-
-### **Local Development:**
-```bash
-# Run on your local machine
-python scripts/run_live_trading.py adaptive --paper-trading
-```
-
-### **VPS Deployment:**
-```bash
-# Install on VPS for 24/7 operation
-screen -S trading
-python scripts/run_live_trading.py adaptive --live-trading --i-understand-the-risks
-# Ctrl+A, D to detach
-```
-
-### **Docker Container:**
-```dockerfile
-FROM python:3.9
-COPY . /app
-WORKDIR /app
-RUN pip install -r requirements.txt
-CMD ["python", "scripts/run_live_trading.py", "adaptive", "--paper-trading"]
-```
-
----
-
-## 📞 **Support & Troubleshooting**
-
-### **Common Commands:**
-
-**Check running status:**
-```bash
-ps aux | grep run_live_trading
-```
-
-**View live logs:**
-```bash
-tail -f live_trading_20250127.log
-```
-
-**Check trade history:**
-```bash
-cat logs/trades/trades_202501.json | jq '.'
-```
-
-### **Debug Mode:**
-```bash
-# Enable debug logging
-export LOG_LEVEL=DEBUG
-python scripts/run_live_trading.py adaptive --paper-trading
-```
-
----
-
-## ⚠️ **Important Warnings**
-
-1. **Financial Risk** - Live trading involves real money. Never trade more than you can afford to lose.
-
-2. **Market Volatility** - Crypto markets are highly volatile. Strategies that work in backtesting may fail in live conditions.
-
-3. **Technical Failures** - Always have contingency plans for system failures, network outages, or API issues.
-
-4. **Regulatory Compliance** - Ensure you comply with local regulations regarding automated trading.
-
-5. **Tax Implications** - Keep detailed records of all trades for tax purposes.
-
----
-
-## 📚 **Additional Resources**
-
-- **[Sentiment Analysis Guide](LIVE_SENTIMENT_ANALYSIS.md)** - Using real-time sentiment
-- **[Strategy Development](strategies/README.md)** - Creating custom strategies
-- **[Risk Management](core/risk/README.md)** - Advanced risk controls
-- **[Binance API Docs](https://binance-docs.github.io/apidocs/)** - Official API reference
-
----
-
-**Remember: Start with paper trading, test thoroughly, and never risk more than you can afford to lose!** 🛡️ 
+- **`
