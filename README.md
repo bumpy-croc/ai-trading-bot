@@ -502,7 +502,7 @@ SentiCrypt API → CSV Storage → SentiCryptProvider → Feature Engineering �
 - **Enhanced Accuracy**: Sentiment data improves prediction quality
 - **Risk Management**: Confidence-based position sizing reduces risk
 - **Market Insight**: Understanding sentiment-price relationships
-- **Adaptive Strategy**: Dynamic response to market sentiment changes
+- **ML Adaptive Strategy**: Dynamic response to market sentiment changes
 
 #### **For Developers**
 - **Modular Design**: Easy to add new sentiment data sources
