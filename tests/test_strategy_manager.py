@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import threading
 import time
 import tempfile
