@@ -74,8 +74,6 @@ python scripts/run_backtest.py ml_basic --days 365 --timeframe 1h --initial-bala
 ```bash
 # Test multiple strategies
 python scripts/run_backtest.py ml_basic --days 365 --timeframe 1h --initial-balance 10000
-python scripts/run_backtest.py adaptive --days 365 --timeframe 1h --initial-balance 10000
-python scripts/run_backtest.py enhanced --days 365 --timeframe 1h --initial-balance 10000
 ```
 
 ### 6. Available Strategies
@@ -84,9 +82,6 @@ python scripts/run_backtest.py enhanced --days 365 --timeframe 1h --initial-bala
 |----------|----------------|----------|
 | `ml_basic` | 1h | Primary ML strategy |
 | `ml_with_sentiment` | 1h | ML with sentiment analysis |
-| `adaptive` | 1h/1d | Adaptive to market conditions |
-| `enhanced` | 1h/1d | Enhanced traditional strategy |
-| `high_risk_high_reward` | 1h | Aggressive strategy |
 
 ### 7. Troubleshooting
 

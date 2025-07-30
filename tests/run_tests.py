@@ -177,13 +177,13 @@ def run_quick_smoke_test():
     
     # Test basic imports
     try:
-        from strategies.adaptive import AdaptiveStrategy
+        from strategies.ml_adaptive import MlAdaptive
         from risk.risk_manager import RiskManager
         from live.trading_engine import LiveTradingEngine
         print_success("All core modules import successfully")
         
         # Test basic functionality
-        strategy = AdaptiveStrategy()
+        strategy = MlAdaptive()
         risk_manager = RiskManager()
         print_success("Core objects can be instantiated")
         
