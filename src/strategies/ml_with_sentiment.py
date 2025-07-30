@@ -33,8 +33,8 @@ import onnxruntime as ort
 import os
 import json
 from datetime import datetime, timedelta
-from strategies.base import BaseStrategy
-from data_providers.senticrypt_provider import SentiCryptProvider
+from src.strategies.base import BaseStrategy
+from src.data_providers.senticrypt_provider import SentiCryptProvider
 
 class MlWithSentiment(BaseStrategy):
     def __init__(self, name="MlWithSentiment", model_path=None, sequence_length=120, 
