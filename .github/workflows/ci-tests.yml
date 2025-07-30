@@ -52,8 +52,14 @@ jobs:
           sleep 2
         done
 
-    - name: Run test suite
+    - name: Run unit tests (parallel)
       env:
         DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test
       run: |
-        python tests/run_tests.py all -q
+        python tests/run_tests.py unit -q
+
+    - name: Run integration tests (serial)
+      env:
+        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test
+      run: |
+        python tests/run_tests.py integration -q

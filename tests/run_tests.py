@@ -133,8 +133,7 @@ def run_integration_tests():
     cmd = [
         sys.executable, '-m', 'pytest',
         '-m', 'integration',
-        '-v', '--tb=short',
-        '-n', 'auto', '--dist=loadscope'
+        '-v', '--tb=short'
     ]
     
     return run_command(cmd, "Integration Tests")
@@ -226,8 +225,7 @@ def run_database_tests():
     cmd = [
         sys.executable, '-m', 'pytest',
         'tests/test_database.py',
-        '-v', '--tb=short',
-        '-n', 'auto', '--dist=loadscope'
+        '-v', '--tb=short'
     ]
     
     return run_command(cmd, "Database Tests")
