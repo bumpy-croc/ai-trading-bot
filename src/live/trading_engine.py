@@ -173,7 +173,7 @@ class LiveTradingEngine:
         self.account_synchronizer = None
         if enable_live_trading:
             try:
-                from config import get_config
+                from src.config import get_config
                 config = get_config()
                 self.exchange_interface, provider_name = _create_exchange_provider(provider, config)
                 if self.exchange_interface:
