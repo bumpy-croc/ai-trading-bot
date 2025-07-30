@@ -11,13 +11,13 @@ alwaysApply: false
 ### Quick Development
 ```bash
 # Quick backtest (development - no database logging)
-python scripts/run_backtest.py adaptive --days 30 --no-db
+python scripts/run_backtest.py ml_basic --days 30 --no-db
 
 # Production backtest (with database logging)
 python scripts/run_backtest.py ml_with_sentiment --days 365
 
 # Custom parameters
-python scripts/run_backtest.py enhanced --symbol ETHUSDT --days 100 --initial-balance 50000
+python scripts/run_backtest.py ml_basic --symbol ETHUSDT --days 100 --initial-balance 50000
 
 # With sentiment analysis
 python scripts/run_backtest.py ml_with_sentiment --use-sentiment --days 90
@@ -26,13 +26,13 @@ python scripts/run_backtest.py ml_with_sentiment --use-sentiment --days 90
 ### Advanced Backtesting
 ```bash
 # Multi-strategy comparison
-python scripts/run_backtest.py adaptive,enhanced,ml_basic --days 100 --compare
+python scripts/run_backtest.py ml_basic,ml_adaptive --days 100 --compare
 
 # Custom risk parameters
-python scripts/run_backtest.py adaptive --risk-per-trade 0.01 --max-drawdown 0.15
+python scripts/run_backtest.py ml_basic --risk-per-trade 0.01 --max-drawdown 0.15
 
 # Export results
-python scripts/run_backtest.py adaptive --days 30 --export-results --format csv
+python scripts/run_backtest.py ml_basic --days 30 --export-results --format csv
 ```
 
 ---
@@ -42,10 +42,10 @@ python scripts/run_backtest.py adaptive --days 30 --export-results --format csv
 ### Paper Trading (Safe)
 ```bash
 # Paper trading (no real money)
-python scripts/run_live_trading.py adaptive --paper-trading
+python scripts/run_live_trading.py ml_basic --paper-trading
 
 # Paper trading with custom settings
-python scripts/run_live_trading.py adaptive --balance 5000 --max-position 0.05
+python scripts/run_live_trading.py ml_basic --balance 5000 --max-position 0.05
 
 # Paper trading with specific strategy config
 python scripts/run_live_trading.py ml_with_sentiment --paper-trading --config custom_config.json
@@ -57,7 +57,7 @@ python scripts/run_live_trading.py ml_with_sentiment --paper-trading --config cu
 python scripts/run_live_trading.py ml_with_sentiment --live-trading --i-understand-the-risks
 
 # Live trading with custom balance
-python scripts/run_live_trading.py adaptive --live-trading --balance 1000 --i-understand-the-risks
+python scripts/run_live_trading.py ml_basic --live-trading --balance 1000 --i-understand-the-risks
 
 # Emergency stop
 python scripts/run_live_trading.py --stop
@@ -268,10 +268,10 @@ python scripts/validate_sentiment_data.py
 python scripts/generate_performance_report.py
 
 # Analyze strategy performance
-python scripts/analyze_strategy_performance.py --strategy adaptive
+python scripts/analyze_strategy_performance.py --strategy ml_basic
 
 # Compare strategies
-python scripts/compare_strategies.py --strategies adaptive,enhanced,ml_basic
+python scripts/compare_strategies.py --strategies ml_basic,ml_adaptive
 ```
 
 ### Risk Analysis
@@ -321,7 +321,7 @@ python scripts/update_dependencies.py
 ### Debug Mode
 ```bash
 # Run with debug logging
-python scripts/run_live_trading.py adaptive --debug
+python scripts/run_live_trading.py ml_adaptive --debug
 
 # Debug specific component
 python scripts/debug_component.py --component strategy

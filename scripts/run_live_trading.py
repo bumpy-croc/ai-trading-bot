@@ -39,7 +39,6 @@ from risk.risk_manager import RiskParameters
 from live.trading_engine import LiveTradingEngine
 
 # Import strategies
-# Removed deprecated strategies (Adaptive, Enhanced, HighRiskHighReward)
 from strategies.ml_basic import MlBasic
 from strategies.ml_with_sentiment import MlWithSentiment
 from strategies.test_high_frequency import TestHighFrequencyStrategy
