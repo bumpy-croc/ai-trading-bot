@@ -106,7 +106,8 @@ def run_critical_tests():
     cmd = [
         sys.executable, '-m', 'pytest', 
         '-m', 'live_trading or risk_management',
-        '-v', '--tb=short'
+        '-v', '--tb=short',
+        '-n', 'auto', '--dist=loadscope'
     ]
     
     return run_command(cmd, "Critical Tests (Live Trading + Risk Management)")
@@ -119,6 +120,7 @@ def run_unit_tests():
         sys.executable, '-m', 'pytest',
         'tests/',
         '-v', '--tb=short',
+        '-n', 'auto', '--dist=loadscope',
         '-m', 'not integration'
     ]
     
@@ -131,7 +133,8 @@ def run_integration_tests():
     cmd = [
         sys.executable, '-m', 'pytest',
         '-m', 'integration',
-        '-v', '--tb=short'
+        '-v', '--tb=short',
+        '-n', 'auto', '--dist=loadscope'
     ]
     
     return run_command(cmd, "Integration Tests")
@@ -145,6 +148,7 @@ def run_coverage_analysis():
         '--cov=ai-trading-bot',
         '--cov-report=term-missing',
         '--cov-report=html',
+        '-n', 'auto', '--dist=loadscope',
         'tests/'
     ]
     
@@ -166,7 +170,8 @@ def run_specific_test_file(test_file):
     cmd = [
         sys.executable, '-m', 'pytest',
         test_file,
-        '-v', '--tb=short'
+        '-v', '--tb=short',
+        '-n', 'auto', '--dist=loadscope'
     ]
     
     return run_command(cmd, f"Tests in {test_file}")
@@ -221,7 +226,8 @@ def run_database_tests():
     cmd = [
         sys.executable, '-m', 'pytest',
         'tests/test_database.py',
-        '-v', '--tb=short'
+        '-v', '--tb=short',
+        '-n', 'auto', '--dist=loadscope'
     ]
     
     return run_command(cmd, "Database Tests")
@@ -301,6 +307,8 @@ def run_custom_pytest_command(markers=None, coverage=False, verbose=False, quiet
     print_header("Running Custom Tests")
     
     cmd = [sys.executable, '-m', 'pytest', 'tests/']
+    # Enable parallel execution with pytest-xdist if available
+    cmd.extend(['-n', 'auto', '--dist=loadscope'])
     
     if markers:
         cmd.extend(['-m', markers])
