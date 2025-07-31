@@ -16,6 +16,9 @@ jobs:
     
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      ACTIONS_STEP_DEBUG: true
+      ACTIONS_RUNNER_DEBUG: true
     
     steps:
     - name: Checkout code
@@ -59,6 +62,10 @@ jobs:
           -m "not integration" \
           $patterns
         
+        # Also run CI-specific smoke tests for quick validation
+        echo "=== Running CI smoke tests ==="
+        python -m pytest tests/test_smoke_ci.py -v
+        
         echo "=== Completed test group: ${{ matrix.test-group }} ==="
         echo "End time: $(date)"
 
@@ -81,6 +88,24 @@ jobs:
         # Show which groups passed/failed
         if [ "${{ needs.test.result }}" == "success" ]; then
           echo "✅ All test groups passed!"
+          echo ""
+          echo "=== Test Results Summary ==="
+          echo "All 4 test groups completed successfully."
+          echo "Individual test results are shown in each group's logs above."
+          echo ""
+          echo "To see detailed test results, check the logs for each group:"
+          echo "- group-1: Basic functionality tests"
+          echo "- group-2: Strategy and backtesting tests"
+          echo "- group-3: Data provider and integration tests"
+          echo "- group-4: Performance and advanced tests"
         else
           echo "❌ Some test groups failed. Check the logs above for details."
+          echo ""
+          echo "=== Failure Summary ==="
+          echo "One or more test groups failed. Check the individual group logs for:"
+          echo "- Specific test failures"
+          echo "- Error messages and stack traces"
+          echo "- Test execution details"
+          echo ""
+          echo "Failed groups will be highlighted in red above."
         fi
