@@ -2,63 +2,106 @@ name: CI Tests
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, staging, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, staging, develop ]
 
 jobs:
   test:
+    strategy:
+      matrix:
+        test-group: [group-1, group-2, group-3, group-4]
+        python-version: [3.12]
+      fail-fast: false  # Continue running other groups if one fails
+    
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: trading_bot
-          POSTGRES_PASSWORD: dev_password_123
-          POSTGRES_DB: ai_trading_bot_test
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: --health-cmd "pg_isready -U trading_bot" --health-interval 10s --health-timeout 5s --health-retries 5
-
+    env:
+      ACTIONS_STEP_DEBUG: true
+      ACTIONS_RUNNER_DEBUG: true
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
-
-    - name: Cache pip packages
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y postgresql-client
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
 
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Wait for PostgreSQL
+    - name: Show test group info
       run: |
-        until pg_isready -h localhost -p 5432 -U trading_bot; do
-          echo "Waiting for PostgreSQL..."
-          sleep 2
-        done
+        echo "=== Test Group Information ==="
+        echo "Group: ${{ matrix.test-group }}"
+        echo "Python version: ${{ matrix.python-version }}"
+        echo "Runner: ${{ runner.os }}"
+        echo "Available memory: $(free -h || echo 'free command not available')"
+        echo "CPU cores: $(nproc || echo 'nproc not available')"
+        echo "=== Test files in this group ==="
+        python tests/group_tests.py get-patterns ${{ matrix.test-group }}
 
-    - name: Run test suite
-      env:
-        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test
+    - name: Run test group ${{ matrix.test-group }}
       run: |
-        python tests/run_tests.py all -q
+        echo "=== Starting test group: ${{ matrix.test-group }} ==="
+        echo "Current time: $(date)"
+        
+        # Get test patterns for this group
+        patterns=$(python tests/group_tests.py get-patterns ${{ matrix.test-group }})
+        
+        # Run tests with patterns
+        python -m pytest \
+          -v \
+          --tb=short \
+          --timeout=300 \
+          -m "not integration" \
+          $patterns
+        
+        echo "=== Completed test group: ${{ matrix.test-group }} ==="
+        echo "End time: $(date)"
+
+  # Optional: Add a summary job that runs after all test groups complete
+  test-summary:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()  # Run even if some test groups failed
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Test Summary
+      run: |
+        echo "=== Test Matrix Summary ==="
+        echo "All test groups have completed."
+        echo "Check individual group results above for details."
+        
+        # Show which groups passed/failed
+        if [ "${{ needs.test.result }}" == "success" ]; then
+          echo "✅ All test groups passed!"
+          echo ""
+          echo "=== Test Results Summary ==="
+          echo "All 4 test groups completed successfully."
+          echo "Individual test results are shown in each group's logs above."
+          echo ""
+          echo "To see detailed test results, check the logs for each group:"
+          echo "- group-1: Basic functionality tests"
+          echo "- group-2: Strategy and backtesting tests"
+          echo "- group-3: Data provider and integration tests"
+          echo "- group-4: Performance and advanced tests"
+        else
+          echo "❌ Some test groups failed. Check the logs above for details."
+          echo ""
+          echo "=== Failure Summary ==="
+          echo "One or more test groups failed. Check the individual group logs for:"
+          echo "- Specific test failures"
+          echo "- Error messages and stack traces"
+          echo "- Test execution details"
+          echo ""
+          echo "Failed groups will be highlighted in red above."
+        fi

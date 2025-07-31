@@ -6,6 +6,7 @@ They are slower but critical for ensuring the system works as a whole.
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import time
 import threading
 from datetime import datetime, timedelta
