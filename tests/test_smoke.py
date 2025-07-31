@@ -13,6 +13,8 @@ from datetime import datetime
 import pytest
 from unittest.mock import Mock
 
+pytestmark = [pytest.mark.fast, pytest.mark.mock_only]
+
 # Core imports
 from backtesting.engine import Backtester
 from data_providers.data_provider import DataProvider

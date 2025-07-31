@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import time
 
 # Add project root and src directory to PYTHONPATH for test imports
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -52,13 +53,22 @@ except ImportError as e:
 
 _RUN_INTEGRATION = os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
 
+# Track database setup time
+_DB_SETUP_START_TIME = None
+_DB_SETUP_END_TIME = None
+
 _POSTGRES_CONTAINER = None
 if _RUN_INTEGRATION:
     try:
         from testcontainers.postgres import PostgresContainer  # type: ignore
+        _DB_SETUP_START_TIME = time.time()
+        print(f"\n[Database Setup] Starting PostgreSQL container setup at {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         _POSTGRES_CONTAINER = PostgresContainer("postgres:15-alpine")
         _POSTGRES_CONTAINER.start()
         os.environ["DATABASE_URL"] = _POSTGRES_CONTAINER.get_connection_url()
+        _DB_SETUP_END_TIME = time.time()
+        setup_duration = _DB_SETUP_END_TIME - _DB_SETUP_START_TIME
+        print(f"[Database Setup] ✅ Container ready in {setup_duration:.2f} seconds")
     except Exception as _e:  # pragma: no cover -- fallback if Docker not available
         # Provide a dummy URL so the code can still import, but mark that Postgres is
         # unavailable.  Tests that actually require DB connectivity should handle the
@@ -68,9 +78,11 @@ if _RUN_INTEGRATION:
             "postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test"
         )
         _POSTGRES_CONTAINER = None
+        print(f"[Database Setup] ⚠️  Failed to start container: {_e}")
 else:
     # Unit-test run ⇒ use super-light SQLite in-memory
     os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+    print("[Database Setup] 🚀 Using in-memory SQLite for unit tests (no container needed)")
 
     # --- Ensure the fallback local test database exists (for developers without Docker) ---
     try:
@@ -107,6 +119,7 @@ def pytest_sessionstart(session):
         # No heavy DB work for unit tests
         return
     print("\n[pytest] Running local setup script to reset database (integration run)...")
+    db_reset_start = time.time()
     result = subprocess.run([
         sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"
     ], capture_output=True, text=True)
@@ -114,6 +127,9 @@ def pytest_sessionstart(session):
     if result.returncode != 0:
         print(result.stderr)
         pytest.exit("Database setup/reset failed before tests.")
+    else:
+        db_reset_duration = time.time() - db_reset_start
+        print(f"[pytest] ✅ Database reset completed in {db_reset_duration:.2f} seconds")
 
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: D401
@@ -458,6 +474,20 @@ def mock_logger():
     logger.error = Mock()
     logger.debug = Mock()
     return logger
+
+
+@pytest.fixture
+def mock_database_manager():
+    """Create a mock database manager for unit tests"""
+    from tests.mocks import MockDatabaseManager
+    return MockDatabaseManager()
+
+
+@pytest.fixture
+def fast_db():
+    """Alias for mock_database_manager - use this in unit tests"""
+    from tests.mocks import MockDatabaseManager
+    return MockDatabaseManager()
 
 @pytest.fixture
 def mock_sentiment_provider():

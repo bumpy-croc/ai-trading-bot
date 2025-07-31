@@ -10,6 +10,7 @@ import sys
 import subprocess
 import os
 import argparse
+import time
 from pathlib import Path
 
 # Ensure we can import from the project
@@ -23,6 +24,23 @@ if 'PYTHONPATH' in os.environ:
     os.environ['PYTHONPATH'] = str(src_path) + ':' + os.environ['PYTHONPATH']
 else:
     os.environ['PYTHONPATH'] = str(src_path)
+
+def get_worker_count():
+    """Get appropriate worker count based on environment"""
+    # Check if running in CI environment
+    ci_indicators = [
+        'CI', 'GITHUB_ACTIONS', 'TRAVIS', 'CIRCLECI', 'JENKINS', 
+        'GITLAB_CI', 'BITBUCKET_BUILD_NUMBER', 'BUILDKITE'
+    ]
+    
+    is_ci = any(os.getenv(indicator) for indicator in ci_indicators)
+    
+    if is_ci:
+        # Use maximum workers in CI for faster builds
+        return 'auto'
+    else:
+        # Use 4 workers locally for good performance while preventing CPU overload
+        return '4'
 
 class Colors:
     """ANSI color codes for terminal output"""
@@ -42,6 +60,11 @@ def print_header(text):
     print(f"{Colors.HEADER}{Colors.BOLD}{text.center(60)}{Colors.ENDC}")
     print(f"{Colors.HEADER}{Colors.BOLD}{'='*60}{Colors.ENDC}\n")
 
+def print_subheader(text):
+    """Print a formatted subheader"""
+    print(f"\n{Colors.OKBLUE}{Colors.BOLD}{text}{Colors.ENDC}")
+    print(f"{Colors.OKBLUE}{'-' * len(text)}{Colors.ENDC}")
+
 def print_success(text):
     """Print success message"""
     print(f"{Colors.OKGREEN}✅ {text}{Colors.ENDC}")
@@ -54,28 +77,59 @@ def print_error(text):
     """Print error message"""
     print(f"{Colors.FAIL}❌ {text}{Colors.ENDC}")
 
-def run_command(cmd, description):
+def print_progress(text):
+    """Print progress message"""
+    print(f"{Colors.OKCYAN}🔄 {text}{Colors.ENDC}")
+
+def print_progress_bar(current, total, width=50):
+    """Print a simple progress bar"""
+    progress = int(width * current / total) if total > 0 else 0
+    bar = '█' * progress + '░' * (width - progress)
+    percentage = int(100 * current / total) if total > 0 else 0
+    print(f"\r{Colors.OKCYAN}[{bar}] {percentage}% ({current}/{total}){Colors.ENDC}", end='', flush=True)
+
+def run_command(cmd, description, show_progress=True):
     """Run a command and return success status"""
     print(f"{Colors.OKBLUE}Running: {description}{Colors.ENDC}")
-    print(f"Command: {' '.join(cmd)}")
+    if show_progress:
+        print(f"Command: {' '.join(cmd)}")
+        # Show environment detection
+        worker_count = get_worker_count()
+        env_type = "CI" if worker_count == 'auto' else "Local"
+        print(f"{Colors.OKCYAN}🖥️  Environment: {env_type} (using {worker_count} workers){Colors.ENDC}")
+        print_progress("Starting test execution...")
+        print(f"{Colors.OKCYAN}🔄 Tests are running - you should see live output below...{Colors.ENDC}")
+    
+    start_time = time.time()
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if show_progress:
+            # For Cursor's embedded terminal, use direct output
+            # This allows real-time display in the embedded terminal
+            process = subprocess.Popen(
+                cmd, 
+                stdout=None,  # Use current terminal
+                stderr=None,  # Use current terminal
+                text=True
+            )
+            
+            return_code = process.wait()
+        else:
+            # Fallback to captured output for non-progress commands
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            return_code = result.returncode
         
-        if result.returncode == 0:
-            print_success(f"{description} completed successfully")
-            if result.stdout.strip():
-                print(f"{Colors.OKCYAN}{result.stdout}{Colors.ENDC}")
+        duration = time.time() - start_time
+        
+        if return_code == 0:
+            print_success(f"{description} completed successfully in {duration:.2f} seconds")
             return True
         else:
-            print_error(f"{description} failed")
-            if result.stderr.strip():
-                print(f"{Colors.FAIL}{result.stderr}{Colors.ENDC}")
-            if result.stdout.strip():
-                print(f"{Colors.WARNING}{result.stdout}{Colors.ENDC}")
+            print_error(f"{description} failed after {duration:.2f} seconds")
             return False
     except Exception as e:
-        print_error(f"Failed to run {description}: {e}")
+        duration = time.time() - start_time
+        print_error(f"Failed to run {description} after {duration:.2f} seconds: {e}")
         return False
 
 def check_dependencies():
@@ -107,7 +161,7 @@ def run_critical_tests():
         sys.executable, '-m', 'pytest', 
         '-m', 'live_trading or risk_management',
         '-v', '--tb=short',
-        '-n', 'auto', '--dist=loadscope'
+        '-n', 'auto', '--dist=loadgroup'
     ]
     
     return run_command(cmd, "Critical Tests (Live Trading + Risk Management)")
@@ -120,8 +174,9 @@ def run_unit_tests():
         sys.executable, '-m', 'pytest',
         'tests/',
         '-v', '--tb=short',
-        '-n', 'auto', '--dist=loadscope',
-        '-m', 'not integration'
+        '-n', get_worker_count(), '--dist=loadgroup',  # Dynamic worker count based on environment
+        '-m', 'not integration',
+        '--color=yes'  # Enable colored output for better visibility in Cursor
     ]
     
     return run_command(cmd, "Unit Tests")
@@ -130,13 +185,22 @@ def run_integration_tests():
     """Run integration tests"""
     print_header("Running Integration Tests")
     
-    cmd = [
-        sys.executable, '-m', 'pytest',
-        '-m', 'integration',
-        '-v', '--tb=short'
-    ]
+    # Set environment variable to enable integration test mode (PostgreSQL containers)
+    original_env = os.environ.get("ENABLE_INTEGRATION_TESTS", "0")
+    os.environ["ENABLE_INTEGRATION_TESTS"] = "1"
     
-    return run_command(cmd, "Integration Tests")
+    try:
+        cmd = [
+            sys.executable, '-m', 'pytest',
+            '-m', 'integration',
+            '-v', '--tb=short'
+            # No parallelization for integration tests - they need sequential DB access
+        ]
+        
+        return run_command(cmd, "Integration Tests")
+    finally:
+        # Restore original environment
+        os.environ["ENABLE_INTEGRATION_TESTS"] = original_env
 
 def run_coverage_analysis():
     """Run tests with coverage analysis"""
@@ -147,7 +211,7 @@ def run_coverage_analysis():
         '--cov=ai-trading-bot',
         '--cov-report=term-missing',
         '--cov-report=html',
-        '-n', 'auto', '--dist=loadscope',
+        '-n', get_worker_count(), '--dist=loadgroup',  # Dynamic worker count based on environment
         'tests/'
     ]
     
@@ -170,7 +234,7 @@ def run_specific_test_file(test_file):
         sys.executable, '-m', 'pytest',
         test_file,
         '-v', '--tb=short',
-        '-n', 'auto', '--dist=loadscope'
+        '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
     ]
     
     return run_command(cmd, f"Tests in {test_file}")
@@ -230,6 +294,88 @@ def run_database_tests():
     
     return run_command(cmd, "Database Tests")
 
+def run_fast_tests():
+    """Run fast tests only (< 1 second each)"""
+    print_header("Running Fast Tests")
+    
+    cmd = [
+        sys.executable, '-m', 'pytest',
+        '-m', 'fast or mock_only',
+        '-v', '--tb=short',
+        '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
+    ]
+    
+    return run_command(cmd, "Fast Tests")
+
+def run_slow_tests():
+    """Run slow tests only"""
+    print_header("Running Slow Tests")
+    
+    cmd = [
+        sys.executable, '-m', 'pytest',
+        '-m', 'slow or computation',
+        '-v', '--tb=short'
+        # No parallelization for slow tests to avoid resource conflicts
+    ]
+    
+    return run_command(cmd, "Slow Tests")
+
+def run_grouped_tests():
+    """Run tests in optimized groups for better parallelization"""
+    print_header("Running Tests in Optimized Groups")
+    
+    # Group 1: Fast unit tests (parallel)
+    print(f"{Colors.OKBLUE}Group 1: Fast Unit Tests{Colors.ENDC}")
+    fast_cmd = [
+        sys.executable, '-m', 'pytest',
+        'tests/test_indicators.py',
+        'tests/test_returns_calculations.py', 
+        'tests/test_smoke.py',
+        'tests/test_coinbase_provider.py',
+        'tests/test_dashboard_balance.py',
+        '-v', '--tb=short',
+        '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
+    ]
+    
+    fast_success = run_command(fast_cmd, "Fast Unit Tests Group")
+    
+    # Group 2: Medium unit tests (parallel)
+    print(f"{Colors.OKBLUE}Group 2: Medium Unit Tests{Colors.ENDC}")
+    medium_cmd = [
+        sys.executable, '-m', 'pytest',
+        'tests/test_strategies.py',
+        'tests/test_risk_management.py',
+        'tests/test_performance.py',
+        'tests/test_config_system.py',
+        '-v', '--tb=short',
+        '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
+    ]
+    
+    medium_success = run_command(medium_cmd, "Medium Unit Tests Group")
+    
+    # Group 3: Computation-heavy tests (limited parallelization)
+    print(f"{Colors.OKBLUE}Group 3: Computation-Heavy Tests{Colors.ENDC}")
+    compute_cmd = [
+        sys.executable, '-m', 'pytest',
+        'tests/test_backtesting.py',
+        'tests/test_ml_adaptive.py',
+        'tests/test_monitoring.py',
+        '-v', '--tb=short',
+        '-n', '2'  # Limited parallelization for heavy tests
+    ]
+    
+    compute_success = run_command(compute_cmd, "Computation-Heavy Tests Group")
+    
+    return fast_success and medium_success and compute_success
+
+def run_performance_benchmark():
+    """Run performance benchmark of test suite"""
+    print_header("Running Performance Benchmark")
+    
+    cmd = [sys.executable, 'tests/performance_benchmark.py']
+    
+    return run_command(cmd, "Performance Benchmark")
+
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
@@ -253,7 +399,7 @@ Examples:
     parser.add_argument(
         'command',
         nargs='?',
-        choices=['smoke', 'critical', 'unit', 'integration', 'database', 'coverage', 'all', 'validate'],
+        choices=['smoke', 'critical', 'unit', 'integration', 'database', 'coverage', 'all', 'validate', 'fast', 'slow', 'grouped', 'benchmark'],
         help='Test command to run'
     )
     
@@ -305,8 +451,11 @@ def run_custom_pytest_command(markers=None, coverage=False, verbose=False, quiet
     print_header("Running Custom Tests")
     
     cmd = [sys.executable, '-m', 'pytest', 'tests/']
+    
     # Enable parallel execution with pytest-xdist if available
-    cmd.extend(['-n', 'auto', '--dist=loadscope'])
+    # Use loadgroup for better test distribution
+    if not markers or 'integration' not in markers:
+        cmd.extend(['-n', 'auto', '--dist=loadgroup'])
     
     if markers:
         cmd.extend(['-m', markers])
@@ -353,6 +502,10 @@ def interactive_mode():
     print("6. coverage - Tests with coverage analysis")
     print("7. all      - All tests")
     print("8. validate - Validate test environment")
+    print("9. fast     - Fast tests only")
+    print("10. slow    - Slow tests only") 
+    print("11. grouped - Optimized test groups")
+    print("12. benchmark - Performance benchmark")
     print()
     
     command = input("Enter command (or test file name): ").strip().lower()
@@ -360,15 +513,26 @@ def interactive_mode():
 
 def run_all_tests(coverage=False, verbose=False, quiet=False):
     """Run the full test suite (all tests in the tests/ directory)."""
-    return run_custom_pytest_command(
-        markers=None,  # no marker restriction ⇒ run everything
-        coverage=coverage,
-        verbose=verbose,
-        quiet=quiet,
-    )
+    print_header("Running All Tests")
+    
+    # Run unit tests first (these can run in parallel)
+    print_subheader("Phase 1: Unit Tests")
+    unit_success = run_unit_tests()
+    
+    if not unit_success:
+        print_error("Unit tests failed. Stopping before integration tests.")
+        return False
+    
+    # Run integration tests (these need sequential execution)
+    print_subheader("Phase 2: Integration Tests")
+    integration_success = run_integration_tests()
+    
+    return unit_success and integration_success
 
 def main():
     """Main test runner function"""
+    main_start_time = time.time()
+    
     args = parse_arguments()
     
     # Handle interactive mode
@@ -417,6 +581,14 @@ def main():
         success = run_database_tests()
     elif command == 'coverage':
         success = run_coverage_analysis()
+    elif command == 'fast':
+        success = run_fast_tests()
+    elif command == 'slow':
+        success = run_slow_tests()
+    elif command == 'grouped':
+        success = run_grouped_tests()
+    elif command == 'benchmark':
+        success = run_performance_benchmark()
     elif command == 'all':
         success = run_all_tests(
             coverage=args.coverage,
@@ -429,7 +601,7 @@ def main():
         success = run_specific_test_file(command)
     elif command:
         print_error(f"Unknown command: {command}")
-        print("Available commands: smoke, critical, unit, integration, coverage, all, validate, database")
+        print("Available commands: smoke, critical, unit, integration, coverage, all, validate, database, fast, slow, grouped, benchmark")
         print("Or use --help for more options")
         sys.exit(1)
     else:
@@ -438,7 +610,11 @@ def main():
         sys.exit(1)
     
     # Summary
+    total_duration = time.time() - main_start_time
     print_header("Test Summary")
+    
+    print(f"{Colors.BOLD}Total Execution Time: {total_duration:.2f} seconds{Colors.ENDC}")
+    
     if success:
         print_success("All tests completed successfully! ✨")
         sys.exit(0)
