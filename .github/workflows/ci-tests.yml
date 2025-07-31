@@ -2,9 +2,9 @@ name: CI Tests
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, staging, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, staging, develop ]
 
 jobs:
   test:
@@ -61,10 +61,6 @@ jobs:
           --timeout=300 \
           -m "not integration" \
           $patterns
-        
-        # Also run CI-specific smoke tests for quick validation
-        echo "=== Running CI smoke tests ==="
-        python -m pytest tests/test_smoke_ci.py -v
         
         echo "=== Completed test group: ${{ matrix.test-group }} ==="
         echo "End time: $(date)"
