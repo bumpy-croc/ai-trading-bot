@@ -161,7 +161,7 @@ def run_critical_tests():
         sys.executable, '-m', 'pytest', 
         '-m', 'live_trading or risk_management',
         '-v', '--tb=short',
-        '-n', 'auto', '--dist=loadgroup'
+        '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
     ]
     
     return run_command(cmd, "Critical Tests (Live Trading + Risk Management)")
@@ -455,7 +455,7 @@ def run_custom_pytest_command(markers=None, coverage=False, verbose=False, quiet
     # Enable parallel execution with pytest-xdist if available
     # Use loadgroup for better test distribution
     if not markers or 'integration' not in markers:
-        cmd.extend(['-n', 'auto', '--dist=loadgroup'])
+        cmd.extend(['-n', get_worker_count(), '--dist=loadgroup'])
     
     if markers:
         cmd.extend(['-m', markers])
