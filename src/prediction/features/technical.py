@@ -145,10 +145,13 @@ class TechnicalFeatureExtractor(FeatureExtractor):
                 # Rolling min-max normalization using vectorized operations
                 rolling_min = df[feature].rolling(window=self.normalization_window, min_periods=1).min()
                 rolling_max = df[feature].rolling(window=self.normalization_window, min_periods=1).max()
+                
+                # Handle NaN values explicitly before division
+                valid_mask = (rolling_max != rolling_min) & rolling_max.notna() & rolling_min.notna()
                 df[f'{feature}_normalized'] = np.where(
-                    rolling_max != rolling_min,
+                    valid_mask,
                     (df[feature] - rolling_min) / (rolling_max - rolling_min),
-                    0.0  # Handle cases where min == max to avoid division by zero
+                    0.0  # Handle cases where min == max or NaN to avoid division by zero
                 )
         return df
     

@@ -73,13 +73,12 @@ class FeatureCache:
             index_hash = pd.util.hash_pandas_object(data.index).values
             columns_hash = pd.util.hash_pandas_object(data.columns).values
             
-            # Concatenate all hashes and generate a final SHA256 hash
+            # Concatenate all hashes and generate a final hash
             combined_hash = np.concatenate([content_hash, index_hash, columns_hash])
-            return hashlib.sha256(combined_hash.tobytes()).hexdigest()[:16]
-            
-        except Exception:
-            # Fallback to simpler hash if above fails
-            return hashlib.sha256(str(data.shape).encode()).hexdigest()[:16]
+            return hashlib.sha256(combined_hash.tobytes()).hexdigest()
+        except Exception as e:
+            # Fallback to a less efficient but robust method
+            return hashlib.sha256(pd.util.hash_pandas_object(data, index=True).to_string().encode('utf-8')).hexdigest()
     
     def _generate_cache_key(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any]) -> str:
         """
@@ -120,8 +119,9 @@ class FeatureCache:
         
         entry = self._cache[cache_key]
         
-        if not entry.is_valid():
-            # Remove expired entry
+        # Check TTL
+        if self.default_ttl > 0 and (time.time() - entry.timestamp) > self.default_ttl:
+            # logger.debug(f"Cache entry for {extractor_name} expired.") # Original code had this line commented out
             del self._cache[cache_key]
             self._stats['evictions'] += 1
             self._stats['misses'] += 1

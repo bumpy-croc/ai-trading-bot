@@ -209,7 +209,7 @@ class FeaturePipeline:
         nan_values = data.isna().sum().sum()
         nan_ratio = nan_values / total_values
         
-        if nan_ratio > DEFAULT_NAN_THRESHOLD:  # More than 50% NaN values
+        if nan_ratio > DEFAULT_NAN_THRESHOLD:  # More than DEFAULT_NAN_THRESHOLD NaN values
             raise ValueError(f"Too many NaN values in output: {nan_ratio:.2%}")
         
         # Check for infinite values
