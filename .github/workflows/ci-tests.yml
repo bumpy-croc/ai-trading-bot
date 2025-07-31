@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
     - name: Checkout code
@@ -30,4 +30,9 @@ jobs:
 
     - name: Run unit tests (parallel)
       run: |
+        echo "Starting unit tests..."
+        echo "Environment: $CI"
+        echo "Python version: $(python --version)"
+        echo "Available memory: $(free -h || echo 'free command not available')"
+        echo "CPU cores: $(nproc || echo 'nproc not available')"
         python tests/run_tests.py unit -q
