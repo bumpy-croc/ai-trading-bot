@@ -66,16 +66,16 @@ class FeatureCache:
             Hash string representing the data content
         """
         try:
-            # Create a string representation of the data
-            # Include index, columns, and values
-            content = (
-                str(data.index.tolist()) +
-                str(data.columns.tolist()) +
-                str(data.values.tolist())
-            )
+            # Compute hash for the DataFrame content using pandas utility
+            content_hash = pd.util.hash_pandas_object(data, index=True).values
             
-            # Generate SHA256 hash
-            return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
+            # Combine with index and column hashes for uniqueness
+            index_hash = pd.util.hash_pandas_object(data.index).values
+            columns_hash = pd.util.hash_pandas_object(data.columns).values
+            
+            # Concatenate all hashes and generate a final SHA256 hash
+            combined_hash = np.concatenate([content_hash, index_hash, columns_hash])
+            return hashlib.sha256(combined_hash.tobytes()).hexdigest()[:16]
             
         except Exception:
             # Fallback to simpler hash if above fails
@@ -99,7 +99,7 @@ class FeatureCache:
         
         return f"{extractor_name}_{data_hash}_{config_hash}"
     
-    def get(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    def get(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], copy: bool = True) -> Optional[pd.DataFrame]:
         """
         Get cached feature extraction result.
         
@@ -107,6 +107,7 @@ class FeatureCache:
             data: Input data used for feature extraction
             extractor_name: Name of the feature extractor
             config: Extractor configuration
+            copy: Whether to return a copy of the cached data (default: True)
             
         Returns:
             Cached DataFrame if available and valid, None otherwise
@@ -127,7 +128,7 @@ class FeatureCache:
             return None
         
         self._stats['hits'] += 1
-        return entry.data.copy()
+        return entry.data.copy() if copy else entry.data
     
     def set(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], 
             result: pd.DataFrame, ttl: Optional[int] = None) -> None:
@@ -167,7 +168,7 @@ class FeatureCache:
         Returns:
             True if valid cached result exists, False otherwise
         """
-        return self.get(data, extractor_name, config) is not None
+        return self.get(data, extractor_name, config, copy=False) is not None
     
     def clear(self) -> None:
         """Clear all cached entries."""

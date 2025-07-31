@@ -142,13 +142,13 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         
         for feature in price_features:
             if feature in df.columns:
-                # Rolling min-max normalization (same as used in strategies)
-                df[f'{feature}_normalized'] = df[feature].rolling(
-                    window=self.normalization_window, min_periods=1
-                ).apply(
-                    lambda x: (x[-1] - np.min(x)) / (np.max(x) - np.min(x)) 
-                    if np.max(x) != np.min(x) else 0.5,
-                    raw=True
+                # Rolling min-max normalization using vectorized operations
+                rolling_min = df[feature].rolling(window=self.normalization_window, min_periods=1).min()
+                rolling_max = df[feature].rolling(window=self.normalization_window, min_periods=1).max()
+                df[f'{feature}_normalized'] = np.where(
+                    rolling_max != rolling_min,
+                    (df[feature] - rolling_min) / (rolling_max - rolling_min),
+                    0.5
                 )
         
         return df

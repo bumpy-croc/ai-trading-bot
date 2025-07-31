@@ -75,7 +75,7 @@ class TestFeatureCache:
     @pytest.fixture
     def sample_data(self):
         """Create sample data for testing."""
-        dates = pd.date_range('2023-01-01', periods=100, freq='1H')
+        dates = pd.date_range('2023-01-01', periods=100, freq='1h')
         return pd.DataFrame({
             'open': np.random.uniform(29000, 31000, 100),
             'high': np.random.uniform(30000, 32000, 100),
@@ -217,13 +217,11 @@ class TestFeatureCache:
         # Clear cache
         cache.clear()
         
-        # Verify entries are gone
-        assert not cache.has(sample_data, extractor_name, config)
-        assert not cache.has(sample_data, "another_extractor", config)
-        
-        # Stats should be reset
+        # Verify entries are gone by checking cache size directly
         stats = cache.get_stats()
         assert stats['total_entries'] == 0
+        
+        # Stats should be reset
         assert stats['hits'] == 0
         assert stats['misses'] == 0
         assert stats['sets'] == 0
@@ -393,7 +391,7 @@ class TestCachePerformance:
     @pytest.fixture
     def large_dataset(self):
         """Create a large dataset for performance testing."""
-        dates = pd.date_range('2020-01-01', periods=10000, freq='1H')
+        dates = pd.date_range('2020-01-01', periods=10000, freq='1h')
         np.random.seed(42)
         
         return pd.DataFrame({

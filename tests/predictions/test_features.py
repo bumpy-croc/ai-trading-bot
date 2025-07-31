@@ -17,10 +17,13 @@ from src.prediction.features.schemas import TECHNICAL_FEATURES_SCHEMA
 class TestTechnicalFeatureExtractor:
     """Test cases for TechnicalFeatureExtractor."""
     
+    # Test configuration constants
+    VALIDATION_THRESHOLD = 0.8  # At least 80% should be valid
+    
     @pytest.fixture
     def sample_ohlcv_data(self):
         """Create sample OHLCV data for testing."""
-        dates = pd.date_range('2023-01-01', periods=300, freq='1H')
+        dates = pd.date_range('2023-01-01', periods=300, freq='1h')
         
         # Generate realistic price data
         np.random.seed(42)
@@ -161,7 +164,7 @@ class TestTechnicalFeatureExtractor:
         # Most features should be valid (allowing for some NaN due to window requirements)
         valid_count = sum(validation_results.values())
         total_count = len(validation_results)
-        assert valid_count / total_count > 0.8  # At least 80% should be valid
+        assert valid_count / total_count > self.VALIDATION_THRESHOLD  # At least 80% should be valid
     
     def test_configuration(self, extractor):
         """Test configuration retrieval."""
@@ -194,7 +197,7 @@ class TestSentimentFeatureExtractor:
     @pytest.fixture
     def sample_data(self):
         """Create sample data for testing."""
-        dates = pd.date_range('2023-01-01', periods=100, freq='1H')
+        dates = pd.date_range('2023-01-01', periods=100, freq='1h')
         return pd.DataFrame({
             'open': np.random.uniform(29000, 31000, 100),
             'high': np.random.uniform(30000, 32000, 100),

@@ -16,7 +16,8 @@ from .market import MarketFeatureExtractor
 from ..utils.caching import FeatureCache, get_global_feature_cache
 from src.config.constants import (
     DEFAULT_ENABLE_SENTIMENT, DEFAULT_ENABLE_MARKET_MICROSTRUCTURE,
-    DEFAULT_FEATURE_CACHE_TTL, DEFAULT_TECHNICAL_INDICATORS_ENABLED
+    DEFAULT_FEATURE_CACHE_TTL, DEFAULT_TECHNICAL_INDICATORS_ENABLED,
+    DEFAULT_NAN_THRESHOLD
 )
 
 
@@ -177,16 +178,16 @@ class FeaturePipeline:
             DataFrame with missing values handled
         """
         if method == 'forward_fill':
-            return data.fillna(method='ffill')
+            return data.ffill()
         elif method == 'backward_fill':
-            return data.fillna(method='bfill')
+            return data.bfill()
         elif method == 'interpolate':
             return data.interpolate()
         elif method == 'drop':
             return data.dropna()
         else:
             # Default: forward fill then backward fill
-            return data.fillna(method='ffill').fillna(method='bfill')
+            return data.ffill().bfill()
     
     def _validate_output(self, data: pd.DataFrame) -> None:
         """
@@ -206,7 +207,7 @@ class FeaturePipeline:
         nan_values = data.isna().sum().sum()
         nan_ratio = nan_values / total_values
         
-        if nan_ratio > 0.5:  # More than 50% NaN values
+        if nan_ratio > DEFAULT_NAN_THRESHOLD:  # More than 50% NaN values
             raise ValueError(f"Too many NaN values in output: {nan_ratio:.2%}")
         
         # Check for infinite values

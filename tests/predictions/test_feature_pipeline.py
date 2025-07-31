@@ -41,7 +41,7 @@ class TestFeaturePipeline:
     @pytest.fixture
     def sample_data(self):
         """Create sample OHLCV data for testing."""
-        dates = pd.date_range('2023-01-01', periods=150, freq='1H')
+        dates = pd.date_range('2023-01-01', periods=150, freq='1h')
         np.random.seed(42)
         
         # Generate realistic price data
@@ -384,7 +384,7 @@ class TestFeaturePipelineIntegration:
     @pytest.fixture
     def realistic_data(self):
         """Create realistic crypto market data."""
-        dates = pd.date_range('2023-01-01', periods=500, freq='1H')
+        dates = pd.date_range('2023-01-01', periods=500, freq='1h')
         np.random.seed(123)
         
         # Generate realistic BTC-like price movements
