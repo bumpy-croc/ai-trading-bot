@@ -92,6 +92,8 @@ def print_progress_bar(current, total, width=50):
 def run_command(cmd, description, show_progress=True):
     """Run a command and return success status"""
     print(f"{Colors.OKBLUE}Running: {description}{Colors.ENDC}")
+    print(f"DEBUG: Command execution started at {time.strftime('%H:%M:%S')}")
+    
     if show_progress:
         print(f"Command: {' '.join(cmd)}")
         # Show environment detection
@@ -109,6 +111,8 @@ def run_command(cmd, description, show_progress=True):
     start_time = time.time()
     
     try:
+        print(f"DEBUG: About to start subprocess at {time.strftime('%H:%M:%S')}")
+        
         if show_progress:
             # For Cursor's embedded terminal, use direct output
             # This allows real-time display in the embedded terminal
@@ -119,7 +123,12 @@ def run_command(cmd, description, show_progress=True):
                 text=True
             )
             
+            print(f"DEBUG: Subprocess started with PID {process.pid} at {time.strftime('%H:%M:%S')}")
+            print(f"DEBUG: Waiting for subprocess to complete...")
+            
             return_code = process.wait()
+            
+            print(f"DEBUG: Subprocess completed with return code {return_code} at {time.strftime('%H:%M:%S')}")
         else:
             # Fallback to captured output for non-progress commands
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -136,6 +145,7 @@ def run_command(cmd, description, show_progress=True):
     except Exception as e:
         duration = time.time() - start_time
         print_error(f"Failed to run {description} after {duration:.2f} seconds: {e}")
+        print(f"DEBUG: Exception occurred at {time.strftime('%H:%M:%S')}")
         return False
 
 def check_dependencies():
@@ -183,6 +193,12 @@ def run_unit_tests():
     ]
     is_ci = any(os.getenv(indicator) for indicator in ci_indicators)
     
+    print(f"DEBUG: CI environment detected: {is_ci}")
+    print(f"DEBUG: Worker count: {get_worker_count()}")
+    print(f"DEBUG: Current working directory: {os.getcwd()}")
+    print(f"DEBUG: Python executable: {sys.executable}")
+    print(f"DEBUG: Python version: {sys.version}")
+    
     cmd = [
         sys.executable, '-m', 'pytest',
         'tests/',
@@ -199,6 +215,9 @@ def run_unit_tests():
             '-k', 'not test_very_large_dataset and not test_ml_basic_backtest_2024_smoke and not test_position_sizing and not test_dynamic_stop_loss and not test_market_regime_detection and not test_volatility_calculations and not test_entry_conditions_crisis and not test_ml_predictions'
         ])
         print_warning("CI environment detected - skipping heaviest tests to prevent timeouts")
+    
+    print(f"DEBUG: Final command: {' '.join(cmd)}")
+    print(f"DEBUG: About to execute command at {time.strftime('%H:%M:%S')}")
     
     return run_command(cmd, "Unit Tests")
 
