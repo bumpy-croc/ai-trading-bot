@@ -527,25 +527,11 @@ class TestAccountSyncIntegration:
         import threading
         import time
         
-        # Patch AccountSynchronizer and config to provide API credentials
-        with patch('live.trading_engine.AccountSynchronizer') as MockSync, \
-             patch('config.get_config') as mock_config, \
+        # Patch config to provide API credentials
+        with patch('src.config.get_config') as mock_config, \
              patch(provider_patch) as MockExchange:
             # Setup mock config to provide API credentials
             mock_config.return_value = cred_keys
-            
-            # Setup mock synchronizer
-            mock_sync = MockSync.return_value
-            mock_sync.sync_account_data.return_value = SyncResult(
-                success=True,
-                message="Account sync successful",
-                data={
-                    'balance_sync': {'corrected': True, 'new_balance': 12345.0},
-                    'position_sync': {},
-                    'order_sync': {}
-                },
-                timestamp=datetime.utcnow()
-            )
             
             # Use a simple strategy and mock data provider
             strategy = MlAdaptive()
@@ -560,6 +546,21 @@ class TestAccountSyncIntegration:
                 initial_balance=10000,
                 provider=provider
             )
+            
+            # Patch the account synchronizer after engine creation
+            if engine.account_synchronizer:
+                mock_sync = Mock()
+                mock_sync.sync_account_data.return_value = SyncResult(
+                    success=True,
+                    message="Account sync successful",
+                    data={
+                        'balance_sync': {'corrected': True, 'new_balance': 12345.0},
+                        'position_sync': {},
+                        'order_sync': {}
+                    },
+                    timestamp=datetime.utcnow()
+                )
+                engine.account_synchronizer = mock_sync
             
             # Mock the thread creation but allow start() to complete synchronously
             original_thread = threading.Thread
@@ -583,15 +584,12 @@ class TestAccountSyncIntegration:
                 # Run start (should trigger account sync and deferred balance update)
                 engine.start(symbol="BTCUSDT", timeframe="1h", max_steps=1)
                 
-                # Debug output
-                print(f"sync_account_data called: {mock_sync.sync_account_data.called}")
-                print(f"engine.trading_session_id after start: {engine.trading_session_id}")
+                # Debug output for CI troubleshooting
+                print(f"sync_account_data called: {engine.account_synchronizer.sync_account_data.called}")
                 print(f"engine.current_balance after sync: {engine.current_balance}")
-                print(f"engine._pending_balance_correction: {getattr(engine, '_pending_balance_correction', 'NOT_SET')}")
-                print(f"engine._pending_corrected_balance: {getattr(engine, '_pending_corrected_balance', 'NOT_SET')}")
                 
                 # Assert sync_account_data was called
-                assert mock_sync.sync_account_data.called, f"Account sync was not triggered by engine for provider {provider}"
+                assert engine.account_synchronizer.sync_account_data.called, f"Account sync was not triggered by engine for provider {provider}"
                 
                 # Assert balance was updated in engine
                 assert engine.current_balance == 12345.0, f"Engine did not update balance from sync result for provider {provider}"
