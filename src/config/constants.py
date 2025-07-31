@@ -12,4 +12,4 @@ DEFAULT_MODEL_REGISTRY_PATH = "src/ml"  # Path to ML model registry directory
 DEFAULT_ENABLE_SENTIMENT = False  # Disabled for MVP - sentiment feature integration
 DEFAULT_ENABLE_MARKET_MICROSTRUCTURE = False  # Disabled for MVP - market microstructure features
 DEFAULT_FEATURE_CACHE_TTL = 300  # Feature cache time-to-live in seconds (5 minutes)
-DEFAULT_MODEL_CACHE_TTL = 600  # Model cache time-to-live in seconds (10 minutes) 
+DEFAULT_MODEL_CACHE_TTL = 600  # Model cache time-to-live in seconds (10 minutes)
