@@ -148,9 +148,8 @@ class TechnicalFeatureExtractor(FeatureExtractor):
                 df[f'{feature}_normalized'] = np.where(
                     rolling_max != rolling_min,
                     (df[feature] - rolling_min) / (rolling_max - rolling_min),
-                    0.5
+                    0.0  # Handle cases where min == max to avoid division by zero
                 )
-        
         return df
     
     def _extract_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
