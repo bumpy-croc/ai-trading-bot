@@ -14,6 +14,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+pytestmark = [pytest.mark.fast, pytest.mark.mock_only]
+
 from indicators.technical import (
     calculate_ema, calculate_rsi, calculate_atr,
     calculate_bollinger_bands, calculate_macd, detect_market_regime,

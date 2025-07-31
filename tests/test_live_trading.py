@@ -13,6 +13,7 @@ Tests cover:
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import threading
 import time
 from unittest.mock import Mock, patch, MagicMock, call
