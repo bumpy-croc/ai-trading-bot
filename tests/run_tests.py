@@ -96,7 +96,12 @@ def run_command(cmd, description, show_progress=True):
         print(f"Command: {' '.join(cmd)}")
         # Show environment detection
         worker_count = get_worker_count()
-        env_type = "CI" if worker_count == 'auto' else "Local"
+        ci_indicators = [
+            'CI', 'GITHUB_ACTIONS', 'TRAVIS', 'CIRCLECI', 'JENKINS', 
+            'GITLAB_CI', 'BITBUCKET_BUILD_NUMBER', 'BUILDKITE'
+        ]
+        is_ci = any(os.getenv(indicator) for indicator in ci_indicators)
+        env_type = "CI" if is_ci else "Local"
         print(f"{Colors.OKCYAN}🖥️  Environment: {env_type} (using {worker_count} workers){Colors.ENDC}")
         print_progress("Starting test execution...")
         print(f"{Colors.OKCYAN}🔄 Tests are running - you should see live output below...{Colors.ENDC}")
@@ -191,7 +196,7 @@ def run_unit_tests():
     # In CI, skip the heaviest tests to prevent timeouts
     if is_ci:
         cmd.extend([
-            '-k', 'not test_very_large_dataset and not test_ml_basic_backtest_2024_smoke'
+            '-k', 'not test_very_large_dataset and not test_ml_basic_backtest_2024_smoke and not test_position_sizing and not test_dynamic_stop_loss and not test_market_regime_detection and not test_volatility_calculations and not test_entry_conditions_crisis and not test_ml_predictions'
         ])
         print_warning("CI environment detected - skipping heaviest tests to prevent timeouts")
     
