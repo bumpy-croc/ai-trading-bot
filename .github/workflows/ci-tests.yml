@@ -54,13 +54,21 @@ jobs:
         # Get test patterns for this group
         patterns=$(python tests/group_tests.py get-patterns ${{ matrix.test-group }})
         
+        # Verify patterns are not empty
+        if [ -z "$patterns" ]; then
+          echo "❌ Error: No test patterns found for group ${{ matrix.test-group }}"
+          exit 1
+        fi
+        
+        echo "Test patterns: $patterns"
+        
         # Run tests with patterns
         python -m pytest \
           -v \
           --tb=short \
           --timeout=300 \
           -m "not integration" \
-          $patterns
+          "$patterns"
         
         echo "=== Completed test group: ${{ matrix.test-group }} ==="
         echo "End time: $(date)"
