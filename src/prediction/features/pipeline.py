@@ -128,20 +128,16 @@ class FeaturePipeline:
                 # Use cached complete result
                 result = cached_result
                 self._performance_stats['cache_hits'] += 1
-                
-                # Record zero time for extractors when using cache
-                for extractor_name in self.extractors.keys():
-                    if extractor_name not in self._performance_stats['extractor_times']:
-                        self._performance_stats['extractor_times'][extractor_name] = []
-                    self._performance_stats['extractor_times'][extractor_name].append(0.0)
+                # Don't record extractor times when using cache since extractors weren't executed
             else:
                 # Apply each feature extractor
+                self._performance_stats['cache_misses'] += 1  # Increment once per pipeline miss
+                
                 for extractor_name, extractor in self.extractors.items():
                     extractor_start = time.time()
                     
                     # Extract features (no individual extractor caching for now)
                     result = extractor.extract(result)
-                    self._performance_stats['cache_misses'] += 1
                     
                     # Track extractor performance
                     extractor_time = time.time() - extractor_start
