@@ -13,8 +13,6 @@ from datetime import datetime
 import pytest
 from unittest.mock import Mock
 
-pytestmark = [pytest.mark.fast, pytest.mark.mock_only]
-
 # Core imports
 from backtesting.engine import Backtester
 from data_providers.data_provider import DataProvider
@@ -23,6 +21,8 @@ from strategies.ml_basic import MlBasic
 # We mark the test as a smoke test to allow easy selection or deselection when running PyTest.
 pytestmark = [
     pytest.mark.smoke,
+    pytest.mark.fast,
+    pytest.mark.mock_only,
 ]
 
 

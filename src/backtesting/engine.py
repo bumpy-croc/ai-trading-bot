@@ -96,9 +96,11 @@ class Backtester:
             # Default to False in test environments (when DATABASE_URL is SQLite or not set)
             import os
             database_url_env = os.getenv('DATABASE_URL', '')
+            # More reliable pytest detection using PYTEST_CURRENT_TEST
+            is_pytest = os.environ.get('PYTEST_CURRENT_TEST') is not None
             log_to_database = not (database_url_env.startswith('sqlite://') or 
                                  database_url_env == '' or 
-                                 'pytest' in os.environ.get('_', ''))
+                                 is_pytest)
         
         self.log_to_database = log_to_database
         self.db_manager = None

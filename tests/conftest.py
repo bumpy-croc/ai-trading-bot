@@ -75,7 +75,7 @@ if _RUN_INTEGRATION:
         # failure or be skipped.
         os.environ.setdefault(
             "DATABASE_URL",
-            "postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test"
+            "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
         )
         _POSTGRES_CONTAINER = None
         print(f"[Database Setup] ⚠️  Failed to start container: {_e}")
@@ -83,34 +83,6 @@ else:
     # Unit-test run ⇒ use super-light SQLite in-memory
     os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
     print("[Database Setup] 🚀 Using in-memory SQLite for unit tests (no container needed)")
-
-    # --- Ensure the fallback local test database exists (for developers without Docker) ---
-    try:
-        from sqlalchemy.engine.url import make_url
-        from sqlalchemy import create_engine, text
-
-        _raw_url = os.environ["DATABASE_URL"]
-        _url_obj = make_url(_raw_url)
-
-        # Attempt connection; if database missing, create it.
-        try:
-            _test_engine = create_engine(_raw_url, isolation_level="AUTOCOMMIT")
-            with _test_engine.connect() as _conn:
-                pass  # connection successful -> DB exists
-        except Exception:
-            # Connect to default 'postgres' database to create target DB
-            _default_db_url = _url_obj.set(database="postgres")
-            _admin_engine = create_engine(_default_db_url, isolation_level="AUTOCOMMIT")
-            with _admin_engine.connect() as _conn:
-                _db_name = _url_obj.database
-                _conn.execute(text(f"CREATE DATABASE {_db_name};"))
-            # Retry connection
-            _test_engine = create_engine(_raw_url, isolation_level="AUTOCOMMIT")
-            with _test_engine.connect():
-                pass
-    except Exception:
-        # If we can't ensure db creation, tests that need it will fail/skipped.
-        pass
 
 
 def pytest_sessionstart(session):
