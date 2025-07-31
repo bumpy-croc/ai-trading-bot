@@ -83,6 +83,26 @@ jobs:
         echo "=== Direct pytest tests completed ==="
         echo "Current time: $(date)"
 
+    - name: Debug - Simple pytest test (no parallel)
+      timeout-minutes: 10
+      run: |
+        echo "=== Testing simple pytest without parallel execution ==="
+        echo "Current time: $(date)"
+        
+        # Test basic pytest discovery without parallel
+        echo "=== Testing pytest discovery (single process) ==="
+        python -m pytest --collect-only -q tests/ | head -10
+        
+        # Test running a few simple tests without parallel
+        echo "=== Testing simple tests without parallel ==="
+        python -m pytest -v tests/test_smoke.py || echo "Smoke tests failed"
+        
+        # Test running all tests without parallel
+        echo "=== Testing all tests without parallel ==="
+        timeout 300 python -m pytest -v --tb=short tests/ -m "not integration" || echo "All tests failed"
+        
+        echo "=== Simple pytest test completed ==="
+
     - name: Debug - Monitor during test execution
       timeout-minutes: 35
       run: |
@@ -129,3 +149,19 @@ jobs:
         free -h || echo "free command not available"
         echo "Disk usage after tests:"
         df -h || echo "df command not available"
+
+    - name: Debug - Test pytest-xdist specifically
+      timeout-minutes: 5
+      run: |
+        echo "=== Testing pytest-xdist specifically ==="
+        echo "Current time: $(date)"
+        
+        # Test pytest-xdist discovery
+        echo "=== Testing pytest-xdist discovery ==="
+        timeout 60 python -m pytest --collect-only -q -n 2 tests/ | head -10 || echo "pytest-xdist discovery failed"
+        
+        # Test pytest-xdist with simple test
+        echo "=== Testing pytest-xdist with simple test ==="
+        timeout 60 python -m pytest -v -n 2 tests/test_smoke.py || echo "pytest-xdist simple test failed"
+        
+        echo "=== pytest-xdist test completed ==="
