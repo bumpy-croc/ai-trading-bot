@@ -117,38 +117,44 @@ class FeaturePipeline:
             # Start with original data
             result = data.copy()
             
-            # Apply each feature extractor
-            for extractor_name, extractor in self.extractors.items():
-                extractor_start = time.time()
+            # Check for complete pipeline result in cache first
+            cached_result = None
+            if should_use_cache and self.cache:
+                cached_result = self.cache.get(
+                    data, "pipeline_complete", self.get_config()
+                )
+            
+            if cached_result is not None:
+                # Use cached complete result
+                result = cached_result
+                self._performance_stats['cache_hits'] += 1
                 
-                # Try to get from cache first
-                cached_result = None
-                if should_use_cache and self.cache:
-                    cached_result = self.cache.get(
-                        data, extractor_name, extractor.get_config()
-                    )
-                
-                if cached_result is not None:
-                    # Use cached result
-                    result = cached_result
-                    self._performance_stats['cache_hits'] += 1
-                else:
-                    # Extract features
+                # Record zero time for extractors when using cache
+                for extractor_name in self.extractors.keys():
+                    if extractor_name not in self._performance_stats['extractor_times']:
+                        self._performance_stats['extractor_times'][extractor_name] = []
+                    self._performance_stats['extractor_times'][extractor_name].append(0.0)
+            else:
+                # Apply each feature extractor
+                for extractor_name, extractor in self.extractors.items():
+                    extractor_start = time.time()
+                    
+                    # Extract features (no individual extractor caching for now)
                     result = extractor.extract(result)
                     self._performance_stats['cache_misses'] += 1
                     
-                    # Cache the result if caching is enabled
-                    if should_use_cache and self.cache:
-                        self.cache.set(
-                            data, extractor_name, extractor.get_config(),
-                            result, ttl=self.cache_ttl
-                        )
+                    # Track extractor performance
+                    extractor_time = time.time() - extractor_start
+                    if extractor_name not in self._performance_stats['extractor_times']:
+                        self._performance_stats['extractor_times'][extractor_name] = []
+                    self._performance_stats['extractor_times'][extractor_name].append(extractor_time)
                 
-                # Track extractor performance
-                extractor_time = time.time() - extractor_start
-                if extractor_name not in self._performance_stats['extractor_times']:
-                    self._performance_stats['extractor_times'][extractor_name] = []
-                self._performance_stats['extractor_times'][extractor_name].append(extractor_time)
+                # Cache the final result if caching is enabled
+                if should_use_cache and self.cache:
+                    self.cache.set(
+                        data, "pipeline_complete", self.get_config(),
+                        result, ttl=self.cache_ttl
+                    )
             
             # Handle missing values
             result = self._handle_missing_values(result)

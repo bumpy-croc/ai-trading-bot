@@ -221,7 +221,8 @@ class TestFeaturePipeline:
     
     def test_performance_tracking(self, pipeline_mvp, sample_data):
         """Test performance statistics tracking."""
-        # Clear stats
+        # Clear cache and stats
+        pipeline_mvp.clear_cache()
         pipeline_mvp.reset_performance_stats()
         
         # Perform transformation
