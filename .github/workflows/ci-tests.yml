@@ -8,160 +8,79 @@ on:
 
 jobs:
   test:
+    strategy:
+      matrix:
+        test-group: [group-1, group-2, group-3, group-4]
+        python-version: [3.12]
+      fail-fast: false  # Continue running other groups if one fails
+    
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      ACTIONS_STEP_DEBUG: true
-      ACTIONS_RUNNER_DEBUG: true
-
+    timeout-minutes: 30
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python
+    - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
+        python-version: ${{ matrix.python-version }}
         cache: 'pip'
 
-    # Built-in pip cache enabled above
-
     - name: Install Python dependencies
-      timeout-minutes: 10
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Debug - Pre-test system info
-      timeout-minutes: 2
+    - name: Show test group info
       run: |
-        echo "=== System Information ==="
-        echo "Date: $(date)"
-        echo "Uptime: $(uptime)"
-        echo "Python version: $(python --version)"
-        echo "Python location: $(which python)"
+        echo "=== Test Group Information ==="
+        echo "Group: ${{ matrix.test-group }}"
+        echo "Python version: ${{ matrix.python-version }}"
+        echo "Runner: ${{ runner.os }}"
         echo "Available memory: $(free -h || echo 'free command not available')"
         echo "CPU cores: $(nproc || echo 'nproc not available')"
-        echo "Disk usage: $(df -h || echo 'df command not available')"
-        echo "Current directory: $(pwd)"
-        echo "Directory contents:"
-        ls -la
-        echo "=== Process list before tests ==="
-        ps aux | head -20
-        echo "=== Environment variables ==="
-        env | grep -E "(CI|GITHUB|PYTHON|PATH)" | sort
+        echo "=== Test files in this group ==="
+        python tests/group_tests.py get-patterns ${{ matrix.test-group }}
 
-    - name: Debug - Test runner setup
-      timeout-minutes: 2
+    - name: Run test group ${{ matrix.test-group }}
       run: |
-        echo "=== Testing test runner ==="
-        echo "Test runner exists: $(ls -la tests/run_tests.py)"
-        echo "Test runner permissions: $(ls -l tests/run_tests.py)"
-        echo "Python can import test runner:"
-        python -c "import sys; sys.path.insert(0, '.'); import tests.run_tests; print('✅ Import successful')" || echo "❌ Import failed"
-        echo "=== Testing pytest directly ==="
-        python -c "import pytest; print(f'✅ Pytest version: {pytest.__version__}')" || echo "❌ Pytest import failed"
-
-    - name: Debug - Test pytest directly
-      timeout-minutes: 5
-      run: |
-        echo "=== Testing pytest directly ==="
+        echo "=== Starting test group: ${{ matrix.test-group }} ==="
         echo "Current time: $(date)"
         
-        # Test basic pytest discovery
-        echo "=== Testing pytest discovery ==="
-        python -m pytest --collect-only -q tests/ | head -20
+        # Get test patterns for this group
+        patterns=$(python tests/group_tests.py get-patterns ${{ matrix.test-group }})
         
-        # Test pytest with single worker
-        echo "=== Testing pytest with single worker ==="
-        python -m pytest -v --tb=short -n 0 tests/test_smoke.py || echo "Single worker test failed"
+        # Run tests with patterns
+        python -m pytest \
+          -v \
+          --tb=short \
+          --timeout=300 \
+          -m "not integration" \
+          $patterns
         
-        # Test pytest with 2 workers (CI setting)
-        echo "=== Testing pytest with 2 workers ==="
-        timeout 60 python -m pytest -v --tb=short -n 2 --dist=loadgroup tests/test_smoke.py || echo "2 worker test failed or timed out"
-        
-        echo "=== Direct pytest tests completed ==="
-        echo "Current time: $(date)"
+        echo "=== Completed test group: ${{ matrix.test-group }} ==="
+        echo "End time: $(date)"
 
-    - name: Debug - Simple pytest test (no parallel)
-      timeout-minutes: 10
-      run: |
-        echo "=== Testing simple pytest without parallel execution ==="
-        echo "Current time: $(date)"
-        
-        # Test basic pytest discovery without parallel
-        echo "=== Testing pytest discovery (single process) ==="
-        python -m pytest --collect-only -q tests/ | head -10
-        
-        # Test running a few simple tests without parallel
-        echo "=== Testing simple tests without parallel ==="
-        python -m pytest -v tests/test_smoke.py || echo "Smoke tests failed"
-        
-        # Test running all tests without parallel
-        echo "=== Testing all tests without parallel ==="
-        timeout 300 python -m pytest -v --tb=short tests/ -m "not integration" || echo "All tests failed"
-        
-        echo "=== Simple pytest test completed ==="
+  # Optional: Add a summary job that runs after all test groups complete
+  test-summary:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()  # Run even if some test groups failed
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-    - name: Debug - Monitor during test execution
-      timeout-minutes: 35
+    - name: Test Summary
       run: |
-        echo "=== Starting background monitoring ==="
+        echo "=== Test Matrix Summary ==="
+        echo "All test groups have completed."
+        echo "Check individual group results above for details."
         
-        # Start background monitoring
-        (
-          while true; do
-            echo "=== $(date) - Process and resource snapshot ==="
-            echo "Active processes:"
-            ps aux | grep -E "(python|pytest)" | grep -v grep || echo "No python/pytest processes found"
-            echo "Memory usage:"
-            free -h || echo "free command not available"
-            echo "CPU usage:"
-            top -bn1 | head -10 || echo "top command not available"
-            echo "=== End snapshot ==="
-            sleep 30
-          done
-        ) &
-        MONITOR_PID=$!
-        
-        echo "Background monitoring started with PID $MONITOR_PID"
-        
-        # Run the actual test command
-        echo "=== Running test command ==="
-        python -u tests/run_tests.py unit -q
-        
-        # Stop monitoring
-        echo "=== Stopping monitoring ==="
-        kill $MONITOR_PID 2>/dev/null || true
-        wait $MONITOR_PID 2>/dev/null || true
-        
-        echo "=== Test execution completed ==="
-
-    - name: Debug - Post-test system info
-      if: always()
-      timeout-minutes: 2
-      run: |
-        echo "=== Post-test system information ==="
-        echo "Date: $(date)"
-        echo "Process list after tests:"
-        ps aux | head -20
-        echo "Memory usage after tests:"
-        free -h || echo "free command not available"
-        echo "Disk usage after tests:"
-        df -h || echo "df command not available"
-
-    - name: Debug - Test pytest-xdist specifically
-      timeout-minutes: 5
-      run: |
-        echo "=== Testing pytest-xdist specifically ==="
-        echo "Current time: $(date)"
-        
-        # Test pytest-xdist discovery
-        echo "=== Testing pytest-xdist discovery ==="
-        timeout 60 python -m pytest --collect-only -q -n 2 tests/ | head -10 || echo "pytest-xdist discovery failed"
-        
-        # Test pytest-xdist with simple test
-        echo "=== Testing pytest-xdist with simple test ==="
-        timeout 60 python -m pytest -v -n 2 tests/test_smoke.py || echo "pytest-xdist simple test failed"
-        
-        echo "=== pytest-xdist test completed ==="
+        # Show which groups passed/failed
+        if [ "${{ needs.test.result }}" == "success" ]; then
+          echo "✅ All test groups passed!"
+        else
+          echo "❌ Some test groups failed. Check the logs above for details."
+        fi
