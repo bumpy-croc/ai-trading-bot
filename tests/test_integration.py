@@ -549,19 +549,19 @@ class TestAccountSyncIntegration:
             )
             
             # Patch the account synchronizer after engine creation
-            # Always create a mock synchronizer, regardless of whether the real one was created
-            mock_sync = Mock()
-            mock_sync.sync_account_data.return_value = SyncResult(
-                success=True,
-                message="Account sync successful",
-                data={
-                    'balance_sync': {'corrected': True, 'new_balance': 12345.0},
-                    'position_sync': {},
-                    'order_sync': {}
-                },
-                timestamp=datetime.utcnow()
-            )
-            engine.account_synchronizer = mock_sync
+            if engine.account_synchronizer:
+                mock_sync = Mock()
+                mock_sync.sync_account_data.return_value = SyncResult(
+                    success=True,
+                    message="Account sync successful",
+                    data={
+                        'balance_sync': {'corrected': True, 'new_balance': 12345.0},
+                        'position_sync': {},
+                        'order_sync': {}
+                    },
+                    timestamp=datetime.utcnow()
+                )
+                engine.account_synchronizer = mock_sync
             
             # Mock the thread creation but allow start() to complete synchronously
             original_thread = threading.Thread
