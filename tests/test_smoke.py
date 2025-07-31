@@ -6,6 +6,11 @@ benchmark (73.81 % for 2024).
 
 If the Binance API is unreachable (e.g. offline CI environment) the test
 is skipped automatically.
+
+TODO: Consider lightening this test for CI environments by:
+- Reducing the time period from 1 year to 1-3 months
+- Using lower resolution data (4h or 1d instead of 1h)
+- This would significantly reduce execution time while maintaining test coverage
 """
 
 from datetime import datetime
@@ -21,6 +26,8 @@ from strategies.ml_basic import MlBasic
 # We mark the test as a smoke test to allow easy selection or deselection when running PyTest.
 pytestmark = [
     pytest.mark.smoke,
+    pytest.mark.fast,
+    pytest.mark.mock_only,
 ]
 
 

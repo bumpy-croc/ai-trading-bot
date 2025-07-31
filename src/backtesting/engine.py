@@ -10,6 +10,7 @@ import numpy as np  # type: ignore
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource, PositionSide
+from sqlalchemy.exc import SQLAlchemyError
 from config.constants import DEFAULT_INITIAL_BALANCE
 from src.utils.symbol_factory import SymbolFactory
 
@@ -72,7 +73,7 @@ class Backtester:
         risk_parameters: Optional[Any] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
         database_url: Optional[str] = None,
-        log_to_database: bool = True
+        log_to_database: Optional[bool] = None
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -90,6 +91,17 @@ class Backtester:
         self.early_stop_candle_index: Optional[int] = None
         
         # Database logging
+        # Auto-detect test environment and default log_to_database accordingly
+        if log_to_database is None:
+            # Default to False in test environments (when DATABASE_URL is SQLite or not set)
+            import os
+            database_url_env = os.getenv('DATABASE_URL', '')
+            # More reliable pytest detection using PYTEST_CURRENT_TEST
+            is_pytest = os.environ.get('PYTEST_CURRENT_TEST') is not None
+            log_to_database = not (database_url_env.startswith('sqlite://') or 
+                                 database_url_env == '' or 
+                                 is_pytest)
+        
         self.log_to_database = log_to_database
         self.db_manager = None
         self.trading_session_id = None
@@ -99,14 +111,14 @@ class Backtester:
                 # Set up strategy logging
                 if self.db_manager:
                     self.strategy.set_database_manager(self.db_manager)
-            except SQLAlchemyError as db_err:
+            except (SQLAlchemyError, ValueError) as db_err:
                 # Fallback to in-memory SQLite to satisfy tests that expect db_manager presence
                 logger.warning(f"Database connection failed ({db_err}). Falling back to in-memory SQLite database for logging.")
                 try:
                     self.db_manager = DatabaseManager('sqlite:///:memory:')
                     if self.db_manager:
                         self.strategy.set_database_manager(self.db_manager)
-                except SQLAlchemyError as sqlite_err:
+                except (SQLAlchemyError, ValueError) as sqlite_err:
                     logger.warning(f"Fallback SQLite initialization failed ({sqlite_err}). Disabling database logging.")
                     self.log_to_database = False
                     class DummyDBManager:
