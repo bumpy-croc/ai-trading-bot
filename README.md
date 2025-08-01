@@ -31,7 +31,7 @@ The codebase supports **backtesting**, **live trading**, **machine-learning pric
 ## Features
 
 - 🔌 **Pluggable Architecture** – Separate Data, Indicator, ML, Risk, Strategy, and Execution layers.
-- 🎯 **Multiple Trading Strategies** – Adaptive EMA, ML-driven, sentiment-enhanced, and high-risk-high-reward templates (see below).
+- 🎯 **Multiple Trading Strategies** – ML-driven (basic & adaptive) and sentiment-enhanced templates (see below).
 - ♻️ **Fast Backtesting Engine** – Vectorised simulation with intelligent on-disk caching of historical data.
 - 🤖 **Live Trading Engine** – Robust real-time execution on Binance with position sizing, trailing stops, and exposure limits.
 - 💾 **Persistent Balance & Positions** – Never lose progress on restarts; automatic balance recovery and position restoration.
@@ -141,7 +141,7 @@ python scripts/test_config_system.py
 
 ```bash
 # Generic backtest (most recent 90 days)
-python scripts/run_backtest.py adaptive --days 90
+python scripts/run_backtest.py ml_basic --days 90
 
 # Full-history backtest with cache disabled and a custom start date
 python scripts/run_backtest.py ml_with_sentiment \
@@ -153,7 +153,7 @@ python scripts/run_backtest.py ml_with_sentiment \
 ```bash
 # Start live trading (paper-mode by default) 
 # Balance and positions automatically recovered from last session
-python scripts/run_live_trading.py adaptive --balance 1000
+python scripts/run_live_trading.py ml_basic --balance 1000
 
 # The bot will display recovery information:
 # 💾 Recovered balance from previous session: $1,250.00
@@ -205,9 +205,6 @@ python -m core.risk.risk_manager --symbol BTCUSDT --qty 0.05
 
 | File                               | Description                                             |
 |------------------------------------|---------------------------------------------------------|
-| `adaptive.py`                      | EMA-based adaptive trend-follower                       |
-| `enhanced.py`                      | Combines multiple indicators for stronger confirmation |
-| `high_risk_high_reward.py`         | Aggressive breakout strategy (for small allocations)    |
 | `ml_basic.py`                      | Utilises ML price predictions for entry/exit            |
 | `ml_with_sentiment.py`             | ML + sentiment, confidence-weighted sizing             |
 
@@ -390,7 +387,7 @@ railway up
 
 ```bash
 pytest -q          # unit tests
-python -m strategies.adaptive --test   # quick strategy smoke-test
+python -m strategies.ml_basic --test   # quick strategy smoke-test
 ```
 
 ---
@@ -446,10 +443,10 @@ python scripts/train_model_with_sentiment.py BTCUSDT --no-sentiment --start-date
 #### **Running Sentiment-Enhanced Backtests**
 ```bash
 # Use sentiment-enhanced ML strategy
-python scripts/run_backtest.py ml_sentiment_strategy --days 365
+python scripts/run_backtest.py ml_with_sentiment --days 365
 
 # Compare with price-only ML strategy
-python scripts/run_backtest.py ml_model_strategy --days 365
+python scripts/run_backtest.py ml_basic --days 365
 ```
 
 #### **Downloading Fresh Sentiment Data**
@@ -505,7 +502,7 @@ SentiCrypt API → CSV Storage → SentiCryptProvider → Feature Engineering �
 - **Enhanced Accuracy**: Sentiment data improves prediction quality
 - **Risk Management**: Confidence-based position sizing reduces risk
 - **Market Insight**: Understanding sentiment-price relationships
-- **Adaptive Strategy**: Dynamic response to market sentiment changes
+- **ML Adaptive Strategy**: Dynamic response to market sentiment changes
 
 #### **For Developers**
 - **Modular Design**: Easy to add new sentiment data sources

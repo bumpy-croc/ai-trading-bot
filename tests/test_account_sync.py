@@ -6,6 +6,7 @@ that cover all critical functionality without unnecessary repetition.
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import logging
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta

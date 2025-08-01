@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import logging
 from typing import Optional, Dict, List, Any
-from utils.symbol_factory import SymbolFactory
+from src.utils.symbol_factory import SymbolFactory
 
 class BaseStrategy(ABC):
     """

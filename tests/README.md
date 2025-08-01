@@ -226,9 +226,7 @@ python tests/run_tests.py --file test_strategies.py --verbose
 ```
 
 ### **Run Single Test**
-```bash
-python -m pytest tests/test_strategies.py::TestAdaptiveStrategy::test_entry_conditions -v
-```
+
 
 ### **Debug Mode**
 ```bash

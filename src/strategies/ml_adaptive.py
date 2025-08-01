@@ -20,22 +20,16 @@ Ideal for:
 - Risk-conscious trading
 """
 
-import sys
-import os
-src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
 import numpy as np
 import pandas as pd
 import onnx
 import onnxruntime as ort
-from strategies.base import BaseStrategy
-from indicators.technical import (
+from src.strategies.base import BaseStrategy
+from src.indicators.technical import (
     calculate_atr, calculate_rsi, calculate_bollinger_bands,
     calculate_moving_averages, calculate_macd
 )
 from datetime import datetime, timedelta
-from ml.model_registry import ModelRegistry  # Local import to avoid circular deps
 from src.utils.symbol_factory import SymbolFactory
 
 class MlAdaptive(BaseStrategy):
