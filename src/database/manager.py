@@ -887,6 +887,11 @@ class DatabaseManager:
         
         if use_sql_optimization:
             try:
+                db_session.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_account_history_session_timestamp
+                    ON account_history (session_id, timestamp);
+                """))
+                
                 drawdown_query = text("""
                     WITH balance_with_peak AS (
                         SELECT 
@@ -914,6 +919,8 @@ class DatabaseManager:
                     
             except Exception as e:
                 logger.warning(f"SQL optimization failed, falling back to Python. Exception type: {type(e).__name__}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Full exception: {type(e).__name__}: {e}", exc_info=True)
         
         # Fallback Python implementation (works with both PostgreSQL and SQLite)
         account_history = db_session.query(AccountHistory).filter_by(
@@ -921,7 +928,13 @@ class DatabaseManager:
         ).order_by(AccountHistory.timestamp).all()
         
         if account_history:
-            peak_balance = account_history[0].balance
+            # Use session's initial_balance for peak_balance initialization for consistency
+            session = db_session.query(TradingSession).filter_by(id=session_id).first()
+            if session and hasattr(session, "initial_balance"):
+                peak_balance = session.initial_balance
+            else:
+                peak_balance = account_history[0].balance
+            
             for record in account_history:
                 if record.balance > peak_balance:
                     peak_balance = record.balance
@@ -962,7 +975,7 @@ class DatabaseManager:
                 losses = [t.pnl for t in trades if t.pnl < 0]
                 avg_win = sum(wins) / len(wins) if wins else 0
                 avg_loss = sum(losses) / len(losses) if losses else 0
-                profit_factor = abs(sum(wins) / sum(losses)) if losses and sum(losses) != 0 else 0
+                profit_factor = sum(wins) / abs(sum(losses)) if losses and sum(losses) != 0 else 0
                 
                 best_trade = max([t.pnl for t in trades]) if trades else 0
                 worst_trade = min([t.pnl for t in trades]) if trades else 0
