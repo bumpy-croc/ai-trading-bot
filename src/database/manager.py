@@ -279,56 +279,8 @@ class DatabaseManager:
                 trading_session.win_rate = (len(winning_trades) / len(trades) * 100) if trades else 0
                 trading_session.total_pnl = sum(t.pnl for t in trades)
                 
-                # Calculate max drawdown using optimized SQL with window functions
-                try:
-                    drawdown_query = text("""
-                        WITH balance_with_peak AS (
-                            SELECT 
-                                balance,
-                                MAX(balance) OVER (ORDER BY timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
-                            FROM account_history 
-                            WHERE session_id = :session_id
-                            ORDER BY timestamp
-                        )
-                        SELECT 
-                            COALESCE(MAX(
-                                CASE 
-                                    WHEN peak_balance > 0 
-                                    THEN (peak_balance - balance) / peak_balance 
-                                    ELSE 0 
-                                END
-                            ), 0) as max_drawdown
-                        FROM balance_with_peak
-                    """)
-                    
-                    result = db.execute(drawdown_query, {'session_id': session_id}).fetchone()
-                    if result and result[0] is not None:
-                        trading_session.max_drawdown = float(result[0]) * 100  # Convert to percentage
-                    else:
-                        trading_session.max_drawdown = 0
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to calculate max drawdown with SQL optimization, falling back to Python: {e}")
-                    # Fallback to original Python implementation if SQL fails
-                    account_history = db.query(AccountHistory).filter_by(
-                        session_id=session_id
-                    ).order_by(AccountHistory.timestamp).all()
-                    
-                    if account_history:
-                        peak_balance = trading_session.initial_balance
-                        max_drawdown = 0
-                        
-                        for record in account_history:
-                            if record.balance > peak_balance:
-                                peak_balance = record.balance
-                            # Protect against division by zero
-                            if peak_balance > 0:
-                                drawdown = (peak_balance - record.balance) / peak_balance
-                                max_drawdown = max(max_drawdown, drawdown)
-                        
-                        trading_session.max_drawdown = max_drawdown * 100
-                    else:
-                        trading_session.max_drawdown = 0
+                # Calculate max drawdown using helper method
+                trading_session.max_drawdown = self._calculate_max_drawdown(db, session_id)
             
             db.commit()
             
@@ -925,6 +877,62 @@ class DatabaseManager:
                 ) / len(trades) if trades else 0
             }
     
+    def _calculate_max_drawdown(self, db_session, session_id: int) -> float:
+        """Calculate max drawdown using optimized SQL with fallback for SQLite compatibility."""
+        max_drawdown = 0
+        
+        # Check if we're using PostgreSQL (supports window functions) or SQLite (fallback)
+        engine_name = db_session.bind.dialect.name.lower()
+        use_sql_optimization = engine_name == 'postgresql'
+        
+        if use_sql_optimization:
+            try:
+                drawdown_query = text("""
+                    WITH balance_with_peak AS (
+                        SELECT 
+                            balance,
+                            MAX(balance) OVER (ORDER BY timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
+                        FROM account_history 
+                        WHERE session_id = :session_id
+                        ORDER BY timestamp
+                    )
+                    SELECT 
+                        COALESCE(MAX(
+                            CASE 
+                                WHEN peak_balance > 0 
+                                THEN (peak_balance - balance) / peak_balance 
+                                ELSE 0 
+                            END
+                        ), 0) as max_drawdown
+                    FROM balance_with_peak
+                """)
+                
+                result = db_session.execute(drawdown_query, {'session_id': session_id}).fetchone()
+                if result and result[0] is not None:
+                    max_drawdown = float(result[0]) * 100  # Convert to percentage
+                    return max_drawdown
+                    
+            except Exception as e:
+                logger.warning(f"SQL optimization failed, falling back to Python. Exception type: {type(e).__name__}")
+        
+        # Fallback Python implementation (works with both PostgreSQL and SQLite)
+        account_history = db_session.query(AccountHistory).filter_by(
+            session_id=session_id
+        ).order_by(AccountHistory.timestamp).all()
+        
+        if account_history:
+            peak_balance = account_history[0].balance
+            for record in account_history:
+                if record.balance > peak_balance:
+                    peak_balance = record.balance
+                if peak_balance > 0:
+                    drawdown = (peak_balance - record.balance) / peak_balance
+                    max_drawdown = max(max_drawdown, drawdown)
+            
+            max_drawdown *= 100  # Convert to percentage
+        
+        return max_drawdown
+
     def _update_performance_metrics(self, session_id: int):
         """Update performance metrics after each trade using optimized SQL queries."""
         # Guard against None session_id
@@ -959,50 +967,8 @@ class DatabaseManager:
                 best_trade = max([t.pnl for t in trades]) if trades else 0
                 worst_trade = min([t.pnl for t in trades]) if trades else 0
                 
-                # Calculate max drawdown using optimized SQL with window functions
-                max_drawdown = 0
-                try:
-                    drawdown_query = text("""
-                        WITH balance_with_peak AS (
-                            SELECT 
-                                balance,
-                                MAX(balance) OVER (ORDER BY timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
-                            FROM account_history 
-                            WHERE session_id = :session_id
-                            ORDER BY timestamp
-                        )
-                        SELECT 
-                            COALESCE(MAX(
-                                CASE 
-                                    WHEN peak_balance > 0 
-                                    THEN (peak_balance - balance) / peak_balance 
-                                    ELSE 0 
-                                END
-                            ), 0) as max_drawdown
-                        FROM balance_with_peak
-                    """)
-                    
-                    result = db.execute(drawdown_query, {'session_id': session_id}).fetchone()
-                    if result and result[0] is not None:
-                        max_drawdown = float(result[0]) * 100  # Convert to percentage
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to calculate max drawdown with SQL optimization, falling back to Python: {e}")
-                    # Fallback to original Python implementation if SQL fails
-                    account_history = db.query(AccountHistory).filter_by(
-                        session_id=session_id
-                    ).order_by(AccountHistory.timestamp).all()
-                    
-                    if account_history:
-                        peak_balance = account_history[0].balance
-                        for record in account_history:
-                            if record.balance > peak_balance:
-                                peak_balance = record.balance
-                            if peak_balance > 0:
-                                drawdown = (peak_balance - record.balance) / peak_balance
-                                max_drawdown = max(max_drawdown, drawdown)
-                        
-                        max_drawdown *= 100  # Convert to percentage
+                # Calculate max drawdown using helper method
+                max_drawdown = self._calculate_max_drawdown(db, session_id)
                 
                 # Check if today's metrics already exist
                 existing = db.query(PerformanceMetrics).filter(
