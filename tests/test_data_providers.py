@@ -11,7 +11,6 @@ Data providers are critical for feeding accurate data to strategies. Tests cover
 """
 
 import pytest
-pytestmark = pytest.mark.integration
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta

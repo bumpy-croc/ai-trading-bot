@@ -30,7 +30,7 @@ The AI Trading Bot now includes a comprehensive persistent balance and position 
 python scripts/migrate_database.py migrate
 
 # Start trading with initial balance
-python scripts/run_live_trading.py ml_basic --balance 1000 --paper-trading
+python scripts/run_live_trading.py adaptive --balance 1000 --paper-trading
 ```
 
 ### 2. **Balance Recovery Process**
@@ -94,10 +94,10 @@ engine = LiveTradingEngine(
 ### Command Line Options
 ```bash
 # Resume from last balance (default)
-python scripts/run_live_trading.py ml_basic --balance 1000
+python scripts/run_live_trading.py adaptive --balance 1000
 
 # Start fresh (ignore existing balance)
-python scripts/run_live_trading.py ml_basic --balance 1000 --no-resume
+python scripts/run_live_trading.py adaptive --balance 1000 --no-resume
 ```
 
 ## 💡 Usage Scenarios
@@ -115,7 +115,7 @@ python scripts/run_live_trading.py ml_basic --balance 1000 --no-resume
 4. **Seamless Continuation**: Trading continues without interruption
 
 ### Scenario 3: Strategy Change
-1. **Switch Strategies**: Change from ml_basic to ml_with_sentiment strategy
+1. **Switch Strategies**: Change from adaptive to ML strategy
 2. **Keep Positions**: Existing positions remain open
 3. **Preserve Balance**: Current balance maintained
 4. **New Strategy**: Uses recovered balance for new trades
@@ -150,7 +150,7 @@ python scripts/migrate_database.py migrate
 python scripts/migrate_database.py validate
 
 # 4. Restart trading bot
-python scripts/run_live_trading.py ml_basic --paper-trading
+python scripts/run_live_trading.py adaptive --paper-trading
 ```
 
 ### Migration Details
