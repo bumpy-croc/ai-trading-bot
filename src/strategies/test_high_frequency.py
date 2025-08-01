@@ -1,4 +1,4 @@
-from src.strategies.base import BaseStrategy
+from strategies.base import BaseStrategy
 import pandas as pd
 
 class TestHighFrequencyStrategy(BaseStrategy):

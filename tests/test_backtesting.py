@@ -18,7 +18,7 @@ from unittest.mock import Mock, patch
 
 from backtesting.engine import Backtester
 from live.trading_engine import Trade
-from strategies.ml_adaptive import MlAdaptive
+from strategies.adaptive import AdaptiveStrategy
 from risk.risk_manager import RiskParameters
 
 
@@ -27,7 +27,7 @@ class TestBacktesterInitialization:
 
     def test_backtester_initialization(self, mock_data_provider):
         """Test backtester initialization with basic parameters"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         risk_params = RiskParameters()
         
         backtester = Backtester(
@@ -47,7 +47,7 @@ class TestBacktesterInitialization:
 
     def test_backtester_with_default_parameters(self, mock_data_provider):
         """Test backtester with default parameters"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         backtester = Backtester(
             strategy=strategy,
@@ -61,7 +61,7 @@ class TestBacktesterInitialization:
 
     def test_backtester_with_sentiment_provider(self, mock_data_provider, mock_sentiment_provider):
         """Test backtester with sentiment provider"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         backtester = Backtester(
             strategy=strategy,
@@ -159,7 +159,7 @@ class TestBacktestingExecution:
 
     def test_basic_backtest_execution(self, mock_data_provider, sample_ohlcv_data):
         """Test basic backtest execution"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         risk_params = RiskParameters()
         
         backtester = Backtester(
@@ -191,7 +191,7 @@ class TestBacktestingExecution:
 
     def test_backtest_with_no_trades(self, mock_data_provider):
         """Test backtest with no trading signals"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         # Create data with no clear signals
         no_signal_data = pd.DataFrame({
@@ -219,7 +219,7 @@ class TestBacktestingExecution:
 
     def test_backtest_performance_metrics(self, mock_data_provider, sample_ohlcv_data):
         """Test backtest performance metrics calculation"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
@@ -246,7 +246,7 @@ class TestRiskManagementIntegration:
 
     def test_risk_parameters_integration(self, mock_data_provider, sample_ohlcv_data):
         """Test that risk parameters are respected during backtesting"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         # Conservative risk parameters
         risk_params = RiskParameters(
@@ -272,7 +272,7 @@ class TestRiskManagementIntegration:
 
     def test_position_size_limits(self, mock_data_provider, sample_ohlcv_data):
         """Test that position size limits are enforced"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         # Very restrictive position size
         risk_params = RiskParameters(max_position_size=0.01)  # 1% max position
@@ -297,7 +297,7 @@ class TestDataHandling:
 
     def test_empty_data_handling(self, mock_data_provider):
         """Test backtester with empty data"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         empty_data = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
         mock_data_provider.get_historical_data.return_value = empty_data
@@ -316,7 +316,7 @@ class TestDataHandling:
 
     def test_missing_columns_handling(self, mock_data_provider):
         """Test backtester with missing data columns"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         # Data missing required columns
         incomplete_data = pd.DataFrame({
@@ -339,7 +339,7 @@ class TestDataHandling:
 
     def test_data_validation(self, mock_data_provider):
         """Test data validation in backtester"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         # Data with invalid values
         invalid_data = pd.DataFrame({
@@ -372,7 +372,7 @@ class TestBacktestingEdgeCases:
 
     def test_single_data_point(self, mock_data_provider):
         """Test backtester with single data point"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         single_data = pd.DataFrame({
             'open': [100],
@@ -398,7 +398,7 @@ class TestBacktestingEdgeCases:
 
     def test_very_large_dataset(self, mock_data_provider):
         """Test backtester with very large dataset"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         # Generate large dataset
         n_points = 10000
@@ -426,7 +426,7 @@ class TestBacktestingEdgeCases:
 
     def test_concurrent_trades_handling(self, mock_data_provider, sample_ohlcv_data):
         """Test handling of concurrent trades"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
@@ -449,7 +449,7 @@ class TestBacktestingIntegration:
     def test_strategy_integration(self, mock_data_provider, sample_ohlcv_data):
         """Test backtester integration with different strategies"""
         # Test with adaptive strategy
-        adaptive_strategy = MlAdaptive()
+        adaptive_strategy = AdaptiveStrategy()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
@@ -466,7 +466,7 @@ class TestBacktestingIntegration:
 
     def test_database_logging_integration(self, mock_data_provider, sample_ohlcv_data):
         """Test backtester with database logging"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
@@ -486,7 +486,7 @@ class TestBacktestingIntegration:
 
     def test_sentiment_integration(self, mock_data_provider, mock_sentiment_provider, sample_ohlcv_data):
         """Test backtester with sentiment data integration"""
-        strategy = MlAdaptive()
+        strategy = AdaptiveStrategy()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         

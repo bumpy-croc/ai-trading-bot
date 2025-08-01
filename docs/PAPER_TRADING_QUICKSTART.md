@@ -56,9 +56,9 @@ print(f'✅ Connection successful! BTC Price: ${price:,.2f}')
 
 ### 2. Start Paper Trading (Safest Options)
 
-#### Option A: Conservative ML Basic Strategy
+#### Option A: Conservative Adaptive Strategy
 ```bash
-python scripts/run_live_trading.py ml_basic \
+python scripts/run_live_trading.py adaptive \
     --symbol BTC-USD \
     --paper-trading \
     --balance 10000 \

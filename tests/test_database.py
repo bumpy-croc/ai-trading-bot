@@ -18,8 +18,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 from database.manager import DatabaseManager
 from database.models import TradeSource, PositionSide, EventType, OrderStatus
 
-pytestmark = pytest.mark.integration
-
 
 class TestDatabaseManager:
     """Comprehensive test suite for DatabaseManager"""
