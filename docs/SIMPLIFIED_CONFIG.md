@@ -47,20 +47,16 @@ class MyStrategy(BaseStrategy):
 
 | Strategy | Default Trading Pair |
 |----------|---------------------|
-| `adaptive` | BTC-USD |
-| `enhanced` | BTC-USD |
-| `high_risk_high_reward` | ETH-USD |
-| `ml_model_strategy` | ETH-USD |
+| `ml_basic` | ETH-USD |
 
 ## Usage Examples
 
 ```bash
 # Uses strategy's default trading pair
-python scripts/run_backtest.py adaptive --days 100          # Uses BTC-USD
-python scripts/run_backtest.py high_risk_high_reward --days 100  # Uses ETH-USD
+python scripts/run_backtest.py ml_basic --days 100          # Uses ETH-USD
 
 # Override with specific symbol
-python scripts/run_backtest.py adaptive --symbol SOL-USD --days 100  # Use SymbolFactory for conversion if needed
+python scripts/run_backtest.py ml_basic --symbol SOL-USD --days 100  # Use SymbolFactory for conversion if needed
 ```
 
 ## Benefits

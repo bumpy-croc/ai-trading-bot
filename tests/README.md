@@ -4,6 +4,7 @@ This directory contains the comprehensive test suite for the AI Trading Bot. The
 
 ---
 
+
 ## 🏁 Quick Reference: Test Runner Options & Markers
 
 ### **Test Runner Options**
@@ -225,9 +226,7 @@ python tests/run_tests.py --file test_strategies.py --verbose
 ```
 
 ### **Run Single Test**
-```bash
-python -m pytest tests/test_strategies.py::TestAdaptiveStrategy::test_entry_conditions -v
-```
+
 
 ### **Debug Mode**
 ```bash

@@ -36,7 +36,7 @@ from .exchange_interface import (
     ExchangeInterface, OrderSide, OrderType, OrderStatus,
     AccountBalance, Position, Order, Trade
 )
-from config import get_config
+from src.config import get_config
 from src.utils.symbol_factory import SymbolFactory
 
 

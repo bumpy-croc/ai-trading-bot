@@ -173,7 +173,7 @@ class LiveTradingEngine:
         self.account_synchronizer = None
         if enable_live_trading:
             try:
-                from config import get_config
+                from src.config import get_config
                 config = get_config()
                 self.exchange_interface, provider_name = _create_exchange_provider(provider, config)
                 if self.exchange_interface:
@@ -321,24 +321,6 @@ class LiveTradingEngine:
                     logger.warning(f"⚠️ Account synchronization failed: {sync_result.message}")
             except Exception as e:
                 logger.error(f"❌ Account synchronization error: {e}", exc_info=True)
-        # Create new trading session in database if none exists
-        if self.trading_session_id is None:
-            mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
-            self.trading_session_id = self.db_manager.create_trading_session(
-                strategy_name=self.strategy.__class__.__name__,
-                symbol=symbol,
-                timeframe=timeframe,
-                mode=mode,
-                initial_balance=self.current_balance,  # Use current balance (might be recovered)
-                strategy_config=getattr(self.strategy, 'config', {})
-            )
-            # Initialize balance tracking
-            self.db_manager.update_balance(
-                self.current_balance, 
-                'session_start', 
-                'system', 
-                self.trading_session_id
-            )
         
         # If a balance correction was pending, log it now (outside session creation conditional)
         if getattr(self, '_pending_balance_correction', False):

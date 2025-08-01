@@ -31,7 +31,7 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     # Get command line arguments (strategy name)
-    strategy = sys.argv[1] if len(sys.argv) > 1 else "adaptive"
+    strategy = sys.argv[1] if len(sys.argv) > 1 else "ml_basic"
     
     print(f"[{datetime.now()}] Starting AI Trading Bot with strategy: {strategy}")
     

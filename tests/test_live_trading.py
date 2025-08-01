@@ -13,6 +13,7 @@ Tests cover:
 """
 
 import pytest
+pytestmark = pytest.mark.integration
 import threading
 import time
 from unittest.mock import Mock, patch, MagicMock, call
@@ -61,7 +62,7 @@ except ImportError:
     StrategyManager = Mock
 
 from risk.risk_manager import RiskManager, RiskParameters
-from strategies.adaptive import AdaptiveStrategy
+from strategies.ml_adaptive import MlAdaptive
 
 
 @pytest.mark.skipif(not LIVE_TRADING_AVAILABLE, reason="Live trading components not available")
@@ -929,10 +930,10 @@ class TestDatabaseLogging:
             },
             {
                 'event_type': EventType.STRATEGY_CHANGE,
-                'message': 'Strategy changed to AdaptiveStrategy',
+                'message': 'Strategy changed to MlAdaptive',
                 'severity': 'info',
                 'component': 'strategy_manager',
-                'details': {'old_strategy': 'BasicStrategy', 'new_strategy': 'AdaptiveStrategy'},
+                'details': {'old_strategy': 'BasicStrategy', 'new_strategy': 'MlAdaptive'},
                 'session_id': session_id
             },
             {
