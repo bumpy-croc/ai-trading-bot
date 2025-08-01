@@ -279,24 +279,56 @@ class DatabaseManager:
                 trading_session.win_rate = (len(winning_trades) / len(trades) * 100) if trades else 0
                 trading_session.total_pnl = sum(t.pnl for t in trades)
                 
-                # Calculate max drawdown from account history
-                account_history = db.query(AccountHistory).filter_by(
-                    session_id=session_id
-                ).order_by(AccountHistory.timestamp).all()
-                
-                if account_history:
-                    peak_balance = trading_session.initial_balance
-                    max_drawdown = 0
+                # Calculate max drawdown using optimized SQL with window functions
+                try:
+                    drawdown_query = text("""
+                        WITH balance_with_peak AS (
+                            SELECT 
+                                balance,
+                                MAX(balance) OVER (ORDER BY timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
+                            FROM account_history 
+                            WHERE session_id = :session_id
+                            ORDER BY timestamp
+                        )
+                        SELECT 
+                            COALESCE(MAX(
+                                CASE 
+                                    WHEN peak_balance > 0 
+                                    THEN (peak_balance - balance) / peak_balance 
+                                    ELSE 0 
+                                END
+                            ), 0) as max_drawdown
+                        FROM balance_with_peak
+                    """)
                     
-                    for record in account_history:
-                        if record.balance > peak_balance:
-                            peak_balance = record.balance
-                        # Protect against division by zero
-                        if peak_balance > 0:
-                            drawdown = (peak_balance - record.balance) / peak_balance
-                            max_drawdown = max(max_drawdown, drawdown)
+                    result = db.execute(drawdown_query, {'session_id': session_id}).fetchone()
+                    if result and result[0] is not None:
+                        trading_session.max_drawdown = float(result[0]) * 100  # Convert to percentage
+                    else:
+                        trading_session.max_drawdown = 0
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to calculate max drawdown with SQL optimization, falling back to Python: {e}")
+                    # Fallback to original Python implementation if SQL fails
+                    account_history = db.query(AccountHistory).filter_by(
+                        session_id=session_id
+                    ).order_by(AccountHistory.timestamp).all()
                     
-                    trading_session.max_drawdown = max_drawdown * 100
+                    if account_history:
+                        peak_balance = trading_session.initial_balance
+                        max_drawdown = 0
+                        
+                        for record in account_history:
+                            if record.balance > peak_balance:
+                                peak_balance = record.balance
+                            # Protect against division by zero
+                            if peak_balance > 0:
+                                drawdown = (peak_balance - record.balance) / peak_balance
+                                max_drawdown = max(max_drawdown, drawdown)
+                        
+                        trading_session.max_drawdown = max_drawdown * 100
+                    else:
+                        trading_session.max_drawdown = 0
             
             db.commit()
             
@@ -894,22 +926,84 @@ class DatabaseManager:
             }
     
     def _update_performance_metrics(self, session_id: int):
-        """Update performance metrics after each trade."""
+        """Update performance metrics after each trade using optimized SQL queries."""
         # Guard against None session_id
         if not session_id:
             logger.warning("Cannot update performance metrics: session_id is None")
             return
         
         try:
-            # Calculate daily metrics
+            # Calculate daily metrics with optimized SQL for max drawdown calculation
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            daily_metrics = self.get_performance_metrics(
-                period='daily',
-                start_date=today_start,
-                session_id=session_id
-            )
             
             with self.get_session() as db:
+                trades = db.query(Trade).filter_by(session_id=session_id).all()
+                
+                if not trades:
+                    return
+                
+                # Calculate basic metrics
+                total_trades = len(trades)
+                winning_trades = len([t for t in trades if t.pnl > 0])
+                losing_trades = total_trades - winning_trades
+                win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+                total_pnl = sum(t.pnl for t in trades)
+                
+                # Calculate win/loss averages
+                wins = [t.pnl for t in trades if t.pnl > 0]
+                losses = [t.pnl for t in trades if t.pnl < 0]
+                avg_win = sum(wins) / len(wins) if wins else 0
+                avg_loss = sum(losses) / len(losses) if losses else 0
+                profit_factor = abs(sum(wins) / sum(losses)) if losses and sum(losses) != 0 else 0
+                
+                best_trade = max([t.pnl for t in trades]) if trades else 0
+                worst_trade = min([t.pnl for t in trades]) if trades else 0
+                
+                # Calculate max drawdown using optimized SQL with window functions
+                max_drawdown = 0
+                try:
+                    drawdown_query = text("""
+                        WITH balance_with_peak AS (
+                            SELECT 
+                                balance,
+                                MAX(balance) OVER (ORDER BY timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
+                            FROM account_history 
+                            WHERE session_id = :session_id
+                            ORDER BY timestamp
+                        )
+                        SELECT 
+                            COALESCE(MAX(
+                                CASE 
+                                    WHEN peak_balance > 0 
+                                    THEN (peak_balance - balance) / peak_balance 
+                                    ELSE 0 
+                                END
+                            ), 0) as max_drawdown
+                        FROM balance_with_peak
+                    """)
+                    
+                    result = db.execute(drawdown_query, {'session_id': session_id}).fetchone()
+                    if result and result[0] is not None:
+                        max_drawdown = float(result[0]) * 100  # Convert to percentage
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to calculate max drawdown with SQL optimization, falling back to Python: {e}")
+                    # Fallback to original Python implementation if SQL fails
+                    account_history = db.query(AccountHistory).filter_by(
+                        session_id=session_id
+                    ).order_by(AccountHistory.timestamp).all()
+                    
+                    if account_history:
+                        peak_balance = account_history[0].balance
+                        for record in account_history:
+                            if record.balance > peak_balance:
+                                peak_balance = record.balance
+                            if peak_balance > 0:
+                                drawdown = (peak_balance - record.balance) / peak_balance
+                                max_drawdown = max(max_drawdown, drawdown)
+                        
+                        max_drawdown *= 100  # Convert to percentage
+                
                 # Check if today's metrics already exist
                 existing = db.query(PerformanceMetrics).filter(
                     and_(
@@ -921,9 +1015,18 @@ class DatabaseManager:
                 
                 if existing:
                     # Update existing metrics
-                    for key, value in daily_metrics.items():
-                        if hasattr(existing, key):
-                            setattr(existing, key, value)
+                    existing.total_trades = total_trades
+                    existing.winning_trades = winning_trades
+                    existing.losing_trades = losing_trades
+                    existing.win_rate = win_rate
+                    existing.total_return = total_pnl
+                    existing.max_drawdown = max_drawdown
+                    existing.avg_win = avg_win
+                    existing.avg_loss = avg_loss
+                    existing.profit_factor = profit_factor
+                    existing.best_trade_pnl = best_trade
+                    existing.worst_trade_pnl = worst_trade
+                    existing.last_updated = datetime.utcnow()
                 else:
                     # Create new metrics record
                     metrics = PerformanceMetrics(
@@ -931,17 +1034,17 @@ class DatabaseManager:
                         period_start=today_start,
                         period_end=datetime.utcnow(),
                         session_id=session_id,
-                        total_trades=daily_metrics.get('total_trades', 0),
-                        winning_trades=daily_metrics.get('winning_trades', 0),
-                        losing_trades=daily_metrics.get('losing_trades', 0),
-                        win_rate=daily_metrics.get('win_rate', 0),
-                        total_return=daily_metrics.get('total_pnl', 0),  # Map total_pnl to total_return
-                        max_drawdown=daily_metrics.get('max_drawdown', 0),
-                        avg_win=daily_metrics.get('avg_win', 0),
-                        avg_loss=daily_metrics.get('avg_loss', 0),
-                        profit_factor=daily_metrics.get('profit_factor', 0),
-                        best_trade_pnl=daily_metrics.get('best_trade', 0),
-                        worst_trade_pnl=daily_metrics.get('worst_trade', 0)
+                        total_trades=total_trades,
+                        winning_trades=winning_trades,
+                        losing_trades=losing_trades,
+                        win_rate=win_rate,
+                        total_return=total_pnl,
+                        max_drawdown=max_drawdown,
+                        avg_win=avg_win,
+                        avg_loss=avg_loss,
+                        profit_factor=profit_factor,
+                        best_trade_pnl=best_trade,
+                        worst_trade_pnl=worst_trade
                     )
                     db.add(metrics)
                 
