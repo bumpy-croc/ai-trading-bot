@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import datetime
 
 from live.strategy_manager import StrategyManager, StrategyVersion
-from strategies.ml_adaptive import MlAdaptive
+from strategies.adaptive import AdaptiveStrategy
 
 
 class TestStrategyManager:
@@ -47,13 +47,13 @@ class TestStrategyManager:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load adaptive strategy
-        strategy = manager.load_strategy("ml_adaptive", version="test_v1")
+        strategy = manager.load_strategy("adaptive", version="test_v1")
         
         assert strategy is not None
-        assert isinstance(strategy, MlAdaptive)
+        assert isinstance(strategy, AdaptiveStrategy)
         assert manager.current_strategy == strategy
         assert manager.current_version is not None
-        assert manager.current_version.strategy_name == "ml_adaptive"
+        assert manager.current_version.strategy_name == "adaptive"
         assert manager.current_version.version == "test_v1"
 
     def test_strategy_loading_with_config(self, temp_directory):
@@ -61,14 +61,16 @@ class TestStrategyManager:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         config = {
-            "name": "CustomMlAdaptive",
-            "sequence_length": 60
+            "base_risk_per_trade": 0.015,
+            "fast_ma": 9,
+            "slow_ma": 22
         }
         
-        strategy = manager.load_strategy("ml_adaptive", config=config)
+        strategy = manager.load_strategy("adaptive", config=config)
         
-        assert strategy.name == "CustomMlAdaptive"
-        assert strategy.sequence_length == 60
+        assert strategy.base_risk_per_trade == 0.015
+        assert strategy.fast_ma == 9
+        assert strategy.slow_ma == 22
 
     def test_invalid_strategy_loading(self, temp_directory):
         """Test loading invalid strategy"""
@@ -83,10 +85,10 @@ class TestStrategyManager:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load initial strategy
-        initial_strategy = manager.load_strategy("ml_adaptive", version="v1")
+        initial_strategy = manager.load_strategy("adaptive", version="v1")
         
         # Prepare hot swap
-        success = manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
+        success = manager.hot_swap_strategy("adaptive", new_config={"fast_ma": 10})
         
         assert success == True
         assert manager.pending_update is not None
@@ -98,18 +100,18 @@ class TestStrategyManager:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load initial strategy
-        initial_strategy = manager.load_strategy("ml_adaptive", version="v1")
+        initial_strategy = manager.load_strategy("adaptive", version="v1")
         initial_name = initial_strategy.name
         
         # Prepare and apply hot swap
-        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
+        manager.hot_swap_strategy("adaptive", new_config={"fast_ma": 15})
         
         # Apply the update
         success = manager.apply_pending_update()
         
         assert success == True
         assert manager.current_strategy != initial_strategy
-        assert manager.current_strategy.sequence_length == 60
+        assert manager.current_strategy.fast_ma == 15
         assert manager.pending_update is None
 
     @pytest.mark.live_trading
@@ -162,8 +164,8 @@ class TestStrategyManager:
         assert manager.has_pending_update() == False
         
         # Prepare update
-        manager.load_strategy("ml_adaptive")
-        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
+        manager.load_strategy("adaptive")
+        manager.hot_swap_strategy("adaptive", new_config={"fast_ma": 12})
         
         # Should detect pending update
         assert manager.has_pending_update() == True
@@ -179,13 +181,13 @@ class TestStrategyManager:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load multiple versions
-        strategy_v1 = manager.load_strategy("ml_adaptive", version="v1")
-        strategy_v2 = manager.load_strategy("ml_adaptive", version="v2") 
+        strategy_v1 = manager.load_strategy("adaptive", version="v1")
+        strategy_v2 = manager.load_strategy("adaptive", version="v2") 
         
         # Check version history
         assert len(manager.version_history) >= 2
-        assert "ml_adaptive_v1" in manager.version_history
-        assert "ml_adaptive_v2" in manager.version_history
+        assert "adaptive_v1" in manager.version_history
+        assert "adaptive_v2" in manager.version_history
 
     def test_strategy_registry(self, temp_directory):
         """Test strategy registry functionality"""
@@ -195,7 +197,7 @@ class TestStrategyManager:
         available = manager.list_available_strategies()
         
         assert 'available_strategies' in available
-        assert 'ml_adaptive' in available['available_strategies']
+        assert 'adaptive' in available['available_strategies']
         assert isinstance(available['available_strategies'], list)
 
 
@@ -220,7 +222,7 @@ class TestStrategyManagerThreadSafety:
         # Start multiple threads loading strategies
         threads = []
         for i in range(3):
-            thread = threading.Thread(target=load_strategy, args=("ml_adaptive", f"v{i}"))
+            thread = threading.Thread(target=load_strategy, args=("adaptive", f"v{i}"))
             threads.append(thread)
             thread.start()
         
@@ -238,13 +240,13 @@ class TestStrategyManagerThreadSafety:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load initial strategy
-        manager.load_strategy("ml_adaptive", version="initial")
+        manager.load_strategy("adaptive", version="initial")
         
         swap_results = []
         
         def attempt_hot_swap(config_variant):
             try:
-                success = manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": config_variant})
+                success = manager.hot_swap_strategy("adaptive", new_config={"fast_ma": config_variant})
                 swap_results.append(success)
             except Exception as e:
                 swap_results.append(False)
@@ -267,7 +269,7 @@ class TestStrategyManagerThreadSafety:
     def test_update_lock_behavior(self, temp_directory):
         """Test that update lock prevents race conditions"""
         manager = StrategyManager(staging_dir=str(temp_directory))
-        manager.load_strategy("ml_adaptive")
+        manager.load_strategy("adaptive")
         
         lock_acquired_count = 0
         
@@ -315,14 +317,14 @@ class TestStrategyManagerErrorHandling:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load initial strategy
-        initial_strategy = manager.load_strategy("ml_adaptive", version="v1")
+        initial_strategy = manager.load_strategy("adaptive", version="v1")
         
         # Mock strategy loading to fail
         with patch.object(manager, 'load_strategy') as mock_load:
             mock_load.side_effect = Exception("Strategy loading failed")
             
             # Attempt hot swap
-            success = manager.hot_swap_strategy("ml_adaptive")
+            success = manager.hot_swap_strategy("adaptive")
             assert success == False
             
             # Current strategy should remain unchanged
@@ -347,7 +349,7 @@ class TestStrategyManagerErrorHandling:
         invalid_config = {"invalid_parameter": "invalid_value"}
         
         try:
-            strategy = manager.load_strategy("ml_adaptive", config=invalid_config)
+            strategy = manager.load_strategy("adaptive", config=invalid_config)
             # Should either ignore invalid params or handle gracefully
             assert strategy is not None
         except Exception as e:
@@ -379,7 +381,7 @@ class TestStrategyManagerIntegration:
         from live.trading_engine import LiveTradingEngine
         
         manager = StrategyManager(staging_dir=str(temp_directory))
-        initial_strategy = manager.load_strategy("ml_adaptive")
+        initial_strategy = manager.load_strategy("adaptive")
         
         # Create trading engine with strategy manager
         engine = LiveTradingEngine(
@@ -392,7 +394,7 @@ class TestStrategyManagerIntegration:
         engine.strategy_manager = manager
         
         # Test hot swap integration
-        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
+        manager.hot_swap_strategy("adaptive", new_config={"fast_ma": 15})
         
         # Simulate engine checking for updates
         has_update = manager.has_pending_update()
@@ -419,8 +421,8 @@ class TestStrategyManagerIntegration:
         manager.on_model_update = model_update_callback
         
         # Load strategy and trigger swap
-        manager.load_strategy("ml_adaptive")
-        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
+        manager.load_strategy("adaptive")
+        manager.hot_swap_strategy("adaptive", new_config={"fast_ma": 20})
         
         # Should have called strategy change callback
         strategy_calls = [call for call in callback_calls if call[0] == "strategy_change"]
@@ -431,11 +433,11 @@ class TestStrategyManagerIntegration:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load strategy
-        strategy = manager.load_strategy("ml_adaptive", version="perf_test")
+        strategy = manager.load_strategy("adaptive", version="perf_test")
         
         # Check that version is tracked
         assert manager.current_version is not None
-        assert manager.current_version.strategy_name == "ml_adaptive"
+        assert manager.current_version.strategy_name == "adaptive"
         assert manager.current_version.version == "perf_test"
         
         # Performance metrics should be trackable
@@ -454,15 +456,15 @@ class TestStrategyVersioning:
     def test_strategy_version_creation(self, temp_directory):
         """Test strategy version object creation"""
         version = StrategyVersion(
-            strategy_name="ml_adaptive",
+            strategy_name="adaptive",
             version="v1.0",
             timestamp=datetime.now(),
-            config={"sequence_length": 60}
+            config={"fast_ma": 10}
         )
         
-        assert version.strategy_name == "ml_adaptive"
+        assert version.strategy_name == "adaptive"
         assert version.version == "v1.0"
-        assert version.config["sequence_length"] == 60
+        assert version.config["fast_ma"] == 10
         assert isinstance(version.timestamp, datetime)
 
     def test_version_comparison_capability(self, temp_directory):
@@ -470,8 +472,8 @@ class TestStrategyVersioning:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load multiple versions
-        manager.load_strategy("ml_adaptive", version="v1.0")
-        manager.load_strategy("ml_adaptive", version="v1.1")
+        manager.load_strategy("adaptive", version="v1.0")
+        manager.load_strategy("adaptive", version="v1.1")
         
         # Should be able to get performance comparison
         comparison = manager.get_performance_comparison()
@@ -482,8 +484,8 @@ class TestStrategyVersioning:
         manager = StrategyManager(staging_dir=str(temp_directory))
         
         # Load and track versions
-        v1 = manager.load_strategy("ml_adaptive", version="v1.0")
-        v2 = manager.load_strategy("ml_adaptive", version="v2.0")
+        v1 = manager.load_strategy("adaptive", version="v1.0")
+        v2 = manager.load_strategy("adaptive", version="v2.0")
         
         # Test rollback capability exists
         assert hasattr(manager, 'rollback_to_previous_version')

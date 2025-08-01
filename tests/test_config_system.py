@@ -87,6 +87,7 @@ class TestDotEnvProvider:
 
 
 
+
 class TestConfigManager:
     """Test the main configuration manager."""
     
@@ -210,7 +211,6 @@ class TestConfigManager:
         config = ConfigManager()
         # Should not raise exception
         config.refresh()
-
 
 
 class TestConfigSystemIntegration:
