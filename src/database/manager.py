@@ -126,6 +126,14 @@ class DatabaseManager:
                 raise ValueError("Database engine not initialized")
             Base.metadata.create_all(self.engine)
 
+            if self.engine.dialect.name.lower() == 'postgresql':
+                with self.engine.connect() as conn:
+                    conn.execute(text("""
+                        CREATE INDEX IF NOT EXISTS idx_account_history_session_timestamp
+                        ON account_history (session_id, timestamp);
+                    """))
+                    conn.commit()
+
             logger.info("Database tables created/verified")
         except Exception as e:
             logger.error(f"Error creating database tables: {e}")
@@ -887,11 +895,6 @@ class DatabaseManager:
         
         if use_sql_optimization:
             try:
-                db_session.execute(text("""
-                    CREATE INDEX IF NOT EXISTS idx_account_history_session_timestamp
-                    ON account_history (session_id, timestamp);
-                """))
-                
                 drawdown_query = text("""
                     WITH balance_with_peak AS (
                         SELECT 
@@ -918,9 +921,9 @@ class DatabaseManager:
                     return max_drawdown
                     
             except Exception as e:
-                logger.warning(f"SQL optimization failed, falling back to Python. Exception type: {type(e).__name__}")
+                logger.warning(f"SQL optimization failed for session {session_id}, falling back to Python. Exception type: {type(e).__name__}")
                 if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Full exception: {type(e).__name__}: {e}", exc_info=True)
+                    logger.debug(f"Full exception for session {session_id}: {type(e).__name__}: {e}", exc_info=True)
         
         # Fallback Python implementation (works with both PostgreSQL and SQLite)
         account_history = db_session.query(AccountHistory).filter_by(
@@ -958,27 +961,28 @@ class DatabaseManager:
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             
             with self.get_session() as db:
-                trades = db.query(Trade).filter_by(session_id=session_id).all()
+                total_trades = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id).scalar() or 0
                 
-                if not trades:
+                if total_trades == 0:
                     return
                 
-                # Calculate basic metrics
-                total_trades = len(trades)
-                winning_trades = len([t for t in trades if t.pnl > 0])
+                winning_trades = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id, Trade.pnl > 0).scalar() or 0
                 losing_trades = total_trades - winning_trades
                 win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-                total_pnl = sum(t.pnl for t in trades)
+                total_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(Trade.session_id == session_id).scalar() or 0
                 
-                # Calculate win/loss averages
-                wins = [t.pnl for t in trades if t.pnl > 0]
-                losses = [t.pnl for t in trades if t.pnl < 0]
-                avg_win = sum(wins) / len(wins) if wins else 0
-                avg_loss = sum(losses) / len(losses) if losses else 0
-                profit_factor = sum(wins) / abs(sum(losses)) if losses and sum(losses) != 0 else 0
-                
-                best_trade = max([t.pnl for t in trades]) if trades else 0
-                worst_trade = min([t.pnl for t in trades]) if trades else 0
+                # Calculate win/loss averages and profit factor
+                win_sum = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(Trade.session_id == session_id, Trade.pnl > 0).scalar() or 0
+                win_count = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id, Trade.pnl > 0).scalar() or 0
+                avg_win = win_sum / win_count if win_count > 0 else 0
+
+                loss_sum = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(Trade.session_id == session_id, Trade.pnl < 0).scalar() or 0
+                loss_count = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id, Trade.pnl < 0).scalar() or 0
+                avg_loss = loss_sum / loss_count if loss_count > 0 else 0
+                profit_factor = win_sum / abs(loss_sum) if loss_sum != 0 else 0
+
+                best_trade = db.query(func.coalesce(func.max(Trade.pnl), 0)).filter(Trade.session_id == session_id).scalar() or 0
+                worst_trade = db.query(func.coalesce(func.min(Trade.pnl), 0)).filter(Trade.session_id == session_id).scalar() or 0
                 
                 # Calculate max drawdown using helper method
                 max_drawdown = self._calculate_max_drawdown(db, session_id)

@@ -8,7 +8,7 @@ This report documents performance inefficiencies identified in the AI trading bo
 
 ### 1. Database N+1 Query Pattern (HIGH IMPACT) ⚠️ **FIXED**
 
-**Location**: `src/database/manager.py` - `_update_performance_metrics()` method (lines 896-951)
+**Location**: `src/database/manager.py` - `_calculate_max_drawdown()` method (lines 880-947) and `_update_performance_metrics()` method (lines 949-1033)
 
 **Issue**: The current implementation processes account history records individually in a Python loop to calculate maximum drawdown:
 
