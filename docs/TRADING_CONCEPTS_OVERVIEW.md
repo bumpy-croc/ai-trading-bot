@@ -56,7 +56,9 @@ Our bot ingests multiple data flavours; combining them tends to outperform any s
 
 | Strategy | Primary Edge | File |
 |----------|--------------|------|
-| **Trend-Following** | Ride sustained moves via moving averages | `strategies.ml_adaptive` |
+| **Trend-Following** | Ride sustained moves via moving averages | `strategies.adaptive` |
+| **Mean-Reversion** | Fade extremes back to average | `strategies.enhanced` |
+| **Breakout** | Enter when price escapes consolidation | `strategies.high_risk_high_reward` |
 | **ML Adaptive** | Model-driven signals + dynamic risk | `strategies.ml_adaptive` |
 | **ML Basic** | Simplified ML without adaptation | `strategies.ml_basic` |
 | **Sentiment-Aware** | Blend price + sentiment | `strategies.ml_with_sentiment` |
