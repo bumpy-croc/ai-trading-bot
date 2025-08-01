@@ -467,7 +467,7 @@ class MonitoringDashboard:
     def _get_active_positions_count(self) -> int:
         """Get number of active positions"""
         try:
-            query = "SELECT COUNT(*) as count FROM positions WHERE status != 'FILLED'"
+            query = "SELECT COUNT(*) as count FROM positions WHERE status = 'OPEN'"
             result = self.db_manager.execute_query(query)
             return result[0]['count'] if result else 0
         except Exception as e:
@@ -501,7 +501,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_exposure
             FROM positions 
-            WHERE status != 'FILLED'
+            WHERE status = 'OPEN'
             """
             result = self.db_manager.execute_query(query)
             exposure = self._safe_float(result[0]['total_exposure']) if result else 0.0
@@ -898,7 +898,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_value
             FROM positions 
-            WHERE status != 'FILLED'
+            WHERE status = 'OPEN'
             """
             result = self.db_manager.execute_query(query)
             return result[0]['total_value'] if result else 0.0
@@ -1016,7 +1016,7 @@ class MonitoringDashboard:
             query = """
             SELECT COALESCE(SUM(quantity), 0) as total_quantity
             FROM positions 
-            WHERE status != 'FILLED'
+            WHERE status = 'OPEN'
             """
             result = self.db_manager.execute_query(query)
             
@@ -1067,7 +1067,7 @@ class MonitoringDashboard:
             SELECT 
                 side, entry_price, quantity
             FROM positions 
-            WHERE status != 'FILLED'
+            WHERE status = 'OPEN'
             """
             result = self.db_manager.execute_query(query)
             
@@ -1181,7 +1181,7 @@ class MonitoringDashboard:
                 symbol, side, entry_price, quantity, entry_time,
                 stop_loss, take_profit, order_id
             FROM positions 
-            WHERE status != 'FILLED'
+            WHERE status = 'OPEN'
             ORDER BY entry_time DESC
             """
             result = self.db_manager.execute_query(query)

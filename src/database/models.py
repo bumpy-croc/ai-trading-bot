@@ -23,6 +23,7 @@ class PositionSide(enum.Enum):
 class OrderStatus(enum.Enum):
     """Order status enumeration"""
     PENDING = "pending"
+    OPEN = "open"
     FILLED = "filled"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -108,7 +109,7 @@ class Position(Base):
     id = Column(Integer, primary_key=True)
     symbol = Column(String(20), nullable=False, index=True)
     side = Column(Enum(PositionSide), nullable=False)
-    status = Column(Enum(OrderStatus), nullable=False, default=OrderStatus.PENDING)
+    status = Column(Enum(OrderStatus), nullable=False, default=OrderStatus.OPEN)
     
     # Position details
     entry_price = Column(Numeric(18, 8), nullable=False)
@@ -403,4 +404,4 @@ class AccountBalance(Base):
         
         db_session.add(balance_record)
         db_session.commit()
-        return balance_record 
+        return balance_record    

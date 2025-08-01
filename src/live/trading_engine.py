@@ -38,6 +38,7 @@ class PositionSide(Enum):
 
 class OrderStatus(Enum):
     PENDING = "pending"
+    OPEN = "open"
     FILLED = "filled"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -1262,4 +1263,4 @@ class LiveTradingEngine:
         else:
             logger.error(f"❌ Model update initiation failed")
         
-        return success 
+        return success  

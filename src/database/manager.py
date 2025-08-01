@@ -418,7 +418,7 @@ class DatabaseManager:
             position = Position(
                 symbol=symbol,
                 side=side,
-                status=OrderStatus.PENDING,
+                status=OrderStatus.OPEN,
                 entry_price=entry_price,
                 size=size,
                 quantity=quantity,
@@ -737,7 +737,7 @@ class DatabaseManager:
         """Get all active positions."""
         with self.get_session() as session:
             query = session.query(Position).filter(
-                Position.status != OrderStatus.FILLED
+                Position.status == OrderStatus.OPEN
             )
             
             if session_id:
