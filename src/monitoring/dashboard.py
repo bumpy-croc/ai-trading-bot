@@ -27,6 +27,7 @@ project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from database.manager import DatabaseManager
+from database.models import OrderStatus
 from data_providers.binance_provider import BinanceProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from performance.metrics import sharpe as perf_sharpe
@@ -467,7 +468,7 @@ class MonitoringDashboard:
     def _get_active_positions_count(self) -> int:
         """Get number of active positions"""
         try:
-            query = "SELECT COUNT(*) as count FROM positions WHERE status = 'OPEN'"
+            query = f"SELECT COUNT(*) as count FROM positions WHERE status = '{OrderStatus.OPEN.value}'"
             result = self.db_manager.execute_query(query)
             return result[0]['count'] if result else 0
         except Exception as e:
@@ -498,10 +499,10 @@ class MonitoringDashboard:
             if balance <= 0:
                 return 0.0
             
-            query = """
+            query = f"""
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_exposure
             FROM positions 
-            WHERE status = 'OPEN'
+            WHERE status = '{OrderStatus.OPEN.value}'
             """
             result = self.db_manager.execute_query(query)
             exposure = self._safe_float(result[0]['total_exposure']) if result else 0.0
@@ -895,10 +896,10 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = """
+            query = f"""
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_value
             FROM positions 
-            WHERE status = 'OPEN'
+            WHERE status = '{OrderStatus.OPEN.value}'
             """
             result = self.db_manager.execute_query(query)
             return result[0]['total_value'] if result else 0.0
@@ -1013,10 +1014,10 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = """
+            query = f"""
             SELECT COALESCE(SUM(quantity), 0) as total_quantity
             FROM positions 
-            WHERE status = 'OPEN'
+            WHERE status = '{OrderStatus.OPEN.value}'
             """
             result = self.db_manager.execute_query(query)
             
@@ -1063,11 +1064,11 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = """
+            query = f"""
             SELECT 
                 side, entry_price, quantity
             FROM positions 
-            WHERE status = 'OPEN'
+            WHERE status = '{OrderStatus.OPEN.value}'
             """
             result = self.db_manager.execute_query(query)
             
@@ -1176,12 +1177,12 @@ class MonitoringDashboard:
     def _get_current_positions(self) -> List[PositionDict]:
         """Get current active positions"""
         try:
-            query = """
+            query = f"""
             SELECT 
                 symbol, side, entry_price, quantity, entry_time,
                 stop_loss, take_profit, order_id
             FROM positions 
-            WHERE status = 'OPEN'
+            WHERE status = '{OrderStatus.OPEN.value}'
             ORDER BY entry_time DESC
             """
             result = self.db_manager.execute_query(query)
