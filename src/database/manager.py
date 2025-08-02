@@ -128,11 +128,17 @@ class DatabaseManager:
 
             if self.engine.dialect.name.lower() == 'postgresql':
                 with self.engine.connect() as conn:
-                    conn.execute(text("""
-                        CREATE INDEX IF NOT EXISTS idx_account_history_session_timestamp
-                        ON account_history (session_id, timestamp);
-                    """))
-                    conn.commit()
+                    trans = conn.begin()
+                    try:
+                        conn.execute(text("""
+                            CREATE INDEX IF NOT EXISTS idx_account_history_session_timestamp
+                            ON account_history (session_id, timestamp);
+                        """))
+                        trans.commit()
+                    except Exception as idx_err:
+                        trans.rollback()
+                        logger.error(f"Error creating index idx_account_history_session_timestamp: {idx_err}")
+                        raise
 
             logger.info("Database tables created/verified")
         except Exception as e:
@@ -273,22 +279,28 @@ class DatabaseManager:
                 logger.error(f"Trading session {session_id} not found")
                 return
             
-            # Calculate final metrics
-            trades = db.query(Trade).filter_by(session_id=session_id).all()
+            # Calculate final metrics using optimized SQL aggregation
+            total_trades = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id).scalar() or 0
+            if total_trades == 0:
+                trading_session.total_trades = 0
+                trading_session.win_rate = 0
+                trading_session.total_pnl = 0
+                trading_session.max_drawdown = self._calculate_max_drawdown(db, session_id)
+                db.commit()
+                return
+            
+            winning_trades = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id, Trade.pnl > 0).scalar() or 0
+            total_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(Trade.session_id == session_id).scalar() or 0
             
             trading_session.end_time = datetime.utcnow()
             trading_session.is_active = False
             trading_session.final_balance = final_balance
-            trading_session.total_trades = len(trades)
+            trading_session.total_trades = total_trades
+            trading_session.win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+            trading_session.total_pnl = total_pnl
             
-            if trades:
-                winning_trades = [t for t in trades if t.pnl > 0]
-                # Protect against division by zero
-                trading_session.win_rate = (len(winning_trades) / len(trades) * 100) if trades else 0
-                trading_session.total_pnl = sum(t.pnl for t in trades)
-                
-                # Calculate max drawdown using helper method
-                trading_session.max_drawdown = self._calculate_max_drawdown(db, session_id)
+            # Calculate max drawdown using helper method
+            trading_session.max_drawdown = self._calculate_max_drawdown(db, session_id)
             
             db.commit()
             
@@ -899,10 +911,10 @@ class DatabaseManager:
                     WITH balance_with_peak AS (
                         SELECT 
                             balance,
-                            MAX(balance) OVER (ORDER BY timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
+                            MAX(balance) OVER (ORDER BY session_id, timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
                         FROM account_history 
                         WHERE session_id = :session_id
-                        ORDER BY timestamp
+                        ORDER BY session_id, timestamp
                     )
                     SELECT 
                         COALESCE(MAX(
@@ -921,7 +933,7 @@ class DatabaseManager:
                     return max_drawdown
                     
             except Exception as e:
-                logger.warning(f"SQL optimization failed for session {session_id}, falling back to Python. Exception type: {type(e).__name__}")
+                logger.warning(f"SQL optimization failed for session {session_id}, falling back to Python. Exception type: {type(e).__name__}, error: {e}")
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(f"Full exception for session {session_id}: {type(e).__name__}: {e}", exc_info=True)
         
@@ -933,7 +945,7 @@ class DatabaseManager:
         if account_history:
             # Use session's initial_balance for peak_balance initialization for consistency
             session = db_session.query(TradingSession).filter_by(id=session_id).first()
-            if session and hasattr(session, "initial_balance"):
+            if session and session.initial_balance is not None:
                 peak_balance = session.initial_balance
             else:
                 peak_balance = account_history[0].balance
@@ -1073,12 +1085,8 @@ class DatabaseManager:
         from sqlalchemy.exc import SQLAlchemyError  # type: ignore
         from sqlalchemy import text as _sql_text  # type: ignore
 
-        engine_typed: "_Engine" = self.engine  # type: ignore[assignment]
-        connection_raw = engine_typed.connect()
-        conn: "_Connection" = connection_raw  # type: ignore[assignment]
-
         try:
-            with conn as connection:
+            with self.engine.connect() as connection:
                 # Prefer SQLAlchemy 2.x driver-level exec
                 try:
                     result: "_Result" = connection.exec_driver_sql(query, params)  # type: ignore[arg-type]
@@ -1180,13 +1188,10 @@ class DatabaseManager:
             if not trading_session:
                 return None
             
-            # Get all trades for this session
-            trades = session.query(Trade).filter(
+            # Calculate total PnL using SQL aggregation instead of loading all trades
+            total_pnl = session.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(
                 Trade.session_id == session_id
-            ).all()
-            
-            # Calculate current balance from initial balance + total PnL
-            total_pnl = sum(trade.pnl for trade in trades)
+            ).scalar() or 0
             current_balance = trading_session.initial_balance + total_pnl
             
             # Update the balance tracking
@@ -1212,8 +1217,8 @@ class DatabaseManager:
         """Manual balance adjustment (for user-initiated changes)"""
         current_balance = self.get_current_balance()
         
-        if current_balance == 0:
-            logger.error("Cannot adjust balance - no current balance found")
+        if current_balance <= 0:
+            logger.error("Cannot adjust balance - no valid current balance found")
             return False
         
         success = self.update_balance(new_balance, f"Manual adjustment: {reason}", updated_by)
