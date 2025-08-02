@@ -1217,8 +1217,14 @@ class DatabaseManager:
         """Manual balance adjustment (for user-initiated changes)"""
         current_balance = self.get_current_balance()
         
-        if current_balance <= 0:
-            logger.error("Cannot adjust balance - no valid current balance found")
+        if current_balance is None:
+            logger.error("Cannot adjust balance - current balance is None (not set)")
+            return False
+        elif current_balance == 0:
+            logger.error("Cannot adjust balance - current balance is zero")
+            return False
+        elif current_balance < 0:
+            logger.error(f"Cannot adjust balance - current balance is negative ({current_balance})")
             return False
         
         success = self.update_balance(new_balance, f"Manual adjustment: {reason}", updated_by)
