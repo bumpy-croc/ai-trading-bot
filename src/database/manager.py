@@ -973,30 +973,37 @@ class DatabaseManager:
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             
             with self.get_session() as db:
-                total_trades = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id).scalar() or 0
+                # Filter trades for today only to calculate actual daily metrics
+                today_trades_filter = and_(
+                    Trade.session_id == session_id,
+                    Trade.exit_time >= today_start
+                )
                 
-                if total_trades == 0:
-                    return
+                total_trades = db.query(func.count(Trade.id)).filter(today_trades_filter).scalar() or 0
                 
-                winning_trades = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id, Trade.pnl > 0).scalar() or 0
-                losing_trades = total_trades - winning_trades
+                # Always create or update metrics, even when total_trades is 0
+                winning_trades = db.query(func.count(Trade.id)).filter(today_trades_filter, Trade.pnl > 0).scalar() or 0
+                # Fix: losing_trades should only count trades with negative P&L to match loss_count calculation
+                losing_trades = db.query(func.count(Trade.id)).filter(today_trades_filter, Trade.pnl < 0).scalar() or 0
                 win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-                total_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(Trade.session_id == session_id).scalar() or 0
+                total_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(today_trades_filter).scalar() or 0
                 
                 # Calculate win/loss averages and profit factor
-                win_sum = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(Trade.session_id == session_id, Trade.pnl > 0).scalar() or 0
-                win_count = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id, Trade.pnl > 0).scalar() or 0
+                win_sum = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(today_trades_filter, Trade.pnl > 0).scalar() or 0
+                win_count = db.query(func.count(Trade.id)).filter(today_trades_filter, Trade.pnl > 0).scalar() or 0
                 avg_win = win_sum / win_count if win_count > 0 else 0
 
-                loss_sum = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(Trade.session_id == session_id, Trade.pnl < 0).scalar() or 0
-                loss_count = db.query(func.count(Trade.id)).filter(Trade.session_id == session_id, Trade.pnl < 0).scalar() or 0
+                loss_sum = db.query(func.coalesce(func.sum(Trade.pnl), 0)).filter(today_trades_filter, Trade.pnl < 0).scalar() or 0
+                loss_count = db.query(func.count(Trade.id)).filter(today_trades_filter, Trade.pnl < 0).scalar() or 0
                 avg_loss = loss_sum / loss_count if loss_count > 0 else 0
                 profit_factor = win_sum / abs(loss_sum) if loss_sum != 0 else 0
 
-                best_trade = db.query(func.coalesce(func.max(Trade.pnl), 0)).filter(Trade.session_id == session_id).scalar() or 0
-                worst_trade = db.query(func.coalesce(func.min(Trade.pnl), 0)).filter(Trade.session_id == session_id).scalar() or 0
+                best_trade = db.query(func.coalesce(func.max(Trade.pnl), 0)).filter(today_trades_filter).scalar() or 0
+                worst_trade = db.query(func.coalesce(func.min(Trade.pnl), 0)).filter(today_trades_filter).scalar() or 0
                 
-                # Calculate max drawdown using helper method
+                # Calculate max drawdown for the session (not just today)
+                # Daily max drawdown calculation would require complex implementation
+                # For now, use session-wide max drawdown as it provides meaningful context
                 max_drawdown = self._calculate_max_drawdown(db, session_id)
                 
                 # Check if today's metrics already exist
