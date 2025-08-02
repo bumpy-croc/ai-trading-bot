@@ -3,6 +3,7 @@ from pandas import DataFrame  # type: ignore
 import pandas as pd  # type: ignore
 import logging
 from datetime import datetime
+from sqlalchemy.exc import SQLAlchemyError
 from data_providers.data_provider import DataProvider
 from strategies.base import BaseStrategy
 from risk.risk_manager import RiskManager, RiskParameters
@@ -530,4 +531,4 @@ class Backtester:
             if col in df.columns and not pd.isna(current_row[col]):
                 sentiment_data[col] = float(current_row[col])
         
-        return sentiment_data 
+        return sentiment_data   
