@@ -468,8 +468,8 @@ class MonitoringDashboard:
     def _get_active_positions_count(self) -> int:
         """Get number of active positions"""
         try:
-            query = f"SELECT COUNT(*) as count FROM positions WHERE status = '{OrderStatus.OPEN.value}'"
-            result = self.db_manager.execute_query(query)
+            query = "SELECT COUNT(*) as count FROM positions WHERE status = ?"
+            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
             return result[0]['count'] if result else 0
         except Exception as e:
             logger.error(f"Error getting active positions: {e}")
@@ -499,12 +499,12 @@ class MonitoringDashboard:
             if balance <= 0:
                 return 0.0
             
-            query = f"""
+            query = """
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_exposure
             FROM positions 
-            WHERE status = '{OrderStatus.OPEN.value}'
+            WHERE status = ?
             """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
             exposure = self._safe_float(result[0]['total_exposure']) if result else 0.0
             return (exposure / balance) * 100
         except Exception as e:
@@ -896,12 +896,12 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = f"""
+            query = """
             SELECT COALESCE(SUM(quantity * entry_price), 0) as total_value
             FROM positions 
-            WHERE status = '{OrderStatus.OPEN.value}'
+            WHERE status = ?
             """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
             return result[0]['total_value'] if result else 0.0
         except Exception as e:
             logger.error(f"Error getting total position sizes: {e}")
@@ -1014,12 +1014,12 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = f"""
+            query = """
             SELECT COALESCE(SUM(quantity), 0) as total_quantity
             FROM positions 
-            WHERE status = '{OrderStatus.OPEN.value}'
+            WHERE status = ?
             """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
             
             if result:
                 total_quantity = self._safe_float(result[0]['total_quantity'])
@@ -1064,13 +1064,13 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = f"""
+            query = """
             SELECT 
                 side, entry_price, quantity
             FROM positions 
-            WHERE status = '{OrderStatus.OPEN.value}'
+            WHERE status = ?
             """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
             
             total_unrealized = 0.0
             for position in result:
@@ -1177,15 +1177,15 @@ class MonitoringDashboard:
     def _get_current_positions(self) -> List[PositionDict]:
         """Get current active positions"""
         try:
-            query = f"""
+            query = """
             SELECT 
                 symbol, side, entry_price, quantity, entry_time,
                 stop_loss, take_profit, order_id
             FROM positions 
-            WHERE status = '{OrderStatus.OPEN.value}'
+            WHERE status = ?
             ORDER BY entry_time DESC
             """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
             
             positions: List[PositionDict] = []
             current_price = self._get_current_price()
@@ -1226,16 +1226,16 @@ class MonitoringDashboard:
     def _get_recent_trades(self, limit: int = 50) -> List[TradeDict]:
         """Get recent completed trades"""
         try:
-            query = f"""
+            query = """
             SELECT 
                 symbol, side, entry_price, exit_price, quantity,
                 entry_time, exit_time, pnl, exit_reason
             FROM trades 
             WHERE exit_time IS NOT NULL
             ORDER BY exit_time DESC
-            LIMIT {limit}
+            LIMIT ?
             """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(query, (limit,))
             logger.info(f"Query returned {len(result)} rows")
             
             trades: List[TradeDict] = []
@@ -1272,13 +1272,13 @@ class MonitoringDashboard:
     def _get_performance_chart_data(self, days: int = 7) -> Dict[str, List]:
         """Get performance chart data for the specified number of days"""
         try:
-            query = f"""
+            query = """
             SELECT balance, timestamp
             FROM account_history
-            WHERE timestamp > NOW() - INTERVAL '{days} days'
+            WHERE timestamp > NOW() - INTERVAL ? DAY
             ORDER BY timestamp
             """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(query, (days,))
             
             timestamps = []
             balances = []
