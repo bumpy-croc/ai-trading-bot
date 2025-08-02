@@ -911,10 +911,10 @@ class DatabaseManager:
                     WITH balance_with_peak AS (
                         SELECT 
                             balance,
-                            MAX(balance) OVER (ORDER BY session_id, timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
+                            MAX(balance) OVER (ORDER BY timestamp ROWS UNBOUNDED PRECEDING) as peak_balance
                         FROM account_history 
                         WHERE session_id = :session_id
-                        ORDER BY session_id, timestamp
+                        ORDER BY timestamp
                     )
                     SELECT 
                         COALESCE(MAX(
