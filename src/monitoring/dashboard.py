@@ -97,12 +97,10 @@ class MonitoringDashboard:
             class _OfflineProvider:  # minimal stub implementation
                 """Fallback provider that returns empty data so the UI still loads."""
 
-                @staticmethod
-                def get_current_price(symbol: str):
+                def get_current_price(self, symbol: str):
                     return 0.0
 
-                @staticmethod
-                def get_historical_data(symbol: str, timeframe: str, start, end):  # noqa: D401
+                def get_historical_data(self, symbol: str, timeframe: str, start, end):  # noqa: D401
                     return pd.DataFrame()
 
             self.data_provider = _OfflineProvider()

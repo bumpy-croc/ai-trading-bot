@@ -60,7 +60,7 @@ class TestMonitoringDashboard:
     def test_dashboard_initialization_with_offline_mode(self):
         """Test dashboard initialization when Binance is unavailable"""
         with patch('src.monitoring.dashboard.DatabaseManager') as mock_db, \
-             patch('src.data_providers.binance_provider.BinanceProvider') as mock_binance:
+             patch('src.monitoring.dashboard.BinanceProvider') as mock_binance:
             
             # Mock Binance failure
             mock_binance.side_effect = Exception("Connection failed")
