@@ -50,14 +50,14 @@ class FeatureCache:
         """
         self.default_ttl = default_ttl
         self._cache: Dict[str, CacheEntry] = {}
-        self._quick_hash_cache: Dict[str, str] = {}  # * Quick hash to full hash mapping
+        self._quick_hash_cache: Dict[str, str] = {}  # Quick hash to full hash mapping
         self._stats = {
             'hits': 0,
             'misses': 0,
             'evictions': 0,
             'sets': 0,
-            'quick_hash_matches': 0,  # * Track quick hash performance
-            'full_hash_verifications': 0  # * Track full hash usage
+            'quick_hash_matches': 0,  # Track quick hash performance
+            'full_hash_verifications': 0  # Track full hash usage
         }
     
     def _generate_quick_hash(self, data: pd.DataFrame) -> str:
