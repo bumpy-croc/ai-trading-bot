@@ -529,7 +529,7 @@ class TestAccountSyncIntegration:
         import time
         
         # Patch config to provide API credentials
-        with patch('config.get_config') as mock_config, \
+        with patch('src.config.get_config') as mock_config, \
              patch(provider_patch) as MockExchange:
             # Setup mock config to provide API credentials
             mock_config.return_value = cred_keys
