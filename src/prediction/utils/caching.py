@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 import hashlib
 import time
+import json
+import pickle
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from functools import wraps
@@ -390,6 +392,66 @@ class ModelCache:
         return len(self.cache)
 
 
+def _generate_cache_key(*args, **kwargs) -> str:
+    """
+    Generate a reliable cache key from function arguments.
+    
+    This function handles different data types properly to avoid the issues
+    with hash() randomization and str() representation inconsistencies.
+    
+    Args:
+        *args: Positional arguments
+        **kwargs: Keyword arguments
+        
+    Returns:
+        Reliable cache key string
+    """
+    def _serialize_value(value):
+        """Serialize a value in a deterministic way."""
+        try:
+            # Handle pandas DataFrames and Series
+            if isinstance(value, pd.DataFrame):
+                # Use pandas hash utility for DataFrames
+                return f"df:{pd.util.hash_pandas_object(value, index=True).values.tobytes().hex()}"
+            elif isinstance(value, pd.Series):
+                # Use pandas hash utility for Series
+                return f"series:{pd.util.hash_pandas_object(value, index=True).values.tobytes().hex()}"
+            
+            # Handle numpy arrays
+            elif isinstance(value, np.ndarray):
+                # Use deterministic hash of array content
+                return f"array:{hashlib.sha256(value.tobytes()).hexdigest()}"
+            
+            # Handle basic types that can be JSON serialized
+            elif isinstance(value, (str, int, float, bool, type(None))):
+                return json.dumps(value, sort_keys=True)
+            
+            # Handle lists and tuples
+            elif isinstance(value, (list, tuple)):
+                return f"[{','.join(_serialize_value(v) for v in value)}]"
+            
+            # Handle dictionaries
+            elif isinstance(value, dict):
+                sorted_items = sorted(value.items(), key=lambda x: x[0])
+                return f"{{{','.join(f'{k}:{_serialize_value(v)}' for k, v in sorted_items)}}}"
+            
+            # For other types, use pickle with deterministic protocol
+            else:
+                return f"pickle:{hashlib.sha256(pickle.dumps(value, protocol=4)).hexdigest()}"
+                
+        except Exception:
+            # Fallback for any serialization issues
+            return f"fallback:{hashlib.sha256(str(value).encode()).hexdigest()}"
+    
+    # Serialize args and kwargs
+    args_str = f"args:[{','.join(_serialize_value(arg) for arg in args)}]"
+    kwargs_str = f"kwargs:{{{','.join(f'{k}:{_serialize_value(v)}' for k, v in sorted(kwargs.items()))}}}"
+    
+    # Combine and hash
+    combined = f"{args_str}|{kwargs_str}"
+    return hashlib.sha256(combined.encode()).hexdigest()
+
+
 def cache_prediction(ttl: int = 600):
     """Decorator to cache model predictions"""
     def decorator(func):
@@ -397,8 +459,8 @@ def cache_prediction(ttl: int = 600):
         
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Create cache key from function name and arguments
-            cache_key = f"{func.__name__}:{hash(str(args) + str(kwargs))}"
+            # Create reliable cache key from function name and arguments
+            cache_key = f"{func.__name__}:{_generate_cache_key(*args, **kwargs)}"
             
             # Try to get from cache
             cached_result = cache.get(cache_key)
