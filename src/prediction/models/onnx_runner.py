@@ -76,8 +76,11 @@ class OnnxRunner:
             # Prepare input
             input_data = self._prepare_input(features)
             
+            # Get input name dynamically from ONNX session
+            input_name = self.session.get_inputs()[0].name
+            
             # Run inference
-            output = self.session.run(None, {'input': input_data})
+            output = self.session.run(None, {input_name: input_data})
             
             # Process output
             prediction = self._process_output(output[0])
@@ -152,13 +155,13 @@ class OnnxRunner:
         """Calculate prediction confidence"""
         # Simple confidence based on prediction magnitude
         # Can be enhanced with model uncertainty estimation
-        return min(1.0, abs(pred) * 10)  # Scale factor for confidence
+        return min(1.0, abs(pred) * self.config.confidence_scale_factor)
     
     def _calculate_direction(self, pred: float) -> int:
         """Calculate prediction direction"""
-        if pred > 0.01:  # 1% threshold
+        if pred > self.config.direction_threshold:
             return 1
-        elif pred < -0.01:
+        elif pred < -self.config.direction_threshold:
             return -1
         else:
             return 0

@@ -6,8 +6,8 @@ existing ConfigManager system to load prediction engine settings.
 """
 from dataclasses import dataclass
 from typing import List
-from config.config_manager import get_config
-from config.constants import (
+from src.config.config_manager import get_config
+from src.config.constants import (
     DEFAULT_PREDICTION_HORIZONS,
     DEFAULT_MIN_CONFIDENCE_THRESHOLD,
     DEFAULT_MAX_PREDICTION_LATENCY,
@@ -15,7 +15,9 @@ from config.constants import (
     DEFAULT_ENABLE_SENTIMENT,
     DEFAULT_ENABLE_MARKET_MICROSTRUCTURE,
     DEFAULT_FEATURE_CACHE_TTL,
-    DEFAULT_MODEL_CACHE_TTL
+    DEFAULT_MODEL_CACHE_TTL,
+    DEFAULT_CONFIDENCE_SCALE_FACTOR,
+    DEFAULT_DIRECTION_THRESHOLD
 )
 
 
@@ -27,14 +29,21 @@ class PredictionConfig:
     This class provides a type-safe way to access prediction engine configuration
     settings loaded from the ConfigManager system.
     """
-    prediction_horizons: List[int]
-    min_confidence_threshold: float
-    max_prediction_latency: float
-    model_registry_path: str
-    enable_sentiment: bool
-    enable_market_microstructure: bool
-    feature_cache_ttl: int
-    model_cache_ttl: int
+    prediction_horizons: List[int] = None
+    min_confidence_threshold: float = DEFAULT_MIN_CONFIDENCE_THRESHOLD
+    max_prediction_latency: float = DEFAULT_MAX_PREDICTION_LATENCY
+    model_registry_path: str = DEFAULT_MODEL_REGISTRY_PATH
+    enable_sentiment: bool = DEFAULT_ENABLE_SENTIMENT
+    enable_market_microstructure: bool = DEFAULT_ENABLE_MARKET_MICROSTRUCTURE
+    feature_cache_ttl: int = DEFAULT_FEATURE_CACHE_TTL
+    model_cache_ttl: int = DEFAULT_MODEL_CACHE_TTL
+    confidence_scale_factor: float = DEFAULT_CONFIDENCE_SCALE_FACTOR
+    direction_threshold: float = DEFAULT_DIRECTION_THRESHOLD
+
+    def __post_init__(self):
+        """Post-initialization processing"""
+        if self.prediction_horizons is None:
+            self.prediction_horizons = DEFAULT_PREDICTION_HORIZONS.copy()
 
     @classmethod
     def from_config_manager(cls) -> 'PredictionConfig':
@@ -82,6 +91,14 @@ class PredictionConfig:
             model_cache_ttl=config.get_int(
                 'MODEL_CACHE_TTL',
                 default=DEFAULT_MODEL_CACHE_TTL
+            ),
+            confidence_scale_factor=config.get_float(
+                'CONFIDENCE_SCALE_FACTOR',
+                default=DEFAULT_CONFIDENCE_SCALE_FACTOR
+            ),
+            direction_threshold=config.get_float(
+                'DIRECTION_THRESHOLD',
+                default=DEFAULT_DIRECTION_THRESHOLD
             )
         )
 

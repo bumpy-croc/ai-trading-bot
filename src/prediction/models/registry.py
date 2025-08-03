@@ -2,11 +2,15 @@
 Model registry for prediction models - replacement for existing ModelRegistry.
 """
 
+import logging
 import numpy as np
 from typing import Dict, Optional, List
 from pathlib import Path
 from ..config import PredictionConfig
 from .onnx_runner import OnnxRunner, ModelPrediction
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 
 class PredictionModelRegistry:
@@ -37,9 +41,9 @@ class PredictionModelRegistry:
                     str(onnx_file), 
                     self.config
                 )
-                logging.info(f"✓ Loaded model: {model_name}")
+                logger.info(f"✓ Loaded model: {model_name}")
             except Exception as e:
-                logging.warning(f"⚠ Warning: Failed to load model {model_name}: {e}")
+                logger.warning(f"⚠ Warning: Failed to load model {model_name}: {e}")
     
     def get_model(self, model_name: str) -> Optional[OnnxRunner]:
         """Get model by name"""
