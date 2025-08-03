@@ -51,26 +51,26 @@ jobs:
         
         # Construct the prompt
         cat > prompt.txt << 'EOF'
-Verify this issue. Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to verify the issue and decide whether it should be fixed or not. If you do decide to fix it, leave a quick comment on the PR to say what you did and why. If you decide not to fix it, leave a comment to say why not.
-
-PR Details:
-- URL: $PR_URL
-- Title: $PR_TITLE
-- Body: $PR_BODY
-
-Review Details:
-- Reviewer: $REVIEWER
-- State: $REVIEW_STATE
-- Review Body: $REVIEW_BODY
-
-PR Comments:
-$COMMENTS
-
-Review Comments:
-$REVIEW_COMMENTS
-
-Please analyze this PR review and take appropriate action based on the reviewer's feedback.
-EOF
+        Verify this issue. Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to verify the issue and decide whether it should be fixed or not. If you do decide to fix it, leave a quick comment on the PR to say what you did and why. If you decide not to fix it, leave a comment to say why not.
+        
+        PR Details:
+        - URL: $PR_URL
+        - Title: $PR_TITLE
+        - Body: $PR_BODY
+        
+        Review Details:
+        - Reviewer: $REVIEWER
+        - State: $REVIEW_STATE
+        - Review Body: $REVIEW_BODY
+        
+        PR Comments:
+          $COMMENTS
+        
+        Review Comments:
+          $REVIEW_COMMENTS
+        
+        Please analyze this PR review and take appropriate action based on the reviewer's feedback.
+        EOF
         
         echo "=== Sending to Cursor Background Agent ==="
         
@@ -78,19 +78,13 @@ EOF
         curl -X POST "https://api.cursor.sh/v1/background-agent/launch" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
-          -d "{
-            \"prompt\": $(cat prompt.txt | jq -Rs .),
-            \"workspace\": \"${{ github.workspace }}\",
-            \"model\": \"gpt-4o-mini\",
-            \"temperature\": 0.1,
-            \"max_tokens\": 4000
-          }"
+          -d "{ \"prompt\": $(cat prompt.txt | jq -Rs .), \"workspace\": \"${{ github.workspace }}\", \"model\": \"gpt-4o-mini\", \"temperature\": 0.1, \"max_tokens\": 4000 }"
         
         echo ""
         echo "=== Cursor Background Agent Launched ==="
         echo "The agent will analyze the PR review and take appropriate action."
         echo "Check the PR for any comments or changes made by the agent."
-    
+  
     - name: Log Review Details
       run: |
         echo "=== Review Summary ==="
