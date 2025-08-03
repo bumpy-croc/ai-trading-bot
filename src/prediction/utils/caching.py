@@ -21,7 +21,7 @@ class CacheEntry:
     timestamp: float
     ttl: int
     data_hash: str
-    quick_hash: str  # * Added quick hash for two-tier approach
+    quick_hash: str  # Added quick hash for two-tier approach
     
     def is_expired(self) -> bool:
         """Check if the cache entry has expired."""
