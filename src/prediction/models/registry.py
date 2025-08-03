@@ -37,9 +37,9 @@ class PredictionModelRegistry:
                     str(onnx_file), 
                     self.config
                 )
-                print(f"✓ Loaded model: {model_name}")
+                logging.info(f"✓ Loaded model: {model_name}")
             except Exception as e:
-                print(f"⚠ Warning: Failed to load model {model_name}: {e}")
+                logging.warning(f"⚠ Warning: Failed to load model {model_name}: {e}")
     
     def get_model(self, model_name: str) -> Optional[OnnxRunner]:
         """Get model by name"""
