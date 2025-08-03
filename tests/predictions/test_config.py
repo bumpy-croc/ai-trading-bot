@@ -61,7 +61,7 @@ class TestPredictionConfig:
             assert config.model_registry_path == "src/ml"
             assert config.enable_sentiment is False
             assert config.enable_market_microstructure is False
-            assert config.feature_cache_ttl == 300
+            assert config.feature_cache_ttl == 3600
             assert config.model_cache_ttl == 600
 
     def test_prediction_config_validation_success(self):
@@ -73,7 +73,7 @@ class TestPredictionConfig:
             model_registry_path="src/ml",
             enable_sentiment=False,
             enable_market_microstructure=False,
-            feature_cache_ttl=300,
+            feature_cache_ttl=3600,
             model_cache_ttl=600
         )
         
@@ -89,7 +89,7 @@ class TestPredictionConfig:
             model_registry_path="src/ml",
             enable_sentiment=False,
             enable_market_microstructure=False,
-            feature_cache_ttl=300,
+            feature_cache_ttl=3600,
             model_cache_ttl=600
         )
 
@@ -105,7 +105,7 @@ class TestPredictionConfig:
             model_registry_path="src/ml",
             enable_sentiment=False,
             enable_market_microstructure=False,
-            feature_cache_ttl=300,
+            feature_cache_ttl=3600,
             model_cache_ttl=600
         )
 
@@ -122,7 +122,7 @@ class TestPredictionConfig:
             model_registry_path="src/ml",
             enable_sentiment=False,
             enable_market_microstructure=False,
-            feature_cache_ttl=300,
+            feature_cache_ttl=3600,
             model_cache_ttl=600
         )
 
@@ -137,7 +137,7 @@ class TestPredictionConfig:
             model_registry_path="src/ml",
             enable_sentiment=False,
             enable_market_microstructure=False,
-            feature_cache_ttl=300,
+            feature_cache_ttl=3600,
             model_cache_ttl=600
         )
 
@@ -153,7 +153,7 @@ class TestPredictionConfig:
             model_registry_path="src/ml",
             enable_sentiment=False,
             enable_market_microstructure=False,
-            feature_cache_ttl=300,
+            feature_cache_ttl=3600,
             model_cache_ttl=600
         )
 
@@ -185,7 +185,7 @@ class TestPredictionConfig:
             model_registry_path="src/ml",
             enable_sentiment=False,
             enable_market_microstructure=False,
-            feature_cache_ttl=300,
+            feature_cache_ttl=3600,
             model_cache_ttl=-600  # Negative TTL
         )
 
@@ -201,7 +201,7 @@ class TestPredictionConfig:
             model_registry_path="src/ml",
             enable_sentiment=True,
             enable_market_microstructure=False,
-            feature_cache_ttl=300,
+            feature_cache_ttl=3600,
             model_cache_ttl=600
         )
         

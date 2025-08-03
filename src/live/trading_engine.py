@@ -459,7 +459,7 @@ class LiveTradingEngine:
                             short_position_size = min(short_position_size, self.max_position_size)
                             if short_position_size > 0:
                                 short_stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, PositionSide.SHORT)
-                                # * Use strategy's take profit percentage for consistency
+                                # Use strategy's take profit percentage for consistency
                                 short_take_profit = current_price * (1 - self.strategy.take_profit_pct)
                                 self._open_position(symbol, PositionSide.SHORT, short_position_size, current_price, short_stop_loss, short_take_profit)
                 # Update performance metrics
