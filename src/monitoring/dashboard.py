@@ -97,12 +97,10 @@ class MonitoringDashboard:
             class _OfflineProvider:  # minimal stub implementation
                 """Fallback provider that returns empty data so the UI still loads."""
 
-                @staticmethod
-                def get_current_price(symbol: str):
+                def get_current_price(self, symbol: str):
                     return 0.0
 
-                @staticmethod
-                def get_historical_data(symbol: str, timeframe: str, start, end):  # noqa: D401
+                def get_historical_data(self, symbol: str, timeframe: str, start, end):  # noqa: D401
                     return pd.DataFrame()
 
             self.data_provider = _OfflineProvider()
@@ -1240,7 +1238,7 @@ class MonitoringDashboard:
             trades: List[TradeDict] = []
             for row in result or []:
                 try:
-                    # * Ensure pnl is always a float
+                    # Ensure pnl is always a float
                     pnl_val = row.get('pnl')
                     if pnl_val is None or not isinstance(pnl_val, (int, float)):
                         row['pnl'] = 0.0
