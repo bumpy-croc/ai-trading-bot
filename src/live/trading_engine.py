@@ -843,11 +843,15 @@ class LiveTradingEngine:
             
             # Update position status in database
             if position.order_id in self.position_db_ids:
-                try:
-                    self.db_manager.close_position(self.position_db_ids[position.order_id])
-                    del self.position_db_ids[position.order_id]
-                except Exception as e:
-                    logger.warning(f"Failed to update position in database: {e}")
+                position_db_id = self.position_db_ids[position.order_id]
+                if position_db_id is not None:
+                    try:
+                        self.db_manager.close_position(position_db_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to update position in database: {e}")
+                else:
+                    logger.debug(f"Position {position.order_id} was not logged to database (no session ID)")
+                del self.position_db_ids[position.order_id]
                 
             # Remove from active positions
             if position.order_id in self.positions:
