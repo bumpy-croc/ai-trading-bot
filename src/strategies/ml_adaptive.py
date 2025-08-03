@@ -36,10 +36,10 @@ class MlAdaptive(BaseStrategy):
     """
     Adaptive ML-based strategy for BTC-USD (Coinbase style symbol).
     """
-    # * Constants for magic numbers
+    # Constants for magic numbers
     MIN_PREDICTION_CONFIDENCE = 0.007  # 0.7% minimum predicted move
-    SECONDS_PER_DAY = 86400  # * Number of seconds in a day
-    LOSS_REDUCTION_FACTOR = 0.2  # * 20% reduction per consecutive loss
+    SECONDS_PER_DAY = 86400  # Number of seconds in a day
+    LOSS_REDUCTION_FACTOR = 0.2  # 20% reduction per consecutive loss
 
     def __init__(self, name="MlAdaptive", model_path="src/ml/btcusdt_price.onnx", sequence_length=120):
         super().__init__(name)
@@ -80,17 +80,17 @@ class MlAdaptive(BaseStrategy):
         self.in_crisis_mode = False
         
         # ML confidence thresholds
-        # * Lower minimum confidence slightly to allow more frequent trades
+        # Lower minimum confidence slightly to allow more frequent trades
         self.min_prediction_confidence = self.MIN_PREDICTION_CONFIDENCE  # 0.7% minimum predicted move
         self.crisis_confidence_multiplier = 2.0  # Double confidence requirement in crisis
 
-        # * Expose a generic take_profit_pct attribute expected by the trading engine
+        # Expose a generic take_profit_pct attribute expected by the trading engine
         self.take_profit_pct = self.base_take_profit_pct  # For short positions handled by engine
 
-        # * Rebound detection parameters
+        # Rebound detection parameters
         self.rebound_confidence_multiplier = 0.5  # Reduce confidence threshold by 50% on rebounds
 
-        # * Bear market detection parameters
+        # Bear market detection parameters
         self.bear_trend_threshold = -0.05  # 5% negative trend strength considered bear
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -114,21 +114,21 @@ class MlAdaptive(BaseStrategy):
         df['trend_strength'] = (df['close'] - df['ma_50']) / df['ma_50']
         df['trend_direction'] = np.where(df['ma_20'] > df['ma_50'], 1, -1)
 
-        # * Bear market flag – MA50 below MA200 and significant negative trend strength
+        # Bear market flag – MA50 below MA200 and significant negative trend strength
         df['bear_market'] = np.where(
             (df['ma_50'] < df['ma_200']) & (df['trend_strength'] < self.bear_trend_threshold),
             1,
             0
         )
 
-        # * Rebound signal – previous candle in bear market but current trend turns positive (ma_20 > ma_50)
+        # Rebound signal – previous candle in bear market but current trend turns positive (ma_20 > ma_50)
         df['rebound_signal'] = (
             (df['bear_market'].shift(1) == 1) &  # Previously in bear
             (df['trend_direction'] > 0) &        # Trend flips positive
             (df['close'] > df['ma_50'])           # Price reclaims MA50
         ).astype(int)
 
-        # * Now that we have bear/rebound flags, detect market regime
+        # Now that we have bear/rebound flags, detect market regime
         df['market_regime'] = self._detect_market_regime(df)
         
         # Normalize price features for ML model
@@ -196,19 +196,19 @@ class MlAdaptive(BaseStrategy):
             volatility = df['volatility_20'].iloc[i] if not pd.isna(df['volatility_20'].iloc[i]) else 0
             atr_pct = df['atr_pct'].iloc[i] if not pd.isna(df['atr_pct'].iloc[i]) else 0
             
-            # * Crisis overrides all other regimes
+            # Crisis overrides all other regimes
             if volatility > self.volatility_crisis_threshold or atr_pct > 0.15:
                 regimes.append('crisis')
                 self.in_crisis_mode = True
                 self.last_crisis_time = df.index[i]
-            # * High volatility
+            # High volatility
             elif volatility > self.volatility_high_threshold or atr_pct > 0.08:
                 regimes.append('volatile')
-            # * Recovery phase directly after crisis (within 24h)
+            # Recovery phase directly after crisis (within 24h)
             elif self.last_crisis_time and (df.index[i] - self.last_crisis_time).total_seconds() < self.SECONDS_PER_DAY:
                 regimes.append('recovery')
             else:
-                # * Trend-based classification
+                # Trend-based classification
                 is_bear = (df['bear_market'].iloc[i] == 1)
                 if is_bear:
                     regimes.append('bear')

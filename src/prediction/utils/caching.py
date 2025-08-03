@@ -21,7 +21,7 @@ class CacheEntry:
     timestamp: float
     ttl: int
     data_hash: str
-    quick_hash: str  # * Added quick hash for two-tier approach
+    quick_hash: str  # Added quick hash for two-tier approach
     
     def is_expired(self) -> bool:
         """Check if the cache entry has expired."""
@@ -50,14 +50,14 @@ class FeatureCache:
         """
         self.default_ttl = default_ttl
         self._cache: Dict[str, CacheEntry] = {}
-        self._quick_hash_cache: Dict[str, str] = {}  # * Quick hash to full hash mapping
+        self._quick_hash_cache: Dict[str, str] = {}  # Quick hash to full hash mapping
         self._stats = {
             'hits': 0,
             'misses': 0,
             'evictions': 0,
             'sets': 0,
-            'quick_hash_matches': 0,  # * Track quick hash performance
-            'full_hash_verifications': 0  # * Track full hash usage
+            'quick_hash_matches': 0,  # Track quick hash performance
+            'full_hash_verifications': 0  # Track full hash usage
         }
     
     def _generate_quick_hash(self, data: pd.DataFrame) -> str:
@@ -74,11 +74,11 @@ class FeatureCache:
             Quick hash string
         """
         try:
-            # * Use shape, dtypes, and sample values for quick identification
+            # Use shape, dtypes, and sample values for quick identification
             shape_str = f"{data.shape[0]}_{data.shape[1]}"
             dtypes_str = str(sorted(data.dtypes.astype(str).items()))
             
-            # * Sample first and last few values for quick comparison
+            # Sample first and last few values for quick comparison
             sample_size = min(3, len(data))
             if len(data) > 0:
                 first_values = data.iloc[:sample_size].values.flatten()
@@ -87,11 +87,11 @@ class FeatureCache:
             else:
                 sample_str = "empty"
             
-            # * Combine shape, dtypes, and samples for quick hash
+            # Combine shape, dtypes, and samples for quick hash
             quick_content = f"{shape_str}_{dtypes_str}_{sample_str}"
             return hashlib.md5(quick_content.encode()).hexdigest()
         except Exception:
-            # * Fallback to simple shape-based hash
+            # Fallback to simple shape-based hash
             return hashlib.md5(f"{data.shape}_{data.dtypes.astype(str)}".encode()).hexdigest()
     
     def _generate_full_data_hash(self, data: pd.DataFrame) -> str:
@@ -107,18 +107,18 @@ class FeatureCache:
             Full hash string representing the data content
         """
         try:
-            # * Compute hash for the DataFrame content using pandas utility
+            # Compute hash for the DataFrame content using pandas utility
             content_hash = pd.util.hash_pandas_object(data, index=True).values
             
-            # * Combine with index and column hashes for uniqueness
+            # Combine with index and column hashes for uniqueness
             index_hash = pd.util.hash_pandas_object(data.index).values
             columns_hash = pd.util.hash_pandas_object(data.columns).values
             
-            # * Concatenate all hashes and generate a final hash
+            # Concatenate all hashes and generate a final hash
             combined_hash = np.concatenate([content_hash, index_hash, columns_hash])
             return hashlib.sha256(combined_hash.tobytes()).hexdigest()
         except pd.errors.PandasError:
-            # * Fallback to a less efficient but robust method
+            # Fallback to a less efficient but robust method
             return hashlib.sha256(pd.util.hash_pandas_object(data, index=True).values.tobytes()).hexdigest()
     
     def _generate_cache_key(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], use_quick_hash: bool = True) -> str:
@@ -158,16 +158,16 @@ class FeatureCache:
         """
         quick_key = self._generate_cache_key(data, extractor_name, config, use_quick_hash=True)
         
-        # * Check if quick hash exists in cache
+        # Check if quick hash exists in cache
         if quick_key not in self._cache:
             return None
         
         entry = self._cache[quick_key]
         
-        # * Verify with full hash to ensure accuracy
+        # Verify with full hash to ensure accuracy
         full_hash = self._generate_full_data_hash(data)
         if entry.data_hash != full_hash:
-            # * Hash mismatch - remove incorrect entry
+            # Hash mismatch - remove incorrect entry
             del self._cache[quick_key]
             self._stats['evictions'] += 1
             return None
@@ -188,7 +188,7 @@ class FeatureCache:
         Returns:
             Cached DataFrame if available and valid, None otherwise
         """
-        # * Try quick hash first for performance
+        # Try quick hash first for performance
         result = self._find_by_quick_hash(data, extractor_name, config)
         if result is None:
             self._stats['misses'] += 1
@@ -196,7 +196,7 @@ class FeatureCache:
         
         cache_key, entry = result
         
-        # * Check TTL using entry's own TTL value
+        # Check TTL using entry's own TTL value
         if not entry.is_valid():
             del self._cache[cache_key]
             self._stats['evictions'] += 1
@@ -290,7 +290,7 @@ class FeatureCache:
         total_requests = self._stats['hits'] + self._stats['misses']
         hit_rate = self._stats['hits'] / total_requests if total_requests > 0 else 0.0
         
-        # * Calculate quick hash efficiency
+        # Calculate quick hash efficiency
         quick_hash_efficiency = (
             self._stats['quick_hash_matches'] / total_requests 
             if total_requests > 0 else 0.0
@@ -315,7 +315,7 @@ class FeatureCache:
         entry_sizes = []
         
         for entry in self._cache.values():
-            # * Rough estimate of DataFrame memory usage
+            # Rough estimate of DataFrame memory usage
             entry_size = entry.data.memory_usage(deep=True).sum()
             entry_sizes.append(entry_size)
             total_memory += entry_size

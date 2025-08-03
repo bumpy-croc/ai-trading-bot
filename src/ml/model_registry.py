@@ -14,8 +14,8 @@ __all__ = [
     "ModelRegistry",
 ]
 
-VOLUME_ROLLING_WINDOW = 1000  # * Rolling window for volume z-score
-EPSILON = 1e-9  # * Small value to prevent division by zero
+VOLUME_ROLLING_WINDOW = 1000  # Rolling window for volume z-score
+EPSILON = 1e-9  # Small value to prevent division by zero
 
 # ---------------------------------------------------------------------------
 # Normalisation helper functions

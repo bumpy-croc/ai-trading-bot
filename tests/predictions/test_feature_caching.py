@@ -26,13 +26,13 @@ class TestCacheEntry:
             timestamp=time.time(),
             ttl=300,
             data_hash="test_hash",
-            quick_hash="quick_test_hash"  # * Added required quick_hash parameter
+            quick_hash="quick_test_hash"  # Added required quick_hash parameter
         )
         
         assert not entry.data.empty
         assert entry.ttl == 300
         assert entry.data_hash == "test_hash"
-        assert entry.quick_hash == "quick_test_hash"  # * Verify quick_hash is set
+        assert entry.quick_hash == "quick_test_hash"  # Verify quick_hash is set
         assert entry.is_valid()  # Should be valid when just created
     
     def test_cache_entry_expiration(self):
@@ -45,7 +45,7 @@ class TestCacheEntry:
             timestamp=time.time() - 10,  # 10 seconds ago
             ttl=5,  # 5 second TTL
             data_hash="test_hash",
-            quick_hash="quick_test_hash"  # * Added required quick_hash parameter
+            quick_hash="quick_test_hash"  # Added required quick_hash parameter
         )
         
         assert entry.is_expired()
@@ -61,7 +61,7 @@ class TestCacheEntry:
             timestamp=time.time(),
             ttl=3600,  # 1 hour TTL
             data_hash="test_hash",
-            quick_hash="quick_test_hash"  # * Added required quick_hash parameter
+            quick_hash="quick_test_hash"  # Added required quick_hash parameter
         )
         
         assert not entry.is_expired()
@@ -105,7 +105,7 @@ class TestFeatureCache:
         assert stats['total_entries'] == 0
         assert stats['hit_rate'] == 0.0
         assert stats['total_requests'] == 0
-        assert 'quick_hash_efficiency' in stats  # * Verify new stat is present
+        assert 'quick_hash_efficiency' in stats  # Verify new stat is present
     
     def test_quick_hash_generation(self, cache, sample_data):
         """Test quick hash generation."""
@@ -180,7 +180,7 @@ class TestFeatureCache:
         assert stats['sets'] == 1
         assert stats['hits'] == 1
         assert stats['misses'] == 1
-        assert 'quick_hash_matches' in stats  # * Verify new stats are present
+        assert 'quick_hash_matches' in stats  # Verify new stats are present
     
     def test_cache_has_method(self, cache, sample_data, sample_result):
         """Test cache has method."""
@@ -244,10 +244,10 @@ class TestFeatureCache:
         stats = cache.get_stats()
         assert stats['total_entries'] == 0
         assert stats['hits'] == 0
-        assert stats['misses'] == 1  # * has() method calls get() which increments misses
+        assert stats['misses'] == 1  # has() method calls get() which increments misses
         assert stats['sets'] == 0
         assert stats['evictions'] == 0
-        assert stats['quick_hash_matches'] == 0  # * Verify new stats are reset
+        assert stats['quick_hash_matches'] == 0  # Verify new stats are reset
     
     def test_cache_cleanup_expired(self, sample_data, sample_result):
         """Test cache cleanup of expired entries."""
@@ -284,7 +284,7 @@ class TestFeatureCache:
         assert stats['misses'] == 0
         assert stats['sets'] == 0
         assert stats['evictions'] == 0
-        assert stats['quick_hash_matches'] == 0  # * Verify new stats are present
+        assert stats['quick_hash_matches'] == 0  # Verify new stats are present
         assert stats['full_hash_verifications'] == 0
         
         # After some operations
@@ -299,7 +299,7 @@ class TestFeatureCache:
         assert stats['misses'] == 1
         assert stats['total_requests'] == 2
         assert stats['hit_rate'] == 0.5
-        assert stats['quick_hash_efficiency'] >= 0.0  # * Verify efficiency calculation
+        assert stats['quick_hash_efficiency'] >= 0.0  # Verify efficiency calculation
     
     def test_cache_size_info(self, cache, sample_data, sample_result):
         """Test cache size information."""
