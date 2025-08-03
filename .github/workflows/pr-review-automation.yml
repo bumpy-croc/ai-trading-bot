@@ -29,13 +29,20 @@ jobs:
         echo "Review ID: ${{ github.event.review.id }}"
         echo "Review State: ${{ github.event.review.state }}"
         
-        # Get PR details
+        # Get PR details - store in files to handle multiline content safely
         PR_URL="${{ github.event.pull_request.html_url }}"
         PR_TITLE="${{ github.event.pull_request.title }}"
-        PR_BODY="${{ github.event.pull_request.body }}"
-        REVIEW_BODY="${{ github.event.review.body }}"
         REVIEW_STATE="${{ github.event.review.state }}"
         REVIEWER="${{ github.event.review.user.login }}"
+        
+        # Store multiline content in temporary files to avoid shell escaping issues
+        cat > pr_body.txt << 'PRBODY_EOF'
+        ${{ github.event.pull_request.body }}
+        PRBODY_EOF
+        
+        cat > review_body.txt << 'REVIEWBODY_EOF'
+        ${{ github.event.review.body }}
+        REVIEWBODY_EOF
         
         # Get PR comments
         echo "=== Fetching PR Comments ==="
@@ -50,18 +57,18 @@ jobs:
           | jq -r '.[] | "- " + .user.login + " (line " + (.line|tostring) + "): " + .body' | tr '\n' ' ' || echo "No review comments found")
         
         # Construct the prompt
-        cat > prompt.txt << 'EOF'
+        cat > prompt.txt << EOF
         Verify this issue. Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to verify the issue and decide whether it should be fixed or not. If you do decide to fix it, leave a quick comment on the PR to say what you did and why. If you decide not to fix it, leave a comment to say why not.
         
         PR Details:
         - URL: $PR_URL
         - Title: $PR_TITLE
-        - Body: $PR_BODY
+        - Body: $(cat pr_body.txt)
         
         Review Details:
         - Reviewer: $REVIEWER
         - State: $REVIEW_STATE
-        - Review Body: $REVIEW_BODY
+        - Review Body: $(cat review_body.txt)
         
         PR Comments:
           $COMMENTS
@@ -84,6 +91,9 @@ jobs:
         echo "=== Cursor Background Agent Launched ==="
         echo "The agent will analyze the PR review and take appropriate action."
         echo "Check the PR for any comments or changes made by the agent."
+        
+        # Cleanup temporary files
+        rm -f pr_body.txt review_body.txt prompt.txt
   
     - name: Log Review Details
       run: |
