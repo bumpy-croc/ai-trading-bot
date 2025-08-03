@@ -21,6 +21,7 @@ class CacheEntry:
     timestamp: float
     ttl: int
     data_hash: str
+    quick_hash: str  # * Added quick hash for two-tier approach
     
     def is_expired(self) -> bool:
         """Check if the cache entry has expired."""
@@ -35,8 +36,9 @@ class FeatureCache:
     """
     Simple in-memory cache for feature extraction results.
     
-    This cache uses data content hashing to determine cache keys and includes
-    TTL (time-to-live) functionality to ensure data freshness.
+    This cache uses a two-tier hashing approach to optimize performance:
+    1. Quick hash: Based on DataFrame shape and sample values (fast)
+    2. Full hash: Complete content hash when quick hash matches (accurate)
     """
     
     def __init__(self, default_ttl: int = DEFAULT_FEATURE_CACHE_TTL):
@@ -48,39 +50,78 @@ class FeatureCache:
         """
         self.default_ttl = default_ttl
         self._cache: Dict[str, CacheEntry] = {}
+        self._quick_hash_cache: Dict[str, str] = {}  # * Quick hash to full hash mapping
         self._stats = {
             'hits': 0,
             'misses': 0,
             'evictions': 0,
-            'sets': 0
+            'sets': 0,
+            'quick_hash_matches': 0,  # * Track quick hash performance
+            'full_hash_verifications': 0  # * Track full hash usage
         }
     
-    def _generate_data_hash(self, data: pd.DataFrame) -> str:
+    def _generate_quick_hash(self, data: pd.DataFrame) -> str:
         """
-        Generate a hash of the DataFrame content for cache key generation.
+        Generate a quick hash based on DataFrame shape and sample values.
+        
+        This is much faster than full content hashing and provides a good
+        first-level filter for cache lookups.
         
         Args:
             data: DataFrame to hash
             
         Returns:
-            Hash string representing the data content
+            Quick hash string
         """
         try:
-            # Compute hash for the DataFrame content using pandas utility
+            # * Use shape, dtypes, and sample values for quick identification
+            shape_str = f"{data.shape[0]}_{data.shape[1]}"
+            dtypes_str = str(sorted(data.dtypes.astype(str).items()))
+            
+            # * Sample first and last few values for quick comparison
+            sample_size = min(3, len(data))
+            if len(data) > 0:
+                first_values = data.iloc[:sample_size].values.flatten()
+                last_values = data.iloc[-sample_size:].values.flatten()
+                sample_str = f"{first_values.tobytes().hex()}_{last_values.tobytes().hex()}"
+            else:
+                sample_str = "empty"
+            
+            # * Combine shape, dtypes, and samples for quick hash
+            quick_content = f"{shape_str}_{dtypes_str}_{sample_str}"
+            return hashlib.md5(quick_content.encode()).hexdigest()
+        except Exception:
+            # * Fallback to simple shape-based hash
+            return hashlib.md5(f"{data.shape}_{data.dtypes.astype(str)}".encode()).hexdigest()
+    
+    def _generate_full_data_hash(self, data: pd.DataFrame) -> str:
+        """
+        Generate a complete hash of the DataFrame content for cache key generation.
+        
+        This is more expensive but provides accurate content identification.
+        
+        Args:
+            data: DataFrame to hash
+            
+        Returns:
+            Full hash string representing the data content
+        """
+        try:
+            # * Compute hash for the DataFrame content using pandas utility
             content_hash = pd.util.hash_pandas_object(data, index=True).values
             
-            # Combine with index and column hashes for uniqueness
+            # * Combine with index and column hashes for uniqueness
             index_hash = pd.util.hash_pandas_object(data.index).values
             columns_hash = pd.util.hash_pandas_object(data.columns).values
             
-            # Concatenate all hashes and generate a final hash
+            # * Concatenate all hashes and generate a final hash
             combined_hash = np.concatenate([content_hash, index_hash, columns_hash])
             return hashlib.sha256(combined_hash.tobytes()).hexdigest()
         except pd.errors.PandasError:
-            # Fallback to a less efficient but robust method
+            # * Fallback to a less efficient but robust method
             return hashlib.sha256(pd.util.hash_pandas_object(data, index=True).values.tobytes()).hexdigest()
     
-    def _generate_cache_key(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any]) -> str:
+    def _generate_cache_key(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], use_quick_hash: bool = True) -> str:
         """
         Generate a cache key for the given data, extractor, and configuration.
         
@@ -88,19 +129,55 @@ class FeatureCache:
             data: Input data
             extractor_name: Name of the feature extractor
             config: Extractor configuration
+            use_quick_hash: Whether to use quick hash for key generation
             
         Returns:
             Cache key string
         """
-        data_hash = self._generate_data_hash(data)
+        if use_quick_hash:
+            data_hash = self._generate_quick_hash(data)
+        else:
+            data_hash = self._generate_full_data_hash(data)
+            
         config_str = str(sorted(config.items()))
         config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
         
         return f"{extractor_name}_{data_hash}_{config_hash}"
     
+    def _find_by_quick_hash(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any]) -> Optional[Tuple[str, CacheEntry]]:
+        """
+        Find cache entry using quick hash first, then verify with full hash.
+        
+        Args:
+            data: Input data
+            extractor_name: Name of the feature extractor
+            config: Extractor configuration
+            
+        Returns:
+            Tuple of (cache_key, cache_entry) if found, None otherwise
+        """
+        quick_key = self._generate_cache_key(data, extractor_name, config, use_quick_hash=True)
+        
+        # * Check if quick hash exists in cache
+        if quick_key not in self._cache:
+            return None
+        
+        entry = self._cache[quick_key]
+        
+        # * Verify with full hash to ensure accuracy
+        full_hash = self._generate_full_data_hash(data)
+        if entry.data_hash != full_hash:
+            # * Hash mismatch - remove incorrect entry
+            del self._cache[quick_key]
+            self._stats['evictions'] += 1
+            return None
+        
+        self._stats['quick_hash_matches'] += 1
+        return quick_key, entry
+    
     def get(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], copy: bool = True) -> Optional[pd.DataFrame]:
         """
-        Get cached feature extraction result.
+        Get cached feature extraction result using two-tier hashing.
         
         Args:
             data: Input data used for feature extraction
@@ -111,17 +188,16 @@ class FeatureCache:
         Returns:
             Cached DataFrame if available and valid, None otherwise
         """
-        cache_key = self._generate_cache_key(data, extractor_name, config)
-        
-        if cache_key not in self._cache:
+        # * Try quick hash first for performance
+        result = self._find_by_quick_hash(data, extractor_name, config)
+        if result is None:
             self._stats['misses'] += 1
             return None
         
-        entry = self._cache[cache_key]
+        cache_key, entry = result
         
-        # Check TTL using entry's own TTL value
+        # * Check TTL using entry's own TTL value
         if not entry.is_valid():
-            # logger.debug(f"Cache entry for {extractor_name} expired.") # Original code had this line commented out
             del self._cache[cache_key]
             self._stats['evictions'] += 1
             self._stats['misses'] += 1
@@ -133,7 +209,7 @@ class FeatureCache:
     def set(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], 
             result: pd.DataFrame, ttl: Optional[int] = None) -> None:
         """
-        Cache feature extraction result.
+        Cache feature extraction result using two-tier hashing.
         
         Args:
             data: Input data used for feature extraction
@@ -142,23 +218,25 @@ class FeatureCache:
             result: Feature extraction result to cache
             ttl: Time-to-live for this entry (uses default if None)
         """
-        cache_key = self._generate_cache_key(data, extractor_name, config)
-        data_hash = self._generate_data_hash(data)
+        quick_key = self._generate_cache_key(data, extractor_name, config, use_quick_hash=True)
+        full_hash = self._generate_full_data_hash(data)
+        quick_hash = self._generate_quick_hash(data)
         ttl = ttl or self.default_ttl
         
         entry = CacheEntry(
             data=result.copy(),
             timestamp=time.time(),
             ttl=ttl,
-            data_hash=data_hash
+            data_hash=full_hash,
+            quick_hash=quick_hash
         )
         
-        self._cache[cache_key] = entry
+        self._cache[quick_key] = entry
         self._stats['sets'] += 1
     
     def has(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any]) -> bool:
         """
-        Check if cached result exists and is valid.
+        Check if cached result exists and is valid using two-tier hashing.
         
         Args:
             data: Input data
@@ -173,11 +251,14 @@ class FeatureCache:
     def clear(self) -> None:
         """Clear all cached entries."""
         self._cache.clear()
+        self._quick_hash_cache.clear()
         self._stats = {
             'hits': 0,
             'misses': 0,
             'evictions': 0,
-            'sets': 0
+            'sets': 0,
+            'quick_hash_matches': 0,
+            'full_hash_verifications': 0
         }
     
     def cleanup_expired(self) -> int:
@@ -201,7 +282,7 @@ class FeatureCache:
     
     def get_stats(self) -> Dict[str, Any]:
         """
-        Get cache statistics.
+        Get cache statistics including two-tier hashing performance.
         
         Returns:
             Dictionary with cache statistics
@@ -209,10 +290,17 @@ class FeatureCache:
         total_requests = self._stats['hits'] + self._stats['misses']
         hit_rate = self._stats['hits'] / total_requests if total_requests > 0 else 0.0
         
+        # * Calculate quick hash efficiency
+        quick_hash_efficiency = (
+            self._stats['quick_hash_matches'] / total_requests 
+            if total_requests > 0 else 0.0
+        )
+        
         return {
             'total_entries': len(self._cache),
             'hit_rate': hit_rate,
             'total_requests': total_requests,
+            'quick_hash_efficiency': quick_hash_efficiency,
             **self._stats
         }
     
@@ -227,7 +315,7 @@ class FeatureCache:
         entry_sizes = []
         
         for entry in self._cache.values():
-            # Rough estimate of DataFrame memory usage
+            # * Rough estimate of DataFrame memory usage
             entry_size = entry.data.memory_usage(deep=True).sum()
             entry_sizes.append(entry_size)
             total_memory += entry_size

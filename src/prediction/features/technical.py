@@ -151,7 +151,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
                 df[f'{feature}_normalized'] = np.where(
                     valid_mask,
                     (df[feature] - rolling_min) / (rolling_max - rolling_min),
-                    0.0  # Handle cases where min == max or NaN to avoid division by zero
+                    0.5  # Handle cases where min == max or NaN - use neutral value instead of minimum
                 )
         return df
     
