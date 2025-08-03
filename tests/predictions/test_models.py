@@ -2,6 +2,7 @@
 Tests for prediction engine model components.
 """
 
+import json
 import pytest
 import numpy as np
 from unittest.mock import Mock, patch, mock_open
@@ -206,6 +207,91 @@ class TestOnnxRunner:
             assert prediction.inference_time >= 0
             assert isinstance(prediction.confidence, float)
             assert prediction.direction in [-1, 0, 1]
+    
+    @patch('onnxruntime.InferenceSession')
+    def test_input_preparation_different_shapes(self, mock_session):
+        """Test input preparation with different input shapes"""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+        
+        with patch('builtins.open', mock_open(read_data='{"sequence_length": 120}')):
+            runner = OnnxRunner("test_model.onnx", self.config)
+            
+            # Test 1D input
+            features_1d = np.random.rand(5).astype(np.float32)
+            result = runner._prepare_input(features_1d)
+            assert result.shape == (1, 1, 5)
+            assert result.dtype == np.float32
+            
+            # Test 2D input
+            features_2d = np.random.rand(10, 5).astype(np.float32)
+            result = runner._prepare_input(features_2d)
+            assert result.shape == (1, 10, 5)
+            assert result.dtype == np.float32
+            
+            # Test 3D input
+            features_3d = np.random.rand(2, 10, 5).astype(np.float32)
+            result = runner._prepare_input(features_3d)
+            assert result.shape == (2, 10, 5)
+            assert result.dtype == np.float32
+            
+            # Test invalid input shape
+            features_4d = np.random.rand(2, 3, 4, 5).astype(np.float32)
+            with pytest.raises(ValueError, match="Features must be 1D, 2D, or 3D array"):
+                runner._prepare_input(features_4d)
+    
+    @patch('onnxruntime.InferenceSession')
+    def test_normalize_features_zero_std_fix(self, mock_session):
+        """Test that ZeroDivisionError is prevented when std is 0.0"""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+        
+        # Mock metadata with zero std values
+        metadata = {
+            "normalization_params": {
+                "feature1": {"mean": 0.0, "std": 0.0},
+                "feature2": {"mean": 1.0, "std": 0.0},
+                "feature3": {"mean": 0.5, "std": 1.0}
+            }
+        }
+        
+        with patch('builtins.open', mock_open(read_data=json.dumps(metadata))):
+            runner = OnnxRunner("test_model.onnx", self.config)
+            
+            # Create 3D features
+            features = np.random.rand(1, 10, 3).astype(np.float32)
+            
+            # This should not raise ZeroDivisionError
+            normalized = runner._normalize_features(features)
+            
+            assert normalized.shape == features.shape
+            assert not np.isnan(normalized).any()
+            assert not np.isinf(normalized).any()
+    
+    @patch('onnxruntime.InferenceSession')
+    def test_normalize_features_invalid_shape_fix(self, mock_session):
+        """Test that IndexError is prevented with invalid input shapes"""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+        
+        metadata = {
+            "normalization_params": {
+                "feature1": {"mean": 0.0, "std": 1.0}
+            }
+        }
+        
+        with patch('builtins.open', mock_open(read_data=json.dumps(metadata))):
+            runner = OnnxRunner("test_model.onnx", self.config)
+            
+            # Test with 2D features (should raise ValueError)
+            features_2d = np.random.rand(10, 1).astype(np.float32)
+            with pytest.raises(ValueError, match="Features must be 3D for normalization"):
+                runner._normalize_features(features_2d)
+            
+            # Test with 1D features (should raise ValueError)
+            features_1d = np.random.rand(5).astype(np.float32)
+            with pytest.raises(ValueError, match="Features must be 3D for normalization"):
+                runner._normalize_features(features_1d)
 
 
 class TestPredictionModelRegistry:

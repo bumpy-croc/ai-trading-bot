@@ -100,9 +100,18 @@ class OnnxRunner:
     
     def _prepare_input(self, features: np.ndarray) -> np.ndarray:
         """Prepare features for model input"""
-        # Ensure correct shape (batch_size, sequence_length, features)
-        if len(features.shape) == 2:
+        # Handle different input shapes
+        if len(features.shape) == 1:
+            # 1D input: (features,) -> (1, 1, features)
+            features = features.reshape(1, 1, -1)
+        elif len(features.shape) == 2:
+            # 2D input: (sequence_length, features) -> (1, sequence_length, features)
             features = features.reshape(1, -1, features.shape[1])
+        elif len(features.shape) == 3:
+            # 3D input: (batch_size, sequence_length, features) - already correct
+            pass
+        else:
+            raise ValueError(f"Features must be 1D, 2D, or 3D array, got shape {features.shape}")
         
         # Normalize features if metadata contains normalization params
         if self.model_metadata.get('normalization_params'):
@@ -114,10 +123,19 @@ class OnnxRunner:
         """Normalize features using model metadata"""
         norm_params = self.model_metadata['normalization_params']
         
+        # Ensure features is 3D
+        if len(features.shape) != 3:
+            raise ValueError(f"Features must be 3D for normalization, got shape {features.shape}")
+        
         for i, feature_name in enumerate(norm_params.keys()):
             if i < features.shape[2]:  # Check feature index bounds
                 mean = norm_params[feature_name].get('mean', 0.0)
                 std = norm_params[feature_name].get('std', 1.0)
+                
+                # * Prevent ZeroDivisionError by using a minimum std value
+                if std == 0.0:
+                    std = 1e-8  # Small epsilon to prevent division by zero
+                
                 features[:, :, i] = (features[:, :, i] - mean) / std
         
         return features
