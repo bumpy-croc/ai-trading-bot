@@ -885,13 +885,13 @@ class MonitoringDashboard:
             return 0.0
     
     def _get_total_position_sizes(self) -> float:
-        """Get total quantity of all active positions"""
+        """Get total position size of all active positions"""
         try:
             positions = self.db_manager.get_active_positions()
-            total_quantities = sum(self._safe_float(pos.get('quantity', 0)) for pos in positions)
-            return total_quantities
+            total_sizes = sum(self._safe_float(pos.get('quantity', 0)) for pos in positions)
+            return total_sizes
         except Exception as e:
-            logger.error(f"Error getting total position quantities: {e}")
+            logger.error(f"Error getting total position sizes: {e}")
             return 0.0
     
     def _get_total_position_value_at_entry(self) -> float:
