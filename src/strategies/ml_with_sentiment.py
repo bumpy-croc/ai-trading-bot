@@ -6,7 +6,7 @@ for enhanced prediction accuracy. It uses sophisticated feature engineering and 
 handle missing or stale sentiment data.
 
 Key Features:
-- Multi-modal predictions using price + sentiment data (14 features total)
+- Multi-modal predictions using prediction engine with sentiment support
 - Real-time sentiment integration via SentiCrypt API
 - Graceful degradation when sentiment data is unavailable
 - Advanced feature engineering with sentiment confidence scoring
@@ -28,8 +28,6 @@ Ideal for:
 
 import numpy as np
 import pandas as pd
-import onnx
-import onnxruntime as ort
 import os
 import json
 from datetime import datetime, timedelta
@@ -37,27 +35,20 @@ from src.strategies.base import BaseStrategy
 from src.data_providers.senticrypt_provider import SentiCryptProvider
 
 class MlWithSentiment(BaseStrategy):
-    def __init__(self, name="MlWithSentiment", model_path=None, sequence_length=120, 
-                 use_sentiment=True, sentiment_csv_path=None):
-        super().__init__(name)
+    """ML strategy with sentiment using prediction engine"""
+    
+    def __init__(self, name="MlWithSentiment", 
+                 use_sentiment=True, 
+                 sentiment_csv_path=None, 
+                 **kwargs):
+        super().__init__(name, **kwargs)
         
         # Set strategy-specific trading pair - will be determined by model
-        self.trading_pair = 'BTCUSDT'  # Default, can be overridden
+        self.trading_pair = kwargs.get('symbol', 'BTCUSDT')
         
-        # Model configuration
-        self.sequence_length = sequence_length
+        # Strategy configuration
         self.use_sentiment = use_sentiment
-        
-        # Determine model path
-        if model_path is None:
-            model_suffix = "sentiment" if use_sentiment else "price"
-            model_path = f"src/ml/{self.trading_pair.lower()}_{model_suffix}.onnx"
-        
-        self.model_path = model_path
-        
-        # Load model and metadata
-        self._load_model()
-        self._load_metadata()
+        self.sentiment_weight = 0.3  # Weight for combining ML and sentiment signals
         
         # Initialize sentiment provider if needed
         self.sentiment_provider = None
@@ -68,134 +59,73 @@ class MlWithSentiment(BaseStrategy):
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
         
+        # ML prediction thresholds
+        self.min_confidence_threshold = 0.6  # Minimum confidence for entry
+        
         # Feature tracking
         self.feature_names = []
         self.sentiment_features = []
-        
-    def _load_model(self):
-        """Load the ONNX model"""
-        try:
-            if not os.path.exists(self.model_path):
-                raise FileNotFoundError(f"Model file not found: {self.model_path}")
-            
-            self.ort_session = ort.InferenceSession(self.model_path)
-            self.input_name = self.ort_session.get_inputs()[0].name
-            
-            # Get input shape to determine expected features
-            input_shape = self.ort_session.get_inputs()[0].shape
-            self.expected_features = input_shape[2] if len(input_shape) > 2 else 1
-            
-            print(f"Loaded model: {self.model_path}")
-            print(f"Expected input shape: {input_shape}")
-            
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
     
-    def _load_metadata(self):
-        """Load model metadata if available"""
-        metadata_path = self.model_path.replace('.onnx', '_metadata.json')
-        
-        if os.path.exists(metadata_path):
-            try:
-                with open(metadata_path, 'r') as f:
-                    self.metadata = json.load(f)
-                
-                # Extract feature information
-                if 'feature_names' in self.metadata:
-                    self.feature_names = self.metadata['feature_names']
-                    self.sentiment_features = [f for f in self.feature_names if f.startswith('sentiment_')]
-                
-                # Update trading pair from metadata
-                if 'symbol' in self.metadata:
-                    self.trading_pair = self.metadata['symbol']
-                
-                print(f"Loaded metadata: {len(self.feature_names)} features")
-                if self.sentiment_features:
-                    print(f"Sentiment features: {len(self.sentiment_features)}")
-                
-            except Exception as e:
-                print(f"Warning: Could not load metadata: {e}")
-                self.metadata = {}
-        else:
-            print(f"No metadata file found: {metadata_path}")
-            self.metadata = {}
+    def _init_strategy_params(self, **kwargs):
+        """Initialize strategy-specific parameters"""
+        self.stop_loss_pct = kwargs.get('stop_loss_pct', 0.02)
+        self.take_profit_pct = kwargs.get('take_profit_pct', 0.04)
+        self.min_confidence_threshold = kwargs.get('min_confidence_threshold', 0.6)
+        self.sentiment_weight = kwargs.get('sentiment_weight', 0.3)
     
-    def _initialize_sentiment_provider(self, csv_path=None):
+    def _initialize_sentiment_provider(self, sentiment_csv_path=None):
         """Initialize sentiment data provider"""
         try:
-            if csv_path is None:
-                # Use default path
-                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                csv_path = os.path.join(project_root, 'data', 'senticrypt_sentiment_data.csv')
-            
-            # Initialize with live mode for real-time trading
-            self.sentiment_provider = SentiCryptProvider(
-                csv_path=csv_path, 
-                live_mode=True,  # Enable live API calls
-                cache_duration_minutes=15  # Refresh every 15 minutes
-            )
-            print(f"Initialized sentiment provider with {len(self.sentiment_provider.data)} records")
-            
+            if sentiment_csv_path and os.path.exists(sentiment_csv_path):
+                # CSV-based provider
+                self.sentiment_provider = SentiCryptProvider(csv_file_path=sentiment_csv_path)
+                print(f"✅ Initialized CSV sentiment provider: {sentiment_csv_path}")
+            else:
+                # API-based provider
+                self.sentiment_provider = SentiCryptProvider()
+                print("✅ Initialized API sentiment provider")
+                
         except Exception as e:
-            print(f"Warning: Could not initialize sentiment provider: {e}")
+            print(f"⚠️ Failed to initialize sentiment provider: {e}")
             self.sentiment_provider = None
             self.use_sentiment = False
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate indicators including sentiment features"""
+        """Calculate indicators and add sentiment features"""
         df = df.copy()
         
-        # Add sentiment data if enabled
-        if self.use_sentiment and self.sentiment_provider is not None:
+        # Process sentiment features if enabled
+        if self.use_sentiment and self.sentiment_provider:
             df = self._add_sentiment_features(df)
-        
-        # Normalize price features (same as training)
-        price_features = ['close', 'volume', 'high', 'low', 'open']
-        for feature in price_features:
-            if feature in df.columns:
-                # Simple min-max normalization within the sequence window
-                df[f'{feature}_normalized'] = df[feature].rolling(
-                    window=self.sequence_length, min_periods=1
-                ).apply(
-                    lambda x: (x[-1] - np.min(x)) / (np.max(x) - np.min(x)) if np.max(x) != np.min(x) else 0.5,
-                    raw=True
-                )
-        
-        # Prepare predictions column
-        df['ml_prediction'] = np.nan
-        df['prediction_confidence'] = np.nan
-        df['sentiment_freshness'] = np.nan  # Track sentiment data age
-        
-        # Generate predictions
-        self._generate_predictions(df)
+        else:
+            # Ensure sentiment features exist with neutral values
+            self._ensure_sentiment_features(df, False)
         
         return df
-    
+
     def _add_sentiment_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add sentiment features to the dataframe with graceful missing data handling"""
-        
-        # Always initialize the sentiment data availability flag
-        sentiment_data_available = False
-        
+        """Add sentiment analysis features to the dataframe"""
         try:
-            # Get sentiment data for the date range
+            # Determine if we're in live trading or backtesting mode
+            current_time = pd.Timestamp.now()
+            latest_data_time = df.index.max()
+            is_live_trading = (current_time - latest_data_time) < pd.Timedelta(hours=1)
+            
+            sentiment_data_available = False
+            
+            # Get date range for sentiment data
             start_date = df.index.min()
             end_date = df.index.max()
             
-            # Check if we're dealing with recent data (live trading scenario)
-            current_time = pd.Timestamp.now()
-            is_recent_data = (end_date - current_time).total_seconds() > -3600  # Within last hour
-            
-            if is_recent_data and hasattr(self.sentiment_provider, 'get_live_sentiment'):
-                print("🔴 LIVE TRADING MODE: Attempting to use real-time sentiment data")
+            if is_live_trading and hasattr(self.sentiment_provider, 'get_live_sentiment'):
+                print("🔴 LIVE TRADING MODE: Attempting to fetch live sentiment...")
                 
                 try:
-                    # Get historical sentiment for the bulk of the data
+                    # Get historical sentiment for the period
                     historical_sentiment = self.sentiment_provider.get_historical_sentiment(
                         symbol=self.trading_pair,
                         start=start_date,
-                        end=end_date - pd.Timedelta(hours=2)  # Get historical up to 2 hours ago
+                        end=end_date - pd.Timedelta(hours=1)  # Don't overlap with live data
                     )
                     
                     # Get live sentiment for the most recent data points
@@ -300,267 +230,117 @@ class MlWithSentiment(BaseStrategy):
                 if recent_mask.any():
                     df.loc[recent_mask, 'sentiment_confidence'] = 0.9  # Higher confidence for recent data
                 
-            # Ensure all expected features exist
-            for feature in expected_features:
-                if feature not in df.columns:
-                    print(f"⚠️ Missing expected sentiment feature: {feature}, using neutral value")
-                    df[feature] = self._get_neutral_sentiment_value(feature)
-                else:
-                    # Fill any remaining NaN with appropriate neutral values
-                    neutral_value = self._get_neutral_sentiment_value(feature)
-                    df[feature] = df[feature].fillna(neutral_value)
-            
-            # Mark sentiment freshness
-            current_time = pd.Timestamp.now()
-            df['sentiment_freshness'] = 0  # Default to historical
-            
-            # Check for recent data and mark as fresh
-            recent_mask = df.index >= (current_time - pd.Timedelta(hours=2))
-            if recent_mask.any():
-                df.loc[recent_mask, 'sentiment_freshness'] = 1
+                # Calculate moving averages
+                if 'sentiment_ma_3' not in df.columns:
+                    df['sentiment_ma_3'] = df['sentiment_primary'].rolling(window=3, min_periods=1).mean()
+                if 'sentiment_ma_7' not in df.columns:
+                    df['sentiment_ma_7'] = df['sentiment_primary'].rolling(window=7, min_periods=1).mean()
+                if 'sentiment_ma_14' not in df.columns:
+                    df['sentiment_ma_14'] = df['sentiment_primary'].rolling(window=14, min_periods=1).mean()
                 
+                # Calculate extreme sentiment flags
+                if 'sentiment_extreme_positive' not in df.columns:
+                    df['sentiment_extreme_positive'] = (df['sentiment_primary'] > 0.7).astype(int)
+                if 'sentiment_extreme_negative' not in df.columns:
+                    df['sentiment_extreme_negative'] = (df['sentiment_primary'] < -0.7).astype(int)
+                
+                print(f"✅ Processed sentiment features. Confidence range: {df['sentiment_confidence'].min():.2f} - {df['sentiment_confidence'].max():.2f}")
+            
         else:
-            print("🔄 FALLBACK MODE: Using neutral sentiment values for all features")
+            print("🔄 Using neutral sentiment fallback values...")
             
-            # No sentiment data available - use neutral/model-friendly values
-            for feature in expected_features:
-                neutral_value = self._get_neutral_sentiment_value(feature)
-                df[feature] = neutral_value
-                print(f"   {feature}: {neutral_value}")
-                
-            df['sentiment_freshness'] = -1  # No real sentiment data
-            
-        print(f"✅ Ensured {len(expected_features)} sentiment features are available")
-    
-    def _get_neutral_sentiment_value(self, feature_name: str) -> float:
-        """Get appropriate neutral value for a sentiment feature"""
+        # Ensure all expected features exist
+        for feature in expected_features:
+            if feature not in df.columns:
+                if 'confidence' in feature:
+                    df[feature] = 0.5  # Medium confidence fallback
+                elif 'extreme' in feature:
+                    df[feature] = 0  # No extreme sentiment
+                else:
+                    df[feature] = 0.0  # Neutral sentiment
         
-        # Map feature names to appropriate neutral values
-        if 'primary' in feature_name.lower():
-            return 0.5  # Neutral sentiment (assuming 0-1 scale)
-        elif 'momentum' in feature_name.lower():
-            return 0.0  # No momentum
-        elif 'volatility' in feature_name.lower():
-            return 0.3  # Low-moderate volatility
-        elif 'extreme_positive' in feature_name.lower():
-            return 0.0  # No extreme positive sentiment
-        elif 'extreme_negative' in feature_name.lower():
-            return 0.0  # No extreme negative sentiment
-        elif 'ma_' in feature_name.lower():
-            return 0.5  # Neutral moving average
-        elif 'confidence' in feature_name.lower():
-            return 0.7  # Moderate confidence
-        else:
-            return 0.0  # Default neutral value
-    
-    def _is_sentiment_data_fresh(self, df: pd.DataFrame) -> bool:
-        """Check if sentiment data is reasonably fresh"""
-        if 'sentiment_freshness' not in df.columns:
-            return False
+        # Fill any remaining NaN values
+        sentiment_cols = [col for col in df.columns if col.startswith('sentiment_')]
+        if sentiment_cols:
+            df[sentiment_cols] = df[sentiment_cols].fillna(0.0)
             
-        # Consider data fresh if any recent points have fresh data
-        recent_freshness = df['sentiment_freshness'].tail(10).max()
-        return recent_freshness > 0
-    
-    def _generate_predictions(self, df: pd.DataFrame):
-        """Generate ML predictions for the dataframe"""
-        try:
-            # Calculate denormalization parameters from data
-            price_min = df['close'].min()
-            price_max = df['close'].max()
-            price_range = price_max - price_min
-            
-            # Use exact feature names from model training (excluding metadata fields)
-            if self.feature_names:
-                features_to_use = self.feature_names.copy()
-                # Remove metadata fields that shouldn't be model features
-                metadata_fields = ['sentiment_freshness']
-                features_to_use = [f for f in features_to_use if f not in metadata_fields]
-            else:
-                # Fallback to basic features
-                features_to_use = ['close', 'volume', 'high', 'low', 'open']
-                if self.use_sentiment:
-                    # Only include actual sentiment features, not metadata
-                    sentiment_features = [
-                        'sentiment_primary', 'sentiment_momentum', 'sentiment_volatility',
-                        'sentiment_extreme_positive', 'sentiment_extreme_negative',
-                        'sentiment_ma_3', 'sentiment_ma_7', 'sentiment_ma_14', 'sentiment_confidence'
-                    ]
-                    features_to_use.extend(sentiment_features)
-            
-            # Ensure all required features are present
-            available_features = []
-            missing_features = 0
-            for feature in features_to_use:
-                if feature in df.columns:
-                    available_features.append(feature)
-                else:
-                    # Create missing feature with neutral values
-                    if feature.startswith('sentiment_'):
-                        df[feature] = self._get_neutral_sentiment_value(feature)
-                    else:
-                        df[feature] = 0.0
-                    available_features.append(feature)
-                    missing_features += 1
-            
-            # Generate predictions for each valid window
-            predictions_generated = 0
-            prediction_errors = 0
-            
-            for i in range(self.sequence_length, len(df)):
-                try:
-                    # Extract feature window
-                    window_data = df[available_features].iloc[i-self.sequence_length:i].values
-                    
-                    # Check for NaN values in the input
-                    if np.isnan(window_data).any():
-                        prediction_errors += 1
-                        continue
-                    
-                    # Reshape for model input and ensure float32 type
-                    input_window = window_data.astype(np.float32)
-                    input_window = np.expand_dims(input_window, axis=0)  # Add batch dimension
-                    
-                    # Ensure correct number of features
-                    if input_window.shape[2] != self.expected_features:
-                        if input_window.shape[2] < self.expected_features:
-                            # Pad with zeros
-                            padding = np.zeros((1, self.sequence_length, 
-                                              self.expected_features - input_window.shape[2]), dtype=np.float32)
-                            input_window = np.concatenate([input_window, padding], axis=2)
-                        else:
-                            # Truncate
-                            input_window = input_window[:, :, :self.expected_features]
-                    
-                    # Ensure input is float32
-                    input_window = input_window.astype(np.float32)
-                    
-                    # Make prediction
-                    output = self.ort_session.run(None, {self.input_name: input_window})
-                    prediction = output[0][0][0]
-                    
-                    # Denormalize prediction from MinMaxScaler(0, 1) back to price
-                    denormalized_pred = prediction * price_range + price_min
-                    
-                    # Skip invalid predictions
-                    if np.isnan(denormalized_pred) or np.isinf(denormalized_pred):
-                        prediction_errors += 1
-                        continue
-                    
-                    df.iloc[i, df.columns.get_loc('ml_prediction')] = denormalized_pred
-                    
-                    # Calculate confidence (simple measure based on prediction vs current price)
-                    current_price = df['close'].iloc[i-1]
-                    confidence = 1.0 - abs(denormalized_pred - current_price) / current_price
-                    df.iloc[i, df.columns.get_loc('prediction_confidence')] = max(0, min(1, confidence))
-                    
-                    predictions_generated += 1
-                    
-                except Exception as e:
-                    prediction_errors += 1
-                    continue
-            
-            # Report final results
-            if predictions_generated > 0 or prediction_errors > 0:
-                print(f"Generated {predictions_generated} ML predictions ({prediction_errors} errors)")
-                    
-        except Exception as e:
-            print(f"Error generating predictions: {e}")
+        print(f"📊 Final sentiment features: {sentiment_cols}")
 
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
-        """Check if conditions are met for entering a position"""
+        """Check if we should enter a position using prediction engine"""
         if index < 1 or index >= len(df):
             return False
         
-        # Check if we have a valid prediction
-        if pd.isna(df['ml_prediction'].iloc[index]):
-            # Log the missing prediction
+        # Get prediction from engine
+        prediction = self.get_prediction(df, index)
+        
+        if prediction.get('error'):
+            # Log the error
             self.log_execution(
                 signal_type='entry',
                 action_taken='no_action',
                 price=df['close'].iloc[index],
-                reasons=['missing_ml_prediction'],
+                reasons=[f'prediction_error: {prediction["error"]}'],
                 additional_context={'prediction_available': False}
             )
             return False
         
-        prediction = df['ml_prediction'].iloc[index]
-        current_price = df['close'].iloc[index]
-        confidence = df.get('prediction_confidence', pd.Series([0.5] * len(df))).iloc[index]
+        # Get sentiment score
+        sentiment_score = self._get_sentiment_score(df, index)
         
-        # Get sentiment freshness (higher weight for fresh sentiment)
-        sentiment_freshness = df.get('sentiment_freshness', pd.Series([0] * len(df))).iloc[index]
-        freshness_boost = 1.1 if sentiment_freshness > 0 else 1.0  # 10% boost for live sentiment
+        # Combine ML prediction with sentiment
+        combined_confidence = self._combine_confidence(
+            prediction['confidence'], 
+            sentiment_score
+        )
         
-        # Entry condition: prediction is higher than current price with sufficient confidence
-        price_increase_threshold = 0.002 / freshness_boost  # More lenient: 0.2% vs 0.5%
-        confidence_threshold = 0.3 / freshness_boost  # More lenient: 30% vs 60%
-        
-        predicted_return = (prediction - current_price) / current_price
-        
-        # Log detailed decision process
-        sentiment_data = {}
-        if 'sentiment_primary' in df.columns:
-            sentiment_data = {
-                'sentiment_primary': df['sentiment_primary'].iloc[index],
-                'sentiment_confidence': df.get('sentiment_confidence', pd.Series([0])).iloc[index],
-                'sentiment_freshness': sentiment_freshness
-            }
-        
-        ml_predictions = {
-            'raw_prediction': prediction,
-            'current_price': current_price,
-            'predicted_return': predicted_return,
-            'confidence': confidence,
-            'freshness_boost': freshness_boost
-        }
-        
-        # Determine entry signal
-        entry_signal = (predicted_return > price_increase_threshold and 
-                       confidence > confidence_threshold)
+        # Use combined signal for entry decision
+        should_enter = (prediction['direction'] == 1 and 
+                       combined_confidence > self.min_confidence_threshold)
         
         # Log the decision process
-        reasons = [
-            f'predicted_return_{predicted_return:.4f}_vs_threshold_{price_increase_threshold:.4f}',
-            f'confidence_{confidence:.4f}_vs_threshold_{confidence_threshold:.4f}',
-            f'freshness_boost_{freshness_boost:.2f}',
-            'entry_signal_met' if entry_signal else 'entry_signal_not_met'
-        ]
+        ml_predictions = {
+            'raw_prediction': prediction['price'],
+            'current_price': df['close'].iloc[index],
+            'confidence': prediction['confidence'],
+            'direction': prediction['direction']
+        }
         
-        # Add sentiment-specific reasons
-        if sentiment_freshness > 0:
-            reasons.append('fresh_sentiment_available')
-            reasons.append(f'sentiment_primary_{sentiment_data.get("sentiment_primary", 0):.3f}')
-        else:
-            reasons.append('historical_sentiment_only')
+        sentiment_data = {
+            'sentiment_score': sentiment_score,
+            'combined_confidence': combined_confidence,
+            'sentiment_available': self.use_sentiment and sentiment_score != 0.0
+        }
+        
+        reasons = [
+            f'ml_confidence_{prediction["confidence"]:.4f}',
+            f'sentiment_score_{sentiment_score:.4f}',
+            f'combined_confidence_{combined_confidence:.4f}',
+            f'direction_{prediction["direction"]}',
+            'entry_signal_met' if should_enter else 'entry_signal_not_met'
+        ]
         
         self.log_execution(
             signal_type='entry',
-            action_taken='entry_signal' if entry_signal else 'no_action',
-            price=current_price,
-            signal_strength=predicted_return if entry_signal else 0.0,
-            confidence_score=confidence,
-            sentiment_data=sentiment_data if sentiment_data else None,
+            action_taken='entry_signal' if should_enter else 'no_action',
+            price=df['close'].iloc[index],
+            signal_strength=combined_confidence if should_enter else 0.0,
+            confidence_score=combined_confidence,
             ml_predictions=ml_predictions,
+            sentiment_data=sentiment_data,
             reasons=reasons,
             additional_context={
                 'model_type': 'ml_with_sentiment',
-                'sequence_length': self.sequence_length,
-                'use_sentiment': self.use_sentiment,
+                'model_name': prediction['model_name'],
+                'sentiment_weight': self.sentiment_weight,
                 'prediction_available': True
             }
         )
         
-        if entry_signal and sentiment_freshness > 0:
-            print(f"🚀 LIVE SENTIMENT ENTRY: Fresh sentiment boosted confidence!")
-            print(f"   Predicted return: {predicted_return:.3f}")
-            print(f"   Confidence: {confidence:.3f}")
-            print(f"   Sentiment primary: {df.get('sentiment_primary', pd.Series([0])).iloc[index]:.3f}")
-        
-        return entry_signal
+        return should_enter
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
-        """Check if conditions are met for exiting a position"""
+        """Check if we should exit a position using prediction engine"""
         if index < 1 or index >= len(df):
             return False
         
@@ -571,52 +351,130 @@ class MlWithSentiment(BaseStrategy):
         hit_stop_loss = returns <= -self.stop_loss_pct
         hit_take_profit = returns >= self.take_profit_pct
         
-        # Additional exit condition: if prediction turns negative
-        if not pd.isna(df['ml_prediction'].iloc[index]):
-            prediction = df['ml_prediction'].iloc[index]
-            predicted_return = (prediction - current_price) / current_price
-            prediction_negative = predicted_return < -0.01  # Exit if predicting >1% drop
-        else:
-            prediction_negative = False
+        # Get prediction from engine for ML-based exit
+        prediction = self.get_prediction(df, index)
+        ml_exit_signal = False
         
-        return hit_stop_loss or hit_take_profit or prediction_negative
+        if not prediction.get('error'):
+            # Get sentiment score
+            sentiment_score = self._get_sentiment_score(df, index)
+            
+            # Combine ML prediction with sentiment
+            combined_confidence = self._combine_confidence(
+                prediction['confidence'], 
+                sentiment_score
+            )
+            
+            # Exit if combined signal suggests significant price drop
+            ml_exit_signal = (prediction['direction'] == -1 and 
+                            combined_confidence > self.min_confidence_threshold)
+        
+        should_exit = hit_stop_loss or hit_take_profit or ml_exit_signal
+        
+        # Determine exit reason
+        exit_reason = []
+        if hit_stop_loss:
+            exit_reason.append('stop_loss')
+        if hit_take_profit:
+            exit_reason.append('take_profit')
+        if ml_exit_signal:
+            exit_reason.append('ml_sentiment_exit_signal')
+        
+        # Log exit decision
+        if should_exit:
+            sentiment_data = {
+                'sentiment_score': self._get_sentiment_score(df, index) if not prediction.get('error') else 0.0,
+                'combined_confidence': combined_confidence if not prediction.get('error') else 0.0
+            }
+            
+            self.log_execution(
+                signal_type='exit',
+                action_taken='exit_signal',
+                price=current_price,
+                signal_strength=prediction.get('confidence', 0.0),
+                confidence_score=prediction.get('confidence', 0.0),
+                ml_predictions=prediction if not prediction.get('error') else None,
+                sentiment_data=sentiment_data,
+                reasons=exit_reason,
+                additional_context={
+                    'returns': returns,
+                    'entry_price': entry_price,
+                    'exit_type': ','.join(exit_reason)
+                }
+            )
+        
+        return should_exit
+
+    def _get_sentiment_score(self, df: pd.DataFrame, index: int) -> float:
+        """Get sentiment score for current data point"""
+        # Use existing sentiment data if available
+        if 'sentiment_primary' in df.columns and index < len(df):
+            return df.iloc[index]['sentiment_primary']
+        
+        # Fallback to neutral sentiment
+        return 0.0
+    
+    def _combine_confidence(self, ml_confidence: float, sentiment_score: float) -> float:
+        """Combine ML confidence with sentiment score"""
+        # Weighted combination
+        sentiment_confidence = abs(sentiment_score)  # Convert to 0-1 scale
+        combined = (1 - self.sentiment_weight) * ml_confidence + self.sentiment_weight * sentiment_confidence
+        return min(1.0, combined)
 
     def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
-        """Calculate position size based on prediction confidence"""
+        """Calculate position size based on combined ML and sentiment confidence"""
         if index >= len(df) or balance <= 0:
             return 0.0
         
-        base_position_size = balance * 0.10  # Base 10% of balance
+        # Get prediction for position sizing
+        prediction = self.get_prediction(df, index)
         
-        # Adjust based on confidence if available
-        if 'prediction_confidence' in df.columns and not pd.isna(df['prediction_confidence'].iloc[index]):
-            confidence = df['prediction_confidence'].iloc[index]
-            # Scale position size by confidence (0.5x to 1.5x)
-            confidence_multiplier = 0.5 + confidence
-            return base_position_size * confidence_multiplier
+        if prediction.get('error'):
+            return 0.0
         
-        return base_position_size
+        # Get sentiment score and combine with ML confidence
+        sentiment_score = self._get_sentiment_score(df, index)
+        combined_confidence = self._combine_confidence(
+            prediction['confidence'], 
+            sentiment_score
+        )
+        
+        if combined_confidence < self.min_confidence_threshold:
+            return 0.0
+        
+        # Base position size with combined confidence scaling
+        base_position_size = 0.1  # 10% of balance
+        min_position_size = 0.05  # 5% minimum
+        max_position_size = 0.2   # 20% maximum
+        
+        # Scale position size based on combined confidence
+        confidence_multiplier = combined_confidence / self.min_confidence_threshold
+        dynamic_size = base_position_size * confidence_multiplier
+        
+        # Apply bounds
+        final_size = max(min_position_size, min(max_position_size, dynamic_size))
+        
+        return final_size * balance
 
-    def get_parameters(self) -> dict:
-        """Get strategy parameters"""
-        params = {
-            'name': self.name,
-            'model_path': self.model_path,
-            'sequence_length': self.sequence_length,
-            'use_sentiment': self.use_sentiment,
-            'stop_loss_pct': self.stop_loss_pct,
-            'take_profit_pct': self.take_profit_pct,
-            'trading_pair': self.trading_pair
-        }
-        
-        if hasattr(self, 'metadata'):
-            params['model_metadata'] = self.metadata
-        
-        return params
-
-    def calculate_stop_loss(self, df, index, price, side: str = 'long') -> float:
+    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = 'long') -> float:
         """Calculate stop loss price"""
-        if side == 'long':
+        # Handle both string and enum inputs for backward compatibility
+        side_str = side.value if hasattr(side, 'value') else str(side)
+        
+        if side_str == 'long':
             return price * (1 - self.stop_loss_pct)
         else:  # short
-            return price * (1 + self.stop_loss_pct) 
+            return price * (1 + self.stop_loss_pct)
+
+    def get_parameters(self) -> dict:
+        """Return strategy parameters for logging"""
+        return {
+            'name': self.name,
+            'stop_loss_pct': self.stop_loss_pct,
+            'take_profit_pct': self.take_profit_pct,
+            'min_confidence_threshold': self.min_confidence_threshold,
+            'sentiment_weight': self.sentiment_weight,
+            'use_sentiment': self.use_sentiment,
+            'symbol': self.symbol,
+            'timeframe': self.timeframe
+        } 
