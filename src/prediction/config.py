@@ -40,8 +40,6 @@ class PredictionConfig:
     confidence_scale_factor: float = DEFAULT_CONFIDENCE_SCALE_FACTOR
     direction_threshold: float = DEFAULT_DIRECTION_THRESHOLD
 
-
-
     @classmethod
     def from_config_manager(cls) -> 'PredictionConfig':
         """
