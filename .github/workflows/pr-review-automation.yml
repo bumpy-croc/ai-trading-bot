@@ -8,6 +8,10 @@ jobs:
   cursor-agent-review:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
     
     # Only run for bugbot or copilot reviews
     if: |
@@ -64,8 +68,9 @@ jobs:
         echo "unresolved_comments=$UNRESOLVED_COMMENTS" >> $GITHUB_OUTPUT
         echo "unresolved_count=$UNRESOLVED_COUNT" >> $GITHUB_OUTPUT
         
-        # Also store the review body
-        echo "review_body=${{ github.event.review.body }}" >> $GITHUB_OUTPUT
+        # Also store the review body (sanitized for GitHub Actions output)
+        REVIEW_BODY=$(echo "${{ github.event.review.body }}" | tr '\n' ' ' | sed 's/"/\\"/g' | sed 's/\\/\\\\/g')
+        echo "review_body=$REVIEW_BODY" >> $GITHUB_OUTPUT
     
     - name: Launch Cursor Background Agent
       run: |
