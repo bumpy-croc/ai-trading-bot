@@ -33,8 +33,9 @@ jobs:
         A PR review has been submitted. Please analyze this PR and take appropriate action based on the reviewer's feedback.
         
         PR URL: ${{ github.event.pull_request.html_url }}
+        Branch: ${{ github.event.pull_request.head.ref }}
         
-        Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to verify the issues in this pull request and decide whether they should be fixed or not. Use the Github MCP server to access PR details and comments.If you do decide to fix them, leave a quick comment on the PR to say what you did and why. If you decide not to fix them, leave a comment to say why not. Push your changes directly to the PR branch.
+        Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to verify the issues in this pull request and decide whether they should be fixed or not. If you do decide to fix them, leave a quick comment on the PR to say what you did and why. If you decide not to fix them, leave a comment to say why not. 1. Use the Github MCP server to access PR details and comments. 2. Checkout the branch ${{ github.event.pull_request.head.ref }} 3. Make any changes required. 3. Add and push your changes directly to ${{ github.event.pull_request.head.ref }}.
         EOF
         
         echo "=== Sending to Cursor Background Agent ==="
