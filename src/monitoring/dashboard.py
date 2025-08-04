@@ -1244,7 +1244,7 @@ class MonitoringDashboard:
             query = f"""
             SELECT balance, timestamp
             FROM account_history
-            WHERE timestamp > NOW() - INTERVAL '{days} DAY'
+            WHERE timestamp > NOW() - INTERVAL '{days} DAYS'
             ORDER BY timestamp
             """
             result = self.db_manager.execute_query(query)
