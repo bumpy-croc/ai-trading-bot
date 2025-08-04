@@ -416,12 +416,6 @@ def run_performance_benchmark():
     
     return run_command(cmd, "Performance Benchmark")
 
-# Available commands
-AVAILABLE_COMMANDS = [
-    'smoke', 'critical', 'unit', 'integration', 'database', 
-    'coverage', 'all', 'validate', 'fast', 'slow', 'grouped', 'benchmark'
-]
-
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
@@ -445,7 +439,7 @@ Examples:
     parser.add_argument(
         'command',
         nargs='?',
-        choices=AVAILABLE_COMMANDS,
+        choices=['smoke', 'critical', 'unit', 'integration', 'database', 'coverage', 'all', 'validate', 'fast', 'slow', 'grouped', 'benchmark'],
         help='Test command to run'
     )
     
@@ -647,7 +641,7 @@ def main():
         success = run_specific_test_file(command)
     elif command:
         print_error(f"Unknown command: {command}")
-        print("Available commands: " + ", ".join(AVAILABLE_COMMANDS))
+        print("Available commands: smoke, critical, unit, integration, coverage, all, validate, database, fast, slow, grouped, benchmark")
         print("Or use --help for more options")
         sys.exit(1)
     else:
