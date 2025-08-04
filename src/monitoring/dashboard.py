@@ -1272,13 +1272,15 @@ class MonitoringDashboard:
     def _get_performance_chart_data(self, days: int = 7) -> Dict[str, List]:
         """Get performance chart data for the specified number of days"""
         try:
-            query = """
+            # * Use string formatting for INTERVAL clause since PostgreSQL doesn't support
+            # * parameter placeholders within INTERVAL expressions
+            query = f"""
             SELECT balance, timestamp
             FROM account_history
-            WHERE timestamp > NOW() - INTERVAL ? DAY
+            WHERE timestamp > NOW() - INTERVAL '{days} DAY'
             ORDER BY timestamp
             """
-            result = self.db_manager.execute_query(query, (days,))
+            result = self.db_manager.execute_query(query)
             
             timestamps = []
             balances = []
