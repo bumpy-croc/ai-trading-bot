@@ -2,7 +2,7 @@ name: PR Review Automation
 
 on:
   pull_request_review:
-    types: [submitted, edited]
+    types: [submitted]
 
 jobs:
   cursor-agent-review:
