@@ -193,8 +193,7 @@ class TestMonitoringDashboard:
                     'symbol': 'BTCUSDT',
                     'side': 'long',
                     'entry_price': 50000.0,
-                    'current_price': 51000.0,
-                    'quantity': 0.1,
+                    'size': 0.1,
                     'entry_time': datetime.now() - timedelta(hours=1),
                     'stop_loss': 49000.0,
                     'take_profit': 52000.0,
@@ -202,7 +201,7 @@ class TestMonitoringDashboard:
                 }
             ]
             
-            dashboard.db_manager.execute_query = Mock(return_value=positions_data)
+            dashboard.db_manager.get_active_positions = Mock(return_value=positions_data)
             dashboard._get_current_price = Mock(return_value=51000.0)
             
             positions = dashboard._get_current_positions()
