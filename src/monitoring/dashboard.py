@@ -27,6 +27,7 @@ project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from database.manager import DatabaseManager
+from database.models import OrderStatus
 from data_providers.binance_provider import BinanceProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from performance.metrics import sharpe as perf_sharpe
@@ -465,9 +466,8 @@ class MonitoringDashboard:
     def _get_active_positions_count(self) -> int:
         """Get number of active positions"""
         try:
-            query = "SELECT COUNT(*) as count FROM positions WHERE status = 'FILLED'"
-            result = self.db_manager.execute_query(query)
-            return result[0]['count'] if result else 0
+            positions = self.db_manager.get_active_positions()
+            return len(positions)
         except Exception as e:
             logger.error(f"Error getting active positions: {e}")
             return 0
@@ -496,13 +496,11 @@ class MonitoringDashboard:
             if balance <= 0:
                 return 0.0
             
-            query = """
-            SELECT COALESCE(SUM(quantity * entry_price), 0) as total_exposure
-            FROM positions 
-            WHERE status = 'FILLED'
-            """
-            result = self.db_manager.execute_query(query)
-            exposure = self._safe_float(result[0]['total_exposure']) if result else 0.0
+            positions = self.db_manager.get_active_positions()
+            exposure = sum(
+                self._safe_float(pos.get('quantity', 0)) * self._safe_float(pos.get('entry_price', 0))
+                for pos in positions
+            )
             return (exposure / balance) * 100
         except Exception as e:
             logger.error(f"Error calculating current exposure: {e}")
@@ -887,21 +885,23 @@ class MonitoringDashboard:
             return 0.0
     
     def _get_total_position_sizes(self) -> float:
-        """Get total value of all active positions"""
+        """Get total position size of all active positions"""
         try:
-            current_price = self._get_current_price()
-            if current_price <= 0:
-                return 0.0
-                
-            query = """
-            SELECT COALESCE(SUM(quantity * entry_price), 0) as total_value
-            FROM positions 
-            WHERE status = 'FILLED'
-            """
-            result = self.db_manager.execute_query(query)
-            return result[0]['total_value'] if result else 0.0
+            positions = self.db_manager.get_active_positions()
+            total_sizes = sum(self._safe_float(pos.get('quantity', 0)) for pos in positions)
+            return total_sizes
         except Exception as e:
             logger.error(f"Error getting total position sizes: {e}")
+            return 0.0
+    
+    def _get_total_position_value_at_entry(self) -> float:
+        """Get total value of all active positions at entry prices"""
+        try:
+            positions = self.db_manager.get_active_positions()
+            total_value = sum(self._safe_float(pos.get('quantity', 0)) * self._safe_float(pos.get('entry_price', 0)) for pos in positions)
+            return total_value
+        except Exception as e:
+            logger.error(f"Error getting total position value at entry: {e}")
             return 0.0
     
     # ========== ORDER EXECUTION METRICS ==========
@@ -1011,17 +1011,9 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = """
-            SELECT COALESCE(SUM(quantity), 0) as total_quantity
-            FROM positions 
-            WHERE status = 'FILLED'
-            """
-            result = self.db_manager.execute_query(query)
-            
-            if result:
-                total_quantity = self._safe_float(result[0]['total_quantity'])
-                return total_quantity * current_price
-            return 0.0
+            positions = self.db_manager.get_active_positions()
+            total_quantity = sum(self._safe_float(pos.get('quantity', 0)) for pos in positions)
+            return total_quantity * current_price
             
         except Exception as e:
             logger.error(f"Error getting total position value: {e}")
@@ -1061,19 +1053,13 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = """
-            SELECT 
-                side, entry_price, quantity
-            FROM positions 
-            WHERE status = 'FILLED'
-            """
-            result = self.db_manager.execute_query(query)
+            positions = self.db_manager.get_active_positions()
             
             total_unrealized = 0.0
-            for position in result:
-                entry_price = self._safe_float(position['entry_price'])
-                quantity = self._safe_float(position['quantity'])
-                side = position['side'].lower()
+            for position in positions:
+                entry_price = self._safe_float(position.get('entry_price', 0))
+                quantity = self._safe_float(position.get('quantity', 0))
+                side = position.get('side', '').lower()
                 
                 if side == 'long':
                     unrealized = (current_price - entry_price) * quantity
@@ -1174,27 +1160,18 @@ class MonitoringDashboard:
     def _get_current_positions(self) -> List[PositionDict]:
         """Get current active positions"""
         try:
-            query = """
-            SELECT 
-                symbol, side, entry_price, quantity, entry_time,
-                stop_loss, take_profit, order_id
-            FROM positions 
-            WHERE status = 'FILLED'
-            ORDER BY entry_time DESC
-            """
-            result = self.db_manager.execute_query(query)
+            positions_data = self.db_manager.get_active_positions()
             
             positions: List[PositionDict] = []
             current_price = self._get_current_price()
             
-            for row in result:
+            for pos in positions_data:
                 # Ensure quantity is float
-                quantity_val = row.get('quantity')
-                quantity = self._safe_float(quantity_val)
+                quantity = self._safe_float(pos.get('quantity', 0))
                 
                 # Calculate unrealized PnL - convert entry_price to float
-                entry_price = self._safe_float(row['entry_price'])
-                side = row['side'].lower()
+                entry_price = self._safe_float(pos.get('entry_price', 0))
+                side = pos.get('side', '').lower()
                 
                 if side == 'long':
                     unrealized_pnl = (current_price - entry_price) * quantity
@@ -1202,16 +1179,16 @@ class MonitoringDashboard:
                     unrealized_pnl = (entry_price - current_price) * quantity
                 
                 positions.append(PositionDict(**{
-                    'symbol': row['symbol'],
-                    'side': row['side'],
+                    'symbol': pos.get('symbol', ''),
+                    'side': pos.get('side', ''),
                     'entry_price': entry_price,
                     'current_price': current_price,
                     'quantity': quantity,
                     'unrealized_pnl': unrealized_pnl,
-                    'entry_time': row['entry_time'],
-                    'stop_loss': self._safe_float(row['stop_loss']) if row['stop_loss'] is not None else None,
-                    'take_profit': self._safe_float(row['take_profit']) if row['take_profit'] is not None else None,
-                    'order_id': row['order_id']
+                    'entry_time': pos.get('entry_time'),
+                    'stop_loss': self._safe_float(pos.get('stop_loss')) if pos.get('stop_loss') is not None else None,
+                    'take_profit': self._safe_float(pos.get('take_profit')) if pos.get('take_profit') is not None else None,
+                    'order_id': pos.get('order_id')
                 }))
             
             return positions
@@ -1223,16 +1200,16 @@ class MonitoringDashboard:
     def _get_recent_trades(self, limit: int = 50) -> List[TradeDict]:
         """Get recent completed trades"""
         try:
-            query = f"""
+            query = """
             SELECT 
                 symbol, side, entry_price, exit_price, quantity,
                 entry_time, exit_time, pnl, exit_reason
             FROM trades 
             WHERE exit_time IS NOT NULL
             ORDER BY exit_time DESC
-            LIMIT {limit}
+            LIMIT %s
             """
-            result = self.db_manager.execute_query(query)
+            result = self.db_manager.execute_query(query, (limit,))
             logger.info(f"Query returned {len(result)} rows")
             
             trades: List[TradeDict] = []
@@ -1269,10 +1246,18 @@ class MonitoringDashboard:
     def _get_performance_chart_data(self, days: int = 7) -> Dict[str, List]:
         """Get performance chart data for the specified number of days"""
         try:
+            # * Validate days parameter to prevent SQL injection
+            # * Ensure days is a positive integer within reasonable bounds
+            if not isinstance(days, int) or days <= 0 or days > 365:
+                logger.warning(f"Invalid days parameter: {days}. Using default value of 7.")
+                days = 7
+            
+            # * Use string formatting for INTERVAL clause since PostgreSQL doesn't support
+            # * parameter placeholders within INTERVAL expressions
             query = f"""
             SELECT balance, timestamp
             FROM account_history
-            WHERE timestamp > NOW() - INTERVAL '{days} days'
+            WHERE timestamp > NOW() - INTERVAL '{days} DAYS'
             ORDER BY timestamp
             """
             result = self.db_manager.execute_query(query)
@@ -1454,6 +1439,7 @@ class MonitoringDashboard:
                 host=host,
                 port=port,
                 debug=debug,
+                use_reloader=False,
                 log_output=True
             )
             # If we ever return from run(), log why
