@@ -39,7 +39,7 @@ class TestMonitoringDashboard:
 
     def test_dashboard_initialization(self):
         """Test dashboard initialization with default settings"""
-        with patch('monitoring.dashboard.BinanceDataProvider') as mock_binance, \
+        with patch('data_providers.binance_provider.BinanceProvider') as mock_binance, \
              patch('monitoring.dashboard.CachedDataProvider') as mock_cache, \
              patch('monitoring.dashboard.DatabaseManager') as mock_db:
             
@@ -59,7 +59,7 @@ class TestMonitoringDashboard:
 
     def test_dashboard_initialization_with_offline_mode(self):
         """Test dashboard initialization when Binance is unavailable"""
-        with patch('monitoring.dashboard.BinanceDataProvider') as mock_binance, \
+        with patch('data_providers.binance_provider.BinanceProvider') as mock_binance, \
              patch('monitoring.dashboard.DatabaseManager') as mock_db:
             
             # Mock Binance failure
@@ -74,7 +74,7 @@ class TestMonitoringDashboard:
 
     def test_dashboard_configuration(self):
         """Test dashboard configuration management"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -98,7 +98,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_metrics_collection(self):
         """Test metrics collection functionality"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -124,7 +124,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_balance_calculation(self):
         """Test balance calculation methods"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -141,7 +141,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_win_rate_calculation(self):
         """Test win rate calculation"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -158,7 +158,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_drawdown_calculation(self):
         """Test drawdown calculation"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -181,7 +181,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_position_tracking(self):
         """Test position tracking functionality"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -217,7 +217,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_trade_history(self):
         """Test trade history retrieval"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -251,7 +251,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_system_health_monitoring(self):
         """Test system health status monitoring"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -272,7 +272,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_performance_chart_data(self):
         """Test performance chart data generation"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -301,7 +301,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_error_handling(self):
         """Test error handling in metrics collection"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -322,7 +322,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_configuration_update(self):
         """Test configuration update functionality"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -338,7 +338,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_monitoring_lifecycle(self):
         """Test monitoring start/stop functionality"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -355,7 +355,7 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_websocket_functionality(self):
         """Test WebSocket event handling"""
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'), \
              patch('monitoring.dashboard.DatabaseManager'):
             
@@ -415,7 +415,7 @@ class TestMonitoringIntegration:
         if not MONITORING_AVAILABLE or not DATABASE_AVAILABLE:
             pytest.skip("Required components not available")
         
-        with patch('monitoring.dashboard.BinanceDataProvider'), \
+        with patch('data_providers.binance_provider.BinanceProvider'), \
              patch('monitoring.dashboard.CachedDataProvider'):
             
             dashboard = MonitoringDashboard()
