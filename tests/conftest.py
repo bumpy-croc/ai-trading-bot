@@ -25,14 +25,14 @@ for _p in (str(_PROJECT_ROOT), str(_SRC_DIR)):
         sys.path.insert(0, _p)
 
 # Import core components for fixture creation
-from src.data_providers.data_provider import DataProvider
-from src.data_providers.binance_provider import BinanceProvider
-from src.risk.risk_manager import RiskManager, RiskParameters
-from src.strategies.base import BaseStrategy
+from data_providers.data_provider import DataProvider
+from data_providers.binance_provider import BinanceProvider
+from risk.risk_manager import RiskManager, RiskParameters
+from strategies.base import BaseStrategy
 
 # Import account sync dependencies
 try:
-    from src.data_providers.exchange_interface import (
+    from data_providers.exchange_interface import (
         AccountBalance, Position, Order, Trade,
         OrderSide, OrderType, OrderStatus as ExchangeOrderStatus
     )
