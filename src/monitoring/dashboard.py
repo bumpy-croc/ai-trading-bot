@@ -883,27 +883,9 @@ class MonitoringDashboard:
             logger.error(f"Error getting weekly P&L: {e}")
             return 0.0
     
-    def _get_total_position_value(self) -> float:
-        """Get total value of all active positions"""
-        try:
-            current_price = self._get_current_price()
-            if current_price <= 0:
-                return 0.0
-                
-            positions = self.db_manager.get_active_positions()
-            total_value = sum(self._safe_float(pos.get('size', 0)) * self._safe_float(pos.get('entry_price', 0)) for pos in positions)
-            return total_value
-        except Exception as e:
-            logger.error(f"Error getting total position value: {e}")
-            return 0.0
-    
     def _get_total_position_value_at_entry(self) -> float:
         """Get total value of all active positions at entry prices"""
         try:
-            current_price = self._get_current_price()
-            if current_price <= 0:
-                return 0.0
-                
             positions = self.db_manager.get_active_positions()
             total_value = sum(self._safe_float(pos.get('size', 0)) * self._safe_float(pos.get('entry_price', 0)) for pos in positions)
             return total_value
