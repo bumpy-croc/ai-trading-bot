@@ -83,7 +83,7 @@ jobs:
         4. If you decide not to fix an issue, leave a comment explaining why not
         5. Push your changes directly to the PR branch
         
-        Notes: 1. Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to make informed decisions. 2. Use the Github API or the Github MCP server to access the PR details. =
+        Notes: 1. Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to make informed decisions. 2. Use the Github API or the Github MCP server to access the PR details.
         EOF
         
         echo "=== Sending to Cursor Background Agent ==="
