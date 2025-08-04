@@ -40,10 +40,7 @@ class PredictionConfig:
     confidence_scale_factor: float = DEFAULT_CONFIDENCE_SCALE_FACTOR
     direction_threshold: float = DEFAULT_DIRECTION_THRESHOLD
 
-    def __post_init__(self):
-        """Post-initialization processing"""
-        # No longer needed since we use field(default_factory)
-        pass
+
 
     @classmethod
     def from_config_manager(cls) -> 'PredictionConfig':

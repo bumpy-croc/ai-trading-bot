@@ -48,13 +48,13 @@ jobs:
         echo "=== Fetching PR Comments ==="
         COMMENTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
           "${{ github.api_url }}/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
-          | jq -r '.[] | "- " + .user.login + ": " + .body' | tr '\n' ' ' || echo "No comments found")
+          | jq -r 'if type == "array" then .[] | "- " + .user.login + ": " + .body else empty end' | tr '\n' ' ' || echo "No comments found")
         
         # Get review comments
         echo "=== Fetching Review Comments ==="
         REVIEW_COMMENTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
           "${{ github.api_url }}/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }}/comments" \
-          | jq -r '.[] | "- " + .user.login + " (line " + (.line|tostring) + "): " + .body' | tr '\n' ' ' || echo "No review comments found")
+          | jq -r 'if type == "array" then .[] | "- " + .user.login + " (line " + (.line|tostring) + "): " + .body else empty end' | tr '\n' ' ' || echo "No review comments found")
         
         # Construct the prompt
         cat > prompt.txt << EOF
@@ -82,10 +82,10 @@ jobs:
         echo "=== Sending to Cursor Background Agent ==="
         
         # Launch Cursor background agent
-        curl -X POST "https://api.cursor.sh/v0/agents" \
+        curl -X POST "https://api.cursor.com/v0/agents" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
-          -d "{ \"prompt\": $(cat prompt.txt | jq -Rs .), \"workspace\": \"${{ github.workspace }}\", \"model\": \"gpt-4o-mini\", \"temperature\": 0.1, \"max_tokens\": 4000 }"
+          -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ github.event.pull_request.head.ref }}\" } }"
         
         echo ""
         echo "=== Cursor Background Agent Launched ==="
