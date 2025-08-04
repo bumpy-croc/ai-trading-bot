@@ -1,0 +1,132 @@
+name: PR Review Automation
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  cursor-agent-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    
+    # Only run for bugbot or copilot reviews
+    if: |
+      github.event.review.user.login == 'bugbot' || 
+      github.event.review.user.login == 'copilot' ||
+      github.event.review.user.login == 'github-actions[bot]'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.ref }}
+    
+    - name: Get Unresolved Review Comments
+      id: get-comments
+      run: |
+        echo "=== Fetching unresolved review comments ==="
+        
+        # Get comments from the specific review that was just submitted
+        COMMENTS_RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }}/comments")
+        
+        # Debug: Check if we got a valid response
+        echo "API Response Status: $(echo "$COMMENTS_RESPONSE" | jq -r '.message // "OK"')"
+        
+        # Filter for unresolved comments only (handle empty arrays)
+        UNRESOLVED_COMMENTS=$(echo "$COMMENTS_RESPONSE" | jq -r '
+          if type == "array" then
+            map(select(.resolved_at == null)) | 
+            map({
+              path: (.path // "unknown"),
+              line: (.line // 0),
+              body: (.body // ""),
+              position: (.position // 0)
+            }) | 
+            tojson
+          else
+            "[]"
+          end
+        ')
+        
+        # Count unresolved comments (handle empty arrays)
+        UNRESOLVED_COUNT=$(echo "$COMMENTS_RESPONSE" | jq -r '
+          if type == "array" then
+            map(select(.resolved_at == null)) | length
+          else
+            0
+          end
+        ')
+        
+        echo "Found $UNRESOLVED_COUNT unresolved comments from the latest review"
+        
+        # Store in step output
+        echo "unresolved_comments=$UNRESOLVED_COMMENTS" >> $GITHUB_OUTPUT
+        echo "unresolved_count=$UNRESOLVED_COUNT" >> $GITHUB_OUTPUT
+        
+        # Also store the review body (sanitized for GitHub Actions output)
+        REVIEW_BODY=$(echo "${{ github.event.review.body }}" | tr '\n' ' ' | sed 's/"/\\"/g' | sed 's/\\/\\\\/g')
+        echo "review_body=$REVIEW_BODY" >> $GITHUB_OUTPUT
+    
+    - name: Launch Cursor Background Agent
+      run: |
+        echo "=== Launching Cursor Background Agent for PR Review ==="
+        echo "PR: ${{ github.event.pull_request.html_url }}"
+        echo "Branch: ${{ github.event.pull_request.head.ref }}"
+        echo "Reviewer: ${{ github.event.review.user.login }}"
+        echo "Review State: ${{ github.event.review.state }}"
+        echo "Unresolved Comments: ${{ steps.get-comments.outputs.unresolved_count }}"
+        
+        # Construct detailed prompt with review comments
+        cat > prompt.txt << EOF
+        A PR review has been submitted with unresolved comments that need attention.
+        
+        PR URL: ${{ github.event.pull_request.html_url }}
+        Reviewer: ${{ github.event.review.user.login }}
+        Review State: ${{ github.event.review.state }}
+        
+        Review Summary:
+        ${{ steps.get-comments.outputs.review_body }}
+        
+        Unresolved Comments (${{ steps.get-comments.outputs.unresolved_count }}):
+        ${{ steps.get-comments.outputs.unresolved_comments }}
+        
+        Please analyze these unresolved comments and take appropriate action:
+        1. Review each unresolved comment carefully
+        2. Determine if the issue should be fixed or if there's a valid reason not to fix it
+        3. If you decide to fix an issue, implement the fix and leave a comment on the pull request, using either the Github MCP server or the Github API.
+        4. If you decide not to fix an issue, leave a comment explaining why not on the pull request, using either the Github MCP server or the Github API.
+        5. Push your changes directly to the PR branch
+        
+        Notes: 1. Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to make informed decisions.
+        EOF
+        
+        echo "=== Sending to Cursor Background Agent ==="
+        
+        # Launch Cursor background agent
+        curl -X POST "https://api.cursor.com/v0/agents" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
+          -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ github.event.pull_request.head.ref }}\" } }"
+        
+        echo ""
+        echo "=== Cursor Background Agent Launched ==="
+        echo "The agent will analyze the unresolved review comments and take appropriate action."
+        echo "Check the PR for any comments or changes made by the agent."
+        
+        # Cleanup temporary files
+        rm -f prompt.txt
+  
+    - name: Log Review Details
+      run: |
+        echo "=== Review Summary ==="
+        echo "PR: ${{ github.event.pull_request.html_url }}"
+        echo "Reviewer: ${{ github.event.review.user.login }}"
+        echo "State: ${{ github.event.review.state }}"
+        echo "Submitted at: ${{ github.event.review.submitted_at }}"
+        echo "Unresolved comments: ${{ steps.get-comments.outputs.unresolved_count }}"
+        echo "Cursor agent launched successfully" 

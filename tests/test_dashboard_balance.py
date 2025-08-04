@@ -15,11 +15,11 @@ class _MockDBManager:
 # Apply patch via import machinery before the dashboard module creates an instance
 import importlib
 
-dashboard_module = importlib.import_module("monitoring.dashboard")
+dashboard_module = importlib.import_module("src.monitoring.dashboard")
 setattr(dashboard_module, "DatabaseManager", _MockDBManager)
 
 # Patch external providers used during dashboard initialization
-setattr(dashboard_module, "BinanceDataProvider", lambda *args, **kwargs: SimpleNamespace())
+setattr(dashboard_module, "BinanceProvider", lambda *args, **kwargs: SimpleNamespace())
 setattr(
     dashboard_module,
     "CachedDataProvider",
@@ -27,7 +27,7 @@ setattr(
 )
 
 # Ensure src/ directory is on path (handled by sitecustomize), then import
-from monitoring.dashboard import MonitoringDashboard
+from src.monitoring.dashboard import MonitoringDashboard
 
 
 @pytest.fixture

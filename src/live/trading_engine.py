@@ -324,7 +324,7 @@ class LiveTradingEngine:
                 logger.error(f"❌ Account synchronization error: {e}", exc_info=True)
         
         # If a balance correction was pending, log it now (outside session creation conditional)
-        if getattr(self, '_pending_balance_correction', False):
+        if getattr(self, '_pending_balance_correction', False) and self.trading_session_id is not None:
             corrected_balance = self._pending_corrected_balance
             self.db_manager.update_balance(
                 corrected_balance,
@@ -335,6 +335,11 @@ class LiveTradingEngine:
             self._pending_balance_correction = False
             self._pending_corrected_balance = None
             logger.info(f"💰 Balance corrected in database: ${corrected_balance:,.2f}")
+        elif getattr(self, '_pending_balance_correction', False):
+            # Balance correction was pending but no session ID available
+            logger.warning("⚠️ Balance correction pending but no trading session ID available - skipping database update")
+            self._pending_balance_correction = False
+            self._pending_corrected_balance = None
             
         # Set session ID on strategy for logging
         if hasattr(self.strategy, 'session_id'):
@@ -460,7 +465,7 @@ class LiveTradingEngine:
                             short_position_size = min(short_position_size, self.max_position_size)
                             if short_position_size > 0:
                                 short_stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, PositionSide.SHORT)
-                                # * Use strategy's take profit percentage for consistency
+                                # Use strategy's take profit percentage for consistency
                                 short_take_profit = current_price * (1 - self.strategy.take_profit_pct)
                                 self._open_position(symbol, PositionSide.SHORT, short_position_size, current_price, short_stop_loss, short_take_profit)
                 # Update performance metrics
@@ -711,19 +716,23 @@ class LiveTradingEngine:
             self.positions[order_id] = position
             
             # Log position to database
-            position_db_id = self.db_manager.log_position(
-                symbol=symbol,
-                side=side.value,
-                entry_price=price,
-                size=size,
-                strategy_name=self.strategy.__class__.__name__,
-                order_id=order_id,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-                quantity=position_value / price,  # Calculate actual quantity
-                session_id=self.trading_session_id
-            )
-            self.position_db_ids[order_id] = position_db_id
+            if self.trading_session_id is not None:
+                position_db_id = self.db_manager.log_position(
+                    symbol=symbol,
+                    side=side.value,
+                    entry_price=price,
+                    size=size,
+                    strategy_name=self.strategy.__class__.__name__,
+                    order_id=order_id,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    quantity=position_value / price,  # Calculate actual quantity
+                    session_id=self.trading_session_id
+                )
+                self.position_db_ids[order_id] = position_db_id
+            else:
+                logger.warning("⚠️ Cannot log position to database - no trading session ID available")
+                self.position_db_ids[order_id] = None
             
             logger.info(f"🚀 Opened {side.value} position: {symbol} @ ${price:.2f} (Size: ${position_value:.2f})")
             
@@ -732,14 +741,17 @@ class LiveTradingEngine:
             
         except Exception as e:
             logger.error(f"Failed to open position: {e}", exc_info=True)
-            self.db_manager.log_event(
-                event_type="ERROR",
-                message=f"Failed to open position: {str(e)}",
-                severity="error",
-                component="LiveTradingEngine",
-                details={"stack_trace": str(e)},
-                session_id=self.trading_session_id
-            )
+            if self.trading_session_id is not None:
+                self.db_manager.log_event(
+                    event_type="ERROR",
+                    message=f"Failed to open position: {str(e)}",
+                    severity="error",
+                    component="LiveTradingEngine",
+                    details={"stack_trace": str(e)},
+                    session_id=self.trading_session_id
+                )
+            else:
+                logger.warning("⚠️ Cannot log error to database - no trading session ID available")
             
     def _close_position(self, position: Position, reason: str):
         """Close an existing position"""
@@ -776,12 +788,15 @@ class LiveTradingEngine:
             self.total_pnl += pnl_dollar
             
             # Update persistent balance tracking
-            self.db_manager.update_balance(
-                self.current_balance, 
-                f'trade_pnl_{reason.lower()}', 
-                'system', 
-                self.trading_session_id
-            )
+            if self.trading_session_id is not None:
+                self.db_manager.update_balance(
+                    self.current_balance, 
+                    f'trade_pnl_{reason.lower()}', 
+                    'system', 
+                    self.trading_session_id
+                )
+            else:
+                logger.warning("⚠️ Cannot update balance in database - no trading session ID available")
             
             # Create trade record
             trade = Trade(
@@ -802,35 +817,42 @@ class LiveTradingEngine:
                 self.winning_trades += 1
             
             # Log trade to database
-            source = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
-            try:
-                trade_db_id = self.db_manager.log_trade(
-                    symbol=position.symbol,
-                    side=position.side.value,
-                    entry_price=position.entry_price,
-                    exit_price=exit_price,
-                    size=position.size,
-                    entry_time=position.entry_time,
-                    exit_time=trade.exit_time,
-                    pnl=pnl_dollar,
-                    exit_reason=reason,
-                    strategy_name=self.strategy.__class__.__name__,
-                    source=source,
-                    stop_loss=position.stop_loss,
-                    take_profit=position.take_profit,
-                    order_id=position.order_id,
-                    session_id=self.trading_session_id
-                )
-            except Exception as e:
-                logger.warning(f"Failed to log trade to database: {e}")
+            if self.trading_session_id is not None:
+                source = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
+                try:
+                    trade_db_id = self.db_manager.log_trade(
+                        symbol=position.symbol,
+                        side=position.side.value,
+                        entry_price=position.entry_price,
+                        exit_price=exit_price,
+                        size=position.size,
+                        entry_time=position.entry_time,
+                        exit_time=trade.exit_time,
+                        pnl=pnl_dollar,
+                        exit_reason=reason,
+                        strategy_name=self.strategy.__class__.__name__,
+                        source=source,
+                        stop_loss=position.stop_loss,
+                        take_profit=position.take_profit,
+                        order_id=position.order_id,
+                        session_id=self.trading_session_id
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log trade to database: {e}")
+            else:
+                logger.warning("⚠️ Cannot log trade to database - no trading session ID available")
             
             # Update position status in database
             if position.order_id in self.position_db_ids:
-                try:
-                    self.db_manager.close_position(self.position_db_ids[position.order_id])
-                    del self.position_db_ids[position.order_id]
-                except Exception as e:
-                    logger.warning(f"Failed to update position in database: {e}")
+                position_db_id = self.position_db_ids[position.order_id]
+                if position_db_id is not None:
+                    try:
+                        self.db_manager.close_position(position_db_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to update position in database: {e}")
+                else:
+                    logger.debug(f"Position {position.order_id} was not logged to database (no session ID)")
+                del self.position_db_ids[position.order_id]
                 
             # Remove from active positions
             if position.order_id in self.positions:
@@ -855,17 +877,20 @@ class LiveTradingEngine:
             
         except Exception as e:
             logger.error(f"Failed to close position: {e}", exc_info=True)
-            try:
-                self.db_manager.log_event(
-                    event_type="ERROR",
-                    message=f"Failed to close position: {str(e)}",
-                    severity="error",
-                    component="LiveTradingEngine",
-                    details={"stack_trace": str(e)},
-                    session_id=self.trading_session_id
-                )
-            except Exception as db_e:
-                logger.error(f"Failed to log error to database: {db_e}", exc_info=True)
+            if self.trading_session_id is not None:
+                try:
+                    self.db_manager.log_event(
+                        event_type="ERROR",
+                        message=f"Failed to close position: {str(e)}",
+                        severity="error",
+                        component="LiveTradingEngine",
+                        details={"stack_trace": str(e)},
+                        session_id=self.trading_session_id
+                    )
+                except Exception as db_e:
+                    logger.error(f"Failed to log error to database: {db_e}", exc_info=True)
+            else:
+                logger.warning("⚠️ Cannot log error to database - no trading session ID available")
             
     def _execute_order(self, symbol: str, side: PositionSide, value: float, price: float) -> Optional[str]:
         """Execute a real market order (implement based on your exchange)"""
@@ -993,16 +1018,19 @@ class LiveTradingEngine:
             daily_pnl = 0  # Placeholder
             
             # Log snapshot to database
-            self.db_manager.log_account_snapshot(
-                balance=self.current_balance,
-                equity=equity,
-                total_pnl=self.total_pnl,
-                open_positions=len(self.positions),
-                total_exposure=total_exposure,
-                drawdown=current_drawdown,
-                daily_pnl=daily_pnl,
-                session_id=self.trading_session_id
-            )
+            if self.trading_session_id is not None:
+                self.db_manager.log_account_snapshot(
+                    balance=self.current_balance,
+                    equity=equity,
+                    total_pnl=self.total_pnl,
+                    open_positions=len(self.positions),
+                    total_exposure=total_exposure,
+                    drawdown=current_drawdown,
+                    daily_pnl=daily_pnl,
+                    session_id=self.trading_session_id
+                )
+            else:
+                logger.warning("⚠️ Cannot log account snapshot to database - no trading session ID available")
             
         except Exception as e:
             logger.error(f"Failed to log account snapshot: {e}")
