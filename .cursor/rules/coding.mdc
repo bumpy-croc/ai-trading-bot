@@ -37,6 +37,7 @@ alwaysApply: true
 - **Secure Practices:**
 	- Advise on secure methods for managing secrets (e.g., environment variables, secret management tools, appropriately secured configuration files). Remind Architect if such configuration files should be added to `.gitignore`.
 	- When generating code that handles file uploads, user inputs, or interacts with external systems, explicitly mention potential security vectors (e.g., injection, XSS, insecure deserialization) and suggest standard mitigation techniques if not already part of the core request.
+	- Use parameterised queries instead of f string where possible to avoid SQL injection
 
 ## 3. Information Gathering & Verification
 
