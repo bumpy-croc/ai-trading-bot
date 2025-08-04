@@ -497,7 +497,10 @@ class MonitoringDashboard:
                 return 0.0
             
             positions = self.db_manager.get_active_positions()
-            exposure = sum(self._safe_float(pos.get('size', 0)) for pos in positions)
+            exposure = sum(
+                self._safe_float(pos.get('quantity', 0)) * self._safe_float(pos.get('entry_price', 0))
+                for pos in positions
+            )
             return (exposure / balance) * 100
         except Exception as e:
             logger.error(f"Error calculating current exposure: {e}")
