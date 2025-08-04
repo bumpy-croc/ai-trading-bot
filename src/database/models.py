@@ -22,11 +22,11 @@ class PositionSide(enum.Enum):
 
 class OrderStatus(enum.Enum):
     """Order status enumeration"""
-    PENDING = "pending"
-    OPEN = "open"
-    FILLED = "filled"
-    CANCELLED = "cancelled"
-    FAILED = "failed"
+    PENDING = "PENDING"
+    OPEN = "OPEN"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
 
 
 class TradeSource(enum.Enum):

@@ -468,9 +468,8 @@ class MonitoringDashboard:
     def _get_active_positions_count(self) -> int:
         """Get number of active positions"""
         try:
-            query = "SELECT COUNT(*) as count FROM positions WHERE status = %s"
-            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
-            return result[0]['count'] if result else 0
+            positions = self.db_manager.get_active_positions()
+            return len(positions)
         except Exception as e:
             logger.error(f"Error getting active positions: {e}")
             return 0
@@ -499,13 +498,8 @@ class MonitoringDashboard:
             if balance <= 0:
                 return 0.0
             
-            query = """
-            SELECT COALESCE(SUM(quantity * entry_price), 0) as total_exposure
-            FROM positions 
-            WHERE status = %s
-            """
-            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
-            exposure = self._safe_float(result[0]['total_exposure']) if result else 0.0
+            positions = self.db_manager.get_active_positions()
+            exposure = sum(self._safe_float(pos.get('size', 0)) for pos in positions)
             return (exposure / balance) * 100
         except Exception as e:
             logger.error(f"Error calculating current exposure: {e}")
@@ -896,13 +890,9 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = """
-            SELECT COALESCE(SUM(quantity * entry_price), 0) as total_value
-            FROM positions 
-            WHERE status = %s
-            """
-            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
-            return result[0]['total_value'] if result else 0.0
+            positions = self.db_manager.get_active_positions()
+            total_value = sum(self._safe_float(pos.get('size', 0)) * self._safe_float(pos.get('entry_price', 0)) for pos in positions)
+            return total_value
         except Exception as e:
             logger.error(f"Error getting total position sizes: {e}")
             return 0.0
@@ -1014,17 +1004,9 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = """
-            SELECT COALESCE(SUM(quantity), 0) as total_quantity
-            FROM positions 
-            WHERE status = %s
-            """
-            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
-            
-            if result:
-                total_quantity = self._safe_float(result[0]['total_quantity'])
-                return total_quantity * current_price
-            return 0.0
+            positions = self.db_manager.get_active_positions()
+            total_quantity = sum(self._safe_float(pos.get('size', 0)) for pos in positions)
+            return total_quantity * current_price
             
         except Exception as e:
             logger.error(f"Error getting total position value: {e}")
@@ -1064,24 +1046,18 @@ class MonitoringDashboard:
             if current_price <= 0:
                 return 0.0
                 
-            query = """
-            SELECT 
-                side, entry_price, quantity
-            FROM positions 
-            WHERE status = %s
-            """
-            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
+            positions = self.db_manager.get_active_positions()
             
             total_unrealized = 0.0
-            for position in result:
-                entry_price = self._safe_float(position['entry_price'])
-                quantity = self._safe_float(position['quantity'])
-                side = position['side'].lower()
+            for position in positions:
+                entry_price = self._safe_float(position.get('entry_price', 0))
+                size = self._safe_float(position.get('size', 0))
+                side = position.get('side', '').lower()
                 
                 if side == 'long':
-                    unrealized = (current_price - entry_price) * quantity
+                    unrealized = (current_price - entry_price) * size
                 else:  # short
-                    unrealized = (entry_price - current_price) * quantity
+                    unrealized = (entry_price - current_price) * size
                 
                 total_unrealized += unrealized
             
@@ -1177,44 +1153,35 @@ class MonitoringDashboard:
     def _get_current_positions(self) -> List[PositionDict]:
         """Get current active positions"""
         try:
-            query = """
-            SELECT 
-                symbol, side, entry_price, quantity, entry_time,
-                stop_loss, take_profit, order_id
-            FROM positions 
-            WHERE status = %s
-            ORDER BY entry_time DESC
-            """
-            result = self.db_manager.execute_query(query, (OrderStatus.OPEN.value,))
+            positions_data = self.db_manager.get_active_positions()
             
             positions: List[PositionDict] = []
             current_price = self._get_current_price()
             
-            for row in result:
-                # Ensure quantity is float
-                quantity_val = row.get('quantity')
-                quantity = self._safe_float(quantity_val)
+            for pos in positions_data:
+                # Ensure size is float
+                size = self._safe_float(pos.get('size', 0))
                 
                 # Calculate unrealized PnL - convert entry_price to float
-                entry_price = self._safe_float(row['entry_price'])
-                side = row['side'].lower()
+                entry_price = self._safe_float(pos.get('entry_price', 0))
+                side = pos.get('side', '').lower()
                 
                 if side == 'long':
-                    unrealized_pnl = (current_price - entry_price) * quantity
+                    unrealized_pnl = (current_price - entry_price) * size
                 else:
-                    unrealized_pnl = (entry_price - current_price) * quantity
+                    unrealized_pnl = (entry_price - current_price) * size
                 
                 positions.append(PositionDict(**{
-                    'symbol': row['symbol'],
-                    'side': row['side'],
+                    'symbol': pos.get('symbol', ''),
+                    'side': pos.get('side', ''),
                     'entry_price': entry_price,
                     'current_price': current_price,
-                    'quantity': quantity,
+                    'quantity': size,
                     'unrealized_pnl': unrealized_pnl,
-                    'entry_time': row['entry_time'],
-                    'stop_loss': self._safe_float(row['stop_loss']) if row['stop_loss'] is not None else None,
-                    'take_profit': self._safe_float(row['take_profit']) if row['take_profit'] is not None else None,
-                    'order_id': row['order_id']
+                    'entry_time': pos.get('entry_time'),
+                    'stop_loss': self._safe_float(pos.get('stop_loss')) if pos.get('stop_loss') is not None else None,
+                    'take_profit': self._safe_float(pos.get('take_profit')) if pos.get('take_profit') is not None else None,
+                    'order_id': pos.get('order_id')
                 }))
             
             return positions
