@@ -82,7 +82,7 @@ jobs:
         echo "=== Sending to Cursor Background Agent ==="
         
         # Launch Cursor background agent
-        curl -X POST "https://api.cursor.sh/v1/background-agent/launch" \
+        curl -X POST "https://api.cursor.sh/v0/agents" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
           -d "{ \"prompt\": $(cat prompt.txt | jq -Rs .), \"workspace\": \"${{ github.workspace }}\", \"model\": \"gpt-4o-mini\", \"temperature\": 0.1, \"max_tokens\": 4000 }"
