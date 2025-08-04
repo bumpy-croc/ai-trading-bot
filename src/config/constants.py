@@ -13,6 +13,8 @@ DEFAULT_ENABLE_SENTIMENT = False  # MVP: disabled
 DEFAULT_ENABLE_MARKET_MICROSTRUCTURE = False  # MVP: disabled
 DEFAULT_FEATURE_CACHE_TTL = 3600  # 1 hour
 DEFAULT_MODEL_CACHE_TTL = 600  # seconds
+DEFAULT_CONFIDENCE_SCALE_FACTOR = 10.0  # Scale factor for confidence calculation
+DEFAULT_DIRECTION_THRESHOLD = 0.01  # 1% threshold for direction determination
 
 # Feature Engineering Constants
 DEFAULT_SEQUENCE_LENGTH = 120  # LSTM sequence length for technical features
