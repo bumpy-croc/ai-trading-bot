@@ -37,11 +37,11 @@ class PositionSide(Enum):
     SHORT = "short"
 
 class OrderStatus(Enum):
-    PENDING = "pending"
-    OPEN = "open"
-    FILLED = "filled"
-    CANCELLED = "cancelled"
-    FAILED = "failed"
+    PENDING = "PENDING"
+    OPEN = "OPEN"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
 
 @dataclass
 class Position:
