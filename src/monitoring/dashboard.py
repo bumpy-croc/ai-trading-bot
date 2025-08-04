@@ -1246,6 +1246,12 @@ class MonitoringDashboard:
     def _get_performance_chart_data(self, days: int = 7) -> Dict[str, List]:
         """Get performance chart data for the specified number of days"""
         try:
+            # * Validate days parameter to prevent SQL injection
+            # * Ensure days is a positive integer within reasonable bounds
+            if not isinstance(days, int) or days <= 0 or days > 365:
+                logger.warning(f"Invalid days parameter: {days}. Using default value of 7.")
+                days = 7
+            
             # * Use string formatting for INTERVAL clause since PostgreSQL doesn't support
             # * parameter placeholders within INTERVAL expressions
             query = f"""
