@@ -106,11 +106,11 @@ jobs:
         
         echo "=== Sending to Cursor Background Agent ==="
         
-        # Launch Cursor background agent with environment variables
+        # Launch Cursor background agent
         curl -X POST "https://api.cursor.com/v0/agents" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
-          -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ github.event.pull_request.head.ref }}\" }, \"env\": { \"GITHUB_TOKEN\": \"${{ secrets.GITHUB_TOKEN }}\" } }"
+          -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ github.event.pull_request.head.ref }}\" } }"
         
         echo ""
         echo "=== Cursor Background Agent Launched ==="
