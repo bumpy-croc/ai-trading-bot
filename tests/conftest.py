@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import time
 
 # Add project root and src directory to PYTHONPATH for test imports
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,15 +25,21 @@ for _p in (str(_PROJECT_ROOT), str(_SRC_DIR)):
         sys.path.insert(0, _p)
 
 # Import core components for fixture creation
+<<<<<<< HEAD
 from data_providers.data_provider import DataProvider
 from data_providers.binance_provider import BinanceProvider
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
-from strategies.adaptive import AdaptiveStrategy
+=======
+from src.data_providers.data_provider import DataProvider
+from src.data_providers.binance_provider import BinanceProvider
+from src.risk.risk_manager import RiskManager, RiskParameters
+from src.strategies.base import BaseStrategy
+>>>>>>> develop
 
 # Import account sync dependencies
 try:
-    from data_providers.exchange_interface import (
+    from src.data_providers.exchange_interface import (
         AccountBalance, Position, Order, Trade,
         OrderSide, OrderType, OrderStatus as ExchangeOrderStatus
     )
@@ -44,55 +51,54 @@ except ImportError as e:
 # Spin up a temporary PostgreSQL instance via Testcontainers so that modules that
 # require a valid DATABASE_URL can import successfully.  This happens at import
 # time, so we do it at module import as well.
+#
+# To prevent spawning heavyweight containers during the normal (unit-only) test
+# run, we guard this section behind the environment flag
+# `ENABLE_INTEGRATION_TESTS=1`.  The CI pipeline sets this flag only in the
+# nightly integration job.  When the flag is NOT set, we fall back to an
+# in-memory SQLite database which satisfies imports but is extremely fast.
+
+_RUN_INTEGRATION = os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
+
+# Track database setup time
+_DB_SETUP_START_TIME = None
+_DB_SETUP_END_TIME = None
 
 _POSTGRES_CONTAINER = None
-try:
-    from testcontainers.postgres import PostgresContainer  # type: ignore
-    _POSTGRES_CONTAINER = PostgresContainer("postgres:15-alpine")
-    _POSTGRES_CONTAINER.start()
-    os.environ["DATABASE_URL"] = _POSTGRES_CONTAINER.get_connection_url()
-except Exception as _e:  # pragma: no cover -- fallback if Docker not available
-    # Provide a dummy URL so the code can still import, but mark that Postgres is
-    # unavailable.  Tests that actually require DB connectivity should handle the
-    # failure or be skipped.
-    os.environ.setdefault(
-        "DATABASE_URL",
-        "postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot_test"
-    )
-    _POSTGRES_CONTAINER = None
-
-    # --- Ensure the fallback local test database exists (for developers without Docker) ---
+if _RUN_INTEGRATION:
     try:
-        from sqlalchemy.engine.url import make_url
-        from sqlalchemy import create_engine, text
-
-        _raw_url = os.environ["DATABASE_URL"]
-        _url_obj = make_url(_raw_url)
-
-        # Attempt connection; if database missing, create it.
-        try:
-            _test_engine = create_engine(_raw_url, isolation_level="AUTOCOMMIT")
-            with _test_engine.connect() as _conn:
-                pass  # connection successful -> DB exists
-        except Exception:
-            # Connect to default 'postgres' database to create target DB
-            _default_db_url = _url_obj.set(database="postgres")
-            _admin_engine = create_engine(_default_db_url, isolation_level="AUTOCOMMIT")
-            with _admin_engine.connect() as _conn:
-                _db_name = _url_obj.database
-                _conn.execute(text(f"CREATE DATABASE {_db_name};"))
-            # Retry connection
-            _test_engine = create_engine(_raw_url, isolation_level="AUTOCOMMIT")
-            with _test_engine.connect():
-                pass
-    except Exception:
-        # If we can't ensure db creation, tests that need it will fail/skipped.
-        pass
+        from testcontainers.postgres import PostgresContainer  # type: ignore
+        _DB_SETUP_START_TIME = time.time()
+        print(f"\n[Database Setup] Starting PostgreSQL container setup at {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+        _POSTGRES_CONTAINER = PostgresContainer("postgres:15-alpine")
+        _POSTGRES_CONTAINER.start()
+        os.environ["DATABASE_URL"] = _POSTGRES_CONTAINER.get_connection_url()
+        _DB_SETUP_END_TIME = time.time()
+        setup_duration = _DB_SETUP_END_TIME - _DB_SETUP_START_TIME
+        print(f"[Database Setup] ✅ Container ready in {setup_duration:.2f} seconds")
+    except Exception as _e:  # pragma: no cover -- fallback if Docker not available
+        # Provide a dummy URL so the code can still import, but mark that Postgres is
+        # unavailable.  Tests that actually require DB connectivity should handle the
+        # failure or be skipped.
+        os.environ.setdefault(
+            "DATABASE_URL",
+            "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
+        )
+        _POSTGRES_CONTAINER = None
+        print(f"[Database Setup] ⚠️  Failed to start container: {_e}")
+else:
+    # Unit-test run ⇒ use super-light SQLite in-memory
+    os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+    print("[Database Setup] 🚀 Using in-memory SQLite for unit tests (no container needed)")
 
 
 def pytest_sessionstart(session):
-    """Ensure the database is set up and cleared before running tests."""
-    print("\n[pytest] Running local setup script to reset database...")
+    """Optional database reset for integration tests."""
+    if not _RUN_INTEGRATION:
+        # No heavy DB work for unit tests
+        return
+    print("\n[pytest] Running local setup script to reset database (integration run)...")
+    db_reset_start = time.time()
     result = subprocess.run([
         sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"
     ], capture_output=True, text=True)
@@ -100,10 +106,15 @@ def pytest_sessionstart(session):
     if result.returncode != 0:
         print(result.stderr)
         pytest.exit("Database setup/reset failed before tests.")
+    else:
+        db_reset_duration = time.time() - db_reset_start
+        print(f"[pytest] ✅ Database reset completed in {db_reset_duration:.2f} seconds")
 
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: D401
     """Cleanup the Postgres container after the entire test session."""
+    if not _RUN_INTEGRATION:
+        return
     global _POSTGRES_CONTAINER
     if _POSTGRES_CONTAINER is not None:
         try:
@@ -228,12 +239,6 @@ def mock_strategy():
     mock_strategy.get_parameters.return_value = {"test": "params"}
     
     return mock_strategy
-
-
-@pytest.fixture
-def real_adaptive_strategy():
-    """Create a real adaptive strategy instance for integration tests"""
-    return AdaptiveStrategy()
 
 
 @pytest.fixture
@@ -448,6 +453,20 @@ def mock_logger():
     logger.error = Mock()
     logger.debug = Mock()
     return logger
+
+
+@pytest.fixture
+def mock_database_manager():
+    """Create a mock database manager for unit tests"""
+    from tests.mocks import MockDatabaseManager
+    return MockDatabaseManager()
+
+
+@pytest.fixture
+def fast_db():
+    """Alias for mock_database_manager - use this in unit tests"""
+    from tests.mocks import MockDatabaseManager
+    return MockDatabaseManager()
 
 @pytest.fixture
 def mock_sentiment_provider():
