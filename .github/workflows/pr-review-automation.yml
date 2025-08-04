@@ -34,7 +34,7 @@ jobs:
         
         PR URL: ${{ github.event.pull_request.html_url }}
         
-        Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to verify the issues and decide whether they should be fixed or not. If you do decide to fix them, leave a quick comment on the PR to say what you did and why. If you decide not to fix them, leave a comment to say why not. Push your changes directly to the PR branch.
+        Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to verify the issues in this pull request and decide whether they should be fixed or not. Use the Github MCP server to access PR details and comments.If you do decide to fix them, leave a quick comment on the PR to say what you did and why. If you decide not to fix them, leave a comment to say why not. Push your changes directly to the PR branch.
         EOF
         
         echo "=== Sending to Cursor Background Agent ==="
