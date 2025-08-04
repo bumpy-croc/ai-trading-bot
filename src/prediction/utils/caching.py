@@ -9,8 +9,11 @@ import pandas as pd
 import numpy as np
 import hashlib
 import time
+import json
+import pickle
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
+from functools import wraps
 from src.config.constants import DEFAULT_FEATURE_CACHE_TTL
 
 
@@ -350,3 +353,127 @@ def clear_global_feature_cache() -> None:
     global _global_feature_cache
     if _global_feature_cache is not None:
         _global_feature_cache.clear()
+
+
+# Model caching functionality for backward compatibility
+class ModelCache:
+    """Simple cache for model predictions"""
+    
+    def __init__(self, ttl: int = 600):
+        """
+        Initialize cache with time-to-live setting.
+        
+        Args:
+            ttl: Time-to-live in seconds
+        """
+        self.cache: Dict[str, Tuple[Any, float]] = {}
+        self.ttl = ttl
+    
+    def get(self, key: str) -> Optional[Any]:
+        """Get cached value if not expired"""
+        if key in self.cache:
+            value, timestamp = self.cache[key]
+            if time.time() - timestamp < self.ttl:
+                return value
+            else:
+                del self.cache[key]
+        return None
+    
+    def set(self, key: str, value: Any) -> None:
+        """Cache value with timestamp"""
+        self.cache[key] = (value, time.time())
+    
+    def clear(self) -> None:
+        """Clear all cached values"""
+        self.cache.clear()
+    
+    def size(self) -> int:
+        """Get current cache size"""
+        return len(self.cache)
+
+
+def _generate_cache_key(*args, **kwargs) -> str:
+    """
+    Generate a reliable cache key from function arguments.
+    
+    This function handles different data types properly to avoid the issues
+    with hash() randomization and str() representation inconsistencies.
+    
+    Args:
+        *args: Positional arguments
+        **kwargs: Keyword arguments
+        
+    Returns:
+        Reliable cache key string
+    """
+    def _serialize_value(value):
+        """Serialize a value in a deterministic way."""
+        try:
+            # Handle pandas DataFrames and Series
+            if isinstance(value, pd.DataFrame):
+                # Use pandas hash utility for DataFrames
+                return f"df:{pd.util.hash_pandas_object(value, index=True).values.tobytes().hex()}"
+            elif isinstance(value, pd.Series):
+                # Use pandas hash utility for Series
+                return f"series:{pd.util.hash_pandas_object(value, index=True).values.tobytes().hex()}"
+            
+            # Handle numpy arrays
+            elif isinstance(value, np.ndarray):
+                # Use deterministic hash of array content
+                return f"array:{hashlib.sha256(value.tobytes()).hexdigest()}"
+            
+            # Handle basic types that can be JSON serialized
+            elif isinstance(value, (str, int, float, bool, type(None))):
+                return json.dumps(value, sort_keys=True)
+            
+            # Handle lists and tuples
+            elif isinstance(value, (list, tuple)):
+                return f"[{','.join(_serialize_value(v) for v in value)}]"
+            
+            # Handle dictionaries
+            elif isinstance(value, dict):
+                sorted_items = sorted(value.items(), key=lambda x: x[0])
+                return f"{{{','.join(f'{k}:{_serialize_value(v)}' for k, v in sorted_items)}}}"
+            
+            # For other types, use pickle with deterministic protocol
+            else:
+                return f"pickle:{hashlib.sha256(pickle.dumps(value, protocol=4)).hexdigest()}"
+                
+        except Exception:
+            # Fallback for any serialization issues
+            return f"fallback:{hashlib.sha256(str(value).encode()).hexdigest()}"
+    
+    # Serialize args and kwargs
+    args_str = f"args:[{','.join(_serialize_value(arg) for arg in args)}]"
+    kwargs_str = f"kwargs:{{{','.join(f'{k}:{_serialize_value(v)}' for k, v in sorted(kwargs.items()))}}}"
+    
+    # Combine and hash
+    combined = f"{args_str}|{kwargs_str}"
+    return hashlib.sha256(combined.encode()).hexdigest()
+
+
+def cache_prediction(ttl: int = 600):
+    """Decorator to cache model predictions"""
+    def decorator(func):
+        cache = ModelCache(ttl)
+        
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Create reliable cache key from function name and arguments
+            cache_key = f"{func.__name__}:{_generate_cache_key(*args, **kwargs)}"
+            
+            # Try to get from cache
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                return cached_result
+            
+            # Run function and cache result
+            result = func(*args, **kwargs)
+            cache.set(cache_key, result)
+            
+            return result
+        
+        # Expose cache for testing/debugging
+        wrapper._cache = cache
+        return wrapper
+    return decorator
