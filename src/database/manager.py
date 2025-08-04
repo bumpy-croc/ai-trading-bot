@@ -755,6 +755,7 @@ class DatabaseManager:
                     'entry_price': p.entry_price,
                     'current_price': p.current_price,
                     'size': p.size,
+                    'quantity': p.quantity,
                     'unrealized_pnl': p.unrealized_pnl,
                     'unrealized_pnl_percent': p.unrealized_pnl_percent,
                     'stop_loss': p.stop_loss,

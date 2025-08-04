@@ -194,6 +194,7 @@ class TestMonitoringDashboard:
                     'side': 'long',
                     'entry_price': 50000.0,
                     'size': 0.1,
+                    'quantity': 0.1,
                     'entry_time': datetime.now() - timedelta(hours=1),
                     'stop_loss': 49000.0,
                     'take_profit': 52000.0,

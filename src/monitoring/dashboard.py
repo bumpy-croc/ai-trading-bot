@@ -885,20 +885,20 @@ class MonitoringDashboard:
             return 0.0
     
     def _get_total_position_sizes(self) -> float:
-        """Get total size (quantity) of all active positions"""
+        """Get total quantity of all active positions"""
         try:
             positions = self.db_manager.get_active_positions()
-            total_sizes = sum(self._safe_float(pos.get('size', 0)) for pos in positions)
-            return total_sizes
+            total_quantities = sum(self._safe_float(pos.get('quantity', 0)) for pos in positions)
+            return total_quantities
         except Exception as e:
-            logger.error(f"Error getting total position sizes: {e}")
+            logger.error(f"Error getting total position quantities: {e}")
             return 0.0
     
     def _get_total_position_value_at_entry(self) -> float:
         """Get total value of all active positions at entry prices"""
         try:
             positions = self.db_manager.get_active_positions()
-            total_value = sum(self._safe_float(pos.get('size', 0)) * self._safe_float(pos.get('entry_price', 0)) for pos in positions)
+            total_value = sum(self._safe_float(pos.get('quantity', 0)) * self._safe_float(pos.get('entry_price', 0)) for pos in positions)
             return total_value
         except Exception as e:
             logger.error(f"Error getting total position value at entry: {e}")
@@ -1012,7 +1012,7 @@ class MonitoringDashboard:
                 return 0.0
                 
             positions = self.db_manager.get_active_positions()
-            total_quantity = sum(self._safe_float(pos.get('size', 0)) for pos in positions)
+            total_quantity = sum(self._safe_float(pos.get('quantity', 0)) for pos in positions)
             return total_quantity * current_price
             
         except Exception as e:
@@ -1058,13 +1058,13 @@ class MonitoringDashboard:
             total_unrealized = 0.0
             for position in positions:
                 entry_price = self._safe_float(position.get('entry_price', 0))
-                size = self._safe_float(position.get('size', 0))
+                quantity = self._safe_float(position.get('quantity', 0))
                 side = position.get('side', '').lower()
                 
                 if side == 'long':
-                    unrealized = (current_price - entry_price) * size
+                    unrealized = (current_price - entry_price) * quantity
                 else:  # short
-                    unrealized = (entry_price - current_price) * size
+                    unrealized = (entry_price - current_price) * quantity
                 
                 total_unrealized += unrealized
             
@@ -1166,24 +1166,24 @@ class MonitoringDashboard:
             current_price = self._get_current_price()
             
             for pos in positions_data:
-                # Ensure size is float
-                size = self._safe_float(pos.get('size', 0))
+                # Ensure quantity is float
+                quantity = self._safe_float(pos.get('quantity', 0))
                 
                 # Calculate unrealized PnL - convert entry_price to float
                 entry_price = self._safe_float(pos.get('entry_price', 0))
                 side = pos.get('side', '').lower()
                 
                 if side == 'long':
-                    unrealized_pnl = (current_price - entry_price) * size
+                    unrealized_pnl = (current_price - entry_price) * quantity
                 else:
-                    unrealized_pnl = (entry_price - current_price) * size
+                    unrealized_pnl = (entry_price - current_price) * quantity
                 
                 positions.append(PositionDict(**{
                     'symbol': pos.get('symbol', ''),
                     'side': pos.get('side', ''),
                     'entry_price': entry_price,
                     'current_price': current_price,
-                    'quantity': size,
+                    'quantity': quantity,
                     'unrealized_pnl': unrealized_pnl,
                     'entry_time': pos.get('entry_time'),
                     'stop_loss': self._safe_float(pos.get('stop_loss')) if pos.get('stop_loss') is not None else None,
