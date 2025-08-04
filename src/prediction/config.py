@@ -4,7 +4,7 @@ Configuration management for the prediction engine.
 This module provides a type-safe configuration class that integrates with the
 existing ConfigManager system to load prediction engine settings.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 from src.config.config_manager import get_config
 from src.config.constants import (
@@ -29,7 +29,7 @@ class PredictionConfig:
     This class provides a type-safe way to access prediction engine configuration
     settings loaded from the ConfigManager system.
     """
-    prediction_horizons: List[int] = None
+    prediction_horizons: List[int] = field(default_factory=lambda: DEFAULT_PREDICTION_HORIZONS.copy())
     min_confidence_threshold: float = DEFAULT_MIN_CONFIDENCE_THRESHOLD
     max_prediction_latency: float = DEFAULT_MAX_PREDICTION_LATENCY
     model_registry_path: str = DEFAULT_MODEL_REGISTRY_PATH
@@ -42,8 +42,8 @@ class PredictionConfig:
 
     def __post_init__(self):
         """Post-initialization processing"""
-        if self.prediction_horizons is None:
-            self.prediction_horizons = DEFAULT_PREDICTION_HORIZONS.copy()
+        # No longer needed since we use field(default_factory)
+        pass
 
     @classmethod
     def from_config_manager(cls) -> 'PredictionConfig':

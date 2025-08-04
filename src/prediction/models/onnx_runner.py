@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from typing import Dict, Any, Optional
 from ..config import PredictionConfig
 
+# Constants for numerical stability
+EPSILON = 1e-8  # Small value to prevent division by zero
+
 
 @dataclass
 class ModelPrediction:
@@ -132,9 +135,9 @@ class OnnxRunner:
                 mean = norm_params[feature_name].get('mean', 0.0)
                 std = norm_params[feature_name].get('std', 1.0)
                 
-                # * Prevent ZeroDivisionError by using a minimum std value
+                # Prevent ZeroDivisionError by using a minimum std value
                 if std == 0.0:
-                    std = 1e-8  # Small epsilon to prevent division by zero
+                    std = EPSILON  # Small epsilon to prevent division by zero
                 
                 features[:, :, i] = (features[:, :, i] - mean) / std
         
