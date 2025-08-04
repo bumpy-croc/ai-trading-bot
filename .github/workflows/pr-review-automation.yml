@@ -76,6 +76,7 @@ jobs:
       run: |
         echo "=== Launching Cursor Background Agent for PR Review ==="
         echo "PR: ${{ github.event.pull_request.html_url }}"
+        echo "Branch: ${{ github.event.pull_request.head.ref }}"
         echo "Reviewer: ${{ github.event.review.user.login }}"
         echo "Review State: ${{ github.event.review.state }}"
         echo "Unresolved Comments: ${{ steps.get-comments.outputs.unresolved_count }}"
@@ -97,11 +98,11 @@ jobs:
         Please analyze these unresolved comments and take appropriate action:
         1. Review each unresolved comment carefully
         2. Determine if the issue should be fixed or if there's a valid reason not to fix it
-        3. If you decide to fix an issue, implement the fix and leave a comment explaining what you did
-        4. If you decide not to fix an issue, leave a comment explaining why not
+        3. If you decide to fix an issue, implement the fix and leave a comment on the pull request, using either the Github MCP server or the Github API.
+        4. If you decide not to fix an issue, leave a comment explaining why not on the pull request, using either the Github MCP server or the Github API.
         5. Push your changes directly to the PR branch
         
-        Notes: 1. Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to make informed decisions. 2. Use the Github API or the Github MCP server to access the PR details.
+        Notes: 1. Use your knowledge of the project coding style, settings, architecture, known issues and other relevant information to make informed decisions.
         EOF
         
         echo "=== Sending to Cursor Background Agent ==="
