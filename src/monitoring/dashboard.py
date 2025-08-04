@@ -337,7 +337,7 @@ class MonitoringDashboard:
             if 'weekly_pnl' in enabled_metrics:
                 metrics['weekly_pnl'] = self._get_weekly_pnl()
             if 'position_sizes' in enabled_metrics:
-                metrics['position_sizes'] = self._get_total_position_value_at_entry()
+                metrics['position_sizes'] = self._get_total_position_sizes()
             if 'max_drawdown' in enabled_metrics:
                 metrics['max_drawdown'] = self._get_max_drawdown()
             if 'risk_per_trade' in enabled_metrics:
@@ -879,6 +879,16 @@ class MonitoringDashboard:
             return result[0]['weekly_pnl'] if result else 0.0
         except Exception as e:
             logger.error(f"Error getting weekly P&L: {e}")
+            return 0.0
+    
+    def _get_total_position_sizes(self) -> float:
+        """Get total size (quantity) of all active positions"""
+        try:
+            positions = self.db_manager.get_active_positions()
+            total_sizes = sum(self._safe_float(pos.get('size', 0)) for pos in positions)
+            return total_sizes
+        except Exception as e:
+            logger.error(f"Error getting total position sizes: {e}")
             return 0.0
     
     def _get_total_position_value_at_entry(self) -> float:
