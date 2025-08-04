@@ -3,13 +3,13 @@
       "railway": {
         "command": "npx -y @jasontanswe/railway-mcp RAILWAY_API_TOKEN",
         "env": {
-          "RAILWAY_API_KEY": "eacd4325-34c0-41f8-a6fb-22e01163e79b"
+          "RAILWAY_API_KEY": "${RAILWAY_API_KEY}"
         }
       },
       "github": {
         "command": "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server",
         "env": {
-          "GITHUB_PERSONAL_ACCESS_TOKEN": "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"
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
         }
       }
     }
