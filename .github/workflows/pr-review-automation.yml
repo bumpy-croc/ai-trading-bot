@@ -15,7 +15,7 @@ jobs:
     
     # Only run for bugbot or copilot reviews
     if: |
-      github.event.review.user.login == 'bugbot' || 
+      github.event.review.user.login == 'cursor' || 
       github.event.review.user.login == 'copilot' ||
       github.event.review.user.login == 'github-actions[bot]'
     
