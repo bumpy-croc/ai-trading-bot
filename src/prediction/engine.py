@@ -102,6 +102,26 @@ class PredictionEngine:
             # Calculate total inference time
             inference_time = time.time() - start_time
             
+            # ! Check for timeout even on successful predictions
+            if inference_time > self.config.max_prediction_latency:
+                return PredictionResult(
+                    price=0.0,
+                    confidence=0.0,
+                    direction=0,
+                    model_name=prediction.model_name,
+                    timestamp=datetime.now(timezone.utc),
+                    inference_time=inference_time,
+                    features_used=features.shape[1] if hasattr(features, 'shape') else 0,
+                    error=f"Prediction timeout after {inference_time:.3f}s (max: {self.config.max_prediction_latency}s)",
+                    metadata={
+                        'error_type': 'PredictionTimeoutError',
+                        'data_length': len(data),
+                        'feature_extraction_time': feature_time,
+                        'model_inference_time': prediction.inference_time,
+                        'config_version': self._get_config_version()
+                    }
+                )
+            
             # Check if cache was hit (from feature pipeline)
             cache_hit = self._was_cache_hit()
             
@@ -129,13 +149,17 @@ class PredictionEngine:
             return result
             
         except Exception as e:
-            # Check for timeout
+            # Calculate total time for both timeout check and error result
             total_time = time.time() - start_time
+            
+            # ! Check for timeout but preserve original error
+            error_message = str(e)
+            error_type = type(e).__name__
+            
             if total_time > self.config.max_prediction_latency:
-                error_msg = f"Prediction timeout after {total_time:.3f}s (max: {self.config.max_prediction_latency}s)"
-                error = PredictionTimeoutError(error_msg)
-            else:
-                error = e
+                # * Add timeout information to the original error instead of replacing it
+                error_message = f"Prediction timeout after {total_time:.3f}s (max: {self.config.max_prediction_latency}s). Original error: {error_message}"
+                error_type = f"PredictionTimeoutError+{error_type}"
             
             # Return error result
             return PredictionResult(
@@ -144,11 +168,11 @@ class PredictionEngine:
                 direction=0,
                 model_name=model_name or "unknown",
                 timestamp=datetime.now(timezone.utc),
-                inference_time=time.time() - start_time,
+                inference_time=total_time,
                 features_used=0,
-                error=str(error),
+                error=error_message,
                 metadata={
-                    'error_type': type(error).__name__,
+                    'error_type': error_type,
                     'data_length': len(data) if isinstance(data, pd.DataFrame) else 0
                 }
             )

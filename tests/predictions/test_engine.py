@@ -278,10 +278,44 @@ class TestPredictionEnginePredict:
         data = self.create_test_data()
         result = engine.predict(data)
         
-        # The timeout logic checks time after try/except block completes
-        # If the operation took longer than max_prediction_latency, it should be flagged
-        # The current implementation returns success if no exception, but we can check inference time
+        # ! With the fixed timeout logic, predictions that exceed max_prediction_latency
+        # should return an error result, even if the prediction completed successfully
+        assert result.error is not None
+        assert "Prediction timeout" in result.error
         assert result.inference_time > config.max_prediction_latency
+        assert result.price == 0.0
+        assert result.confidence == 0.0
+        assert result.direction == 0
+        assert result.metadata['error_type'] == 'PredictionTimeoutError'
+    
+    @patch('src.prediction.engine.PredictionModelRegistry')
+    @patch('src.prediction.engine.FeaturePipeline')
+    def test_predict_timeout_with_original_error(self, mock_pipeline, mock_registry):
+        """Test timeout logic preserves original error when both timeout and exception occur"""
+        config = PredictionConfig()
+        config.max_prediction_latency = 0.001  # Very short timeout (1ms)
+        engine = PredictionEngine(config)
+        
+        # Mock slow feature extraction that raises an exception and takes longer than timeout
+        def slow_transform_with_error(*args, **kwargs):
+            import time
+            time.sleep(0.05)  # Sleep longer than timeout (50ms > 1ms)
+            raise ValueError("Feature extraction failed")
+        
+        engine.feature_pipeline.transform.side_effect = slow_transform_with_error
+        
+        data = self.create_test_data()
+        result = engine.predict(data)
+        
+        # ! With the fixed timeout logic, original errors are preserved with timeout info
+        assert result.error is not None
+        assert "Prediction timeout" in result.error
+        assert "Original error: Feature extraction failed" in result.error
+        assert result.inference_time > config.max_prediction_latency
+        assert result.price == 0.0
+        assert result.confidence == 0.0
+        assert result.direction == 0
+        assert result.metadata['error_type'] == 'PredictionTimeoutError+FeatureExtractionError'
 
 
 class TestPredictionEngineBatch:
