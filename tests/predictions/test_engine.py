@@ -228,6 +228,10 @@ class TestPredictionEnginePredict:
         engine = PredictionEngine()
         engine.model_registry.get_model.return_value = None
         
+        # Mock feature extraction to return numpy array
+        mock_features = np.random.random((1, 10))
+        engine.feature_pipeline.transform.return_value = mock_features
+        
         data = self.create_test_data()
         result = engine.predict(data, model_name="nonexistent_model")
         

@@ -330,6 +330,9 @@ class PredictionEngine:
     def clear_caches(self) -> None:
         """Clear all caches"""
         self.feature_pipeline.clear_cache()
+        # Reset cache hit status after clearing
+        if hasattr(self.feature_pipeline, '_last_cache_hit'):
+            self.feature_pipeline._last_cache_hit = False
         # Reset performance stats related to caching
         self._cache_hits = 0
         self._cache_misses = 0
@@ -431,7 +434,26 @@ class PredictionEngine:
     def _extract_features(self, data: pd.DataFrame) -> np.ndarray:
         """Extract features using feature pipeline"""
         try:
-            return self.feature_pipeline.transform(data, use_cache=True)
+            # Get features from pipeline (returns DataFrame with original data + features)
+            features_result = self.feature_pipeline.transform(data, use_cache=True)
+            
+            # Handle different return types from feature pipeline
+            if isinstance(features_result, np.ndarray):
+                # Feature pipeline returned numpy array directly
+                return features_result
+            elif isinstance(features_result, pd.DataFrame):
+                # Feature pipeline returned DataFrame - extract feature columns
+                original_columns = ['open', 'high', 'low', 'close', 'volume']
+                feature_columns = [col for col in features_result.columns if col not in original_columns]
+                
+                if not feature_columns:
+                    raise FeatureExtractionError("No feature columns found in pipeline output")
+                
+                # Convert feature columns to numpy array
+                features_array = features_result[feature_columns].values
+                return features_array
+            else:
+                raise FeatureExtractionError(f"Unexpected feature pipeline output type: {type(features_result)}")
         except Exception as e:
             raise FeatureExtractionError(f"Feature extraction failed: {str(e)}")
     
@@ -452,27 +474,8 @@ class PredictionEngine:
     
     def _was_cache_hit(self) -> bool:
         """Check if last operation was a cache hit"""
-        # Check feature pipeline cache statistics to detect cache hits
-        if self.feature_pipeline.cache:
-            pipeline_stats = self.feature_pipeline.get_performance_stats()
-            # Compare with our tracked cache hits to see if there was a new hit
-            current_hits = pipeline_stats.get('cache_hits', 0)
-            if hasattr(self, '_last_pipeline_cache_hits'):
-                # Only compare if both values are numeric (not mocks)
-                if (isinstance(current_hits, (int, float)) and 
-                    isinstance(self._last_pipeline_cache_hits, (int, float))):
-                    cache_hit = current_hits > self._last_pipeline_cache_hits
-                    self._last_pipeline_cache_hits = current_hits
-                    return cache_hit
-                else:
-                    # If we have mocks, return False to avoid comparison errors
-                    return False
-            else:
-                # First call - initialize tracking
-                if isinstance(current_hits, (int, float)):
-                    self._last_pipeline_cache_hits = current_hits
-                return False
-        return False
+        # Get cache hit status directly from feature pipeline for current operation
+        return self.feature_pipeline.get_last_cache_hit_status()
     
     def _get_config_version(self) -> str:
         """Get configuration version/hash for tracking"""
