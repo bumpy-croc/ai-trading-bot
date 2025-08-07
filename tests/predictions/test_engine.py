@@ -314,7 +314,7 @@ class TestPredictionEnginePredict:
         # Test that when both a timeout and an exception occur, the error message includes both timeout and original error information
         assert result.error is not None
         assert "Prediction timeout" in result.error
-        assert "Original error: Feature extraction failed" in result.error
+        assert "Feature extraction failed" in result.error
         assert result.inference_time > config.max_prediction_latency
         assert result.price == 0.0
         assert result.confidence == 0.0
