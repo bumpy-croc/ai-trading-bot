@@ -234,9 +234,9 @@ class MlAdaptive(BaseStrategy):
         if rebound:
             min_confidence *= self.rebound_confidence_multiplier
         
-        # Entry conditions using prediction engine
+        # Entry conditions using original price comparison logic
         entry_conditions = [
-            prediction['direction'] == 1,  # Positive prediction (expecting price rise)
+            predicted_price > close,  # Predicted price higher than current price (original behavior)
             confidence >= min_confidence,  # Sufficient confidence
             regime not in ['crisis', 'bear'] or confidence >= min_confidence * 2,  # Extra caution in crisis/bear
             rsi < 70,  # Not overbought
@@ -321,9 +321,9 @@ class MlAdaptive(BaseStrategy):
         if regime in ['crisis', 'volatile']:
             min_confidence *= 1.5
 
-        # Entry rules using prediction engine
+        # Entry rules using original price comparison logic
         entry_conditions = [
-            prediction['direction'] == -1,      # Model predicts lower price
+            predicted_price < close,            # Predicted price lower than current price (original behavior)
             confidence >= min_confidence,       # Enough expected drop
             regime in ['bear', 'crisis', 'volatile'],  # Only short in non-bull phases
             rsi > 30,                          # Not oversold

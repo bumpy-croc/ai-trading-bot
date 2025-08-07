@@ -140,9 +140,9 @@ class MlBasic(BaseStrategy):
         predicted_price = prediction['price']
         predicted_return = (predicted_price - current_price) / current_price if current_price > 0 else 0
         
-        # Short entry: simple price comparison (original behavior)
-        # Enter short if predicted price is lower than current price
-        return predicted_price < current_price
+        # Short entry: require significant predicted price drop below threshold
+        # Enter short if predicted return is below the threshold
+        return predicted_return < self.SHORT_ENTRY_THRESHOLD
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Check exit conditions using basic risk management and ML signals"""
@@ -187,9 +187,9 @@ class MlBasic(BaseStrategy):
         # Calculate predicted return
         predicted_return = (predicted_price - current_price) / current_price if current_price > 0 else 0
         
-        # TODO: After backtesting returns, use prediction['confidence'] instead of calculated confidence
-        # Old calculation: confidence based on predicted return magnitude
-        confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
+        # Use absolute value of predicted return for confidence to handle both bullish and bearish predictions
+        # This ensures consistent position sizing regardless of prediction direction
+        confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         
         # Scale position size by confidence
         dynamic_size = self.BASE_POSITION_SIZE * confidence
