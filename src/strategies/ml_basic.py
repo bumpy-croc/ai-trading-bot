@@ -140,8 +140,9 @@ class MlBasic(BaseStrategy):
         predicted_price = prediction['price']
         predicted_return = (predicted_price - current_price) / current_price if current_price > 0 else 0
         
-        # Short entry: prediction suggests price decrease
-        return prediction['direction'] == -1 and predicted_return < self.SHORT_ENTRY_THRESHOLD
+        # Short entry: simple price comparison (original behavior)
+        # Enter short if predicted price is lower than current price
+        return predicted_price < current_price
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Check exit conditions using basic risk management and ML signals"""
@@ -162,9 +163,7 @@ class MlBasic(BaseStrategy):
             # For long positions: exit if prediction suggests significant price drop
             predicted_return = (prediction['price'] - current_price) / current_price if current_price > 0 else 0
             significant_unfavorable_prediction = (
-                prediction['direction'] == -1 and 
-                predicted_return < -0.02 and  # 2% threshold
-                prediction['confidence'] > 0.6
+                predicted_return < -0.02  # 2% threshold - simple price comparison
             )
             
             return basic_exit or significant_unfavorable_prediction
