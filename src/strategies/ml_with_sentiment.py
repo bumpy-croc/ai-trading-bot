@@ -313,6 +313,18 @@ class MlWithSentiment(BaseStrategy):
             )
             return False
         
+        # Check for zero current_price to prevent division by zero
+        if current_price <= 0:
+            # Log the zero price error
+            self.log_execution(
+                signal_type='entry',
+                action_taken='no_action',
+                price=current_price,
+                reasons=['zero_current_price'],
+                additional_context={'prediction_available': True, 'current_price': current_price}
+            )
+            return False
+        
         # Get sentiment freshness (higher weight for fresh sentiment)
         sentiment_freshness = df.get('sentiment_freshness', pd.Series([0] * len(df))).iloc[index]
         freshness_boost = 1.1 if sentiment_freshness > 0 else 1.0  # 10% boost for live sentiment
@@ -402,7 +414,7 @@ class MlWithSentiment(BaseStrategy):
         prediction = self.get_prediction(df, index)
         prediction_negative = False
         
-        if not prediction.get('error') and prediction['price'] is not None:
+        if not prediction.get('error') and prediction['price'] is not None and current_price > 0:
             predicted_return = (prediction['price'] - current_price) / current_price
             prediction_negative = (
                 prediction['direction'] == -1 and 
