@@ -278,8 +278,8 @@ class TestPredictionEnginePredict:
         data = self.create_test_data()
         result = engine.predict(data)
         
-        # ! With the fixed timeout logic, predictions that exceed max_prediction_latency
-        # should return an error result, even if the prediction completed successfully
+        # Predictions that exceed max_prediction_latency should return an error result,
+        # even if the prediction completed successfully.
         assert result.error is not None
         assert "Prediction timeout" in result.error
         assert result.inference_time > config.max_prediction_latency
@@ -307,7 +307,7 @@ class TestPredictionEnginePredict:
         data = self.create_test_data()
         result = engine.predict(data)
         
-        # ! With the fixed timeout logic, original errors are preserved with timeout info
+        # Test that when both a timeout and an exception occur, the error message includes both timeout and original error information
         assert result.error is not None
         assert "Prediction timeout" in result.error
         assert "Original error: Feature extraction failed" in result.error

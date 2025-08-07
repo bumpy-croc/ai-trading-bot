@@ -17,7 +17,8 @@ class TestPredictionEngineIntegration:
     
     def create_test_data(self, num_rows=120):
         """Create realistic test market data"""
-        np.random.seed(42)  # For reproducible tests
+        # Use local random state for better test isolation
+        rng = np.random.RandomState(42)
         
         # Generate realistic OHLCV data
         base_price = 50000.0
@@ -27,13 +28,13 @@ class TestPredictionEngineIntegration:
         current_price = base_price
         for i in range(num_rows):
             # Random walk with some volatility
-            change = np.random.normal(0, 0.02) * current_price
+            change = rng.normal(0, 0.02) * current_price
             current_price = max(current_price + change, 1000)  # Minimum price
             
             # Generate OHLC around current price
-            high = current_price * (1 + abs(np.random.normal(0, 0.01)))
-            low = current_price * (1 - abs(np.random.normal(0, 0.01)))
-            open_price = current_price + np.random.normal(0, 0.005) * current_price
+            high = current_price * (1 + abs(rng.normal(0, 0.01)))
+            low = current_price * (1 - abs(rng.normal(0, 0.01)))
+            open_price = current_price + rng.normal(0, 0.005) * current_price
             close_price = current_price
             
             price_data.append({
@@ -44,7 +45,7 @@ class TestPredictionEngineIntegration:
             })
             
             # Generate realistic volume
-            volume = np.random.exponential(1000) + 100
+            volume = rng.exponential(1000) + 100
             volume_data.append(volume)
         
         data = pd.DataFrame(price_data)
