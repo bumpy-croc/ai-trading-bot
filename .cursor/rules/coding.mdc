@@ -74,8 +74,9 @@ alwaysApply: true
 	- **Good:** `// * Fetches user data from the v2 API.`
 	- **Bad:** `// TODO: This was a temporary fix, will rewrite later.`
 	- **Good:** `// TODO: Refactor this logic to be more efficient.`
-- **Don't use  words like "new" or "now we are adding ...", or "fixed ...".**
-- When writting comments, avoid referencing points in time, PRs, fixes, chats or reasons for the code change. Use simple language that describes the **current code**
+- Don't add words like "new" or "now we are adding this".
+- Only comment what is truly useful and ads value
+- When writting comments, avoid referencing points in time, PRs, chats or reasons for the code change. Use simple language that describes the context
 
 ### 4.3. Dependency Management
 - **Declaration:** Clearly state any new external libraries or dependencies introduced.

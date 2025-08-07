@@ -113,6 +113,9 @@ class FeaturePipeline:
         # Check if we should use cache
         should_use_cache = use_cache if use_cache is not None else self.use_cache
         
+        # Track cache hit status for this operation
+        cache_hit = False
+        
         try:
             # Start with original data
             result = data.copy()
@@ -127,6 +130,7 @@ class FeaturePipeline:
             if cached_result is not None:
                 # Use cached complete result
                 result = cached_result
+                cache_hit = True
                 self._performance_stats['cache_hits'] += 1
                 # Don't record extractor times when using cache since extractors weren't executed
             else:
@@ -162,6 +166,9 @@ class FeaturePipeline:
             total_time = time.time() - start_time
             self._performance_stats['total_transforms'] += 1
             self._performance_stats['total_time'] += total_time
+            
+            # Store cache hit status for this operation
+            self._last_cache_hit = cache_hit
             
             return result
             
@@ -354,3 +361,12 @@ class FeaturePipeline:
             'total_time': 0.0,
             'extractor_times': {}
         }
+    
+    def get_last_cache_hit_status(self) -> bool:
+        """
+        Get the cache hit status for the last transform operation.
+        
+        Returns:
+            True if the last operation was a cache hit, False otherwise
+        """
+        return getattr(self, '_last_cache_hit', False)
