@@ -45,6 +45,11 @@ class MlWithSentiment(BaseStrategy):
         # Configuration
         self.use_sentiment = use_sentiment
         
+        # * Backward compatibility: expose sequence_length/model_path parameters
+        self.sequence_length = int(kwargs.get('sequence_length', 120))
+        default_model = 'src/ml/btcusdt_sentiment.onnx' if use_sentiment else 'src/ml/btcusdt_price.onnx'
+        self.model_path = kwargs.get('model_path', default_model)
+        
         # Initialize sentiment provider if needed (for analysis and logging)
         self.sentiment_provider = None
         if self.use_sentiment:
@@ -284,6 +289,17 @@ class MlWithSentiment(BaseStrategy):
         if index < 1 or index >= len(df):
             return False
         
+        # * Backward compatibility: if legacy column present and missing, log as missing prediction
+        if self.prediction_engine is None and 'ml_prediction' in df.columns and pd.isna(df['ml_prediction'].iloc[index]):
+            self.log_execution(
+                signal_type='entry',
+                action_taken='no_action',
+                price=df['close'].iloc[index],
+                reasons=['missing_ml_prediction', 'prediction_available=False'],
+                additional_context={'prediction_available': False}
+            )
+            return False
+
         # Get prediction from engine
         prediction = self.get_prediction(df, index)
         
@@ -308,7 +324,7 @@ class MlWithSentiment(BaseStrategy):
                 signal_type='entry',
                 action_taken='no_action',
                 price=current_price,
-                reasons=['missing_ml_prediction'],
+                reasons=['missing_ml_prediction', 'prediction_available=False'],
                 additional_context={'prediction_available': False}
             )
             return False
@@ -449,6 +465,8 @@ class MlWithSentiment(BaseStrategy):
         """Get strategy parameters"""
         params = {
             'name': self.name,
+            'model_path': self.model_path,
+            'sequence_length': self.sequence_length,
             'use_sentiment': self.use_sentiment,
             'stop_loss_pct': self.stop_loss_pct,
             'take_profit_pct': self.take_profit_pct,

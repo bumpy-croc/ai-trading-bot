@@ -190,7 +190,7 @@ class LiveTradingEngine:
                 logger.warning(f"Failed to initialize exchange interface: {e}")
         
         # Optionally resume balance from last snapshot
-        if self.resume_from_last_balance:
+        if self.resume_from_last_balance and self.enable_live_trading:
             try:
                 # Get the latest active session ID
                 active_session_id = self.db_manager.get_active_session_id()

@@ -7,7 +7,25 @@ from sqlalchemy import (
     Enum, ForeignKey, Index, UniqueConstraint, Float, JSON  # Added Float and JSON
 )
 from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
+from sqlalchemy.types import TypeDecorator
+from sqlalchemy import JSON as _SA_JSON  # type: ignore
+
+class JSONFlexible(TypeDecorator):
+    """Portable JSON column: JSONB on PostgreSQL, JSON elsewhere.
+
+    Avoids binding a PostgreSQL-specific type when running under SQLite.
+    """
+    impl = _SA_JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            try:
+                from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
+                return dialect.type_descriptor(JSONB())
+            except Exception:  # pragma: no cover
+                return dialect.type_descriptor(_SA_JSON())
+        return dialect.type_descriptor(_SA_JSON())
 from datetime import datetime
 import enum
 
@@ -80,7 +98,7 @@ class Trade(Base):
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False, index=True)
-    strategy_config = Column(JSONB)  # Store strategy parameters
+    strategy_config = Column(JSONFlexible)  # Store strategy parameters
     confidence_score = Column(Numeric(18, 8))  # ML model confidence if applicable
     
     # Additional metadata
@@ -218,7 +236,7 @@ class PerformanceMetrics(Base):
     largest_loss_streak = Column(Integer, default=0)
     
     # By strategy breakdown
-    strategy_breakdown = Column(JSONB)  # Dict of strategy_name: metrics
+    strategy_breakdown = Column(JSONFlexible)  # Dict of strategy_name: metrics
     
     # Session reference
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
@@ -252,7 +270,7 @@ class TradingSession(Base):
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
-    strategy_config = Column(JSONB)
+    strategy_config = Column(JSONFlexible)
     
     # Environment
     symbol = Column(String(20), nullable=False)
@@ -287,7 +305,7 @@ class SystemEvent(Base):
     
     # Event details
     message = Column(Text, nullable=False)
-    details = Column(JSONB)  # Additional structured data
+    details = Column(JSONFlexible)  # Additional structured data
     
     # Context
     component = Column(String(100))  # Which part of the system
@@ -328,14 +346,14 @@ class StrategyExecution(Base):
     confidence_score = Column(Numeric(18, 8))
     
     # Decision factors
-    indicators = Column(JSONB)  # Dict of indicator values
-    sentiment_data = Column(JSONB)  # Sentiment scores if used
-    ml_predictions = Column(JSONB)  # ML model outputs if used
+    indicators = Column(JSONFlexible)  # Dict of indicator values
+    sentiment_data = Column(JSONFlexible)  # Sentiment scores if used
+    ml_predictions = Column(JSONFlexible)  # ML model outputs if used
     
     # Execution result
     action_taken = Column(String(50))  # 'opened_long', 'closed_position', 'no_action'
     position_size = Column(Numeric(18, 8))
-    reasons = Column(JSONB)  # List of reasons for the decision
+    reasons = Column(JSONFlexible)  # List of reasons for the decision
     
     # Market context
     price = Column(Numeric(18, 8))

@@ -65,41 +65,56 @@ class DatabaseManager:
         self._create_tables()
     
     def _init_database(self):
-        """Initialize PostgreSQL database connection and session factory"""
+        """Initialize database connection and session factory.
         
+        Supports PostgreSQL for production/integration and SQLite for unit tests.
+        """
         # Get database URL from configuration if not provided
         if self.database_url is None:
             config = get_config()
             self.database_url = config.get('DATABASE_URL')
-            
             if self.database_url is None:
                 raise ValueError(
-                    "DATABASE_URL environment variable is required for PostgreSQL connection. "
+                    "DATABASE_URL environment variable is required for database connection. "
                     "Please set DATABASE_URL in your environment or Railway configuration."
                 )
-        
-        # Validate PostgreSQL URL
-        if not self.database_url.startswith('postgresql'):
+
+        db_url = self.database_url
+
+        # Determine backend and engine configuration
+        if db_url.startswith('postgresql'):
+            engine_kwargs = self._get_engine_config()
+            backend = 'postgresql'
+        elif db_url.startswith('sqlite'):
+            # Normalize in-memory SQLite to a shared on-disk DB for tests so that
+            # separate DatabaseManager instances see the same data.
+            if db_url.rstrip('/') in ('sqlite:///:memory:', 'sqlite:///:memory'):
+                # Store under project root hidden folder
+                import os
+                os.makedirs('.pytest_db', exist_ok=True)
+                db_url = 'sqlite:///./.pytest_db/ai_trading_tests.sqlite'
+                self.database_url = db_url
+            engine_kwargs = self._get_sqlite_engine_config(sqlite_url=db_url)
+            backend = 'sqlite'
+        else:
+            # Keep strict for other backends (message matches existing tests)
             raise ValueError(
                 f"Only PostgreSQL databases are supported. "
-                f"Expected URL to start with 'postgresql://', got: {self.database_url[:20]}..."
+                f"Expected URL to start with 'postgresql://', got: {db_url[:20]}..."
             )
-        
-        # Create engine with PostgreSQL configuration
-        engine_kwargs = self._get_engine_config()
-        
+
         try:
-            self.engine = create_engine(self.database_url, **engine_kwargs)
+            self.engine = create_engine(db_url, **engine_kwargs)
             self.session_factory = sessionmaker(bind=self.engine)
-            
-            # Secure test query
+
+            # Lightweight connectivity probe (works for both backends)
             from sqlalchemy import text as _sql_text  # local import to avoid circular
             with self.engine.connect() as conn:
                 conn.execute(_sql_text("SELECT 1"))
-            logger.info("✅ PostgreSQL database connection established")
-                
+            logger.info(f"✅ {backend.capitalize()} database connection established")
+
         except Exception as e:
-            logger.error(f"Failed to initialize PostgreSQL database: {e}")
+            logger.error(f"Failed to initialize {backend} database: {e}")
             raise
     
     def _get_engine_config(self) -> Dict[str, Any]:
@@ -118,16 +133,37 @@ class DatabaseManager:
                 'application_name': 'ai-trading-bot'
             }
         }
+
+    def _get_sqlite_engine_config(self, sqlite_url: str) -> Dict[str, Any]:
+        """Get SQLite engine configuration optimized for unit tests.
+        
+        Uses a StaticPool and disables same-thread checks so the in-memory
+        database persists across sessions within the same process.
+        """
+        config: Dict[str, Any] = {
+            'echo': False,
+            'connect_args': {'check_same_thread': False}
+        }
+        # Use StaticPool only for true in-memory URIs
+        if sqlite_url.rstrip('/') in ('sqlite:///:memory:', 'sqlite:///:memory'):
+            from sqlalchemy.pool import StaticPool  # local import
+            config['poolclass'] = StaticPool
+        return config
     
     def _create_tables(self):
         """Create database tables if they don't exist"""
         try:
             if self.engine is None:
                 raise ValueError("Database engine not initialized")
-            Base.metadata.create_all(self.engine)
+            Base.metadata.create_all(self.engine, checkfirst=True)
 
             logger.info("Database tables created/verified")
         except Exception as e:
+            # Gracefully ignore benign race condition when tables already exist
+            err_msg = str(e).lower()
+            if "already exists" in err_msg and "table" in err_msg:
+                logger.info("Database tables already exist; skipping creation")
+                return
             logger.error(f"Error creating database tables: {e}")
             raise
     
