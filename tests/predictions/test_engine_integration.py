@@ -15,43 +15,31 @@ from src.prediction import create_engine, create_minimal_engine, predict
 class TestPredictionEngineIntegration:
     """Integration tests with real components"""
     
+    @classmethod
+    def setup_class(cls):
+        """Create shared test data to improve performance"""
+        # Create deterministic data for faster, reproducible tests
+        cls._cached_test_data = pd.DataFrame({
+            'open': [50000.0 + i * 10 for i in range(120)],
+            'high': [50500.0 + i * 10 for i in range(120)],
+            'low': [49500.0 + i * 10 for i in range(120)],
+            'close': [50200.0 + i * 10 for i in range(120)],
+            'volume': [1000.0 + i * 50 for i in range(120)]
+        })
+    
     def create_test_data(self, num_rows=120):
-        """Create realistic test market data"""
-        # Use local random state for better test isolation
-        rng = np.random.RandomState(42)
+        """Create realistic test market data - optimized version"""
+        if num_rows == 120:
+            return self._cached_test_data.copy()
         
-        # Generate realistic OHLCV data
-        base_price = 50000.0
-        price_data = []
-        volume_data = []
-        
-        current_price = base_price
-        for i in range(num_rows):
-            # Random walk with some volatility
-            change = rng.normal(0, 0.02) * current_price
-            current_price = max(current_price + change, 1000)  # Minimum price
-            
-            # Generate OHLC around current price
-            high = current_price * (1 + abs(rng.normal(0, 0.01)))
-            low = current_price * (1 - abs(rng.normal(0, 0.01)))
-            open_price = current_price + rng.normal(0, 0.005) * current_price
-            close_price = current_price
-            
-            price_data.append({
-                'open': open_price,
-                'high': high,
-                'low': low,
-                'close': close_price
-            })
-            
-            # Generate realistic volume
-            volume = rng.exponential(1000) + 100
-            volume_data.append(volume)
-        
-        data = pd.DataFrame(price_data)
-        data['volume'] = volume_data
-        
-        return data
+        # Only generate different data if non-standard size
+        return pd.DataFrame({
+            'open': [50000.0 + i * 10 for i in range(num_rows)],
+            'high': [50500.0 + i * 10 for i in range(num_rows)], 
+            'low': [49500.0 + i * 10 for i in range(num_rows)],
+            'close': [50200.0 + i * 10 for i in range(num_rows)],
+            'volume': [1000.0 + i * 50 for i in range(num_rows)]
+        })
     
     def test_engine_creation_with_real_config(self):
         """Test engine creation with real configuration"""

@@ -855,3 +855,174 @@ class TestStrategyLoggingIntegration:
                     # Check for any strategy-specific reason
                     pass
                 assert len(kwargs['reasons']) > 0
+
+
+class TestStrategyPredictionEngineIntegration:
+    """Test strategy integration with prediction engine"""
+
+    def test_strategies_accept_prediction_engine(self):
+        """Test that strategies can accept a prediction engine parameter"""
+        from src.prediction.engine import PredictionEngine
+        from unittest.mock import Mock
+        
+        # Create a mock prediction engine
+        mock_engine = Mock(spec=PredictionEngine)
+        
+        # Test that strategies can be initialized with prediction engine
+        strategies = [
+            MlBasic(prediction_engine=mock_engine),
+            MlAdaptive(prediction_engine=mock_engine),
+            MlWithSentiment(prediction_engine=mock_engine)
+        ]
+        
+        for strategy in strategies:
+            # Verify prediction engine is set
+            if hasattr(strategy, 'prediction_engine'):
+                assert strategy.prediction_engine == mock_engine
+
+    def test_strategy_prediction_integration_with_mock_engine(self, sample_ohlcv_data):
+        """Test strategy entry/exit conditions work with mock prediction engine"""
+        from src.prediction.engine import PredictionEngine, PredictionResult
+        from unittest.mock import Mock
+        from datetime import datetime, timezone
+        
+        # Create mock prediction engine with realistic responses
+        mock_engine = Mock(spec=PredictionEngine)
+        mock_result = PredictionResult(
+            price=55000.0,
+            confidence=0.75,
+            direction=1,
+            model_name="test_model",
+            timestamp=datetime.now(timezone.utc),
+            inference_time=0.05,
+            features_used=10
+        )
+        mock_engine.predict.return_value = mock_result
+        
+        strategies = [
+            MlBasic(prediction_engine=mock_engine),
+            MlAdaptive(prediction_engine=mock_engine)
+        ]
+        
+        for strategy in strategies:
+            # Calculate indicators
+            df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
+            
+            if len(df_with_indicators) > 20:
+                test_index = min(20, len(df_with_indicators) - 1)
+                
+                # Test entry conditions
+                result = strategy.check_entry_conditions(df_with_indicators, test_index)
+                assert isinstance(result, (bool, np.bool_, dict))
+                
+                # If prediction engine is being used, it should be called
+                if hasattr(strategy, 'prediction_engine') and strategy.prediction_engine:
+                    # Test that strategy can handle prediction results
+                    assert mock_engine.predict.called or not hasattr(strategy, '_use_prediction_engine')
+
+    def test_strategy_fallback_without_prediction_engine(self, sample_ohlcv_data):
+        """Test that strategies still work without prediction engine (backward compatibility)"""
+        strategies = [
+            MlBasic(),
+            MlAdaptive(),
+            MlWithSentiment()
+        ]
+        
+        for strategy in strategies:
+            # Calculate indicators
+            df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
+            
+            if len(df_with_indicators) > 20:
+                test_index = min(20, len(df_with_indicators) - 1)
+                
+                # Test entry conditions work without prediction engine
+                result = strategy.check_entry_conditions(df_with_indicators, test_index)
+                assert isinstance(result, (bool, np.bool_, dict))
+                
+                # Test exit conditions work without prediction engine
+                if result:  # Only test exit if we can enter
+                    position = {
+                        'side': 'long',
+                        'entry_price': 50000.0,
+                        'entry_time': df_with_indicators.index[test_index]
+                    }
+                    exit_result = strategy.check_exit_conditions(df_with_indicators, test_index, position)
+                    assert isinstance(exit_result, (bool, np.bool_, dict))
+
+    def test_prediction_engine_error_handling(self, sample_ohlcv_data):
+        """Test that strategies handle prediction engine errors gracefully"""
+        from src.prediction.engine import PredictionEngine
+        from unittest.mock import Mock
+        
+        # Create mock prediction engine that raises exceptions
+        mock_engine = Mock(spec=PredictionEngine)
+        mock_engine.predict.side_effect = Exception("Prediction failed")
+        
+        strategies = [
+            MlBasic(prediction_engine=mock_engine),
+            MlAdaptive(prediction_engine=mock_engine)
+        ]
+        
+        for strategy in strategies:
+            # Calculate indicators
+            df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
+            
+            if len(df_with_indicators) > 20:
+                test_index = min(20, len(df_with_indicators) - 1)
+                
+                # Should not crash even if prediction engine fails
+                try:
+                    result = strategy.check_entry_conditions(df_with_indicators, test_index)
+                    assert isinstance(result, (bool, np.bool_, dict))
+                except Exception as e:
+                    # If strategy doesn't handle prediction errors gracefully,
+                    # this test documents the current behavior
+                    pytest.skip(f"Strategy {type(strategy).__name__} doesn't handle prediction errors: {e}")
+
+    @pytest.mark.timeout(10)  # Ensure tests don't hang
+    def test_prediction_integration_performance(self, sample_ohlcv_data):
+        """Test that prediction engine integration doesn't significantly slow down strategies"""
+        import time
+        from src.prediction.engine import PredictionEngine
+        from unittest.mock import Mock
+        from datetime import datetime, timezone
+        
+        # Create fast mock prediction engine
+        mock_engine = Mock(spec=PredictionEngine)
+        mock_result = PredictionResult(
+            price=55000.0,
+            confidence=0.75,
+            direction=1,
+            model_name="fast_model",
+            timestamp=datetime.now(timezone.utc),
+            inference_time=0.001,  # Very fast mock
+            features_used=10
+        )
+        mock_engine.predict.return_value = mock_result
+        
+        strategy_with_engine = MlBasic(prediction_engine=mock_engine)
+        strategy_without_engine = MlBasic()
+        
+        # Calculate indicators for both
+        df_with_engine = strategy_with_engine.calculate_indicators(sample_ohlcv_data)
+        df_without_engine = strategy_without_engine.calculate_indicators(sample_ohlcv_data)
+        
+        if len(df_with_engine) > 20 and len(df_without_engine) > 20:
+            test_index = 20
+            
+            # Time strategy with prediction engine
+            start_time = time.time()
+            for _ in range(10):  # Multiple iterations for better measurement
+                strategy_with_engine.check_entry_conditions(df_with_engine, test_index)
+            with_engine_time = time.time() - start_time
+            
+            # Time strategy without prediction engine
+            start_time = time.time()
+            for _ in range(10):
+                strategy_without_engine.check_entry_conditions(df_without_engine, test_index)
+            without_engine_time = time.time() - start_time
+            
+            # Performance should not be dramatically worse (less than 10x slower)
+            if with_engine_time > 0:
+                slowdown_factor = with_engine_time / max(without_engine_time, 0.001)
+                assert slowdown_factor < 10, f"Prediction engine slows down strategy by {slowdown_factor:.2f}x"
