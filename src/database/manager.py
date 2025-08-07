@@ -86,14 +86,8 @@ class DatabaseManager:
             engine_kwargs = self._get_engine_config()
             backend = 'postgresql'
         elif db_url.startswith('sqlite'):
-            # Normalize in-memory SQLite to a shared on-disk DB for tests so that
-            # separate DatabaseManager instances see the same data.
-            if db_url.rstrip('/') in ('sqlite:///:memory:', 'sqlite:///:memory'):
-                # Store under project root hidden folder
-                import os
-                os.makedirs('.pytest_db', exist_ok=True)
-                db_url = 'sqlite:///./.pytest_db/ai_trading_tests.sqlite'
-                self.database_url = db_url
+            # Use in-memory SQLite for unit tests as provided by the environment
+            # to keep test isolation and speed. Do not normalize to on-disk.
             engine_kwargs = self._get_sqlite_engine_config(sqlite_url=db_url)
             backend = 'sqlite'
         else:

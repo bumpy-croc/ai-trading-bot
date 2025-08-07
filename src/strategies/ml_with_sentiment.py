@@ -290,7 +290,7 @@ class MlWithSentiment(BaseStrategy):
             return False
         
         # * Backward compatibility: if legacy column present and missing, log as missing prediction
-        if self.prediction_engine is None and 'ml_prediction' in df.columns and pd.isna(df['ml_prediction'].iloc[index]):
+        if 'ml_prediction' in df.columns and pd.isna(df['ml_prediction'].iloc[index]):
             self.log_execution(
                 signal_type='entry',
                 action_taken='no_action',
