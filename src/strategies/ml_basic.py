@@ -25,7 +25,7 @@ class MlBasic(BaseStrategy):
     # Strategy configuration constants
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
     CONFIDENCE_MULTIPLIER = 10  # Multiplier for confidence calculation
-    BASE_POSITION_SIZE = 0.926  # Base position size tuned to baseline backtest
+    BASE_POSITION_SIZE = 0.1  # Base position size (10% of balance) - preserves original risk profile
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
     
@@ -41,9 +41,7 @@ class MlBasic(BaseStrategy):
 
         # Confidence uses absolute magnitude by default to avoid shrinking sizes in bear regimes
         self.use_abs_confidence = True
-        # Keep prediction engine disabled by default for fast tests
-        if prediction_engine is None:
-            self.prediction_engine = None
+        # Use prediction engine from base class when available; do not disable by default
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate indicators - simplified since prediction engine handles feature engineering"""
@@ -62,14 +60,24 @@ class MlBasic(BaseStrategy):
             return False
         
         current_price = df['close'].iloc[index]
-        # Heuristic fallback when no prediction engine is available
+        # * When prediction engine is unavailable, do not enter positions.
+        # * Maintain ML-based entry/exit contract by requiring valid predictions.
         if self.prediction_engine is None:
-            prev_price = df['close'].iloc[index - 1]
-            predicted_price = prev_price  # legacy simple comparison
-            confidence = 0.45
-            predicted_return = (predicted_price - current_price) / current_price if current_price > 0 else 0
-            entry_signal = predicted_price > current_price
-            ml_context = None
+            self.log_execution(
+                signal_type='entry',
+                action_taken='no_action',
+                price=current_price,
+                signal_strength=0.0,
+                confidence_score=0.0,
+                ml_predictions={},
+                reasons=['prediction_engine_unavailable', 'no_ml_prediction'],
+                additional_context={
+                    'model_type': 'ml_basic',
+                    'prediction_available': False,
+                    'inference_time': 0.0,
+                }
+            )
+            return False
         else:
             # Get prediction from engine
             prediction = self.get_prediction(df, index)
@@ -182,13 +190,9 @@ class MlBasic(BaseStrategy):
             return 0.0
         
         current_price = df['close'].iloc[index]
-        # Heuristic fallback sizing when no prediction engine is available
+        # * When prediction engine is unavailable, do not size positions.
         if self.prediction_engine is None:
-            # Legacy heuristic: fixed position size when signal triggers
-            prev_price = df['close'].iloc[index - 1] if index > 0 else current_price
-            predicted_price = prev_price
-            predicted_return = (predicted_price - current_price) / current_price if current_price > 0 else 0
-            confidence = 0.5
+            return 0.0
         else:
             # Get prediction from engine
             prediction = self.get_prediction(df, index)
@@ -200,14 +204,10 @@ class MlBasic(BaseStrategy):
             magnitude = abs(predicted_return) if self.use_abs_confidence else max(0.0, predicted_return)
             confidence = min(1.0, magnitude * self.CONFIDENCE_MULTIPLIER)
         
-        # Scale position size and return fraction (0..1)
-        if self.prediction_engine is None:
-            final_size = self.BASE_POSITION_SIZE
-        else:
-            dynamic_size = self.BASE_POSITION_SIZE * confidence
-            final_size = max(self.MIN_POSITION_SIZE_RATIO, min(self.MAX_POSITION_SIZE_RATIO, dynamic_size))
-        
-        return float(final_size)
+        # Scale position size (ratio 0..1) and clamp within bounds
+        dynamic_ratio = self.BASE_POSITION_SIZE * confidence
+        clamped_ratio = max(self.MIN_POSITION_SIZE_RATIO, min(self.MAX_POSITION_SIZE_RATIO, dynamic_ratio))
+        return float(clamped_ratio)
 
     def get_parameters(self) -> dict:
         """Get strategy parameters"""

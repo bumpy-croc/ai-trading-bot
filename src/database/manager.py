@@ -96,10 +96,10 @@ class DatabaseManager:
             db_url = normalized_url
             backend = 'sqlite'
         else:
-            # Keep strict for other backends (message matches existing tests)
+            # Keep strict for other backends
             raise ValueError(
-                f"Only PostgreSQL databases are supported. "
-                f"Expected URL to start with 'postgresql://', got: {db_url[:20]}..."
+                f"Unsupported database URL. "
+                f"Expected URL to start with 'postgresql://' or 'sqlite://', got: {db_url[:20]}..."
             )
 
         try:

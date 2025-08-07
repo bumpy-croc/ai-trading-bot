@@ -93,7 +93,7 @@ def verify_railway_setup():
                 print("✅ PostgreSQL database detected")
             else:
                 print("❌ Database URL does not start with 'postgresql://'")
-                print("   Only PostgreSQL databases are supported")
+                print("   Unsupported database URL. Railway verification requires 'postgresql://'.")
                 return False
         else:
             print("❌ DATABASE_URL not found")

@@ -218,8 +218,8 @@ print(stats)
 3. Monitor for deadlocks
 
 ### Common Errors
-- `DATABASE_URL environment variable is required`: Set PostgreSQL connection string
-- `Only PostgreSQL databases are supported`: Check URL format
+ - `DATABASE_URL environment variable is required`: Set PostgreSQL connection string
+ - `Unsupported database URL.`: Check URL format (must start with `postgresql://` or `sqlite://` for tests)
 - Connection timeout: Check network connectivity
 
 ## Cost Considerations

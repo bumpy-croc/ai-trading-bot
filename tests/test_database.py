@@ -111,11 +111,11 @@ class TestInitialization(TestDatabaseManager):
             with pytest.raises(ValueError, match="DATABASE_URL environment variable is required"):
                 DatabaseManager()
     
-    def test_init_fails_with_non_postgresql_url(self):
-        """Test initialization fails with non-PostgreSQL URL"""
+    def test_init_fails_with_unsupported_url(self):
+        """Test initialization fails with unsupported DB URL"""
         sqlite_url = "mysql://user:pass@localhost:3306/testdb"
         
-        with pytest.raises(ValueError, match="Only PostgreSQL databases are supported"):
+        with pytest.raises(ValueError, match="Unsupported database URL\."):
             DatabaseManager(database_url=sqlite_url)
 
 
