@@ -218,7 +218,7 @@ class TestStrategyPredictionIntegration:
     def test_strategy_without_prediction_engine(self):
         """Test strategy behavior when prediction engine is None"""
         # Test with None prediction engine (should create default if available)
-        with pytest.raises(Exception):  # May raise import error if prediction engine not available
+        with pytest.raises(ImportError):  # May raise import error if prediction engine not available
             strategy = MlBasic(prediction_engine=None)
         
         # Or test with explicit None and ensure graceful handling
