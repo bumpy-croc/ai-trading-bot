@@ -5,6 +5,7 @@ This strategy improves upon ML Basic to handle extreme market volatility and bea
 It incorporates lessons learned from the 2020 COVID crash analysis.
 
 Key Improvements:
+- Uses unified prediction engine for ML predictions
 - Volatility-based position sizing using ATR
 - Market regime detection (trending, ranging, volatile, crisis)
 - Dynamic stop loss based on market conditions
@@ -22,8 +23,6 @@ Ideal for:
 
 import numpy as np
 import pandas as pd
-import onnx
-import onnxruntime as ort
 from src.strategies.base import BaseStrategy
 from src.indicators.technical import (
     calculate_atr, calculate_rsi, calculate_bollinger_bands,
@@ -41,16 +40,11 @@ class MlAdaptive(BaseStrategy):
     SECONDS_PER_DAY = 86400  # Number of seconds in a day
     LOSS_REDUCTION_FACTOR = 0.2  # 20% reduction per consecutive loss
 
-    def __init__(self, name="MlAdaptive", model_path="src/ml/btcusdt_price.onnx", sequence_length=120):
-        super().__init__(name)
+    def __init__(self, name="MlAdaptive", prediction_engine=None, **kwargs):
+        super().__init__(name, prediction_engine=prediction_engine)
         
         # Set strategy-specific trading pair - ML model trained on BTC-USD
         self.trading_pair = 'BTC-USD'
-        
-        self.model_path = model_path
-        self.sequence_length = sequence_length
-        self.ort_session = ort.InferenceSession(self.model_path)
-        self.input_name = self.ort_session.get_inputs()[0].name
         
         # Adaptive risk management parameters
         self.base_stop_loss_pct = 0.02  # 2% base stop loss
@@ -96,7 +90,7 @@ class MlAdaptive(BaseStrategy):
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         
-        # Calculate technical indicators
+        # Calculate technical indicators for market regime detection
         df = calculate_atr(df, period=14)
         df = calculate_moving_averages(df, periods=[20, 50, 200])
         df = calculate_bollinger_bands(df, period=20, std_dev=2.0)
@@ -131,56 +125,9 @@ class MlAdaptive(BaseStrategy):
         # Now that we have bear/rebound flags, detect market regime
         df['market_regime'] = self._detect_market_regime(df)
         
-        # Normalize price features for ML model
-        price_features = ['close', 'volume', 'high', 'low', 'open']
-        for feature in price_features:
-            if feature in df.columns:
-                df[f'{feature}_normalized'] = df[feature].rolling(
-                    window=self.sequence_length, min_periods=1
-                ).apply(
-                    lambda x: (x[-1] - np.min(x)) / (np.max(x) - np.min(x)) if np.max(x) != np.min(x) else 0.5,
-                    raw=True
-                )
-        
-        # Generate ML predictions
-        df['onnx_pred'] = np.nan
+        # Add placeholder columns for backward compatibility
+        df['ml_prediction'] = np.nan
         df['prediction_confidence'] = np.nan
-        
-        for i in range(self.sequence_length, len(df)):
-            # Prepare input features
-            feature_columns = [f'{feature}_normalized' for feature in price_features]
-            input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
-            
-            # Reshape for ONNX model
-            input_data = input_data.astype(np.float32)
-            input_data = np.expand_dims(input_data, axis=0)
-            
-            # Run prediction
-            try:
-                output = self.ort_session.run(None, {self.input_name: input_data})
-                pred = output[0][0][0]
-                
-                # Denormalize prediction
-                recent_close = df['close'].iloc[i-self.sequence_length:i].values
-                min_close = np.min(recent_close)
-                max_close = np.max(recent_close)
-                
-                if max_close != min_close:
-                    pred_denormalized = pred * (max_close - min_close) + min_close
-                else:
-                    pred_denormalized = df['close'].iloc[i-1]
-                
-                df.at[df.index[i], 'onnx_pred'] = pred_denormalized
-                
-                # Calculate prediction confidence based on expected return
-                current_close = df['close'].iloc[i]
-                expected_return = abs((pred_denormalized - current_close) / current_close)
-                df.at[df.index[i], 'prediction_confidence'] = expected_return
-                
-            except Exception as e:
-                print(f"Prediction error at index {i}: {e}")
-                df.at[df.index[i], 'onnx_pred'] = df['close'].iloc[i-1]
-                df.at[df.index[i], 'prediction_confidence'] = 0.0
         
         return df
 
@@ -243,40 +190,53 @@ class MlAdaptive(BaseStrategy):
             )
             return False
         
+        # Get prediction from engine
+        prediction = self.get_prediction(df, index)
+        
+        if prediction.get('error'):
+            self.log_execution(
+                signal_type='entry',
+                action_taken='no_action',
+                price=df['close'].iloc[index],
+                reasons=[f'prediction_error: {prediction["error"]}'],
+                additional_context={'prediction_available': False}
+            )
+            return False
+        
         # Get current conditions
-        pred = df['onnx_pred'].iloc[index]
         close = df['close'].iloc[index]
         regime = df['market_regime'].iloc[index]
         volatility = df['volatility_20'].iloc[index]
         rsi = df['rsi'].iloc[index]
         trend_direction = df['trend_direction'].iloc[index]
-        confidence = df['prediction_confidence'].iloc[index]
         
-        # Check if we have valid prediction
-        if pd.isna(pred) or pd.isna(confidence):
+        predicted_price = prediction['price']
+        confidence = prediction['confidence']
+        
+        if predicted_price is None:
             return False
         
         # Calculate predicted return
-        predicted_return = (pred - close) / close if close > 0 else 0
+        predicted_return = (predicted_price - close) / close if close > 0 else 0
         
-        # * Base confidence threshold adjustments
+        # Base confidence threshold adjustments
         min_confidence = self.min_prediction_confidence
         if regime == 'crisis':
             min_confidence *= self.crisis_confidence_multiplier
         elif regime == 'volatile':
             min_confidence *= 1.5
         elif regime == 'bull':
-            # * Be more aggressive in confirmed bull runs
-            min_confidence *= 0.75  # Reduce threshold by 25 %
+            # Be more aggressive in confirmed bull runs
+            min_confidence *= 0.75  # Reduce threshold by 25%
 
-        # * Rebound – be more aggressive (lower confidence threshold)
+        # Rebound – be more aggressive (lower confidence threshold)
         rebound = df['rebound_signal'].iloc[index] == 1
         if rebound:
             min_confidence *= self.rebound_confidence_multiplier
         
-        # Entry conditions
+        # Entry conditions using prediction engine
         entry_conditions = [
-            pred > close,  # Positive prediction (expecting price rise)
+            prediction['direction'] == 1,  # Positive prediction (expecting price rise)
             confidence >= min_confidence,  # Sufficient confidence
             regime not in ['crisis', 'bear'] or confidence >= min_confidence * 2,  # Extra caution in crisis/bear
             rsi < 70,  # Not overbought
@@ -294,10 +254,11 @@ class MlAdaptive(BaseStrategy):
         
         # Log decision
         ml_predictions = {
-            'raw_prediction': pred,
+            'raw_prediction': predicted_price,
             'current_price': close,
             'predicted_return': predicted_return,
-            'confidence': confidence
+            'confidence': confidence,
+            'model_name': prediction['model_name']
         }
         
         market_conditions = {
@@ -320,7 +281,7 @@ class MlAdaptive(BaseStrategy):
             action_taken='entry_signal' if entry_signal else 'no_action',
             price=close,
             signal_strength=confidence if entry_signal else 0.0,
-            confidence_score=min(1.0, confidence * 10),
+            confidence_score=confidence,
             ml_predictions=ml_predictions,
             volatility=volatility,
             reasons=reasons,
@@ -334,50 +295,50 @@ class MlAdaptive(BaseStrategy):
         
         return entry_signal
 
-    # * ------------------------------------------------------------------
-    # * Short entry conditions for bear markets
-    # * ------------------------------------------------------------------
     def check_short_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
         if index < 1 or index >= len(df):
             return False
 
-        pred = df['onnx_pred'].iloc[index]
+        # Get prediction from engine
+        prediction = self.get_prediction(df, index)
+        
+        if prediction.get('error') or prediction['price'] is None:
+            return False
+
         close = df['close'].iloc[index]
         regime = df['market_regime'].iloc[index]
         rsi = df['rsi'].iloc[index]
         trend_direction = df['trend_direction'].iloc[index]
 
-        # * Validate prediction availability
-        if pd.isna(pred):
-            return False
+        predicted_price = prediction['price']
+        confidence = prediction['confidence']
+        
+        # Expected downward move for short
+        predicted_return = (close - predicted_price) / close if close > 0 else 0
 
-        # * Expected downward move for short
-        predicted_return = (close - pred) / close if close > 0 else 0
-        confidence = predicted_return  # Use magnitude as confidence proxy
-
-        # * Minimum confidence requirement (reuse long threshold)
+        # Minimum confidence requirement (reuse long threshold)
         min_confidence = self.min_prediction_confidence
         if regime in ['crisis', 'volatile']:
             min_confidence *= 1.5
 
-        # * Entry rules
+        # Entry rules using prediction engine
         entry_conditions = [
-            pred < close,               # Model predicts lower price
-            confidence >= min_confidence,  # Enough expected drop
+            prediction['direction'] == -1,      # Model predicts lower price
+            confidence >= min_confidence,       # Enough expected drop
             regime in ['bear', 'crisis', 'volatile'],  # Only short in non-bull phases
-            rsi > 30,                   # Not oversold
-            trend_direction < 0,        # Downward trend
+            rsi > 30,                          # Not oversold
+            trend_direction < 0,               # Downward trend
         ]
 
         short_entry = all(entry_conditions)
 
-        # * Simple logging (re-use BaseStrategy logger)
+        # Simple logging (re-use BaseStrategy logger)
         self.log_execution(
             signal_type='entry_short',
             action_taken='entry_signal' if short_entry else 'no_action',
             price=close,
             signal_strength=confidence if short_entry else 0.0,
-            confidence_score=min(1.0, confidence * 10),
+            confidence_score=confidence,
             reasons=[
                 f'regime_{regime}',
                 f'predicted_return_{-predicted_return:.4f}',  # Negative means drop
@@ -425,11 +386,17 @@ class MlAdaptive(BaseStrategy):
         if index >= len(df) or balance <= 0:
             return 0.0
         
+        # Get prediction confidence
+        prediction = self.get_prediction(df, index)
+        
+        if prediction.get('error') or prediction['price'] is None:
+            return 0.0
+        
         # Get current market conditions
         regime = df['market_regime'].iloc[index]
         volatility = df['volatility_20'].iloc[index] if not pd.isna(df['volatility_20'].iloc[index]) else 0.02
         atr_pct = df['atr_pct'].iloc[index] if not pd.isna(df['atr_pct'].iloc[index]) else 0.02
-        confidence = df['prediction_confidence'].iloc[index] if not pd.isna(df['prediction_confidence'].iloc[index]) else 0.0
+        confidence = prediction['confidence']
         
         # Base position size
         position_size = self.base_position_size
@@ -498,7 +465,7 @@ class MlAdaptive(BaseStrategy):
 
     def calculate_stop_loss(self, df, index, price, side: str = 'long') -> float:
         """Calculate stop loss price (handle enum or string)"""
-        # * Normalize side to string value ('long' / 'short') to handle PositionSide enum
+        # Normalize side to string value ('long' / 'short') to handle PositionSide enum
         side_str = side.value if hasattr(side, 'value') else str(side)
 
         regime = df['market_regime'].iloc[index] if 'market_regime' in df.columns else 'normal'
@@ -512,8 +479,6 @@ class MlAdaptive(BaseStrategy):
     def get_parameters(self) -> dict:
         return {
             'name': self.name,
-            'model_path': self.model_path,
-            'sequence_length': self.sequence_length,
             'base_stop_loss_pct': self.base_stop_loss_pct,
             'base_take_profit_pct': self.base_take_profit_pct,
             'take_profit_pct': self.take_profit_pct,
@@ -523,14 +488,6 @@ class MlAdaptive(BaseStrategy):
                 'low': self.volatility_low_threshold,
                 'high': self.volatility_high_threshold,
                 'crisis': self.volatility_crisis_threshold
-            }
+            },
+            'prediction_engine_available': self.prediction_engine is not None
         }
-    
-    def _load_model(self):
-        """Load or reload the ONNX model"""
-        try:
-            self.ort_session = ort.InferenceSession(self.model_path)
-            self.input_name = self.ort_session.get_inputs()[0].name
-        except Exception as e:
-            print(f"Failed to load model {self.model_path}: {e}")
-            raise

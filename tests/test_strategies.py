@@ -118,7 +118,18 @@ class TestMlAdaptive:
     @pytest.mark.strategy
     def test_atr_calculation(self, sample_ohlcv_data):
         """Test ATR calculation accuracy"""
-        strategy = MlAdaptive()
+        from unittest.mock import Mock
+        
+        # Create mock prediction engine
+        mock_engine = Mock()
+        mock_prediction = Mock(
+            price=50000.0, confidence=0.8, direction=1, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.1, features_used=5,
+            cache_hit=False, error=None
+        )
+        mock_engine.predict.return_value = mock_prediction
+        
+        strategy = MlAdaptive(prediction_engine=mock_engine)
         
         # Check if strategy has ATR calculation method
         if hasattr(strategy, 'calculate_atr'):
@@ -140,7 +151,18 @@ class TestMlAdaptive:
     @pytest.mark.strategy
     def test_entry_conditions_with_valid_data(self, sample_ohlcv_data):
         """Test entry condition checking with valid data"""
-        strategy = MlAdaptive()
+        from unittest.mock import Mock
+        
+        # Create mock prediction engine
+        mock_engine = Mock()
+        mock_prediction = Mock(
+            price=50000.0, confidence=0.8, direction=1, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.1, features_used=5,
+            cache_hit=False, error=None
+        )
+        mock_engine.predict.return_value = mock_prediction
+        
+        strategy = MlAdaptive(prediction_engine=mock_engine)
         
         try:
             df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
@@ -161,7 +183,18 @@ class TestMlAdaptive:
     @pytest.mark.strategy
     def test_position_size_calculation(self, sample_ohlcv_data):
         """Test position size calculation"""
-        strategy = MlAdaptive()
+        from unittest.mock import Mock
+        
+        # Create mock prediction engine
+        mock_engine = Mock()
+        mock_prediction = Mock(
+            price=50000.0, confidence=0.8, direction=1, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.1, features_used=5,
+            cache_hit=False, error=None
+        )
+        mock_engine.predict.return_value = mock_prediction
+        
+        strategy = MlAdaptive(prediction_engine=mock_engine)
         
         try:
             df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
@@ -187,13 +220,24 @@ class TestMlAdaptive:
     @pytest.mark.strategy
     def test_strategy_parameters(self):
         """Test strategy parameter retrieval"""
-        strategy = MlAdaptive()
+        from unittest.mock import Mock
+        
+        # Create mock prediction engine
+        mock_engine = Mock()
+        mock_prediction = Mock(
+            price=50000.0, confidence=0.8, direction=1, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.1, features_used=5,
+            cache_hit=False, error=None
+        )
+        mock_engine.predict.return_value = mock_prediction
+        
+        strategy = MlAdaptive(prediction_engine=mock_engine)
         
         params = strategy.get_parameters()
         
         assert isinstance(params, dict)
-        # Check for common parameters (flexible)
-        expected_params = ['name', 'base_risk_per_trade']
+        # Check for common parameters (flexible) - updated for new structure
+        expected_params = ['name', 'prediction_engine_available']
         present_params = [param for param in expected_params if param in params]
         assert len(present_params) > 0, f"Expected at least one of {expected_params} in params"
         
@@ -626,64 +670,101 @@ class TestMlBasicStrategy:
     @pytest.mark.strategy
     def test_ml_basic_strategy_missing_prediction_logging(self, sample_ohlcv_data):
         """Test that ML basic strategy logs when prediction is missing"""
-        strategy = MlBasic()
+        from unittest.mock import Mock
+        
+        # Create mock prediction engine that returns error
+        mock_engine = Mock()
+        mock_prediction = Mock(
+            price=None, confidence=0.0, direction=0, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.0, features_used=0,
+            cache_hit=False, error='Prediction failed'
+        )
+        mock_engine.predict.return_value = mock_prediction
+        
+        strategy = MlBasic(prediction_engine=mock_engine)
         
         # Mock database manager for logging
         mock_db_manager = Mock()
         strategy.set_database_manager(mock_db_manager, session_id=789)
         
-        # Create data without ML predictions
-        df_no_predictions = sample_ohlcv_data.copy()
-        df_no_predictions['onnx_pred'] = np.nan
+        # Calculate indicators
+        df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
         
-        # Test entry conditions - should log missing prediction
-        if len(df_no_predictions) > 1:
-            result = strategy.check_entry_conditions(df_no_predictions, 1)
-            assert result is False  # Should return False for missing prediction
+        # Test entry conditions - should log prediction error
+        if len(df_with_indicators) > 1:
+            result = strategy.check_entry_conditions(df_with_indicators, 1)
+            assert result is False  # Should return False for prediction error
             
-            # Verify that log_execution was called for missing prediction
+            # Verify that log_execution was called for prediction error
             mock_db_manager.log_strategy_execution.assert_called()
             
             # Get the last call arguments
             call_args = mock_db_manager.log_strategy_execution.call_args
             assert call_args is not None
             
-            # Verify it logged the missing prediction
+            # Verify it logged the prediction error
             args, kwargs = call_args
-            assert 'missing_ml_prediction' in kwargs['reasons']
-            # Instead of checking additional_context, check reasons for the merged key-value
-            assert 'prediction_available=False' in kwargs['reasons']
+            assert any('prediction_error' in reason for reason in kwargs['reasons'])
 
     @pytest.mark.strategy
     def test_ml_basic_strategy_parameters(self):
         """Test ML basic strategy parameter retrieval"""
-        strategy = MlBasic()
+        from unittest.mock import Mock
+        
+        # Create mock prediction engine
+        mock_engine = Mock()
+        mock_prediction = Mock(
+            price=50000.0, confidence=0.8, direction=1, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.1, features_used=5,
+            cache_hit=False, error=None
+        )
+        mock_engine.predict.return_value = mock_prediction
+        
+        strategy = MlBasic(prediction_engine=mock_engine)
         
         params = strategy.get_parameters()
         
-        # Check required parameters
+        # Check required parameters - updated for new structure
         assert 'name' in params
-        assert 'model_path' in params
-        assert 'sequence_length' in params
+        assert 'prediction_engine_available' in params
         assert 'stop_loss_pct' in params
         assert 'take_profit_pct' in params
+        assert params['prediction_engine_available'] is True
 
     @pytest.mark.strategy
     def test_ml_basic_exit_conditions(self, sample_ohlcv_data):
-        strategy = MlBasic()
+        from unittest.mock import Mock
+        
+        # Test favorable prediction - should not exit
+        mock_engine_bullish = Mock()
+        mock_prediction_bullish = Mock(
+            price=55000.0, confidence=0.9, direction=1, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.1, features_used=5,
+            cache_hit=False, error=None
+        )
+        mock_engine_bullish.predict.return_value = mock_prediction_bullish
+        
+        strategy = MlBasic(prediction_engine=mock_engine_bullish)
         df = strategy.calculate_indicators(sample_ohlcv_data)
         
-        # * Use realistic entry price close to current price
+        # Use realistic entry price close to current price
         current_price = df['close'].iloc[-1]
         entry_price = current_price * 0.98  # Entry at 2% below current price
         
         # Test not exit (predicted price higher than current)
-        df.at[df.index[-1], 'onnx_pred'] = current_price * 1.05  # 5% above current
         assert not strategy.check_exit_conditions(df, len(df)-1, entry_price)
         
         # Test exit on unfavorable prediction (predicted price lower than current)
-        df.at[df.index[-1], 'onnx_pred'] = current_price * 0.95  # 5% below current
-        assert strategy.check_exit_conditions(df, len(df)-1, entry_price)
+        mock_engine_bearish = Mock()
+        mock_prediction_bearish = Mock(
+            price=current_price * 0.95, confidence=0.9, direction=-1, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.1, features_used=5,
+            cache_hit=False, error=None
+        )
+        mock_engine_bearish.predict.return_value = mock_prediction_bearish
+        
+        strategy_bearish = MlBasic(prediction_engine=mock_engine_bearish)
+        assert strategy_bearish.check_exit_conditions(df, len(df)-1, entry_price)
 
 
 class TestMlWithSentimentStrategy:
@@ -692,12 +773,23 @@ class TestMlWithSentimentStrategy:
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_initialization(self):
         """Test ML with sentiment strategy initialization"""
-        strategy = MlWithSentiment()
+        from unittest.mock import Mock
+        
+        # Create mock prediction engine
+        mock_engine = Mock()
+        mock_prediction = Mock(
+            price=50000.0, confidence=0.8, direction=1, model_name='test_model',
+            timestamp=pd.Timestamp.now(), inference_time=0.1, features_used=5,
+            cache_hit=False, error=None
+        )
+        mock_engine.predict.return_value = mock_prediction
+        
+        strategy = MlWithSentiment(prediction_engine=mock_engine, use_sentiment=False)
         
         assert hasattr(strategy, 'name')
         assert getattr(strategy, 'trading_pair', 'BTCUSDT') is not None
-        assert hasattr(strategy, 'model_path')
-        assert hasattr(strategy, 'sequence_length')
+        assert hasattr(strategy, 'use_sentiment')
+        assert strategy.prediction_engine is not None
         assert hasattr(strategy, 'use_sentiment')
         assert hasattr(strategy, 'stop_loss_pct')
         assert hasattr(strategy, 'take_profit_pct')
