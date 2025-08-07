@@ -410,17 +410,13 @@ class MlWithSentiment(BaseStrategy):
         hit_stop_loss = returns <= -self.stop_loss_pct
         hit_take_profit = returns >= self.take_profit_pct
         
-        # Additional exit condition: if prediction turns negative with high confidence
+        # Additional exit condition: if prediction turns negative
         prediction = self.get_prediction(df, index)
         prediction_negative = False
         
         if not prediction.get('error') and prediction['price'] is not None and current_price > 0:
             predicted_return = (prediction['price'] - current_price) / current_price
-            prediction_negative = (
-                prediction['direction'] == -1 and 
-                predicted_return < -0.01 and  # Exit if predicting >1% drop
-                prediction['confidence'] > 0.6
-            )
+            prediction_negative = predicted_return < -0.01  # Exit if predicting >1% drop
         
         return hit_stop_loss or hit_take_profit or prediction_negative
 
