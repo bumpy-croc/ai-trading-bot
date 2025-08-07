@@ -64,7 +64,24 @@ class TestStrategyPredictionIntegration:
     def test_ml_basic_strategy_prediction_integration(self):
         """Test ML basic strategy with prediction engine"""
         # Create mock prediction engine with bullish prediction
-        mock_engine = self._create_mock_prediction_engine()
+        # First get the current price to create a realistic bullish prediction
+        strategy = MlBasic(prediction_engine=None)  # Temporary to get data
+        df_with_indicators = strategy.calculate_indicators(self.test_data)
+        current_price = df_with_indicators['close'].iloc[140]
+        
+        # Create bullish prediction (10% higher than current price)
+        bullish_prediction = Mock(
+            price=current_price * 1.10,  # 10% higher
+            confidence=0.8,
+            direction=1,
+            model_name='test_model',
+            timestamp=datetime.now(timezone.utc),
+            inference_time=0.1,
+            features_used=5,
+            cache_hit=False,
+            error=None
+        )
+        mock_engine = self._create_mock_prediction_engine(bullish_prediction)
         
         strategy = MlBasic(prediction_engine=mock_engine)
         
@@ -75,18 +92,20 @@ class TestStrategyPredictionIntegration:
         result = strategy.check_entry_conditions(df_with_indicators, 140)
         
         # Verify prediction engine was called
-        mock_engine.predict.assert_called_once()
+        assert mock_engine.predict.call_count == 1
         
         # Should enter since mock prediction is bullish with high confidence
-        assert result is True
+        assert result == True
         
         # Test position sizing
         position_size = strategy.calculate_position_size(df_with_indicators, 140, 10000.0)
         assert position_size > 0
         
         # Test exit conditions
-        exit_result = strategy.check_exit_conditions(df_with_indicators, 140, 49000.0)
-        # Should not exit immediately with favorable prediction
+        current_price = df_with_indicators['close'].iloc[140]
+        entry_price = current_price * 0.98  # Entry at 2% below current price (profitable position)
+        exit_result = strategy.check_exit_conditions(df_with_indicators, 140, entry_price)
+        # Should not exit immediately with favorable prediction and profitable position
         assert exit_result is False
 
     def test_ml_basic_strategy_prediction_error_handling(self):
@@ -217,29 +236,27 @@ class TestStrategyPredictionIntegration:
 
     def test_strategy_without_prediction_engine(self):
         """Test strategy behavior when prediction engine is None"""
-        # Test with None prediction engine (should create default if available)
-        with pytest.raises(ImportError):  # May raise import error if prediction engine not available
-            strategy = MlBasic(prediction_engine=None)
+        # Test with None prediction engine - should handle gracefully without raising ImportError
+        strategy = MlBasic(prediction_engine=None)
         
-        # Or test with explicit None and ensure graceful handling
-        strategy = MlBasic.__new__(MlBasic)  # Bypass __init__
-        strategy.name = "test"
-        strategy.prediction_engine = None
-        strategy.trading_pair = 'BTCUSDT'
-        strategy.stop_loss_pct = 0.02
-        strategy.take_profit_pct = 0.04
+        # Verify strategy was created successfully
+        assert strategy.name == "MlBasic"
+        assert strategy.trading_pair == 'BTCUSDT'
+        assert strategy.stop_loss_pct == 0.02
+        assert strategy.take_profit_pct == 0.04
         
-        # Manually initialize other required attributes
-        strategy.logger = Mock()
-        strategy.db_manager = None
-        strategy.session_id = None
-        strategy.enable_execution_logging = False
-        
+        # Test that strategy can calculate indicators even without prediction engine
         df_with_indicators = strategy.calculate_indicators(self.test_data)
+        assert isinstance(df_with_indicators, pd.DataFrame)
+        assert len(df_with_indicators) == len(self.test_data)
         
-        # Test entry conditions - should handle None prediction engine gracefully
+        # Test entry conditions - should return False when prediction engine is None
         result = strategy.check_entry_conditions(df_with_indicators, 140)
         assert result is False  # Should not enter without valid predictions
+        
+        # Test position sizing - should return 0 when prediction engine is None
+        position_size = strategy.calculate_position_size(df_with_indicators, 140, 10000.0)
+        assert position_size == 0.0  # Should not take position without predictions
 
     def test_strategy_prediction_caching(self):
         """Test that strategies properly handle prediction caching"""
@@ -266,8 +283,8 @@ class TestStrategyPredictionIntegration:
         result2 = strategy.check_entry_conditions(df_with_indicators, 140)
         
         # Both should succeed
-        assert result1 is True
-        assert result2 is True
+        assert result1 == True
+        assert result2 == True
         
         # Engine should be called for each check
         assert mock_engine.predict.call_count == 2

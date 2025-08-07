@@ -615,8 +615,7 @@ class TestMlBasicStrategy:
         
         assert hasattr(strategy, 'name')
         assert getattr(strategy, 'trading_pair', 'BTCUSDT') is not None
-        assert hasattr(strategy, 'model_path')
-        assert hasattr(strategy, 'sequence_length')
+        assert hasattr(strategy, 'prediction_engine')  # Updated to use prediction engine
         assert hasattr(strategy, 'stop_loss_pct')
         assert hasattr(strategy, 'take_profit_pct')
 

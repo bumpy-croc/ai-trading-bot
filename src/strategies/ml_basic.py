@@ -87,8 +87,9 @@ class MlBasic(BaseStrategy):
         # Calculate predicted return
         predicted_return = (predicted_price - current_price) / current_price if current_price > 0 else 0
         
-        # Entry signal: prediction suggests price increase
-        entry_signal = prediction['direction'] == 1 and confidence > 0.6
+        # Entry signal: simple price comparison (original behavior)
+        # Enter if predicted price is higher than current price
+        entry_signal = predicted_price > current_price
         
         # Log the decision process
         ml_predictions = {
@@ -103,6 +104,7 @@ class MlBasic(BaseStrategy):
             f'predicted_return_{predicted_return:.4f}',
             f'prediction_{predicted_price:.2f}_vs_current_{current_price:.2f}',
             f'confidence_{confidence:.4f}',
+            f'price_comparison_{predicted_price:.2f}_>{current_price:.2f}' if entry_signal else f'price_comparison_{predicted_price:.2f}_<={current_price:.2f}',
             'entry_signal_met' if entry_signal else 'entry_signal_not_met'
         ]
         
@@ -174,13 +176,21 @@ class MlBasic(BaseStrategy):
         if index >= len(df) or balance <= 0:
             return 0.0
         
-        # Get prediction confidence
+        # Get prediction from engine
         prediction = self.get_prediction(df, index)
         
         if prediction.get('error') or prediction['price'] is None:
             return 0.0
         
-        confidence = prediction['confidence']
+        current_price = df['close'].iloc[index]
+        predicted_price = prediction['price']
+        
+        # Calculate predicted return
+        predicted_return = (predicted_price - current_price) / current_price if current_price > 0 else 0
+        
+        # TODO: After backtesting returns, use prediction['confidence'] instead of calculated confidence
+        # Old calculation: confidence based on predicted return magnitude
+        confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
         
         # Scale position size by confidence
         dynamic_size = self.BASE_POSITION_SIZE * confidence
