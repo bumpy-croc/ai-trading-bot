@@ -267,7 +267,7 @@ class PredictionEngine:
                     price=0.0,
                     confidence=0.0,
                     direction=0,
-                    model_name=used_model_name,
+                    model_name=model_name or "unknown",
                     timestamp=datetime.now(timezone.utc),
                     inference_time=time.time() - start_time,
                     features_used=0,
