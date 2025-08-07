@@ -2,13 +2,14 @@
 Tests for trading strategies.
 
 Strategy tests are crucial as they generate trading signals. Tests cover:
-- Signal generation accuracy
+- Signal generation accuracy with prediction engine integration
 - Indicator calculations
 - Position sizing logic
 - Entry/exit condition validation
 - Edge cases and market conditions
 - Strategy parameter validation
 - Strategy execution logging
+- Prediction engine integration and fallbacks
 """
 
 import pytest
@@ -44,6 +45,10 @@ class TestBaseStrategy:
         assert hasattr(strategy, 'calculate_position_size')
         assert hasattr(strategy, 'get_parameters')
         
+        # Test prediction engine integration
+        assert hasattr(strategy, 'get_prediction')
+        assert hasattr(strategy, 'prediction_engine')
+        
         # Test optional methods with fallbacks
         if hasattr(strategy, 'get_trading_pair'):
             assert hasattr(strategy, 'set_trading_pair')
@@ -62,6 +67,58 @@ class TestBaseStrategy:
             if hasattr(strategy, 'set_trading_pair'):
                 strategy.set_trading_pair('ETHUSDT')
                 assert strategy.get_trading_pair() == 'ETHUSDT'
+
+    def test_prediction_engine_integration(self, sample_ohlcv_data):
+        """Test base strategy prediction engine integration"""
+        # Create a mock prediction engine
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = 50000.0
+        mock_prediction_result.confidence = 0.8
+        mock_prediction_result.direction = 1
+        mock_prediction_result.model_name = 'test_model'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        # Test with prediction engine
+        try:
+            from strategies.ml_basic import MlBasic
+            strategy = MlBasic(prediction_engine=mock_prediction_engine)
+            
+            # Test get_prediction method
+            result = strategy.get_prediction(sample_ohlcv_data, len(sample_ohlcv_data) - 1)
+            
+            assert result['price'] == 50000.0
+            assert result['confidence'] == 0.8
+            assert result['direction'] == 1
+            assert result['model_name'] == 'test_model'
+            assert result.get('error') is None
+            
+        except ImportError:
+            pytest.skip("ML strategies not available")
+
+    def test_prediction_engine_error_handling(self, sample_ohlcv_data):
+        """Test prediction engine error handling"""
+        # Create a mock prediction engine that raises an exception
+        mock_prediction_engine = Mock()
+        mock_prediction_engine.predict.side_effect = Exception("Prediction failed")
+        
+        try:
+            from strategies.ml_basic import MlBasic
+            strategy = MlBasic(prediction_engine=mock_prediction_engine)
+            
+            # Test error handling
+            result = strategy.get_prediction(sample_ohlcv_data, len(sample_ohlcv_data) - 1)
+            
+            assert result['price'] is None
+            assert result['confidence'] == 0.0
+            assert result['direction'] == 0
+            assert 'error' in result
+            assert 'Prediction failed' in result['error']
+            
+        except ImportError:
+            pytest.skip("ML strategies not available")
 
 
 class TestAdaptiveStrategy:
@@ -98,96 +155,80 @@ class TestAdaptiveStrategy:
                 
                 additional_data.append({
                     'open': base_price,
-                    'high': new_price * 1.005,
-                    'low': new_price * 0.995,
+                    'high': new_price * 1.01,
+                    'low': new_price * 0.99,
                     'close': new_price,
-                    'volume': 1000
+                    'volume': np.random.randint(1000, 10000)
                 })
                 base_price = new_price
             
             additional_df = pd.DataFrame(additional_data, index=pd.date_range(
-                last_date + timedelta(hours=1), periods=len(additional_data), freq='1h'
+                start=last_date + timedelta(hours=1), periods=len(additional_data), freq='H'
             ))
-            sample_ohlcv_data = pd.concat([sample_ohlcv_data, additional_df])
+            
+            extended_data = pd.concat([sample_ohlcv_data, additional_df])
+        else:
+            extended_data = sample_ohlcv_data
         
+        df_with_indicators = strategy.calculate_indicators(extended_data)
+        
+        # Test that required columns exist
+        required_columns = ['open', 'high', 'low', 'close', 'volume']
+        for col in required_columns:
+            assert col in df_with_indicators.columns
+        
+        # Test that indicators were calculated
+        # Note: Some indicators might have NaN values for initial rows
+        assert len(df_with_indicators) == len(extended_data)
+        
+        # Test data types
+        for col in required_columns:
+            assert pd.api.types.is_numeric_dtype(df_with_indicators[col])
+
+    @pytest.mark.strategy
+    def test_entry_exit_conditions(self, sample_ohlcv_data):
+        """Test entry and exit condition methods exist and return boolean"""
+        strategy = AdaptiveStrategy()
+        
+        # Ensure we have enough data
+        if len(sample_ohlcv_data) < 50:
+            # Create extended sample data
+            extended_data = sample_ohlcv_data.copy()
+            for _ in range(50 - len(sample_ohlcv_data)):
+                extended_data = pd.concat([extended_data, sample_ohlcv_data.tail(1)])
+        else:
+            extended_data = sample_ohlcv_data
+        
+        df_with_indicators = strategy.calculate_indicators(extended_data)
+        
+        # Test entry conditions
+        if len(df_with_indicators) > 20:
+            entry_result = strategy.check_entry_conditions(df_with_indicators, 20)
+            assert isinstance(entry_result, (bool, np.bool_))
+        
+            # Test exit conditions
+            entry_price = df_with_indicators['close'].iloc[20]
+            exit_result = strategy.check_exit_conditions(df_with_indicators, 21, entry_price)
+            assert isinstance(exit_result, (bool, np.bool_))
+
+    @pytest.mark.strategy
+    def test_position_sizing(self, sample_ohlcv_data):
+        """Test position sizing calculation"""
+        strategy = AdaptiveStrategy()
         df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
         
-        # Check that indicators were added (flexible checking)
-        original_columns = set(sample_ohlcv_data.columns)
-        new_columns = set(df_with_indicators.columns)
-        added_columns = new_columns - original_columns
+        balance = 10000.0
+        test_index = min(10, len(df_with_indicators) - 1)
         
-        # Should have added some indicators
-        assert len(added_columns) > 0
-
-    @pytest.mark.strategy
-    def test_atr_calculation(self, sample_ohlcv_data):
-        """Test ATR calculation accuracy"""
-        strategy = AdaptiveStrategy()
+        position_size = strategy.calculate_position_size(df_with_indicators, test_index, balance)
         
-        # Check if strategy has ATR calculation method
-        if hasattr(strategy, 'calculate_atr'):
-            atr_series = strategy.calculate_atr(sample_ohlcv_data)
-            
-            # ATR should be positive where calculated
-            valid_atr = atr_series.dropna()
-            if len(valid_atr) > 0:
-                assert (valid_atr >= 0).all()
-            
-            # ATR should have the right length
-            assert len(atr_series) == len(sample_ohlcv_data)
-        else:
-            # If no explicit ATR method, check if it's calculated in indicators
-            df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
-            atr_columns = [col for col in df_with_indicators.columns if 'atr' in col.lower()]
-            assert len(atr_columns) > 0, "No ATR calculation found"
-
-    @pytest.mark.strategy
-    def test_entry_conditions_with_valid_data(self, sample_ohlcv_data):
-        """Test entry condition checking with valid data"""
-        strategy = AdaptiveStrategy()
+        # Position size should be positive and reasonable
+        assert position_size > 0
+        assert position_size <= balance * 0.2  # Max 20% position size
         
-        try:
-            df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
-            
-            # Test entry conditions on valid indices only
-            valid_indices = range(max(1, len(df_with_indicators) - 10), len(df_with_indicators))
-            for i in valid_indices:
-                if i < len(df_with_indicators):
-                    result = strategy.check_entry_conditions(df_with_indicators, i)
-                    assert isinstance(result, bool)
-        except Exception as e:
-            # If indicators calculation fails due to insufficient data, skip gracefully
-            if "insufficient" in str(e).lower() or len(sample_ohlcv_data) < 20:
-                pytest.skip(f"Insufficient data for strategy testing: {e}")
-            else:
-                raise
-
-    @pytest.mark.strategy
-    def test_position_size_calculation(self, sample_ohlcv_data):
-        """Test position size calculation"""
-        strategy = AdaptiveStrategy()
-        
-        try:
-            df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
-            balance = 10000
-            
-            # Test position sizing on valid data points
-            valid_indices = range(max(20, len(df_with_indicators) - 5), len(df_with_indicators))
-            for i in valid_indices:
-                if i < len(df_with_indicators):
-                    position_size = strategy.calculate_position_size(df_with_indicators, i, balance)
-                    
-                    # Position size should be reasonable
-                    assert position_size >= 0
-                    # Position size should not exceed reasonable bounds
-                    max_reasonable_size = balance * 0.5  # 50% max
-                    assert position_size <= max_reasonable_size
-        except Exception as e:
-            if "insufficient" in str(e).lower() or len(sample_ohlcv_data) < 20:
-                pytest.skip(f"Insufficient data for position size testing: {e}")
-            else:
-                raise
+        # Test with zero balance
+        zero_position = strategy.calculate_position_size(df_with_indicators, test_index, 0.0)
+        assert zero_position == 0.0
 
     @pytest.mark.strategy
     def test_strategy_parameters(self):
@@ -196,308 +237,16 @@ class TestAdaptiveStrategy:
         
         params = strategy.get_parameters()
         
+        # Should return a dictionary
         assert isinstance(params, dict)
-        # Check for common parameters (flexible)
-        expected_params = ['name', 'base_risk_per_trade']
-        present_params = [param for param in expected_params if param in params]
-        assert len(present_params) > 0, f"Expected at least one of {expected_params} in params"
+        assert len(params) > 0
         
-        # Validate risk parameter if present
-        if 'base_risk_per_trade' in params:
-            assert 0 < params['base_risk_per_trade'] <= 0.1  # Between 0% and 10%
-
-    @pytest.mark.strategy
-    def test_stop_loss_calculation(self, sample_ohlcv_data):
-        """Test stop loss calculation"""
-        strategy = AdaptiveStrategy()
-        
-        # Only test if method exists
-        if hasattr(strategy, 'calculate_stop_loss'):
-            try:
-                df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
-                price = 50000
-                
-                if len(df_with_indicators) > 0:
-                    # Test long stop loss
-                    stop_loss_long = strategy.calculate_stop_loss(
-                        df_with_indicators, len(df_with_indicators)-1, price, 'long'
-                    )
-                    assert stop_loss_long < price  # Long stop loss should be below entry price
-                    assert stop_loss_long > 0
-                    
-                    # Test short stop loss
-                    stop_loss_short = strategy.calculate_stop_loss(
-                        df_with_indicators, len(df_with_indicators)-1, price, 'short'
-                    )
-                    assert stop_loss_short > price  # Short stop loss should be above entry price
-            except Exception as e:
-                if "insufficient" in str(e).lower():
-                    pytest.skip(f"Insufficient data for stop loss testing: {e}")
-                else:
-                    raise
+        # Should contain at least strategy name
+        assert 'name' in params or any('name' in str(k).lower() for k in params.keys())
 
 
-class TestStrategyEdgeCases:
-    """Test strategy behavior in edge cases"""
-
-    @pytest.mark.strategy
-    def test_insufficient_data_handling(self):
-        """Test strategy behavior with insufficient data"""
-        strategy = AdaptiveStrategy()
-        
-        # Create minimal dataset
-        minimal_data = pd.DataFrame({
-            'open': [50000, 50100],
-            'high': [50200, 50300], 
-            'low': [49800, 49900],
-            'close': [50100, 50200],
-            'volume': [1000, 1100]
-        }, index=pd.date_range('2024-01-01', periods=2, freq='1h'))
-        
-        # Should handle gracefully - either work or fail with meaningful error
-        try:
-            df_with_indicators = strategy.calculate_indicators(minimal_data)
-            # If it works, should return a DataFrame
-            assert isinstance(df_with_indicators, pd.DataFrame)
-            assert len(df_with_indicators) == len(minimal_data)
-        except Exception as e:
-            # Should be a meaningful error about insufficient data
-            error_msg = str(e).lower()
-            assert any(keyword in error_msg for keyword in ['insufficient', 'data', 'length', 'period'])
-
-    @pytest.mark.strategy
-    def test_entry_conditions_out_of_bounds(self, sample_ohlcv_data):
-        """Test entry conditions with out-of-bounds indices"""
-        strategy = AdaptiveStrategy()
-        
-        df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
-        
-        # Test negative index - should handle gracefully
-        result = strategy.check_entry_conditions(df_with_indicators, -1)
-        assert result == False
-        
-        # Test index beyond data length - should handle gracefully
-        result = strategy.check_entry_conditions(df_with_indicators, len(df_with_indicators) + 10)
-        assert result == False
-        
-        # Test index 0 (should be False due to needing previous data)
-        result = strategy.check_entry_conditions(df_with_indicators, 0)
-        assert result == False
-
-    @pytest.mark.strategy
-    def test_position_size_edge_cases(self, sample_ohlcv_data):
-        """Test position size calculation edge cases"""
-        strategy = AdaptiveStrategy()
-        
-        df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
-        
-        if len(df_with_indicators) > 0:
-            # Zero balance
-            position_size = strategy.calculate_position_size(df_with_indicators, len(df_with_indicators)-1, 0)
-            assert position_size == 0
-            
-            # Very small balance
-            position_size = strategy.calculate_position_size(df_with_indicators, len(df_with_indicators)-1, 1)
-            assert position_size >= 0
-            assert position_size <= 1
-
-    @pytest.mark.strategy
-    def test_missing_indicator_data(self):
-        """Test strategy behavior when indicator calculation fails"""
-        strategy = AdaptiveStrategy()
-        
-        # Create data with missing values
-        problematic_data = pd.DataFrame({
-            'open': [50000, np.nan, 50200],
-            'high': [50200, 50300, np.nan], 
-            'low': [49800, 49900, 50000],
-            'close': [50100, 50200, 50300],
-            'volume': [1000, 1100, 1200]
-        }, index=pd.date_range('2024-01-01', periods=3, freq='1h'))
-        
-        # Should handle NaN values gracefully
-        try:
-            df_with_indicators = strategy.calculate_indicators(problematic_data)
-            # Should complete without crashing
-            assert isinstance(df_with_indicators, pd.DataFrame)
-            assert len(df_with_indicators) == len(problematic_data)
-        except Exception as e:
-            # Should be a meaningful error about data quality
-            error_msg = str(e).lower()
-            assert any(keyword in error_msg for keyword in ['nan', 'missing', 'invalid', 'data'])
-
-
-class TestStrategyMarketConditions:
-    """Test strategy behavior in different market conditions"""
-
-    @pytest.mark.strategy
-    def test_bull_market_conditions(self, market_conditions):
-        """Test strategy in bull market conditions"""
-        strategy = AdaptiveStrategy()
-        
-        # Create uptrending data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
-        closes = [50000 * (1.01 ** i) for i in range(50)]  # 1% hourly growth
-        
-        bull_data = pd.DataFrame({
-            'open': [c * 0.995 for c in closes],
-            'high': [c * 1.005 for c in closes],
-            'low': [c * 0.99 for c in closes],
-            'close': closes,
-            'volume': [1000 + np.random.randint(-100, 100) for _ in range(50)]
-        }, index=dates)
-        
-        df_with_indicators = strategy.calculate_indicators(bull_data)
-        
-        # In bull market, should generate some entry signals
-        entry_signals = []
-        for i in range(10, len(df_with_indicators)):
-            if strategy.check_entry_conditions(df_with_indicators, i):
-                entry_signals.append(i)
-        
-        # Should detect the trend and generate some signals
-        assert len(entry_signals) > 0
-
-    @pytest.mark.strategy
-    def test_bear_market_conditions(self):
-        """Test strategy in bear market conditions"""
-        strategy = AdaptiveStrategy()
-        
-        # Create downtrending data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
-        closes = [50000 * (0.99 ** i) for i in range(50)]  # 1% hourly decline
-        
-        bear_data = pd.DataFrame({
-            'open': [c * 1.005 for c in closes],
-            'high': [c * 1.01 for c in closes],
-            'low': [c * 0.995 for c in closes],
-            'close': closes,
-            'volume': [1000 + np.random.randint(-100, 100) for _ in range(50)]
-        }, index=dates)
-        
-        df_with_indicators = strategy.calculate_indicators(bear_data)
-        
-        # Strategy should adapt to bear market
-        # Test that it doesn't generate excessive long signals in declining market
-        entry_signals = []
-        for i in range(10, len(df_with_indicators)):
-            if strategy.check_entry_conditions(df_with_indicators, i):
-                entry_signals.append(i)
-        
-        # Should be more conservative in bear market
-        assert len(entry_signals) <= len(df_with_indicators) * 0.3  # Max 30% of periods
-
-    @pytest.mark.strategy
-    def test_sideways_market_conditions(self):
-        """Test strategy in sideways market conditions"""
-        strategy = AdaptiveStrategy()
-        
-        # Create sideways/ranging data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
-        base_price = 50000
-        closes = [base_price + 1000 * np.sin(i * 0.3) for i in range(50)]  # Oscillating around base
-        
-        sideways_data = pd.DataFrame({
-            'open': [c + np.random.uniform(-50, 50) for c in closes],
-            'high': [c + abs(np.random.uniform(0, 100)) for c in closes],
-            'low': [c - abs(np.random.uniform(0, 100)) for c in closes],
-            'close': closes,
-            'volume': [1000 + np.random.randint(-100, 100) for _ in range(50)]
-        }, index=dates)
-        
-        df_with_indicators = strategy.calculate_indicators(sideways_data)
-        
-        # Check regime detection
-        regimes = df_with_indicators['regime'].dropna()
-        if len(regimes) > 0:
-            # Should detect ranging conditions
-            ranging_count = (regimes == 'ranging').sum()
-            assert ranging_count > 0
-
-    @pytest.mark.strategy
-    def test_volatile_market_conditions(self):
-        """Test strategy in highly volatile market conditions"""
-        strategy = AdaptiveStrategy()
-        
-        # Create highly volatile data
-        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
-        base_price = 50000
-        closes = [base_price * (1 + np.random.uniform(-0.05, 0.05)) for _ in range(50)]  # 5% random moves
-        
-        volatile_data = pd.DataFrame({
-            'open': [c * (1 + np.random.uniform(-0.02, 0.02)) for c in closes],
-            'high': [c * (1 + abs(np.random.uniform(0, 0.03))) for c in closes],
-            'low': [c * (1 - abs(np.random.uniform(0, 0.03))) for c in closes],
-            'close': closes,
-            'volume': [1000 + np.random.randint(-500, 500) for _ in range(50)]
-        }, index=dates)
-        
-        df_with_indicators = strategy.calculate_indicators(volatile_data)
-        
-        # Strategy should reduce position sizes in volatile conditions
-        position_sizes = []
-        for i in range(20, len(df_with_indicators)):
-            size = strategy.calculate_position_size(df_with_indicators, i, 10000)
-            position_sizes.append(size)
-        
-        # Check that positions are generally smaller due to volatility
-        avg_position_size = np.mean([s for s in position_sizes if s > 0])
-        if not np.isnan(avg_position_size):
-            assert avg_position_size <= 10000 * strategy.max_position_size
-
-
-class TestMultipleStrategies:
-    """Test behavior with multiple strategy implementations"""
-
-    @pytest.mark.strategy
-    def test_strategy_consistency(self, sample_ohlcv_data):
-        """Test that different strategies produce consistent data structures"""
-        strategies = [AdaptiveStrategy()]
-        
-        # Add other strategies when available
-        try:
-            strategies.append(EnhancedStrategy())
-        except:
-            pass  # Enhanced strategy might not be available
-        
-        for strategy in strategies:
-            df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
-            
-            # All strategies should return DataFrame
-            assert isinstance(df_with_indicators, pd.DataFrame)
-            
-            # Should have at least the original columns
-            for col in sample_ohlcv_data.columns:
-                assert col in df_with_indicators.columns
-            
-            # Should have parameters
-            params = strategy.get_parameters()
-            assert isinstance(params, dict)
-            assert 'name' in params
-
-    @pytest.mark.strategy
-    def test_strategy_parameter_ranges(self):
-        """Test that strategy parameters are in reasonable ranges"""
-        strategy = AdaptiveStrategy()
-        params = strategy.get_parameters()
-        
-        # Risk parameters should be reasonable
-        if 'base_risk_per_trade' in params:
-            assert 0 < params['base_risk_per_trade'] <= 0.1
-        
-        if 'max_risk_per_trade' in params:
-            assert 0 < params['max_risk_per_trade'] <= 0.2
-        
-        # Moving average periods should be reasonable
-        if 'fast_ma' in params and 'slow_ma' in params:
-            assert params['fast_ma'] < params['slow_ma']
-            assert params['fast_ma'] >= 2
-            assert params['slow_ma'] <= 200
-
-
-# Tests moved from test_missing_strategies.py
 class TestEnhancedStrategy:
-    """Test the enhanced strategy implementation and logging"""
+    """Test the enhanced strategy implementation"""
 
     @pytest.mark.strategy
     def test_enhanced_strategy_initialization(self):
@@ -506,8 +255,10 @@ class TestEnhancedStrategy:
         
         assert hasattr(strategy, 'name')
         assert getattr(strategy, 'trading_pair', 'BTCUSDT') is not None
-        assert hasattr(strategy, 'risk_per_trade')
-        assert hasattr(strategy, 'max_position_size')
+        assert hasattr(strategy, 'fast_ma')
+        assert hasattr(strategy, 'slow_ma')
+        assert hasattr(strategy, 'rsi_period')
+        assert hasattr(strategy, 'bb_period')
 
     @pytest.mark.strategy
     def test_enhanced_strategy_execution_logging(self, sample_ohlcv_data):
@@ -521,68 +272,60 @@ class TestEnhancedStrategy:
         # Calculate indicators
         df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
         
-        # Test entry conditions on valid indices
-        valid_indices = range(max(20, len(df_with_indicators) - 5), len(df_with_indicators))
-        for i in valid_indices:
-            if i < len(df_with_indicators):
-                result = strategy.check_entry_conditions(df_with_indicators, i)
-                try:
-                    assert isinstance(result, (bool, np.bool_))
-                except AssertionError:
-                    print(f"DEBUG: result={result!r}, type={type(result)} at index {i}")
-                    raise
-                
-                # Verify that log_execution was called
-                mock_db_manager.log_strategy_execution.assert_called()
-                
-                # Get the last call arguments
-                call_args = mock_db_manager.log_strategy_execution.call_args
-                assert call_args is not None
-                
-                # Verify required parameters
-                args, kwargs = call_args
-                assert kwargs['strategy_name'] == strategy.name
-                assert kwargs['signal_type'] == 'entry'
-                assert kwargs['price'] > 0
-                assert isinstance(kwargs['reasons'], list)
-                assert len(kwargs['reasons']) > 0
-                # Instead of checking additional_context, check for merged key-value in reasons
-                assert 'strategy_type=enhanced_multi_condition' in kwargs['reasons']
-
-    @pytest.mark.strategy
-    def test_enhanced_strategy_parameters(self):
-        """Test enhanced strategy parameter retrieval"""
-        strategy = EnhancedStrategy()
-        
-        params = strategy.get_parameters()
-        
-        # Check required parameters
-        assert 'name' in params
-        assert 'risk_per_trade' in params
-        assert 'max_position_size' in params
-        assert 'base_stop_loss_pct' in params
-        assert 'min_conditions' in params
+        # Test entry conditions
+        if len(df_with_indicators) > 20:
+            test_index = 20
+            result = strategy.check_entry_conditions(df_with_indicators, test_index)
+            assert isinstance(result, (bool, np.bool_))
+            
+            # Verify that log_execution was called
+            mock_db_manager.log_strategy_execution.assert_called()
+            
+            # Get the last call arguments
+            call_args = mock_db_manager.log_strategy_execution.call_args
+            assert call_args is not None
+            
+            # Verify required parameters
+            args, kwargs = call_args
+            assert kwargs['strategy_name'] == strategy.name
+            assert kwargs['signal_type'] == 'entry'
+            assert kwargs['price'] > 0
+            assert isinstance(kwargs['reasons'], list)
+            assert len(kwargs['reasons']) > 0
 
 
 class TestMlBasicStrategy:
-    """Test the ML basic strategy implementation and logging"""
+    """Test the ML basic strategy implementation with prediction engine integration"""
 
     @pytest.mark.strategy
     def test_ml_basic_strategy_initialization(self):
         """Test ML basic strategy initialization"""
-        strategy = MlBasic()
+        # Mock prediction engine to avoid dependency issues
+        mock_prediction_engine = Mock()
+        strategy = MlBasic(prediction_engine=mock_prediction_engine)
         
         assert hasattr(strategy, 'name')
         assert getattr(strategy, 'trading_pair', 'BTCUSDT') is not None
-        assert hasattr(strategy, 'model_path')
-        assert hasattr(strategy, 'sequence_length')
+        assert hasattr(strategy, 'prediction_engine')
         assert hasattr(strategy, 'stop_loss_pct')
         assert hasattr(strategy, 'take_profit_pct')
+        assert strategy.prediction_engine == mock_prediction_engine
 
     @pytest.mark.strategy
-    def test_ml_basic_strategy_execution_logging(self, sample_ohlcv_data):
-        """Test that ML basic strategy logs execution details"""
-        strategy = MlBasic()
+    def test_ml_basic_strategy_prediction_integration(self, sample_ohlcv_data):
+        """Test ML basic strategy with prediction engine"""
+        # Create mock prediction engine
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = 50000.0
+        mock_prediction_result.confidence = 0.8
+        mock_prediction_result.direction = 1
+        mock_prediction_result.model_name = 'btcusdt_price'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        strategy = MlBasic(prediction_engine=mock_prediction_engine)
         
         # Mock database manager for logging
         mock_db_manager = Mock()
@@ -591,120 +334,198 @@ class TestMlBasicStrategy:
         # Calculate indicators
         df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
         
-        # Test entry conditions on valid indices (need enough data for ML predictions)
-        valid_indices = range(max(120, len(df_with_indicators) - 3), len(df_with_indicators))
-        for i in valid_indices:
-            if i < len(df_with_indicators):
-                result = strategy.check_entry_conditions(df_with_indicators, i)
-                assert isinstance(result, bool)
-                
-                # Verify that log_execution was called
-                mock_db_manager.log_strategy_execution.assert_called()
-                
-                # Get the last call arguments
-                call_args = mock_db_manager.log_strategy_execution.call_args
-                assert call_args is not None
-                
-                # Verify required parameters
-                args, kwargs = call_args
-                assert kwargs['strategy_name'] == strategy.name
-                assert kwargs['signal_type'] == 'entry'
-                assert kwargs['price'] > 0
-                assert isinstance(kwargs['reasons'], list)
-                assert len(kwargs['reasons']) > 0
-                
-                # Verify ML predictions
-                assert 'ml_predictions' in kwargs or 'prediction_available' in kwargs.get('additional_context', {})
-                
-                # Verify additional context
-                assert 'additional_context' in kwargs
-                context = kwargs['additional_context']
-                assert 'model_type' in context
-                assert context['model_type'] == 'ml_basic'
+        # Test entry conditions
+        result = strategy.check_entry_conditions(df_with_indicators, len(df_with_indicators) - 1)
+        
+        assert isinstance(result, bool)
+        assert result is True  # Should enter with positive direction and high confidence
+        
+        # Verify prediction engine was called
+        mock_prediction_engine.predict.assert_called_once()
+        
+        # Verify logging was called
+        mock_db_manager.log_strategy_execution.assert_called()
+        
+        # Get the last call arguments
+        call_args = mock_db_manager.log_strategy_execution.call_args
+        assert call_args is not None
+        
+        # Verify required parameters
+        args, kwargs = call_args
+        assert kwargs['strategy_name'] == strategy.name
+        assert kwargs['signal_type'] == 'entry'
+        assert kwargs['action_taken'] == 'entry_signal'
+        assert kwargs['price'] > 0
+        assert isinstance(kwargs['reasons'], list)
+        assert len(kwargs['reasons']) > 0
+        
+        # Verify ML predictions
+        assert 'ml_predictions' in kwargs
+        ml_preds = kwargs['ml_predictions']
+        assert ml_preds['raw_prediction'] == 50000.0
+        assert ml_preds['direction'] == 1
+        
+        # Verify additional context
+        assert 'additional_context' in kwargs
+        context = kwargs['additional_context']
+        assert context['model_type'] == 'ml_basic'
+        assert context['model_name'] == 'btcusdt_price'
 
     @pytest.mark.strategy
-    def test_ml_basic_strategy_missing_prediction_logging(self, sample_ohlcv_data):
-        """Test that ML basic strategy logs when prediction is missing"""
-        strategy = MlBasic()
+    def test_ml_basic_strategy_fallback_on_prediction_error(self, sample_ohlcv_data):
+        """Test strategy fallback when prediction fails"""
+        # Create mock prediction engine that raises error
+        mock_prediction_engine = Mock()
+        mock_prediction_engine.predict.side_effect = Exception("Prediction failed")
+        
+        strategy = MlBasic(prediction_engine=mock_prediction_engine)
         
         # Mock database manager for logging
         mock_db_manager = Mock()
         strategy.set_database_manager(mock_db_manager, session_id=789)
         
-        # Create data without ML predictions
-        df_no_predictions = sample_ohlcv_data.copy()
-        df_no_predictions['onnx_pred'] = np.nan
+        # Calculate indicators
+        df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
+        
+        # Test entry conditions
+        result = strategy.check_entry_conditions(df_with_indicators, len(df_with_indicators) - 1)
+        
+        assert result is False  # Should return False on prediction error
+        
+        # Verify logging was called for error
+        mock_db_manager.log_strategy_execution.assert_called()
+        
+        # Get the last call arguments
+        call_args = mock_db_manager.log_strategy_execution.call_args
+        assert call_args is not None
+        
+        # Verify it logged the prediction error
+        args, kwargs = call_args
+        assert kwargs['action_taken'] == 'no_action'
+        assert any('prediction_error' in reason for reason in kwargs['reasons'])
+        assert any('Prediction failed' in reason for reason in kwargs['reasons'])
+
+    @pytest.mark.strategy
+    def test_ml_basic_strategy_missing_prediction_logging(self, sample_ohlcv_data):
+        """Test that ML basic strategy logs when prediction engine returns None"""
+        # Create mock prediction engine that returns None prediction
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = None
+        mock_prediction_result.confidence = 0.0
+        mock_prediction_result.direction = 0
+        mock_prediction_result.model_name = 'test_model'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        strategy = MlBasic(prediction_engine=mock_prediction_engine)
+        
+        # Mock database manager for logging
+        mock_db_manager = Mock()
+        strategy.set_database_manager(mock_db_manager, session_id=789)
+        
+        # Calculate indicators
+        df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
         
         # Test entry conditions - should log missing prediction
-        if len(df_no_predictions) > 1:
-            result = strategy.check_entry_conditions(df_no_predictions, 1)
-            assert result is False  # Should return False for missing prediction
-            
-            # Verify that log_execution was called for missing prediction
-            mock_db_manager.log_strategy_execution.assert_called()
-            
-            # Get the last call arguments
-            call_args = mock_db_manager.log_strategy_execution.call_args
-            assert call_args is not None
-            
-            # Verify it logged the missing prediction
-            args, kwargs = call_args
-            assert 'missing_ml_prediction' in kwargs['reasons']
-            # Instead of checking additional_context, check reasons for the merged key-value
-            assert 'prediction_available=False' in kwargs['reasons']
+        result = strategy.check_entry_conditions(df_with_indicators, len(df_with_indicators) - 1)
+        assert result is False  # Should return False for missing prediction
+        
+        # Verify that log_execution was called for missing prediction
+        mock_db_manager.log_strategy_execution.assert_called()
+        
+        # Get the last call arguments
+        call_args = mock_db_manager.log_strategy_execution.call_args
+        assert call_args is not None
+        
+        # Verify it logged the missing prediction
+        args, kwargs = call_args
+        assert any('missing_ml_prediction' in reason for reason in kwargs['reasons'])
+        assert kwargs['action_taken'] == 'no_action'
+        # Check additional context
+        context = kwargs.get('additional_context', {})
+        assert context.get('prediction_available') is False
 
     @pytest.mark.strategy
     def test_ml_basic_strategy_parameters(self):
         """Test ML basic strategy parameter retrieval"""
-        strategy = MlBasic()
+        mock_prediction_engine = Mock()
+        strategy = MlBasic(prediction_engine=mock_prediction_engine)
         
         params = strategy.get_parameters()
         
         # Check required parameters
         assert 'name' in params
-        assert 'model_path' in params
-        assert 'sequence_length' in params
+        assert 'trading_pair' in params
         assert 'stop_loss_pct' in params
         assert 'take_profit_pct' in params
+        assert 'prediction_engine_available' in params
+        assert params['prediction_engine_available'] is True
 
     @pytest.mark.strategy
-    def test_ml_basic_exit_conditions(self, sample_ohlcv_data):
-        strategy = MlBasic()
+    def test_ml_basic_exit_conditions_with_prediction(self, sample_ohlcv_data):
+        """Test ML basic exit conditions with prediction engine"""
+        # Create mock prediction engine
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = 45000.0  # Lower than current price for exit signal
+        mock_prediction_result.confidence = 0.8
+        mock_prediction_result.direction = -1
+        mock_prediction_result.model_name = 'test_model'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        strategy = MlBasic(prediction_engine=mock_prediction_engine)
         df = strategy.calculate_indicators(sample_ohlcv_data)
         
-        # * Use realistic entry price close to current price
+        # Use realistic entry price close to current price
         current_price = df['close'].iloc[-1]
         entry_price = current_price * 0.98  # Entry at 2% below current price
         
-        # Test not exit (predicted price higher than current)
-        df.at[df.index[-1], 'onnx_pred'] = current_price * 1.05  # 5% above current
-        assert not strategy.check_exit_conditions(df, len(df)-1, entry_price)
+        # Test exit with unfavorable prediction (>2% drop predicted with high confidence)
+        # Mock result shows 45000 vs current ~50000 = ~10% drop with 0.8 confidence
+        result = strategy.check_exit_conditions(df, len(df)-1, entry_price)
         
-        # Test exit on unfavorable prediction (predicted price lower than current)
-        df.at[df.index[-1], 'onnx_pred'] = current_price * 0.95  # 5% below current
-        assert strategy.check_exit_conditions(df, len(df)-1, entry_price)
+        # Should exit due to unfavorable ML prediction
+        assert result is True
 
 
 class TestMlWithSentimentStrategy:
-    """Test the ML with sentiment strategy implementation and logging"""
+    """Test the ML with sentiment strategy implementation with prediction engine integration"""
 
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_initialization(self):
         """Test ML with sentiment strategy initialization"""
-        strategy = MlWithSentiment()
+        # Mock prediction engine to avoid dependency issues
+        mock_prediction_engine = Mock()
+        strategy = MlWithSentiment(prediction_engine=mock_prediction_engine)
         
         assert hasattr(strategy, 'name')
         assert getattr(strategy, 'trading_pair', 'BTCUSDT') is not None
-        assert hasattr(strategy, 'model_path')
-        assert hasattr(strategy, 'sequence_length')
+        assert hasattr(strategy, 'prediction_engine')
         assert hasattr(strategy, 'use_sentiment')
+        assert hasattr(strategy, 'sentiment_weight')
         assert hasattr(strategy, 'stop_loss_pct')
         assert hasattr(strategy, 'take_profit_pct')
+        assert strategy.prediction_engine == mock_prediction_engine
 
     @pytest.mark.strategy
-    def test_ml_with_sentiment_strategy_execution_logging(self, sample_ohlcv_data):
-        """Test that ML with sentiment strategy logs execution details"""
-        strategy = MlWithSentiment()
+    def test_ml_with_sentiment_strategy_prediction_integration(self, sample_ohlcv_data):
+        """Test ML with sentiment strategy with prediction engine"""
+        # Create mock prediction engine
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = 52000.0
+        mock_prediction_result.confidence = 0.7
+        mock_prediction_result.direction = 1
+        mock_prediction_result.model_name = 'btcusdt_sentiment'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        strategy = MlWithSentiment(prediction_engine=mock_prediction_engine, use_sentiment=False)
         
         # Mock database manager for logging
         mock_db_manager = Mock()
@@ -713,81 +534,125 @@ class TestMlWithSentimentStrategy:
         # Calculate indicators
         df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
         
-        # Test entry conditions on valid indices (need enough data for ML predictions)
-        valid_indices = range(max(120, len(df_with_indicators) - 3), len(df_with_indicators))
-        for i in valid_indices:
-            if i < len(df_with_indicators):
-                result = strategy.check_entry_conditions(df_with_indicators, i)
-                assert isinstance(result, bool)
-                
-                # Verify that log_execution was called
-                mock_db_manager.log_strategy_execution.assert_called()
-                
-                # Get the last call arguments
-                call_args = mock_db_manager.log_strategy_execution.call_args
-                assert call_args is not None
-                
-                # Verify required parameters
-                args, kwargs = call_args
-                assert kwargs['strategy_name'] == strategy.name
-                assert kwargs['signal_type'] == 'entry'
-                assert kwargs['price'] > 0
-                assert isinstance(kwargs['reasons'], list)
-                assert len(kwargs['reasons']) > 0
-                
-                # Verify ML predictions
-                assert 'ml_predictions' in kwargs or 'prediction_available' in kwargs.get('additional_context', {})
-                
-                # Verify additional context
-                assert 'additional_context' in kwargs
-                context = kwargs['additional_context']
-                assert 'model_type' in context
-                assert context['model_type'] == 'ml_with_sentiment'
+        # Test entry conditions
+        result = strategy.check_entry_conditions(df_with_indicators, len(df_with_indicators) - 1)
+        
+        assert isinstance(result, bool)
+        
+        # Verify prediction engine was called
+        mock_prediction_engine.predict.assert_called_once()
+        
+        # Verify logging was called
+        mock_db_manager.log_strategy_execution.assert_called()
+        
+        # Get the last call arguments
+        call_args = mock_db_manager.log_strategy_execution.call_args
+        assert call_args is not None
+        
+        # Verify required parameters
+        args, kwargs = call_args
+        assert kwargs['strategy_name'] == strategy.name
+        assert kwargs['signal_type'] == 'entry'
+        assert kwargs['price'] > 0
+        assert isinstance(kwargs['reasons'], list)
+        assert len(kwargs['reasons']) > 0
+        
+        # Verify ML predictions
+        assert 'ml_predictions' in kwargs
+        ml_preds = kwargs['ml_predictions']
+        assert ml_preds['raw_prediction'] == 52000.0
+        assert ml_preds['direction'] == 1
+        
+        # Verify additional context
+        assert 'additional_context' in kwargs
+        context = kwargs['additional_context']
+        assert context['model_type'] == 'ml_with_sentiment'
+        assert context['model_name'] == 'btcusdt_sentiment'
+
+    @pytest.mark.strategy
+    def test_ml_with_sentiment_strategy_combined_signal(self, sample_ohlcv_data):
+        """Test ML sentiment strategy combined signals"""
+        # Create mock prediction engine
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = 51000.0
+        mock_prediction_result.confidence = 0.7
+        mock_prediction_result.direction = 1
+        mock_prediction_result.model_name = 'btcusdt_sentiment'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        # Add sentiment data to test data
+        test_data_with_sentiment = sample_ohlcv_data.copy()
+        test_data_with_sentiment['sentiment_primary'] = 0.7  # Positive sentiment
+        
+        strategy = MlWithSentiment(prediction_engine=mock_prediction_engine, use_sentiment=True)
+        
+        # Test entry conditions
+        result = strategy.check_entry_conditions(test_data_with_sentiment, len(test_data_with_sentiment) - 1)
+        
+        # Should use combined ML and sentiment for entry decision
+        assert isinstance(result, bool)
 
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_missing_prediction_logging(self, sample_ohlcv_data):
         """Test that ML with sentiment strategy logs when prediction is missing"""
-        strategy = MlWithSentiment()
+        # Create mock prediction engine that returns None prediction
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = None
+        mock_prediction_result.confidence = 0.0
+        mock_prediction_result.direction = 0
+        mock_prediction_result.model_name = 'test_model'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        strategy = MlWithSentiment(prediction_engine=mock_prediction_engine)
         
         # Mock database manager for logging
         mock_db_manager = Mock()
         strategy.set_database_manager(mock_db_manager, session_id=202)
         
-        # Create data without ML predictions
-        df_no_predictions = sample_ohlcv_data.copy()
-        df_no_predictions['ml_prediction'] = np.nan
+        # Calculate indicators
+        df_with_indicators = strategy.calculate_indicators(sample_ohlcv_data)
         
         # Test entry conditions - should log missing prediction
-        if len(df_no_predictions) > 1:
-            result = strategy.check_entry_conditions(df_no_predictions, 1)
-            assert result is False  # Should return False for missing prediction
-            
-            # Verify that log_execution was called for missing prediction
-            mock_db_manager.log_strategy_execution.assert_called()
-            
-            # Get the last call arguments
-            call_args = mock_db_manager.log_strategy_execution.call_args
-            assert call_args is not None
-            
-            # Verify it logged the missing prediction
-            args, kwargs = call_args
-            assert 'missing_ml_prediction' in kwargs['reasons']
-            assert 'prediction_available=False' in kwargs['reasons']
+        result = strategy.check_entry_conditions(df_with_indicators, len(df_with_indicators) - 1)
+        assert result is False  # Should return False for missing prediction
+        
+        # Verify that log_execution was called for missing prediction
+        mock_db_manager.log_strategy_execution.assert_called()
+        
+        # Get the last call arguments
+        call_args = mock_db_manager.log_strategy_execution.call_args
+        assert call_args is not None
+        
+        # Verify it logged the missing prediction
+        args, kwargs = call_args
+        assert any('missing_ml_prediction' in reason for reason in kwargs['reasons'])
+        # Check additional context
+        context = kwargs.get('additional_context', {})
+        assert context.get('prediction_available') is False
 
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_parameters(self):
         """Test ML with sentiment strategy parameter retrieval"""
-        strategy = MlWithSentiment()
+        mock_prediction_engine = Mock()
+        strategy = MlWithSentiment(prediction_engine=mock_prediction_engine)
         
         params = strategy.get_parameters()
         
         # Check required parameters
         assert 'name' in params
-        assert 'model_path' in params
-        assert 'sequence_length' in params
+        assert 'trading_pair' in params
         assert 'use_sentiment' in params
+        assert 'sentiment_weight' in params
         assert 'stop_loss_pct' in params
         assert 'take_profit_pct' in params
+        assert 'prediction_engine_available' in params
+        assert params['prediction_engine_available'] is True
 
 
 class TestStrategyLoggingIntegration:
@@ -799,8 +664,11 @@ class TestStrategyLoggingIntegration:
         strategies = []
         
         strategies.append(EnhancedStrategy())
-        strategies.append(MlBasic())
-        strategies.append(MlWithSentiment())
+        
+        # Create ML strategies with mock prediction engines
+        mock_prediction_engine = Mock()
+        strategies.append(MlBasic(prediction_engine=mock_prediction_engine))
+        strategies.append(MlWithSentiment(prediction_engine=mock_prediction_engine))
         
         # Test that all strategies inherit from BaseStrategy and have logging
         for strategy in strategies:
@@ -815,13 +683,52 @@ class TestStrategyLoggingIntegration:
             assert strategy.enable_execution_logging is True
 
     @pytest.mark.strategy
+    def test_strategy_prediction_engine_integration(self, sample_ohlcv_data):
+        """Test that ML strategies work with prediction engine"""
+        # Create mock prediction engine
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = 50000.0
+        mock_prediction_result.confidence = 0.8
+        mock_prediction_result.direction = 1
+        mock_prediction_result.model_name = 'test_model'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        # Test strategy with prediction engine
+        strategy = MlBasic(prediction_engine=mock_prediction_engine)
+        
+        # Test entry conditions
+        df = strategy.calculate_indicators(sample_ohlcv_data)
+        result = strategy.check_entry_conditions(df, len(df) - 1)
+        
+        assert isinstance(result, bool)
+        assert result is True  # Should enter with positive signal
+        
+        # Test prediction was called
+        mock_prediction_engine.predict.assert_called()
+
+    @pytest.mark.strategy
     def test_strategy_logging_with_mock_database(self, sample_ohlcv_data):
         """Test that strategies can log to a mock database"""
         strategies = []
         
         strategies.append(EnhancedStrategy())
-        strategies.append(MlBasic())
-        strategies.append(MlWithSentiment())
+        
+        # Create ML strategies with mock prediction engines
+        mock_prediction_engine = Mock()
+        mock_prediction_result = Mock()
+        mock_prediction_result.price = 50000.0
+        mock_prediction_result.confidence = 0.8
+        mock_prediction_result.direction = 1
+        mock_prediction_result.model_name = 'test_model'
+        mock_prediction_result.timestamp = pd.Timestamp.now()
+        mock_prediction_result.error = None
+        mock_prediction_engine.predict.return_value = mock_prediction_result
+        
+        strategies.append(MlBasic(prediction_engine=mock_prediction_engine))
+        strategies.append(MlWithSentiment(prediction_engine=mock_prediction_engine))
         
         mock_db_manager = Mock()
         

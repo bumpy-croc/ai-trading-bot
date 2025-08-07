@@ -25,8 +25,8 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 import numpy as np
 import pandas as pd
-import onnxruntime as ort
 from strategies.base import BaseStrategy
+from typing import Optional
 
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants
@@ -36,16 +36,13 @@ class MlBasic(BaseStrategy):
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
     
-    def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120):
-        super().__init__(name)
+    def __init__(self, name="MlBasic", prediction_engine: Optional['PredictionEngine'] = None, **kwargs):
+        super().__init__(name=name, prediction_engine=prediction_engine, **kwargs)
         
         # Set strategy-specific trading pair - ML model trained on BTC
         self.trading_pair = 'BTCUSDT'
         
-        self.model_path = model_path
-        self.sequence_length = sequence_length
-        self.ort_session = ort.InferenceSession(self.model_path)
-        self.input_name = self.ort_session.get_inputs()[0].name
+        # Risk management parameters
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
 

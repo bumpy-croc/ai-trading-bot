@@ -11,22 +11,100 @@ class BaseStrategy(ABC):
     Default trading pair is Binance style (e.g., BTCUSDT).
     """
     
-    def __init__(self, name: str):
+    def __init__(self, 
+                 name: str,
+                 symbol: str = "BTCUSDT",
+                 timeframe: str = "1h",
+                 initial_balance: float = 10000,
+                 prediction_engine: Optional['PredictionEngine'] = None,
+                 **kwargs):
         self.name = name
         self.logger = logging.getLogger(name)
         
+        # Trading configuration
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.initial_balance = initial_balance
+        self.current_balance = initial_balance
+        
         # Default trading pair - strategies can override this
-        self.trading_pair = 'BTCUSDT'
+        self.trading_pair = symbol
+        
+        # Initialize prediction engine
+        try:
+            if prediction_engine is not None:
+                self.prediction_engine = prediction_engine
+            else:
+                # Import here to avoid circular dependency
+                from src.prediction.engine import PredictionEngine
+                self.prediction_engine = PredictionEngine()
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize prediction engine: {e}")
+            self.prediction_engine = None
+        
+        # Strategy-specific parameters
+        self._init_strategy_params(**kwargs)
         
         # Strategy execution logging
         self.db_manager = None
         self.session_id = None
         self.enable_execution_logging = True
+
+    def _init_strategy_params(self, **kwargs):
+        """Initialize strategy-specific parameters - override in subclasses"""
+        pass
         
     def set_database_manager(self, db_manager, session_id: Optional[int] = None):
         """Set database manager for strategy execution logging"""
         self.db_manager = db_manager
         self.session_id = session_id
+        
+    def get_prediction(self, df: pd.DataFrame, index: int) -> Dict[str, Any]:
+        """Get prediction from prediction engine"""
+        try:
+            if self.prediction_engine is None:
+                return {
+                    'price': None,
+                    'confidence': 0.0,
+                    'direction': 0,
+                    'model_name': None,
+                    'timestamp': None,
+                    'error': 'Prediction engine not available'
+                }
+            
+            # Get data up to current index
+            data_slice = df.iloc[:index+1]
+            
+            # Get prediction from engine
+            prediction = self.prediction_engine.predict(data_slice)
+            
+            if prediction.error:
+                return {
+                    'price': None,
+                    'confidence': 0.0,
+                    'direction': 0,
+                    'model_name': prediction.model_name,
+                    'timestamp': prediction.timestamp,
+                    'error': prediction.error
+                }
+            
+            return {
+                'price': prediction.price,
+                'confidence': prediction.confidence,
+                'direction': prediction.direction,
+                'model_name': prediction.model_name,
+                'timestamp': prediction.timestamp
+            }
+        except Exception as e:
+            # Fallback to no prediction or error handling
+            return {
+                'price': None,
+                'confidence': 0.0,
+                'direction': 0,
+                'model_name': None,
+                'timestamp': None,
+                'error': str(e)
+            }
         
     def log_execution(
         self,

@@ -28,36 +28,24 @@ Ideal for:
 
 import numpy as np
 import pandas as pd
-import onnx
-import onnxruntime as ort
 import os
 import json
 from datetime import datetime, timedelta
 from strategies.base import BaseStrategy
 from data_providers.senticrypt_provider import SentiCryptProvider
+from typing import Optional
 
 class MlWithSentiment(BaseStrategy):
-    def __init__(self, name="MlWithSentiment", model_path=None, sequence_length=120, 
-                 use_sentiment=True, sentiment_csv_path=None):
-        super().__init__(name)
+    def __init__(self, name="MlWithSentiment", prediction_engine: Optional['PredictionEngine'] = None, 
+                 use_sentiment=True, sentiment_csv_path=None, **kwargs):
+        super().__init__(name=name, prediction_engine=prediction_engine, **kwargs)
         
-        # Set strategy-specific trading pair - will be determined by model
+        # Set strategy-specific trading pair
         self.trading_pair = 'BTCUSDT'  # Default, can be overridden
         
-        # Model configuration
-        self.sequence_length = sequence_length
+        # Strategy configuration
         self.use_sentiment = use_sentiment
-        
-        # Determine model path
-        if model_path is None:
-            model_suffix = "sentiment" if use_sentiment else "price"
-            model_path = f"src/ml/{self.trading_pair.lower()}_{model_suffix}.onnx"
-        
-        self.model_path = model_path
-        
-        # Load model and metadata
-        self._load_model()
-        self._load_metadata()
+        self.sentiment_weight = 0.3  # Weight for combining ML prediction with sentiment
         
         # Initialize sentiment provider if needed
         self.sentiment_provider = None
@@ -68,58 +56,7 @@ class MlWithSentiment(BaseStrategy):
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
         
-        # Feature tracking
-        self.feature_names = []
-        self.sentiment_features = []
-        
-    def _load_model(self):
-        """Load the ONNX model"""
-        try:
-            if not os.path.exists(self.model_path):
-                raise FileNotFoundError(f"Model file not found: {self.model_path}")
-            
-            self.ort_session = ort.InferenceSession(self.model_path)
-            self.input_name = self.ort_session.get_inputs()[0].name
-            
-            # Get input shape to determine expected features
-            input_shape = self.ort_session.get_inputs()[0].shape
-            self.expected_features = input_shape[2] if len(input_shape) > 2 else 1
-            
-            print(f"Loaded model: {self.model_path}")
-            print(f"Expected input shape: {input_shape}")
-            
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
-    
-    def _load_metadata(self):
-        """Load model metadata if available"""
-        metadata_path = self.model_path.replace('.onnx', '_metadata.json')
-        
-        if os.path.exists(metadata_path):
-            try:
-                with open(metadata_path, 'r') as f:
-                    self.metadata = json.load(f)
-                
-                # Extract feature information
-                if 'feature_names' in self.metadata:
-                    self.feature_names = self.metadata['feature_names']
-                    self.sentiment_features = [f for f in self.feature_names if f.startswith('sentiment_')]
-                
-                # Update trading pair from metadata
-                if 'symbol' in self.metadata:
-                    self.trading_pair = self.metadata['symbol']
-                
-                print(f"Loaded metadata: {len(self.feature_names)} features")
-                if self.sentiment_features:
-                    print(f"Sentiment features: {len(self.sentiment_features)}")
-                
-            except Exception as e:
-                print(f"Warning: Could not load metadata: {e}")
-                self.metadata = {}
-        else:
-            print(f"No metadata file found: {metadata_path}")
-            self.metadata = {}
+
     
     def _initialize_sentiment_provider(self, csv_path=None):
         """Initialize sentiment data provider"""
