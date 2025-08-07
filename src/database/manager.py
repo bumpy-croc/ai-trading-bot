@@ -4,7 +4,7 @@ PostgreSQL database manager for handling all database operations
 
 import logging
 import os
-from typing import Optional, Dict, List, Any, Union, TYPE_CHECKING, Iterable
+from typing import Optional, Dict, List, Any, Union, TYPE_CHECKING, Iterable, Generator
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
@@ -86,9 +86,14 @@ class DatabaseManager:
             engine_kwargs = self._get_engine_config()
             backend = 'postgresql'
         elif db_url.startswith('sqlite'):
-            # Use in-memory SQLite for unit tests as provided by the environment
-            # to keep test isolation and speed. Do not normalize to on-disk.
-            engine_kwargs = self._get_sqlite_engine_config(sqlite_url=db_url)
+            # SQLite for unit tests. For in-memory, switch to a shared in-memory URI
+            # so multiple DatabaseManager instances in the same process share state.
+            normalized_url = db_url
+            if db_url.rstrip('/').startswith('sqlite:///:memory'):
+                normalized_url = 'sqlite:///file:pytest_shared_memdb?mode=memory&cache=shared&uri=true'
+                self.database_url = normalized_url
+            engine_kwargs = self._get_sqlite_engine_config(sqlite_url=normalized_url)
+            db_url = normalized_url
             backend = 'sqlite'
         else:
             # Keep strict for other backends (message matches existing tests)
@@ -138,10 +143,19 @@ class DatabaseManager:
             'echo': False,
             'connect_args': {'check_same_thread': False}
         }
-        # Use StaticPool only for true in-memory URIs
-        if sqlite_url.rstrip('/') in ('sqlite:///:memory:', 'sqlite:///:memory'):
+        # Use StaticPool only for true in-memory URIs. Handle both
+        # `sqlite:///:memory:` and `sqlite:///:memory` forms without
+        # listing duplicate strings.
+        mem_like = (
+            'sqlite:///:memory:',
+            'sqlite:///:memory',
+            'sqlite:///file:pytest_shared_memdb?mode=memory&cache=shared&uri=true',
+            'sqlite:///file::memory:?cache=shared'
+        )
+        if sqlite_url.rstrip('/') in mem_like or 'cache=shared' in sqlite_url:
             from sqlalchemy.pool import StaticPool  # local import
             config['poolclass'] = StaticPool
+            config['connect_args']['uri'] = True
         return config
     
     def _create_tables(self):
@@ -162,7 +176,7 @@ class DatabaseManager:
             raise
     
     @contextmanager
-    def get_session(self) -> Session:
+    def get_session(self) -> Generator[Session, None, None]:
         """
         Get a database session with automatic cleanup.
         
