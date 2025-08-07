@@ -118,7 +118,6 @@ class TestMlAdaptive:
     @pytest.mark.strategy
     def test_atr_calculation(self, sample_ohlcv_data):
         """Test ATR calculation accuracy"""
-        from unittest.mock import Mock
         
         # Create mock prediction engine
         mock_engine = Mock()
@@ -151,7 +150,6 @@ class TestMlAdaptive:
     @pytest.mark.strategy
     def test_entry_conditions_with_valid_data(self, sample_ohlcv_data):
         """Test entry condition checking with valid data"""
-        from unittest.mock import Mock
         
         # Create mock prediction engine
         mock_engine = Mock()
@@ -183,7 +181,6 @@ class TestMlAdaptive:
     @pytest.mark.strategy
     def test_position_size_calculation(self, sample_ohlcv_data):
         """Test position size calculation"""
-        from unittest.mock import Mock
         
         # Create mock prediction engine
         mock_engine = Mock()
@@ -220,7 +217,6 @@ class TestMlAdaptive:
     @pytest.mark.strategy
     def test_strategy_parameters(self):
         """Test strategy parameter retrieval"""
-        from unittest.mock import Mock
         
         # Create mock prediction engine
         mock_engine = Mock()
@@ -670,7 +666,6 @@ class TestMlBasicStrategy:
     @pytest.mark.strategy
     def test_ml_basic_strategy_missing_prediction_logging(self, sample_ohlcv_data):
         """Test that ML basic strategy logs when prediction is missing"""
-        from unittest.mock import Mock
         
         # Create mock prediction engine that returns error
         mock_engine = Mock()
@@ -709,7 +704,6 @@ class TestMlBasicStrategy:
     @pytest.mark.strategy
     def test_ml_basic_strategy_parameters(self):
         """Test ML basic strategy parameter retrieval"""
-        from unittest.mock import Mock
         
         # Create mock prediction engine
         mock_engine = Mock()
@@ -733,7 +727,6 @@ class TestMlBasicStrategy:
 
     @pytest.mark.strategy
     def test_ml_basic_exit_conditions(self, sample_ohlcv_data):
-        from unittest.mock import Mock
         
         # Test favorable prediction - should not exit
         mock_engine_bullish = Mock()
@@ -773,7 +766,6 @@ class TestMlWithSentimentStrategy:
     @pytest.mark.strategy
     def test_ml_with_sentiment_strategy_initialization(self):
         """Test ML with sentiment strategy initialization"""
-        from unittest.mock import Mock
         
         # Create mock prediction engine
         mock_engine = Mock()
@@ -790,7 +782,6 @@ class TestMlWithSentimentStrategy:
         assert getattr(strategy, 'trading_pair', 'BTCUSDT') is not None
         assert hasattr(strategy, 'use_sentiment')
         assert strategy.prediction_engine is not None
-        assert hasattr(strategy, 'use_sentiment')
         assert hasattr(strategy, 'stop_loss_pct')
         assert hasattr(strategy, 'take_profit_pct')
 
