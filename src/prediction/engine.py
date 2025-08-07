@@ -12,17 +12,15 @@ import time
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 
 from .config import PredictionConfig
 from .features.pipeline import FeaturePipeline
 from .models.registry import PredictionModelRegistry
-from .models.onnx_runner import ModelPrediction
 from .exceptions import (
-    PredictionEngineError,
     InvalidInputError,
     ModelNotFoundError,
     FeatureExtractionError,
-    PredictionTimeoutError
 )
 
 
@@ -71,8 +69,6 @@ class PredictionEngine:
         self._feature_extraction_time = 0.0
         # Track per-model inference times
         self._model_inference_times: Dict[str, List[float]] = {}
-        # Track last cache hit status from feature pipeline
-        self._last_cache_hit = False
     
     def predict(self, data: pd.DataFrame, model_name: Optional[str] = None) -> PredictionResult:
         """
