@@ -41,3 +41,11 @@ DEFAULT_OPTIMIZATION_COOLDOWN_HOURS = 6
 DEFAULT_WIN_RATE_THRESHOLD = 0.45
 DEFAULT_SHARPE_RATIO_THRESHOLD = 0.5
 DEFAULT_DRAWDOWN_THRESHOLD = 0.15
+
+# Model Outage Exit Policy (safe fallback when predictions are unavailable)
+MODEL_OUTAGE_EXIT_ENABLED: bool = True
+MODEL_OUTAGE_MAX_HOLD_SECONDS: int = 12 * 60 * 60  # 12 hours
+MODEL_OUTAGE_BREAKEVEN_TRIGGER_PCT: float = 0.02  # Move stop to breakeven after +2%
+MODEL_OUTAGE_TRAIL_ATR_MULTIPLIER: float = 1.0  # Trail by 1x ATR when in profit
+MODEL_OUTAGE_TRAIL_MIN_PCT: float = 0.01  # Minimum trailing distance 1% if ATR unavailable
+MODEL_OUTAGE_VOLATILITY_GUARD_MULTIPLIER: float = 2.5  # Exit/tighten if ATR spikes > 2.5x 20-bar median

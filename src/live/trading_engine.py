@@ -29,6 +29,8 @@ from performance.metrics import (
     cash_pnl,
 )
 from src.utils.symbol_factory import SymbolFactory
+from src.live.exit_policies import ModelOutageExitPolicy, PositionSnapshot
+from src.config.constants import MODEL_OUTAGE_EXIT_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +238,9 @@ class LiveTradingEngine:
         self.consecutive_errors = 0
         self.max_consecutive_errors = max_consecutive_errors
         self.error_cooldown = 300  # 5 minutes
+        
+        # Model outage policy
+        self.model_outage_policy = ModelOutageExitPolicy(enabled=MODEL_OUTAGE_EXIT_ENABLED)
         
         # Threading
         self.main_thread = None
@@ -584,10 +589,35 @@ class LiveTradingEngine:
                 should_exit = True
                 exit_reason = "Take profit"
                 
-            # Check maximum position time (24 hours)
-            elif (datetime.now() - position.entry_time).total_seconds() > 86400:
-                should_exit = True
-                exit_reason = "Time limit"
+            # Model-outage policy: time-based/volatility guards and stop adjustments
+            else:
+                # Detect model outage by probing strategy.prediction_engine
+                model_unavailable = getattr(self.strategy, 'prediction_engine', None) is None
+                if model_unavailable and self.model_outage_policy.enabled:
+                    snapshot = PositionSnapshot(
+                        symbol=position.symbol,
+                        side=position.side.value,
+                        entry_price=position.entry_price,
+                        entry_time=position.entry_time,
+                        stop_loss=position.stop_loss,
+                        take_profit=position.take_profit,
+                    )
+                    # Adjust protective stops (breakeven/trailing)
+                    new_sl, new_tp = self.model_outage_policy.adjust_protective_stops(df, current_index, snapshot)
+                    # Update local position and db if changed
+                    if new_sl != position.stop_loss or new_tp != position.take_profit:
+                        position.stop_loss = new_sl
+                        position.take_profit = new_tp
+                        try:
+                            pos_db_id = self.position_db_ids.get(position.order_id)
+                            if pos_db_id is not None:
+                                self.db_manager.update_position(pos_db_id, stop_loss=new_sl, take_profit=new_tp)
+                        except Exception as e:
+                            logger.debug(f"Failed to update position stops in DB: {e}")
+                    # Determine if forced exit due to time/volatility
+                    if self.model_outage_policy.should_exit(df, current_index, snapshot):
+                        should_exit = True
+                        exit_reason = "Model outage policy"
             
             # Log exit decision for each position
             if self.db_manager:
