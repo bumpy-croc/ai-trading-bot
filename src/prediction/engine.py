@@ -479,7 +479,9 @@ class PredictionEngine:
     
     def _get_config_version(self) -> str:
         """Get configuration version/hash for tracking"""
-        return f"v1.0-{hash(str(self.config))}"
+        config_str = str(self.config).encode("utf-8")
+        config_hash = hashlib.sha256(config_str).hexdigest()[:12]
+        return f"v1.0-{config_hash}"
     
     def _update_performance_stats(self, result: PredictionResult) -> None:
         """Update internal performance statistics"""
