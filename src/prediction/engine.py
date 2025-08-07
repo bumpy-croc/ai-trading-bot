@@ -69,6 +69,9 @@ class PredictionEngine:
         self._feature_extraction_time = 0.0
         # Track per-model inference times
         self._model_inference_times: Dict[str, List[float]] = {}
+        # Track feature extraction times for averaging
+        self._total_feature_extraction_time = 0.0
+        self._feature_extraction_count = 0
     
     def predict(self, data: pd.DataFrame, model_name: Optional[str] = None) -> PredictionResult:
         """
@@ -92,6 +95,9 @@ class PredictionEngine:
             features = self._extract_features(data)
             feature_time = time.time() - feature_start_time
             self._feature_extraction_time = feature_time
+            # Track for averaging
+            self._total_feature_extraction_time += feature_time
+            self._feature_extraction_count += 1
             
             # Get model for prediction
             model = self._get_model(model_name)
@@ -102,8 +108,8 @@ class PredictionEngine:
             # Calculate total inference time
             inference_time = time.time() - start_time
             
-            # Check for timeout even after a successful prediction to ensure latency constraints are enforced.
-            # This ensures that predictions exceeding the maximum allowed latency are flagged, even if they succeed.
+            # Predictions that exceed max_prediction_latency should return an error result,
+            # even if the prediction completed successfully.
             if (hasattr(self.config, 'max_prediction_latency') and 
                 isinstance(self.config.max_prediction_latency, (int, float)) and
                 inference_time > self.config.max_prediction_latency):
@@ -155,8 +161,7 @@ class PredictionEngine:
             # Calculate total time for both timeout check and error result
             total_time = time.time() - start_time
             
-            # Check for timeout and preserve the original error message if both occur.
-            # This ensures that both timeout and the original error are reported for debugging.
+            # Check for timeout but preserve original error
             error_message = str(e)
             error_type = type(e).__name__
             
@@ -202,18 +207,26 @@ class PredictionEngine:
             model = self._get_model(model_name)
         except Exception as e:
             # If model loading fails, return error results for all batches
-            error_result_template = PredictionResult(
-                price=0.0,
-                confidence=0.0,
-                direction=0,
-                model_name=model_name or "unknown",
-                timestamp=datetime.now(timezone.utc),
-                inference_time=0.0,
-                features_used=0,
-                error=str(e),
-                metadata={'error_type': type(e).__name__}
-            )
-            return [error_result_template for _ in data_batches]
+            # Create individual PredictionResult objects to avoid shared mutable state
+            error_results = []
+            for i, _ in enumerate(data_batches):
+                error_result = PredictionResult(
+                    price=0.0,
+                    confidence=0.0,
+                    direction=0,
+                    model_name=model_name or "unknown",
+                    timestamp=datetime.now(timezone.utc),
+                    inference_time=0.0,
+                    features_used=0,
+                    error=str(e),
+                    metadata={
+                        'error_type': type(e).__name__,
+                        'batch_index': i,
+                        'batch_size': len(data_batches)
+                    }
+                )
+                error_results.append(error_result)
+            return error_results
         
         for i, data in enumerate(data_batches):
             start_time = time.time()
@@ -226,6 +239,9 @@ class PredictionEngine:
                 feature_start_time = time.time()
                 features = self._extract_features(data)
                 feature_time = time.time() - feature_start_time
+                # Track for averaging
+                self._total_feature_extraction_time += feature_time
+                self._feature_extraction_count += 1
                 
                 # Make prediction with pre-loaded model
                 prediction = model.predict(features)
@@ -320,7 +336,10 @@ class PredictionEngine:
             'cache_hits': self._cache_hits,
             'cache_misses': self._cache_misses,
             'available_models': len(self.get_available_models()),
-            'avg_feature_extraction_time': self._feature_extraction_time
+            'avg_feature_extraction_time': (
+                self._total_feature_extraction_time / self._feature_extraction_count
+                if self._feature_extraction_count > 0 else 0.0
+            )
         }
     
     def clear_caches(self) -> None:
@@ -332,6 +351,9 @@ class PredictionEngine:
         # Reset performance stats related to caching
         self._cache_hits = 0
         self._cache_misses = 0
+        # Reset feature extraction tracking
+        self._total_feature_extraction_time = 0.0
+        self._feature_extraction_count = 0
     
     def reload_models(self) -> None:
         """Reload all models"""
@@ -501,8 +523,7 @@ class PredictionEngine:
         if model_name in self._model_inference_times and self._model_inference_times[model_name]:
             return np.mean(self._model_inference_times[model_name])
         
-        # Fallback to global average with clear documentation
-        # Note: This returns global average when no model-specific data is available
+        # Fallback to global average when no model-specific data is available
         return (
             self._total_inference_time / self._prediction_count 
             if self._prediction_count > 0 else 0.0
