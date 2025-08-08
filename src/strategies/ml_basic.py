@@ -23,6 +23,18 @@ import pandas as pd
 import onnxruntime as ort
 from src.strategies.base import BaseStrategy
 from src.config.feature_flags import is_enabled
+from src.prediction.features.pipeline import FeaturePipeline
+from src.prediction.features.technical import TechnicalFeatureExtractor
+from typing import Optional
+from src.prediction import PredictionEngine, PredictionConfig
+from src.config import get_config
+from src.config.constants import (
+    DEFAULT_USE_PREDICTION_ENGINE
+)
+from pathlib import Path
+from src.prediction.features.price_only import PriceOnlyFeatureExtractor
+import os
+
 
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants
@@ -32,7 +44,7 @@ class MlBasic(BaseStrategy):
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
     
-    def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120):
+    def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120, use_prediction_engine: Optional[bool] = None, model_name: Optional[str] = None):
         super().__init__(name)
         
         # Set strategy-specific trading pair - ML model trained on BTC
@@ -45,62 +57,158 @@ class MlBasic(BaseStrategy):
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
 
+        # Optional prediction engine integration (disabled by default to preserve behavior)
+        cfg = get_config()
+        self.use_prediction_engine = (
+            use_prediction_engine
+            if use_prediction_engine is not None
+            else cfg.get_bool('USE_PREDICTION_ENGINE', default=DEFAULT_USE_PREDICTION_ENGINE)
+        )
+        # Prefer explicit, then config, then fallback to stem of ONNX path to match prior behavior
+        self.model_name = model_name
+        if self.model_name is None:
+            self.model_name = cfg.get('PREDICTION_ENGINE_MODEL_NAME', default=None)
+        if self.model_name is None:
+            try:
+                self.model_name = Path(self.model_path).stem
+            except Exception:
+                self.model_name = None
+        self.prediction_engine = None
+        self._engine_warning_emitted = False
+        # Optional batch inference flag (default off to preserve exact behavior)
+        self.use_engine_batch = get_config().get_bool('ENGINE_BATCH_INFERENCE', default=False)
+
+        # Initialize feature pipeline with a technical extractor matching our normalization window
+        technical_extractor = TechnicalFeatureExtractor(
+            sequence_length=self.sequence_length,
+            normalization_window=self.sequence_length
+        )
+        # Disable default technical extractor to avoid duplicate; use our custom one
+        if self.use_prediction_engine:
+            # When engine is enabled, use a price-only extractor to guarantee 5 features in expected order
+            price_only = PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
+            self.feature_pipeline = FeaturePipeline(
+                enable_technical=False,
+                enable_sentiment=False,
+                enable_market_microstructure=False,
+                custom_extractors=[price_only]
+            )
+        else:
+            self.feature_pipeline = FeaturePipeline(
+                enable_technical=False,
+                enable_sentiment=False,
+                enable_market_microstructure=False,
+                custom_extractors=[technical_extractor]
+            )
+
+        # Early health check for engine (non-fatal)
+        if self.use_prediction_engine:
+            try:
+                config = PredictionConfig.from_config_manager()
+                config.enable_sentiment = False
+                config.enable_market_microstructure = False
+                engine = PredictionEngine(config)
+                # Ensure price-only extractor
+                engine.feature_pipeline = FeaturePipeline(
+                    enable_technical=False,
+                    enable_sentiment=False,
+                    enable_market_microstructure=False,
+                    custom_extractors=[PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)]
+                )
+                health = engine.health_check()
+                if health.get('status') != 'healthy' and not self._engine_warning_emitted:
+                    print(f"[MlBasic] Prediction engine health degraded: {health}")
+                    self._engine_warning_emitted = True
+                self.prediction_engine = engine
+            except Exception as _e:
+                if not self._engine_warning_emitted:
+                    print("[MlBasic] Prediction engine initialization failed; falling back to local ONNX session.")
+                    self._engine_warning_emitted = True
+                self.prediction_engine = None
+
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         
-        # * Gate prediction engine usage via feature flag
-        use_prediction_engine = is_enabled("use_prediction_engine", default=True)
+        # * Gate ML predictions via feature flag (use_prediction_engine)
+        use_prediction_engine = is_enabled("use_prediction_engine", default=False)
 
-        # Normalize price features (same as training)
-        price_features = ['close', 'volume', 'high', 'low', 'open']
-        for feature in price_features:
-            if feature in df.columns:
-                # Simple min-max normalization within the sequence window
-                df[f'{feature}_normalized'] = df[feature].rolling(
-                    window=self.sequence_length, min_periods=1
-                ).apply(
-                    lambda x: (x[-1] - np.min(x)) / (np.max(x) - np.min(x)) if np.max(x) != np.min(x) else 0.5,
-                    raw=True
-                )
+        # Use the prediction feature pipeline to generate normalized price features identically
+        df = self.feature_pipeline.transform(df)
         
-        # Prepare predictions column
+        # Prepare predictions columns
         df['onnx_pred'] = np.nan
+        df['ml_prediction'] = np.nan
+        df['prediction_confidence'] = np.nan
+        df['engine_direction'] = np.nan
+        df['engine_confidence'] = np.nan
+        
+        price_features = ['close', 'volume', 'high', 'low', 'open']
         
         # Generate predictions for each row that has enough history
         if use_prediction_engine:
+            # Lazy engine init
+            if self.prediction_engine is None:
+                try:
+                    config = PredictionConfig.from_config_manager()
+                    config.enable_sentiment = False
+                    config.enable_market_microstructure = False
+                    engine = PredictionEngine(config)
+                    engine.feature_pipeline = FeaturePipeline(
+                        enable_technical=False,
+                        enable_sentiment=False,
+                        enable_market_microstructure=False,
+                        custom_extractors=[PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)]
+                    )
+                    self.prediction_engine = engine
+                except Exception:
+                    self.prediction_engine = None
+
             for i in range(self.sequence_length, len(df)):
                 # Prepare input features
                 feature_columns = [f'{feature}_normalized' for feature in price_features]
                 input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
-                
+
                 # Reshape for ONNX model: (batch_size, sequence_length, features)
                 input_data = input_data.astype(np.float32)
-                input_data = np.expand_dims(input_data, axis=0)  # Add batch dimension
-                
-                # Run prediction
+                input_data = np.expand_dims(input_data, axis=0)
+
                 try:
-                    output = self.ort_session.run(None, {self.input_name: input_data})
-                    pred = output[0][0][0]  # Extract scalar prediction
-                    
-                    # Denormalize prediction back to actual price scale
+                    if self.prediction_engine is not None and self.model_name:
+                        window_df = df[['open', 'high', 'low', 'close', 'volume']].iloc[i-self.sequence_length:i]
+                        result = self.prediction_engine.predict(window_df, model_name=self.model_name)
+                        pred = float(result.price)
+                    else:
+                        output = self.ort_session.run(None, {self.input_name: input_data})
+                        pred = output[0][0][0]
+
                     recent_close = df['close'].iloc[i-self.sequence_length:i].values
                     min_close = np.min(recent_close)
                     max_close = np.max(recent_close)
-                    
+
                     if max_close != min_close:
                         pred_denormalized = pred * (max_close - min_close) + min_close
                     else:
-                        pred_denormalized = df['close'].iloc[i-1]  # Use previous close if no range
-                    
+                        pred_denormalized = df['close'].iloc[i-1]
+
                     df.at[df.index[i], 'onnx_pred'] = pred_denormalized
-                    
+                    df.at[df.index[i], 'ml_prediction'] = pred_denormalized
+
+                    close_i = df['close'].iloc[i]
+                    if close_i > 0:
+                        predicted_return = abs(pred_denormalized - close_i) / close_i
+                        confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
+                        df.at[df.index[i], 'prediction_confidence'] = confidence
+
                 except Exception as e:
                     print(f"Prediction error at index {i}: {e}")
-                    df.at[df.index[i], 'onnx_pred'] = df['close'].iloc[i-1]  # Fallback to previous close
+                    fallback_price = df['close'].iloc[i-1]
+                    df.at[df.index[i], 'onnx_pred'] = fallback_price
+                    df.at[df.index[i], 'ml_prediction'] = fallback_price
+                    df.at[df.index[i], 'prediction_confidence'] = np.nan
         else:
-            # * If prediction engine is disabled, keep 'onnx_pred' as NaN to disable ML-driven entries/size
+            # Predictions disabled via feature flag
             pass
-        
+
         return df
 
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
@@ -135,6 +243,13 @@ class MlBasic(BaseStrategy):
             'current_price': close,
             'predicted_return': predicted_return
         }
+        # Engine metadata for auditability
+        if self.use_prediction_engine and self.prediction_engine is not None:
+            ml_predictions.update({
+                'engine_enabled': True,
+                'engine_model_name': self.model_name,
+                'engine_batch': self.use_engine_batch,
+            })
         
         reasons = [
             f'predicted_return_{predicted_return:.4f}',
@@ -147,7 +262,7 @@ class MlBasic(BaseStrategy):
             action_taken='entry_signal' if entry_signal else 'no_action',
             price=close,
             signal_strength=abs(predicted_return) if entry_signal else 0.0,
-            confidence_score=min(1.0, abs(predicted_return) * 10),  # Scale confidence based on predicted return
+            confidence_score=float(df['prediction_confidence'].iloc[index]) if 'prediction_confidence' in df.columns and not pd.isna(df['prediction_confidence'].iloc[index]) else min(1.0, abs(predicted_return) * 10),
             ml_predictions=ml_predictions,
             reasons=reasons,
             additional_context={
@@ -210,7 +325,9 @@ class MlBasic(BaseStrategy):
             'model_path': self.model_path,
             'sequence_length': self.sequence_length,
             'stop_loss_pct': self.stop_loss_pct,
-            'take_profit_pct': self.take_profit_pct
+            'take_profit_pct': self.take_profit_pct,
+            'use_prediction_engine': self.use_prediction_engine,
+            'engine_model_name': self.model_name
         }
 
     def calculate_stop_loss(self, df, index, price, side) -> float:
