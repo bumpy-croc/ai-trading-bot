@@ -3,13 +3,29 @@ Database models for trade logging and performance tracking
 """
 
 from sqlalchemy import (
-    Column, Integer, String, Numeric, DateTime, Boolean, Text, 
+    Column, Integer, String, Numeric, DateTime, Boolean, Text,
     Enum, ForeignKey, Index, UniqueConstraint, Float, JSON  # Added Float and JSON
 )
 from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
+from sqlalchemy.types import TypeDecorator
 from datetime import datetime
 import enum
+
+# Portable JSON that chooses JSONB on PostgreSQL and JSON elsewhere (e.g., SQLite)
+class PortableJSON(TypeDecorator):
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            try:  # pragma: no cover - depends on installed dialect
+                from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
+                return dialect.type_descriptor(JSONB())
+            except Exception:
+                return dialect.type_descriptor(JSON())
+        return dialect.type_descriptor(JSON())
+
+JSONType = PortableJSON
 
 Base = declarative_base()
 
@@ -80,11 +96,11 @@ class Trade(Base):
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False, index=True)
-    strategy_config = Column(JSONB)  # Store strategy parameters
+    strategy_config = Column(JSONType)  # Store strategy parameters
     confidence_score = Column(Numeric(18, 8))  # ML model confidence if applicable
     
     # Additional metadata
-    order_id = Column(String(100), unique=True)
+    order_id = Column(String(100))
     exchange = Column(String(50), default='binance')
     timeframe = Column(String(10))
     
@@ -96,6 +112,7 @@ class Trade(Base):
     __table_args__ = (
         Index('idx_trade_time', 'entry_time', 'exit_time'),
         Index('idx_trade_performance', 'pnl_percent', 'strategy_name'),
+        UniqueConstraint('order_id', 'session_id', name='uq_trade_order_session'),
     )
     
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -135,7 +152,7 @@ class Position(Base):
     confidence_score = Column(Numeric(18, 8))
     
     # Order information
-    order_id = Column(String(100), unique=True)
+    order_id = Column(String(100))
     exchange = Column(String(50), default='binance')
     
     # Relationships
@@ -143,6 +160,9 @@ class Position(Base):
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
     
     created_at = Column(DateTime, default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('order_id', 'session_id', name='uq_position_order_session'),
+    )
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -218,7 +238,7 @@ class PerformanceMetrics(Base):
     largest_loss_streak = Column(Integer, default=0)
     
     # By strategy breakdown
-    strategy_breakdown = Column(JSONB)  # Dict of strategy_name: metrics
+    strategy_breakdown = Column(JSONType)  # Dict of strategy_name: metrics
     
     # Session reference
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
@@ -252,7 +272,7 @@ class TradingSession(Base):
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
-    strategy_config = Column(JSONB)
+    strategy_config = Column(JSONType)
     
     # Environment
     symbol = Column(String(20), nullable=False)
@@ -287,7 +307,7 @@ class SystemEvent(Base):
     
     # Event details
     message = Column(Text, nullable=False)
-    details = Column(JSONB)  # Additional structured data
+    details = Column(JSONType)  # Additional structured data
     
     # Context
     component = Column(String(100))  # Which part of the system
@@ -328,14 +348,14 @@ class StrategyExecution(Base):
     confidence_score = Column(Numeric(18, 8))
     
     # Decision factors
-    indicators = Column(JSONB)  # Dict of indicator values
-    sentiment_data = Column(JSONB)  # Sentiment scores if used
-    ml_predictions = Column(JSONB)  # ML model outputs if used
+    indicators = Column(JSONType)  # Dict of indicator values
+    sentiment_data = Column(JSONType)  # Sentiment scores if used
+    ml_predictions = Column(JSONType)  # ML model outputs if used
     
     # Execution result
     action_taken = Column(String(50))  # 'opened_long', 'closed_position', 'no_action'
     position_size = Column(Numeric(18, 8))
-    reasons = Column(JSONB)  # List of reasons for the decision
+    reasons = Column(JSONType)  # List of reasons for the decision
     
     # Market context
     price = Column(Numeric(18, 8))
@@ -362,7 +382,7 @@ class AccountBalance(Base):
     reserved_balance = Column(Float, default=0.0)  # Reserved in open positions
     
     # Balance breakdown by asset (for multi-asset support)
-    asset_balances = Column(JSON, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
+    asset_balances = Column(JSONType, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
     
     # Metadata
     last_updated = Column(DateTime, nullable=False, default=datetime.utcnow)

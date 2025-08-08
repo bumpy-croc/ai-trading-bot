@@ -2,26 +2,36 @@ import sys
 import os
 from pathlib import Path
 
-# Ensure that the `src` directory is on the Python path so all modules inside it
+# Ensure both the project root and the `src` directory are on the Python path so all modules
 # can be imported from anywhere in the project (tests, scripts, notebooks, etc.).
-# This approach avoids the need to modify existing import statements after the
-# project was reorganised into a `src/` layout.
 _project_root = Path(__file__).resolve().parent
 _src_path = _project_root / "src"
 
+# Insert project root first to allow `import src` to resolve properly
+project_root_str = str(_project_root)
+if project_root_str not in sys.path:
+    sys.path.insert(0, project_root_str)
+
 if _src_path.exists():
-    # Insert at the beginning so it has priority over any site-packages that may
-    # contain similarly named modules.
+    # Insert `src` path after project root so it has priority over any site-packages that may
+    # contain similarly named modules, while keeping root available for `import src`.
     src_path_str = str(_src_path)
     if src_path_str not in sys.path:
-        sys.path.insert(0, src_path_str)
+        sys.path.insert(1, src_path_str)
 
 # Also add to PYTHONPATH environment variable for subprocess calls
-if 'PYTHONPATH' in os.environ:
-    if str(_src_path) not in os.environ['PYTHONPATH']:
-        os.environ['PYTHONPATH'] = str(_src_path) + ':' + os.environ['PYTHONPATH']
-else:
-    os.environ['PYTHONPATH'] = str(_src_path)
+existing_pythonpath = os.environ.get('PYTHONPATH', '')
+paths_to_add = [project_root_str, str(_src_path)]
+
+# Build a colon-separated PYTHONPATH ensuring no duplicates and preserving order
+new_pythonpath_parts = []
+for p in paths_to_add:
+    if p and p not in existing_pythonpath and p not in new_pythonpath_parts:
+        new_pythonpath_parts.append(p)
+if existing_pythonpath:
+    new_pythonpath_parts.append(existing_pythonpath)
+
+os.environ['PYTHONPATH'] = ':'.join(new_pythonpath_parts)
 
 # ---------------------------------------------------------------------------
 # Removed pandas fallback – real pandas will be installed in the

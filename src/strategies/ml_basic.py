@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import onnxruntime as ort
 from src.strategies.base import BaseStrategy
+from src.config.feature_flags import is_enabled
 
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants
@@ -47,6 +48,9 @@ class MlBasic(BaseStrategy):
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         
+        # * Gate prediction engine usage via feature flag
+        use_prediction_engine = is_enabled("use_prediction_engine", default=True)
+
         # Normalize price features (same as training)
         price_features = ['close', 'volume', 'high', 'low', 'open']
         for feature in price_features:
@@ -63,35 +67,39 @@ class MlBasic(BaseStrategy):
         df['onnx_pred'] = np.nan
         
         # Generate predictions for each row that has enough history
-        for i in range(self.sequence_length, len(df)):
-            # Prepare input features
-            feature_columns = [f'{feature}_normalized' for feature in price_features]
-            input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
-            
-            # Reshape for ONNX model: (batch_size, sequence_length, features)
-            input_data = input_data.astype(np.float32)
-            input_data = np.expand_dims(input_data, axis=0)  # Add batch dimension
-            
-            # Run prediction
-            try:
-                output = self.ort_session.run(None, {self.input_name: input_data})
-                pred = output[0][0][0]  # Extract scalar prediction
+        if use_prediction_engine:
+            for i in range(self.sequence_length, len(df)):
+                # Prepare input features
+                feature_columns = [f'{feature}_normalized' for feature in price_features]
+                input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
                 
-                # Denormalize prediction back to actual price scale
-                recent_close = df['close'].iloc[i-self.sequence_length:i].values
-                min_close = np.min(recent_close)
-                max_close = np.max(recent_close)
+                # Reshape for ONNX model: (batch_size, sequence_length, features)
+                input_data = input_data.astype(np.float32)
+                input_data = np.expand_dims(input_data, axis=0)  # Add batch dimension
                 
-                if max_close != min_close:
-                    pred_denormalized = pred * (max_close - min_close) + min_close
-                else:
-                    pred_denormalized = df['close'].iloc[i-1]  # Use previous close if no range
-                
-                df.at[df.index[i], 'onnx_pred'] = pred_denormalized
-                
-            except Exception as e:
-                print(f"Prediction error at index {i}: {e}")
-                df.at[df.index[i], 'onnx_pred'] = df['close'].iloc[i-1]  # Fallback to previous close
+                # Run prediction
+                try:
+                    output = self.ort_session.run(None, {self.input_name: input_data})
+                    pred = output[0][0][0]  # Extract scalar prediction
+                    
+                    # Denormalize prediction back to actual price scale
+                    recent_close = df['close'].iloc[i-self.sequence_length:i].values
+                    min_close = np.min(recent_close)
+                    max_close = np.max(recent_close)
+                    
+                    if max_close != min_close:
+                        pred_denormalized = pred * (max_close - min_close) + min_close
+                    else:
+                        pred_denormalized = df['close'].iloc[i-1]  # Use previous close if no range
+                    
+                    df.at[df.index[i], 'onnx_pred'] = pred_denormalized
+                    
+                except Exception as e:
+                    print(f"Prediction error at index {i}: {e}")
+                    df.at[df.index[i], 'onnx_pred'] = df['close'].iloc[i-1]  # Fallback to previous close
+        else:
+            # * If prediction engine is disabled, keep 'onnx_pred' as NaN to disable ML-driven entries/size
+            pass
         
         return df
 

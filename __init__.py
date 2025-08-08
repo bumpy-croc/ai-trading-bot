@@ -1,41 +1,9 @@
 """
 AI-Trading-Bot - Cryptocurrency Trading Bot Framework
-"""
 
-from data_providers import DataProvider, BinanceProvider, BinanceDataProvider, BinanceExchange
-from indicators import (
-    calculate_moving_averages,
-    calculate_rsi,
-    calculate_atr,
-    calculate_bollinger_bands,
-    calculate_macd
-)
-from risk import RiskManager, RiskParameters
-from strategies import BaseStrategy
-from backtesting import Backtester, Trade
+Root package file kept minimal to avoid heavy imports during test collection.
+"""
 
 __version__ = '0.1.0'
 
-__all__ = [
-    # Data providers
-    'DataProvider',
-    'BinanceProvider',
-    'BinanceDataProvider',
-    'BinanceExchange',
-    
-    # Technical indicators
-    'calculate_moving_averages',
-    'calculate_rsi',
-    'calculate_atr',
-    'calculate_bollinger_bands',
-    'calculate_macd',
-    
-    # Risk management
-    'RiskManager',
-    'RiskParameters',
-    
-    # Strategy and backtesting
-    'BaseStrategy',
-    'Backtester',
-    'Trade'
-] 
+__all__ = [] 
