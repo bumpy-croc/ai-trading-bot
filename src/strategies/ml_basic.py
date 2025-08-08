@@ -49,7 +49,7 @@ class MlBasic(BaseStrategy):
         df = df.copy()
         
         # * Gate prediction engine usage via feature flag
-        use_prediction_engine = is_enabled("use_prediction_engine", default=False)
+        use_prediction_engine = is_enabled("use_prediction_engine", default=True)
 
         # Normalize price features (same as training)
         price_features = ['close', 'volume', 'high', 'low', 'open']
