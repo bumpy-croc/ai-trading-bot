@@ -188,6 +188,75 @@ class PredictionEngine:
                 }
             )
     
+    def predict_series(
+        self,
+        data: pd.DataFrame,
+        model_name: Optional[str] = None,
+        batch_size: int = 1024,
+        return_denormalized: bool = False,
+        sequence_length_override: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Predict over a long OHLCV series efficiently.
+        Returns a dict with keys: 'indices' (np.ndarray), 'preds' (np.ndarray), 'normalized' (bool)
+        If return_denormalized is True, applies rolling-window denormalization of close based on previous window.
+        """
+        self._validate_input_data(data)
+        # Extract features once
+        features_df = self.feature_pipeline.transform(data, use_cache=True)
+        original_columns = ['open', 'high', 'low', 'close', 'volume']
+        feature_columns = [c for c in features_df.columns if c not in original_columns]
+        if not feature_columns:
+            raise FeatureExtractionError("No feature columns found for series prediction")
+        feat = features_df[feature_columns].values.astype(np.float32)
+        total = len(features_df)
+        seq = sequence_length_override or self.config.prediction_horizons[0] if hasattr(self.config, 'prediction_horizons') else 120
+        # Fallback to 120 if missing
+        if not isinstance(seq, int) or seq <= 0:
+            seq = 120
+        if total <= seq:
+            return { 'indices': np.array([], dtype=int), 'preds': np.array([], dtype=np.float32), 'normalized': not return_denormalized }
+
+        model = self._get_model(model_name)
+        session = model.session
+        input_name = session.get_inputs()[0].name
+
+        # Build windows (N, seq, features)
+        try:
+            from numpy.lib.stride_tricks import sliding_window_view
+            windows = sliding_window_view(feat, (seq, feat.shape[1]))
+            windows = windows[:, 0, :, :]
+        except Exception:
+            num_windows = total - seq
+            windows = np.empty((num_windows, seq, feat.shape[1]), dtype=np.float32)
+            for idx in range(num_windows):
+                windows[idx] = feat[idx:idx+seq]
+
+        num_windows = windows.shape[0]
+        preds_norm = np.empty((num_windows,), dtype=np.float32)
+        for start in range(0, num_windows, batch_size):
+            end = min(start + batch_size, num_windows)
+            batch = windows[start:end]
+            output = session.run(None, {input_name: batch})
+            out = output[0]
+            preds_norm[start:end] = out.reshape(out.shape[0], -1)[:, 0].astype(np.float32)
+
+        indices = np.arange(seq, total, dtype=int)
+        if not return_denormalized:
+            return { 'indices': indices, 'preds': preds_norm, 'normalized': True }
+
+        # Denormalize using rolling window on close based on previous seq bars
+        close = features_df['close']
+        min_prev = close.shift(1).rolling(window=seq).min().values
+        max_prev = close.shift(1).rolling(window=seq).max().values
+        min_vals = min_prev[indices]
+        max_vals = max_prev[indices]
+        same_range = (max_vals == min_vals) | np.isnan(max_vals) | np.isnan(min_vals)
+        preds_denorm = preds_norm * (max_vals - min_vals) + min_vals
+        prev_close = features_df['close'].shift(1).values[indices]
+        preds_denorm[same_range] = prev_close[same_range]
+        return { 'indices': indices, 'preds': preds_denorm, 'normalized': False }
+
     def predict_batch(self, data_batches: List[pd.DataFrame], 
                      model_name: Optional[str] = None) -> List[PredictionResult]:
         """
