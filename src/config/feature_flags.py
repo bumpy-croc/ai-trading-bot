@@ -39,7 +39,17 @@ def _load_repo_defaults() -> Dict[str, Any]:
                 return data
             return {}
     except Exception:
-        # Fail-soft: if JSON is malformed, ignore and return empty map
+    flags_path: Path = get_project_root() / _DEFAULT_FLAGS_FILENAME
+    if not flags_path.exists():
+        return {}
+    try:
+        with flags_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+            return {}
+    except (json.JSONDecodeError, FileNotFoundError, PermissionError):
+        # Fail-soft: if file is missing, permission denied, or JSON is malformed, ignore and return empty map
         return {}
 
 
