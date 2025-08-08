@@ -25,6 +25,7 @@ from src.strategies.base import BaseStrategy
 from src.config.feature_flags import is_enabled
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.technical import TechnicalFeatureExtractor
+from typing import Optional
 
 
 class MlBasic(BaseStrategy):
@@ -35,7 +36,7 @@ class MlBasic(BaseStrategy):
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
     
-    def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120):
+    def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120, use_prediction_engine: bool = False, model_name: Optional[str] = None):
         super().__init__(name)
         
         # Set strategy-specific trading pair - ML model trained on BTC
@@ -47,6 +48,11 @@ class MlBasic(BaseStrategy):
         self.input_name = self.ort_session.get_inputs()[0].name
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
+
+        # Optional prediction engine integration (disabled by default to preserve behavior)
+        self.use_prediction_engine = use_prediction_engine
+        self.model_name = model_name
+        self.prediction_engine = None
 
         # Initialize feature pipeline with a technical extractor matching our normalization window
         technical_extractor = TechnicalFeatureExtractor(
@@ -70,8 +76,10 @@ class MlBasic(BaseStrategy):
         # Use the prediction feature pipeline to generate normalized price features identically
         df = self.feature_pipeline.transform(df)
         
-        # Prepare predictions column
+        # Prepare predictions columns
         df['onnx_pred'] = np.nan
+        df['ml_prediction'] = np.nan
+        df['prediction_confidence'] = np.nan
         
         price_features = ['close', 'volume', 'high', 'low', 'open']
         
@@ -86,12 +94,10 @@ class MlBasic(BaseStrategy):
                 input_data = input_data.astype(np.float32)
                 input_data = np.expand_dims(input_data, axis=0)  # Add batch dimension
                 
-                # Run prediction
                 try:
                     output = self.ort_session.run(None, {self.input_name: input_data})
                     pred = output[0][0][0]  # Extract scalar prediction
                     
-                    # Denormalize prediction back to actual price scale
                     recent_close = df['close'].iloc[i-self.sequence_length:i].values
                     min_close = np.min(recent_close)
                     max_close = np.max(recent_close)
@@ -101,11 +107,23 @@ class MlBasic(BaseStrategy):
                     else:
                         pred_denormalized = df['close'].iloc[i-1]  # Use previous close if no range
                     
+                    # Store predictions in standardized columns
                     df.at[df.index[i], 'onnx_pred'] = pred_denormalized
+                    df.at[df.index[i], 'ml_prediction'] = pred_denormalized
+                    
+                    # Compute and store a confidence proxy consistent with sizing logic
+                    close_i = df['close'].iloc[i]
+                    if close_i > 0:
+                        predicted_return = abs(pred_denormalized - close_i) / close_i
+                        confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
+                        df.at[df.index[i], 'prediction_confidence'] = confidence
                     
                 except Exception as e:
                     print(f"Prediction error at index {i}: {e}")
-                    df.at[df.index[i], 'onnx_pred'] = df['close'].iloc[i-1]  # Fallback to previous close
+                    fallback_price = df['close'].iloc[i-1]
+                    df.at[df.index[i], 'onnx_pred'] = fallback_price  # Fallback to previous close
+                    df.at[df.index[i], 'ml_prediction'] = fallback_price
+                    df.at[df.index[i], 'prediction_confidence'] = np.nan
         else:
             # * If predictions are disabled via feature flag, keep 'onnx_pred' NaN to skip ML entries
             pass
