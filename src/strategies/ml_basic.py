@@ -167,52 +167,49 @@ class MlBasic(BaseStrategy):
                 # Prepare input features
                 feature_columns = [f'{feature}_normalized' for feature in price_features]
                 input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
-                
+
                 # Reshape for ONNX model: (batch_size, sequence_length, features)
                 input_data = input_data.astype(np.float32)
-                input_data = np.expand_dims(input_data, axis=0)  # Add batch dimension
-                
+                input_data = np.expand_dims(input_data, axis=0)
+
                 try:
                     if self.prediction_engine is not None and self.model_name:
-                        # Use engine.predict on raw OHLCV window (normalized within engine)
                         window_df = df[['open', 'high', 'low', 'close', 'volume']].iloc[i-self.sequence_length:i]
                         result = self.prediction_engine.predict(window_df, model_name=self.model_name)
                         pred = float(result.price)
                     else:
                         output = self.ort_session.run(None, {self.input_name: input_data})
-                        pred = output[0][0][0]  # Extract scalar prediction
-                    
+                        pred = output[0][0][0]
+
                     recent_close = df['close'].iloc[i-self.sequence_length:i].values
                     min_close = np.min(recent_close)
                     max_close = np.max(recent_close)
-                    
+
                     if max_close != min_close:
                         pred_denormalized = pred * (max_close - min_close) + min_close
                     else:
-                        pred_denormalized = df['close'].iloc[i-1]  # Use previous close if no range
-                    
-                    # Store predictions in standardized columns
+                        pred_denormalized = df['close'].iloc[i-1]
+
                     df.at[df.index[i], 'onnx_pred'] = pred_denormalized
                     df.at[df.index[i], 'ml_prediction'] = pred_denormalized
-                    
-                    # Compute and store a confidence proxy consistent with sizing logic
+
                     close_i = df['close'].iloc[i]
                     if close_i > 0:
                         predicted_return = abs(pred_denormalized - close_i) / close_i
                         confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
                         df.at[df.index[i], 'prediction_confidence'] = confidence
-                 
-                 except Exception as e:
-                     print(f"Prediction error at index {i}: {e}")
-                     fallback_price = df['close'].iloc[i-1]
-                     df.at[df.index[i], 'onnx_pred'] = fallback_price  # Fallback to previous close
-                     df.at[df.index[i], 'ml_prediction'] = fallback_price
-                     df.at[df.index[i], 'prediction_confidence'] = np.nan
-         else:
-             # * If predictions are disabled via feature flag, keep 'onnx_pred' NaN to skip ML entries
-             pass
-         
-         return df
+
+                except Exception as e:
+                    print(f"Prediction error at index {i}: {e}")
+                    fallback_price = df['close'].iloc[i-1]
+                    df.at[df.index[i], 'onnx_pred'] = fallback_price
+                    df.at[df.index[i], 'ml_prediction'] = fallback_price
+                    df.at[df.index[i], 'prediction_confidence'] = np.nan
+        else:
+            # Predictions disabled via feature flag
+            pass
+
+        return df
 
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
         # Go long if the predicted price for the next bar is higher than the current close
