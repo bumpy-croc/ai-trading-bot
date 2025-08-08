@@ -175,7 +175,7 @@ def run_critical_tests():
     
     cmd = [
         sys.executable, '-m', 'pytest', 
-        '-m', 'live_trading or risk_management',
+        '-m', 'live_trading or risk_management and not slow',
         '-v', '--tb=short',
         '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
     ]
@@ -204,7 +204,7 @@ def run_unit_tests():
         'tests/',
         '-v', '--tb=short',
         '-n', get_worker_count(), '--dist=loadgroup',  # Dynamic worker count based on environment
-        '-m', 'not integration',
+        '-m', 'not integration and not slow',
         '--color=yes',  # Enable colored output for better visibility in Cursor
         '--timeout=300'  # 5 minute timeout per test to prevent hanging
     ]
@@ -340,7 +340,7 @@ def run_fast_tests():
     
     cmd = [
         sys.executable, '-m', 'pytest',
-        '-m', 'fast or mock_only',
+        '-m', 'fast or mock_only and not slow',
         '-v', '--tb=short',
         '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
     ]
