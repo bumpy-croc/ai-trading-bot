@@ -21,8 +21,6 @@ from src.database.models import PositionSide, TradeSource
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 
-# Remove pytestmark and binance_ fixtures, restoring the file to its previous state.
-
 @pytest.fixture
 def binance_account_balance_fixture():
     """Binance-style account balance fixture (USDT)"""
