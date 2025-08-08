@@ -14,3 +14,6 @@ src/data/trading_bot.db
 # Staging directories (now using /tmp but keeping this for safety)
 staging/
 /tmp/ai-trading-bot-staging/
+
+# Ephemeral SQLite shared memory files created during unit tests
+file:unit_test_db_*
