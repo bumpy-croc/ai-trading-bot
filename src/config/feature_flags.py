@@ -38,17 +38,7 @@ def _load_repo_defaults() -> Dict[str, Any]:
             if isinstance(data, dict):
                 return data
             return {}
-    except Exception:
-    flags_path: Path = get_project_root() / _DEFAULT_FLAGS_FILENAME
-    if not flags_path.exists():
-        return {}
-    try:
-        with flags_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                return data
-            return {}
-    except (json.JSONDecodeError, FileNotFoundError, PermissionError):
+    except (json.JSONDecodeError, FileNotFoundError, PermissionError, Exception):
         # Fail-soft: if file is missing, permission denied, or JSON is malformed, ignore and return empty map
         return {}
 

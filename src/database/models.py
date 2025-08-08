@@ -7,18 +7,25 @@ from sqlalchemy import (
     Enum, ForeignKey, Index, UniqueConstraint, Float, JSON  # Added Float and JSON
 )
 from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.types import TypeDecorator
 from datetime import datetime
 import enum
-import os
 
-# * Portable JSON type that compiles on SQLite and uses JSONB on PostgreSQL when available
-try:  # pragma: no cover - availability depends on installed dialect
-    from sqlalchemy.dialects.postgresql import JSONB as _PG_JSONB  # type: ignore
-except Exception:  # pragma: no cover - fallback when dialect not present
-    _PG_JSONB = None
+# Portable JSON that chooses JSONB on PostgreSQL and JSON elsewhere (e.g., SQLite)
+class PortableJSON(TypeDecorator):
+    impl = JSON
+    cache_ok = True
 
-_IS_SQLITE = os.getenv("DATABASE_URL", "").startswith("sqlite:")
-JSONType = JSON if _IS_SQLITE or _PG_JSONB is None else _PG_JSONB
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            try:  # pragma: no cover - depends on installed dialect
+                from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
+                return dialect.type_descriptor(JSONB())
+            except Exception:
+                return dialect.type_descriptor(JSON())
+        return dialect.type_descriptor(JSON())
+
+JSONType = PortableJSON
 
 Base = declarative_base()
 
@@ -375,7 +382,7 @@ class AccountBalance(Base):
     reserved_balance = Column(Float, default=0.0)  # Reserved in open positions
     
     # Balance breakdown by asset (for multi-asset support)
-    asset_balances = Column(JSON, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
+    asset_balances = Column(JSONType, default=lambda: {})  # {'BTC': 0.1, 'ETH': 2.5, 'USD': 1000}
     
     # Metadata
     last_updated = Column(DateTime, nullable=False, default=datetime.utcnow)
