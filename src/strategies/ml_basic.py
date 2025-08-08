@@ -27,6 +27,10 @@ from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.technical import TechnicalFeatureExtractor
 from typing import Optional
 from src.prediction import PredictionEngine, PredictionConfig
+from src.config import get_config
+from src.config.constants import (
+    DEFAULT_USE_PREDICTION_ENGINE
+)
 
 
 class MlBasic(BaseStrategy):
@@ -37,7 +41,7 @@ class MlBasic(BaseStrategy):
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
     
-    def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120, use_prediction_engine: bool = False, model_name: Optional[str] = None):
+    def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120, use_prediction_engine: Optional[bool] = None, model_name: Optional[str] = None):
         super().__init__(name)
         
         # Set strategy-specific trading pair - ML model trained on BTC
@@ -51,8 +55,15 @@ class MlBasic(BaseStrategy):
         self.take_profit_pct = 0.04  # 4% take profit
 
         # Optional prediction engine integration (disabled by default to preserve behavior)
-        self.use_prediction_engine = use_prediction_engine
-        self.model_name = model_name
+        cfg = get_config()
+        self.use_prediction_engine = (
+            use_prediction_engine
+            if use_prediction_engine is not None
+            else cfg.get_bool('USE_PREDICTION_ENGINE', default=DEFAULT_USE_PREDICTION_ENGINE)
+        )
+        self.model_name = (
+            model_name if model_name is not None else cfg.get('PREDICTION_ENGINE_MODEL_NAME', default=None)
+        )
         self.prediction_engine = None
 
         # Initialize feature pipeline with a technical extractor matching our normalization window
