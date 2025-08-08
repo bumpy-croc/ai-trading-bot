@@ -3,13 +3,22 @@ Database models for trade logging and performance tracking
 """
 
 from sqlalchemy import (
-    Column, Integer, String, Numeric, DateTime, Boolean, Text, 
+    Column, Integer, String, Numeric, DateTime, Boolean, Text,
     Enum, ForeignKey, Index, UniqueConstraint, Float, JSON  # Added Float and JSON
 )
 from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy.dialects.postgresql import JSONB  # type: ignore
 from datetime import datetime
 import enum
+import os
+
+# * Portable JSON type that compiles on SQLite and uses JSONB on PostgreSQL when available
+try:  # pragma: no cover - availability depends on installed dialect
+    from sqlalchemy.dialects.postgresql import JSONB as _PG_JSONB  # type: ignore
+except Exception:  # pragma: no cover - fallback when dialect not present
+    _PG_JSONB = None
+
+_IS_SQLITE = os.getenv("DATABASE_URL", "").startswith("sqlite:")
+JSONType = JSON if _IS_SQLITE or _PG_JSONB is None else _PG_JSONB
 
 Base = declarative_base()
 
@@ -80,11 +89,11 @@ class Trade(Base):
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False, index=True)
-    strategy_config = Column(JSONB)  # Store strategy parameters
+    strategy_config = Column(JSONType)  # Store strategy parameters
     confidence_score = Column(Numeric(18, 8))  # ML model confidence if applicable
     
     # Additional metadata
-    order_id = Column(String(100), unique=True)
+    order_id = Column(String(100))
     exchange = Column(String(50), default='binance')
     timeframe = Column(String(10))
     
@@ -96,6 +105,7 @@ class Trade(Base):
     __table_args__ = (
         Index('idx_trade_time', 'entry_time', 'exit_time'),
         Index('idx_trade_performance', 'pnl_percent', 'strategy_name'),
+        UniqueConstraint('order_id', 'session_id', name='uq_trade_order_session'),
     )
     
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -135,7 +145,7 @@ class Position(Base):
     confidence_score = Column(Numeric(18, 8))
     
     # Order information
-    order_id = Column(String(100), unique=True)
+    order_id = Column(String(100))
     exchange = Column(String(50), default='binance')
     
     # Relationships
@@ -143,6 +153,9 @@ class Position(Base):
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
     
     created_at = Column(DateTime, default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('order_id', 'session_id', name='uq_position_order_session'),
+    )
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -218,7 +231,7 @@ class PerformanceMetrics(Base):
     largest_loss_streak = Column(Integer, default=0)
     
     # By strategy breakdown
-    strategy_breakdown = Column(JSONB)  # Dict of strategy_name: metrics
+    strategy_breakdown = Column(JSONType)  # Dict of strategy_name: metrics
     
     # Session reference
     session_id = Column(Integer, ForeignKey('trading_sessions.id'))
@@ -252,7 +265,7 @@ class TradingSession(Base):
     
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
-    strategy_config = Column(JSONB)
+    strategy_config = Column(JSONType)
     
     # Environment
     symbol = Column(String(20), nullable=False)
@@ -287,7 +300,7 @@ class SystemEvent(Base):
     
     # Event details
     message = Column(Text, nullable=False)
-    details = Column(JSONB)  # Additional structured data
+    details = Column(JSONType)  # Additional structured data
     
     # Context
     component = Column(String(100))  # Which part of the system
@@ -328,14 +341,14 @@ class StrategyExecution(Base):
     confidence_score = Column(Numeric(18, 8))
     
     # Decision factors
-    indicators = Column(JSONB)  # Dict of indicator values
-    sentiment_data = Column(JSONB)  # Sentiment scores if used
-    ml_predictions = Column(JSONB)  # ML model outputs if used
+    indicators = Column(JSONType)  # Dict of indicator values
+    sentiment_data = Column(JSONType)  # Sentiment scores if used
+    ml_predictions = Column(JSONType)  # ML model outputs if used
     
     # Execution result
     action_taken = Column(String(50))  # 'opened_long', 'closed_position', 'no_action'
     position_size = Column(Numeric(18, 8))
-    reasons = Column(JSONB)  # List of reasons for the decision
+    reasons = Column(JSONType)  # List of reasons for the decision
     
     # Market context
     price = Column(Numeric(18, 8))
