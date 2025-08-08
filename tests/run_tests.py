@@ -175,7 +175,7 @@ def run_critical_tests():
     
     cmd = [
         sys.executable, '-m', 'pytest', 
-        '-m', 'live_trading or risk_management and not slow',
+        '-m', '(live_trading or risk_management) and not slow',
         '-v', '--tb=short',
         '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
     ]
@@ -340,7 +340,7 @@ def run_fast_tests():
     
     cmd = [
         sys.executable, '-m', 'pytest',
-        '-m', 'fast or mock_only and not slow',
+        '-m', '(fast or mock_only) and not slow',
         '-v', '--tb=short',
         '-n', get_worker_count(), '--dist=loadgroup'  # Dynamic worker count based on environment
     ]
