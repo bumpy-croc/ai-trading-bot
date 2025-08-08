@@ -26,6 +26,7 @@ from src.config.feature_flags import is_enabled
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.technical import TechnicalFeatureExtractor
 from typing import Optional
+from src.prediction import PredictionEngine, PredictionConfig
 
 
 class MlBasic(BaseStrategy):
@@ -237,7 +238,9 @@ class MlBasic(BaseStrategy):
             'model_path': self.model_path,
             'sequence_length': self.sequence_length,
             'stop_loss_pct': self.stop_loss_pct,
-            'take_profit_pct': self.take_profit_pct
+            'take_profit_pct': self.take_profit_pct,
+            'use_prediction_engine': self.use_prediction_engine,
+            'engine_model_name': self.model_name
         }
 
     def calculate_stop_loss(self, df, index, price, side) -> float:
