@@ -68,7 +68,7 @@ def _load_env_json(var_name: str) -> Dict[str, Any]:
     try:
         data = json.loads(raw)
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except json.JSONDecodeError:
         return {}
 
 
