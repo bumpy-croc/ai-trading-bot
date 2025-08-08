@@ -115,6 +115,23 @@ class MlBasic(BaseStrategy):
         
         # Generate predictions for each row that has enough history
         if use_prediction_engine:
+            # Lazy engine init
+            if self.prediction_engine is None:
+                try:
+                    config = PredictionConfig.from_config_manager()
+                    config.enable_sentiment = False
+                    config.enable_market_microstructure = False
+                    engine = PredictionEngine(config)
+                    # Force price-only extractor to match 5-feature input
+                    engine.feature_pipeline = FeaturePipeline(
+                        enable_technical=False,
+                        enable_sentiment=False,
+                        enable_market_microstructure=False,
+                        custom_extractors=[PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)]
+                    )
+                    self.prediction_engine = engine
+                except Exception:
+                    self.prediction_engine = None
             for i in range(self.sequence_length, len(df)):
                 # Prepare input features
                 feature_columns = [f'{feature}_normalized' for feature in price_features]
@@ -125,8 +142,14 @@ class MlBasic(BaseStrategy):
                 input_data = np.expand_dims(input_data, axis=0)  # Add batch dimension
                 
                 try:
-                    output = self.ort_session.run(None, {self.input_name: input_data})
-                    pred = output[0][0][0]  # Extract scalar prediction
+                    if self.prediction_engine is not None and self.model_name:
+                        # Use engine.predict on raw OHLCV window (normalized within engine)
+                        window_df = df[['open', 'high', 'low', 'close', 'volume']].iloc[i-self.sequence_length:i]
+                        result = self.prediction_engine.predict(window_df, model_name=self.model_name)
+                        pred = float(result.price)
+                    else:
+                        output = self.ort_session.run(None, {self.input_name: input_data})
+                        pred = output[0][0][0]  # Extract scalar prediction
                     
                     recent_close = df['close'].iloc[i-self.sequence_length:i].values
                     min_close = np.min(recent_close)
