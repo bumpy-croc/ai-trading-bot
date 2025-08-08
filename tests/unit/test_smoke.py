@@ -15,6 +15,7 @@ TODO: Consider lightening this test for CI environments by:
 
 from datetime import datetime
 
+import os
 import pytest
 from unittest.mock import Mock
 
@@ -39,6 +40,10 @@ def test_ml_basic_backtest_2024_smoke(btcusdt_1h_2023_2024):
     data_provider.get_historical_data.return_value = btcusdt_1h_2023_2024
     # For completeness, live data can return last candle
     data_provider.get_live_data.return_value = btcusdt_1h_2023_2024.tail(1)
+
+    # Stabilize engine path to match baseline
+    os.environ.setdefault('USE_PREDICTION_ENGINE', '1')
+    os.environ.setdefault('ENGINE_BATCH_INFERENCE', '0')
 
     strategy = MlBasic()
     backtester = Backtester(
@@ -77,6 +82,7 @@ def test_ml_basic_engine_parity_short_slice(btcusdt_1h_2023_2024):
 
     # Engine ON
     os.environ['USE_PREDICTION_ENGINE'] = '1'
+    os.environ['ENGINE_BATCH_INFERENCE'] = '0'
     s_on = MlBasic()
     df_on = s_on.calculate_indicators(df)
 
