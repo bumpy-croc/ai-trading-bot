@@ -23,6 +23,9 @@ import pandas as pd
 import onnxruntime as ort
 from src.strategies.base import BaseStrategy
 from src.config.feature_flags import is_enabled
+from src.prediction.features.pipeline import FeaturePipeline
+from src.prediction.features.technical import TechnicalFeatureExtractor
+
 
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants
@@ -45,26 +48,32 @@ class MlBasic(BaseStrategy):
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
 
+        # Initialize feature pipeline with a technical extractor matching our normalization window
+        technical_extractor = TechnicalFeatureExtractor(
+            sequence_length=self.sequence_length,
+            normalization_window=self.sequence_length
+        )
+        # Disable default technical extractor to avoid duplicate; use our custom one
+        self.feature_pipeline = FeaturePipeline(
+            enable_technical=False,
+            enable_sentiment=False,
+            enable_market_microstructure=False,
+            custom_extractors=[technical_extractor]
+        )
+
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         
-        # * Gate prediction engine usage via feature flag
+        # * Gate ML predictions via feature flag (use_prediction_engine)
         use_prediction_engine = is_enabled("use_prediction_engine", default=True)
 
-        # Normalize price features (same as training)
-        price_features = ['close', 'volume', 'high', 'low', 'open']
-        for feature in price_features:
-            if feature in df.columns:
-                # Simple min-max normalization within the sequence window
-                df[f'{feature}_normalized'] = df[feature].rolling(
-                    window=self.sequence_length, min_periods=1
-                ).apply(
-                    lambda x: (x[-1] - np.min(x)) / (np.max(x) - np.min(x)) if np.max(x) != np.min(x) else 0.5,
-                    raw=True
-                )
+        # Use the prediction feature pipeline to generate normalized price features identically
+        df = self.feature_pipeline.transform(df)
         
         # Prepare predictions column
         df['onnx_pred'] = np.nan
+        
+        price_features = ['close', 'volume', 'high', 'low', 'open']
         
         # Generate predictions for each row that has enough history
         if use_prediction_engine:
@@ -98,7 +107,7 @@ class MlBasic(BaseStrategy):
                     print(f"Prediction error at index {i}: {e}")
                     df.at[df.index[i], 'onnx_pred'] = df['close'].iloc[i-1]  # Fallback to previous close
         else:
-            # * If prediction engine is disabled, keep 'onnx_pred' as NaN to disable ML-driven entries/size
+            # * If predictions are disabled via feature flag, keep 'onnx_pred' NaN to skip ML entries
             pass
         
         return df
