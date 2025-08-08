@@ -130,7 +130,7 @@ class MlBasic(BaseStrategy):
         df = df.copy()
         
         # * Gate ML predictions via feature flag (use_prediction_engine)
-        use_prediction_engine = is_enabled("use_prediction_engine", default=True)
+        use_prediction_engine = is_enabled("use_prediction_engine", default=False)
 
         # Use the prediction feature pipeline to generate normalized price features identically
         df = self.feature_pipeline.transform(df)
