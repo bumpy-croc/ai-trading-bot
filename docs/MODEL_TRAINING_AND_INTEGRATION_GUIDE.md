@@ -106,8 +106,18 @@ This guide explains how to train or retrain models and integrate them with the p
 ### CI considerations
 - Keep engine disabled by default; enable in dedicated jobs to validate new models.
 - Enforce a minimum return threshold vs. baseline to avoid regressions.
+- Add a parity test comparing engine-off vs engine-on predictions within a tight tolerance over a short slice.
+- Keep smoke test threshold unchanged; add a performance budget test once batching is implemented.
 
 ### Roadmap for fuller integration
 - Migrate `MlBasic` to call `engine.predict(...)` directly once output scale/semantics are confirmed identical.
 - Introduce extractor profiles per strategy (price-only vs. technical) and bind models accordingly via config.
 - Add model versioning metadata and performance benchmarks for auto-selection.
+
+### Engine integration checklist
+- [ ] Enable via `USE_PREDICTION_ENGINE=1` and select model (`PREDICTION_ENGINE_MODEL_NAME` or filename stem)
+- [ ] Ensure extractor matches model features (count, order); for MlBasic use `PriceOnlyFeatureExtractor`
+- [ ] Confirm metadata (`sequence_length`, `feature_count`) present
+- [ ] Run parity test (engine-off vs engine-on predictions within tight tolerance)
+- [ ] Run smoke test (returns ≥ baseline)
+- [ ] Add performance budget test if needed (batching on)

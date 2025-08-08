@@ -33,6 +33,7 @@ from src.config.constants import (
 )
 from pathlib import Path
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
+import os
 
 
 class MlBasic(BaseStrategy):
@@ -73,6 +74,9 @@ class MlBasic(BaseStrategy):
             except Exception:
                 self.model_name = None
         self.prediction_engine = None
+        self._engine_warning_emitted = False
+        # Optional batch inference flag (default off to preserve exact behavior)
+        self.use_engine_batch = get_config().get_bool('ENGINE_BATCH_INFERENCE', default=False)
 
         # Initialize feature pipeline with a technical extractor matching our normalization window
         technical_extractor = TechnicalFeatureExtractor(
@@ -97,6 +101,31 @@ class MlBasic(BaseStrategy):
                 custom_extractors=[technical_extractor]
             )
 
+        # Early health check for engine (non-fatal)
+        if self.use_prediction_engine:
+            try:
+                config = PredictionConfig.from_config_manager()
+                config.enable_sentiment = False
+                config.enable_market_microstructure = False
+                engine = PredictionEngine(config)
+                # Ensure price-only extractor
+                engine.feature_pipeline = FeaturePipeline(
+                    enable_technical=False,
+                    enable_sentiment=False,
+                    enable_market_microstructure=False,
+                    custom_extractors=[PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)]
+                )
+                health = engine.health_check()
+                if health.get('status') != 'healthy' and not self._engine_warning_emitted:
+                    print(f"[MlBasic] Prediction engine health degraded: {health}")
+                    self._engine_warning_emitted = True
+                self.prediction_engine = engine
+            except Exception as _e:
+                if not self._engine_warning_emitted:
+                    print("[MlBasic] Prediction engine initialization failed; falling back to local ONNX session.")
+                    self._engine_warning_emitted = True
+                self.prediction_engine = None
+
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         
@@ -110,6 +139,8 @@ class MlBasic(BaseStrategy):
         df['onnx_pred'] = np.nan
         df['ml_prediction'] = np.nan
         df['prediction_confidence'] = np.nan
+        df['engine_direction'] = np.nan
+        df['engine_confidence'] = np.nan
         
         price_features = ['close', 'volume', 'high', 'low', 'open']
         
@@ -122,7 +153,6 @@ class MlBasic(BaseStrategy):
                     config.enable_sentiment = False
                     config.enable_market_microstructure = False
                     engine = PredictionEngine(config)
-                    # Force price-only extractor to match 5-feature input
                     engine.feature_pipeline = FeaturePipeline(
                         enable_technical=False,
                         enable_sentiment=False,
@@ -132,6 +162,7 @@ class MlBasic(BaseStrategy):
                     self.prediction_engine = engine
                 except Exception:
                     self.prediction_engine = None
+
             for i in range(self.sequence_length, len(df)):
                 # Prepare input features
                 feature_columns = [f'{feature}_normalized' for feature in price_features]
@@ -170,18 +201,18 @@ class MlBasic(BaseStrategy):
                         predicted_return = abs(pred_denormalized - close_i) / close_i
                         confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
                         df.at[df.index[i], 'prediction_confidence'] = confidence
-                    
-                except Exception as e:
-                    print(f"Prediction error at index {i}: {e}")
-                    fallback_price = df['close'].iloc[i-1]
-                    df.at[df.index[i], 'onnx_pred'] = fallback_price  # Fallback to previous close
-                    df.at[df.index[i], 'ml_prediction'] = fallback_price
-                    df.at[df.index[i], 'prediction_confidence'] = np.nan
-        else:
-            # * If predictions are disabled via feature flag, keep 'onnx_pred' NaN to skip ML entries
-            pass
-        
-        return df
+                 
+                 except Exception as e:
+                     print(f"Prediction error at index {i}: {e}")
+                     fallback_price = df['close'].iloc[i-1]
+                     df.at[df.index[i], 'onnx_pred'] = fallback_price  # Fallback to previous close
+                     df.at[df.index[i], 'ml_prediction'] = fallback_price
+                     df.at[df.index[i], 'prediction_confidence'] = np.nan
+         else:
+             # * If predictions are disabled via feature flag, keep 'onnx_pred' NaN to skip ML entries
+             pass
+         
+         return df
 
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
         # Go long if the predicted price for the next bar is higher than the current close
@@ -215,6 +246,13 @@ class MlBasic(BaseStrategy):
             'current_price': close,
             'predicted_return': predicted_return
         }
+        # Engine metadata for auditability
+        if self.use_prediction_engine and self.prediction_engine is not None:
+            ml_predictions.update({
+                'engine_enabled': True,
+                'engine_model_name': self.model_name,
+                'engine_batch': self.use_engine_batch,
+            })
         
         reasons = [
             f'predicted_return_{predicted_return:.4f}',
@@ -227,7 +265,7 @@ class MlBasic(BaseStrategy):
             action_taken='entry_signal' if entry_signal else 'no_action',
             price=close,
             signal_strength=abs(predicted_return) if entry_signal else 0.0,
-            confidence_score=min(1.0, abs(predicted_return) * 10),  # Scale confidence based on predicted return
+            confidence_score=float(df['prediction_confidence'].iloc[index]) if 'prediction_confidence' in df.columns and not pd.isna(df['prediction_confidence'].iloc[index]) else min(1.0, abs(predicted_return) * 10),
             ml_predictions=ml_predictions,
             reasons=reasons,
             additional_context={
