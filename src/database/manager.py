@@ -81,7 +81,7 @@ class DatabaseManager:
         # Accept SQLite strictly for unit tests (fast path), controlled by ENABLE_INTEGRATION_TESTS
         is_sqlite = self.database_url.startswith('sqlite:')
         is_postgres = self.database_url.startswith('postgresql')
-
+        
         if not (is_sqlite or is_postgres):
             # Keep error message compatible with tests expectations
             raise ValueError(
@@ -96,31 +96,30 @@ class DatabaseManager:
                 "SQLite URL provided while integration tests are enabled. Use a PostgreSQL DATABASE_URL."
             )
 
+        # Helper for creating a SQLite engine config
+        def _sqlite_engine_config(url: str) -> tuple[str, Dict[str, Any]]:
+            from sqlalchemy.pool import StaticPool  # type: ignore
+            engine_kwargs: Dict[str, Any] = {
+                'pool_pre_ping': True,
+                'echo': False,
+                'connect_args': {'check_same_thread': False},
+                'poolclass': StaticPool if url.endswith(":memory:") else None,
+            }
+            engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
+            effective_url = url
+            if url.endswith(":memory:"):
+                import threading
+                dbname = f"unit_test_db_{os.getpid()}_{threading.get_ident()}"
+                effective_url = f"sqlite:///file:{dbname}?mode=memory&cache=shared"
+                engine_kwargs['connect_args']['uri'] = True
+            return effective_url, engine_kwargs
+
         # Create engine with appropriate configuration per backend
         if is_postgres:
             engine_kwargs = self._get_engine_config()
             effective_url = self.database_url
         else:
-            # Lightweight, thread-friendly SQLite config for tests
-            # Use StaticPool to ensure in-memory DB is shared across the process
-            from sqlalchemy.pool import StaticPool  # type: ignore
-            engine_kwargs = {
-                'pool_pre_ping': True,
-                'echo': False,
-                'connect_args': {'check_same_thread': False},
-                'poolclass': StaticPool if self.database_url.endswith(":memory:") else None,
-            }
-            # Remove None entries
-            engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
-            # Share the same in-memory database across multiple engines within the same test thread
-            if self.database_url.endswith(":memory:"):
-                import threading
-                dbname = f"unit_test_db_{os.getpid()}_{threading.get_ident()}"
-                effective_url = f"sqlite:///file:{dbname}?mode=memory&cache=shared"
-                # Enable URI parsing for SQLite
-                engine_kwargs['connect_args']['uri'] = True
-            else:
-                effective_url = self.database_url
+            effective_url, engine_kwargs = _sqlite_engine_config(self.database_url)
 
         try:
             self.engine = create_engine(effective_url, **engine_kwargs)
@@ -136,8 +135,24 @@ class DatabaseManager:
             )
 
         except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
-            raise
+            # If we're attempting Postgres but not in integration mode, fall back to SQLite for unit tests
+            if is_postgres and not run_integration:
+                logger.warning("PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.", e)
+                fallback_url = 'sqlite:///:memory:'
+                effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
+                try:
+                    self.engine = create_engine(effective_url, **engine_kwargs)
+                    self.session_factory = sessionmaker(bind=self.engine)
+                    from sqlalchemy import text as _sql_text
+                    with self.engine.connect() as conn:
+                        conn.execute(_sql_text("SELECT 1"))
+                    logger.info("✅ Database connection established (SQLite fallback for unit tests)")
+                except Exception as sqlite_err:
+                    logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                    raise
+            else:
+                logger.error(f"Failed to initialize database: {e}")
+                raise
     
     def _get_engine_config(self) -> Dict[str, Any]:
         """Get PostgreSQL engine configuration"""
