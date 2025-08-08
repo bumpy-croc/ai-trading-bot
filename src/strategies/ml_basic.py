@@ -31,6 +31,7 @@ from src.config import get_config
 from src.config.constants import (
     DEFAULT_USE_PREDICTION_ENGINE
 )
+from pathlib import Path
 
 
 class MlBasic(BaseStrategy):
@@ -61,9 +62,15 @@ class MlBasic(BaseStrategy):
             if use_prediction_engine is not None
             else cfg.get_bool('USE_PREDICTION_ENGINE', default=DEFAULT_USE_PREDICTION_ENGINE)
         )
-        self.model_name = (
-            model_name if model_name is not None else cfg.get('PREDICTION_ENGINE_MODEL_NAME', default=None)
-        )
+        # Prefer explicit, then config, then fallback to stem of ONNX path to match prior behavior
+        self.model_name = model_name
+        if self.model_name is None:
+            self.model_name = cfg.get('PREDICTION_ENGINE_MODEL_NAME', default=None)
+        if self.model_name is None:
+            try:
+                self.model_name = Path(self.model_path).stem
+            except Exception:
+                self.model_name = None
         self.prediction_engine = None
 
         # Initialize feature pipeline with a technical extractor matching our normalization window
