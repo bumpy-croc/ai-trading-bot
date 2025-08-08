@@ -32,6 +32,7 @@ from src.config.constants import (
     DEFAULT_USE_PREDICTION_ENGINE
 )
 from pathlib import Path
+from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 
 
 class MlBasic(BaseStrategy):
@@ -79,12 +80,22 @@ class MlBasic(BaseStrategy):
             normalization_window=self.sequence_length
         )
         # Disable default technical extractor to avoid duplicate; use our custom one
-        self.feature_pipeline = FeaturePipeline(
-            enable_technical=False,
-            enable_sentiment=False,
-            enable_market_microstructure=False,
-            custom_extractors=[technical_extractor]
-        )
+        if self.use_prediction_engine:
+            # When engine is enabled, use a price-only extractor to guarantee 5 features in expected order
+            price_only = PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
+            self.feature_pipeline = FeaturePipeline(
+                enable_technical=False,
+                enable_sentiment=False,
+                enable_market_microstructure=False,
+                custom_extractors=[price_only]
+            )
+        else:
+            self.feature_pipeline = FeaturePipeline(
+                enable_technical=False,
+                enable_sentiment=False,
+                enable_market_microstructure=False,
+                custom_extractors=[technical_extractor]
+            )
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
