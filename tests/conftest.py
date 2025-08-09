@@ -568,5 +568,4 @@ def pytest_configure(config):
     # Add any runtime configuration changes here if needed.
     pass
 
-
 # Test categories for easy selection

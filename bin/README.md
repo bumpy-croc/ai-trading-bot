@@ -1,27 +1,22 @@
 # Railway Deployment Scripts
 
-This directory contains the Railway deployment scripts.
+Helper scripts for Railway setup and deployment.
 
 ## Scripts
+- `railway-setup.sh`: Installs CLI, configures project, deploys services
 
-### `railway-setup.sh`
-- Sets up Railway deployment environment
-- Configures Railway CLI and project settings
-- Deploys the application to Railway
+Usage:
+```bash
+./bin/railway-setup.sh
+```
 
-**Usage**: `./railway-setup.sh`
+Features:
+- Error handling and timestamped logging
+- CLI installation and project linking
+- Deployment and health verification
+- Detailed diagnostics on failure
 
-## Features
-
-The script includes:
-- ✅ Comprehensive error handling with line-by-line error reporting
-- ✅ Timestamped logging for better debugging
-- ✅ Railway CLI installation and configuration
-- ✅ Project deployment and health verification
-- ✅ Detailed diagnostics on failure
-
-## Security
-
-- Scripts are downloaded directly from GitHub using the specific commit SHA
-- All operations run with appropriate user permissions
-- Comprehensive logging for audit trails 
+Security:
+- Scripts download pinned commits
+- Non-root execution where possible
+- Logged operations for audit 

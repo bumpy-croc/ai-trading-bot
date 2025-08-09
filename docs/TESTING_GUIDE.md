@@ -76,8 +76,8 @@ Tests are categorized using pytest markers:
 pip install pytest pytest-cov pytest-mock pytest-asyncio
 
 # Install project dependencies
-pip install -r requirements.txt
-```
+pip install -r requirements.txt  # or requirements-server.txt for CI
+  ```
 
 ### Basic Test Execution
 
