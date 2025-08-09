@@ -44,7 +44,10 @@ jobs:
           --timeout=300 \
           -m "not integration" \
           --splits 4 \
-          --group ${{ matrix.split-index }}
+          --group ${{ matrix.split-index }} \
+          --cov=src \
+          --cov-report=term-missing \
+          --cov-report=xml
 
   # Optional: Add a summary job that runs after all splits complete
   test-summary:

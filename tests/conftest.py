@@ -17,12 +17,6 @@ import sys
 import subprocess
 import time
 
-# Add project root and src directory to PYTHONPATH for test imports
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_SRC_DIR = _PROJECT_ROOT / "src"
-for _p in (str(_PROJECT_ROOT), str(_SRC_DIR)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 # Import core components for fixture creation
 from src.data_providers.data_provider import DataProvider
