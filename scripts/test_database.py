@@ -16,10 +16,8 @@ from src.database.manager import DatabaseManager
 from src.database.models import TradeSource, PositionSide
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from utils.logging_config import configure_logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 

@@ -49,14 +49,8 @@ logs_dir = project_root / "logs"
 logs_dir.mkdir(exist_ok=True)
 log_file_path = logs_dir / f"live_trading_{datetime.now().strftime('%Y%m%d')}.log"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(str(log_file_path))
-    ]
-)
+from utils.logging_config import configure_logging
+configure_logging()
 logger = logging.getLogger('live_trading')
 
 def load_strategy(strategy_name: str):

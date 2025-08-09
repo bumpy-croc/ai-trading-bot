@@ -34,8 +34,7 @@ from performance.metrics import sharpe as perf_sharpe
 from performance.metrics import max_drawdown as perf_max_drawdown
 from src.utils.symbol_factory import SymbolFactory
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging via centralized config (set by entry points)
 logger = logging.getLogger(__name__)
 
 # after imports define typedicts

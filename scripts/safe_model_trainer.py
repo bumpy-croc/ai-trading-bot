@@ -28,7 +28,8 @@ sys.path.append(str(project_root))
 import subprocess
 from live.strategy_manager import StrategyManager
 
-logging.basicConfig(level=logging.INFO)
+from utils.logging_config import configure_logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 class SafeModelTrainer:
