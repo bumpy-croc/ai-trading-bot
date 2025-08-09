@@ -9,8 +9,10 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
-# Set Python path for absolute imports from src
-ENV PYTHONPATH=/app/src
+# Set Python path and runtime envs
+ENV PYTHONPATH=/app/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 # Copy production requirements and install dependencies
 COPY requirements-server.txt ./requirements-server.txt
@@ -24,6 +26,10 @@ COPY . .
 
 # Create necessary directories
 # Removed: data directory moved to src/data, logs and ml already exist
+
+# Create non-root user and adjust ownership
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
 
 # Make scripts executable
 RUN chmod +x scripts/health_check.py scripts/run_live_trading_with_health.py scripts/start_dashboard.py
