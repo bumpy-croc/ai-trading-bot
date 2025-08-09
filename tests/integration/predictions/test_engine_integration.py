@@ -246,8 +246,8 @@ class TestPredictionEngineIntegration:
                 
         except Exception as e:
             pytest.skip(f"Cannot test cache functionality: {e}")
-
-
+ 
+ 
 class TestFactoryFunctions:
     """Test factory functions and convenience methods"""
     
@@ -288,8 +288,8 @@ class TestFactoryFunctions:
             
         except Exception as e:
             pytest.skip(f"Cannot test predict convenience function: {e}")
-
-
+ 
+ 
 class TestConfigurationIntegration:
     """Test configuration integration"""
     
@@ -321,8 +321,8 @@ class TestConfigurationIntegration:
             
         except Exception as e:
             pytest.skip(f"Cannot test config manager integration: {e}")
-
-
+ 
+ 
 class TestErrorHandlingIntegration:
     """Test error handling with real components"""
     

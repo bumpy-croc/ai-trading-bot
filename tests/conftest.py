@@ -571,12 +571,3 @@ def pytest_configure(config):
     # Marker registration is now handled declaratively in pytest.ini to avoid duplication.
     # Add any runtime configuration changes here if needed.
     pass
-
-
-# Test categories for easy selection
-pytest_plugins = [
-    "tests.test_live_trading",
-    "tests.test_risk_management", 
-    "tests.test_strategies",
-    "tests.test_data_providers"
-]

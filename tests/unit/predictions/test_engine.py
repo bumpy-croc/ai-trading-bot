@@ -563,10 +563,6 @@ class TestPredictionEngineHealthCheck:
         assert health['components']['model_registry']['status'] == 'healthy'
         assert health['components']['configuration']['status'] == 'healthy'
         assert "Feature pipeline error" in health['components']['feature_pipeline']['error']
-
-
-class TestPredictionEnginePrivateMethods:
-    """Test PredictionEngine private methods"""
     
     @patch('src.prediction.engine.PredictionModelRegistry')
     @patch('src.prediction.engine.FeaturePipeline')
