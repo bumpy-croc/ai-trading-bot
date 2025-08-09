@@ -20,8 +20,8 @@ from typing import Dict, Any
 from data_providers.senticrypt_provider import SentiCryptProvider
 from strategies.ml_with_sentiment import MlWithSentiment
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from utils.logging_config import configure_logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 class LiveSentimentDemo:

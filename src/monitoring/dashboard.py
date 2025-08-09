@@ -34,8 +34,7 @@ from performance.metrics import sharpe as perf_sharpe
 from performance.metrics import max_drawdown as perf_max_drawdown
 from src.utils.symbol_factory import SymbolFactory
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging via centralized config (set by entry points)
 logger = logging.getLogger(__name__)
 
 # after imports define typedicts
@@ -81,7 +80,8 @@ class MonitoringDashboard:
     
     def __init__(self, db_url: Optional[str] = None, update_interval: int = 3600):
         self.app = Flask(__name__, template_folder='templates', static_folder='static')
-        self.app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
+        from utils.secrets import get_secret_key
+        self.app.config['SECRET_KEY'] = get_secret_key()
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
         
         # Initialize database manager – avoid passing None to ease mocking in unit tests

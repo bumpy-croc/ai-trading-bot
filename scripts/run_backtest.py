@@ -27,11 +27,8 @@ from strategies import MlBasic  # Direct import after removing deprecated strate
 from strategies.ml_adaptive import MlAdaptive
 from src.utils.symbol_factory import SymbolFactory
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from utils.logging_config import configure_logging
+configure_logging()
 logger = logging.getLogger('backtest')
 
 def load_strategy(strategy_name: str):

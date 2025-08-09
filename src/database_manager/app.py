@@ -75,7 +75,8 @@ def create_app() -> Flask:
     except sqlalchemy.exc.OperationalError as exc:  # pragma: no cover – we want to surface the error in logs
         logger.exception("❌ Failed to initialise DatabaseManager due to a database connection error: %s", exc)
         app = Flask(__name__)
-        app.config["SECRET_KEY"] = secret_key
+        from utils.secrets import get_secret_key
+        app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
 
         @app.route("/db_error")
         def db_error() -> tuple[Dict[str, str], int]:
@@ -93,7 +94,8 @@ def create_app() -> Flask:
 
     # Create Flask app
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = secret_key
+    from utils.secrets import get_secret_key
+    app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
 
     # --- Flask-Login setup for admin authentication ---
     login_manager = LoginManager()

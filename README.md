@@ -170,6 +170,15 @@ Sentiment data (SentiCrypt) and ML training are supported. Pretrained models liv
 
 ---
 
+## Security
+- Do not commit secrets. Use `.env` (see `.env.example`) and environment variables.
+- MCP: use `mcp.example.json` and keep your local `mcp.json` untracked.
+
+## Logging
+- Centralized logging via `utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
+
+---
+
 ## Disclaimer
 
 This project is for educational purposes only. Trading cryptocurrencies involves significant risk. Use paper trading, test thoroughly, and never risk funds you cannot afford to lose. 
