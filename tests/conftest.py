@@ -41,79 +41,75 @@ except ImportError as e:
     print(f"Warning: Could not import account sync dependencies: {e}")
 
 # ---------- Database setup for tests ----------
-# Spin up a temporary PostgreSQL instance via Testcontainers so that modules that
-# require a valid DATABASE_URL can import successfully.  This happens at import
-# time, so we do it at module import as well.
-#
-# To prevent spawning heavyweight containers during the normal (unit-only) test
-# run, we guard this section behind the environment flag
-# `ENABLE_INTEGRATION_TESTS=1`.  The CI pipeline sets this flag only in the
-# nightly integration job.  When the flag is NOT set, we fall back to an
-# in-memory SQLite database which satisfies imports but is extremely fast.
+# Avoid import-time heavy setup. Use a session-scoped autouse fixture to configure
+# an in-memory DB for unit tests, or start a Postgres container / use external DB
+# for integration runs when ENABLE_INTEGRATION_TESTS=1.
 
-_RUN_INTEGRATION = os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
+def _is_integration_enabled() -> bool:
+    return os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
 
-# Track database setup time
-_DB_SETUP_START_TIME = None
-_DB_SETUP_END_TIME = None
+@pytest.fixture(scope="session", autouse=True)
+def maybe_setup_database():
+    """Configure test database per run mode.
 
-_POSTGRES_CONTAINER = None
-if _RUN_INTEGRATION:
-    try:
-        from testcontainers.postgres import PostgresContainer  # type: ignore
-        _DB_SETUP_START_TIME = time.time()
-        print(f"\n[Database Setup] Starting PostgreSQL container setup at {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
-        _POSTGRES_CONTAINER = PostgresContainer("postgres:15-alpine")
-        _POSTGRES_CONTAINER.start()
-        os.environ["DATABASE_URL"] = _POSTGRES_CONTAINER.get_connection_url()
-        _DB_SETUP_END_TIME = time.time()
-        setup_duration = _DB_SETUP_END_TIME - _DB_SETUP_START_TIME
-        print(f"[Database Setup] ✅ Container ready in {setup_duration:.2f} seconds")
-    except Exception as _e:  # pragma: no cover -- fallback if Docker not available
-        # Provide a dummy URL so the code can still import, but mark that Postgres is
-        # unavailable.  Tests that actually require DB connectivity should handle the
-        # failure or be skipped.
-        os.environ.setdefault(
-            "DATABASE_URL",
-            "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
-        )
-        _POSTGRES_CONTAINER = None
-        print(f"[Database Setup] ⚠️  Failed to start container: {_e}")
-else:
-    # Unit-test run ⇒ use super-light SQLite in-memory
-    os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
-    print("[Database Setup] 🚀 Using in-memory SQLite for unit tests (no container needed)")
-
-
-def pytest_sessionstart(session):
-    """Optional database reset for integration tests."""
-    if not _RUN_INTEGRATION:
-        # No heavy DB work for unit tests
+    - Unit/default: ensure lightweight in-memory SQLite via DATABASE_URL default.
+    - Integration: if DATABASE_URL is already set (e.g., CI Postgres service), use it;
+      otherwise start a Postgres testcontainer, export its URL, and stop it at teardown.
+      Also run schema reset before tests.
+    """
+    if not _is_integration_enabled():
+        os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
         return
-    print("\n[pytest] Running local setup script to reset database (integration run)...")
+
+    started_container = None
+    if not os.getenv("DATABASE_URL"):
+        try:
+            from testcontainers.postgres import PostgresContainer  # type: ignore
+            print(f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}")
+            container = PostgresContainer("postgres:15-alpine")
+            container.start()
+            os.environ["DATABASE_URL"] = container.get_connection_url()
+            started_container = container
+            print("[Database Setup] ✅ Postgres container ready")
+        except Exception as exc:  # pragma: no cover
+            pytest.exit(f"Failed to start Postgres container for integration tests: {exc}")
+
+    # Reset DB schema/content before tests
+    print("\n[pytest] Running database reset before integration tests...")
     db_reset_start = time.time()
     result = subprocess.run([
         sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"
     ], capture_output=True, text=True)
-    print(result.stdout)
+    if result.stdout:
+        print(result.stdout)
     if result.returncode != 0:
-        print(result.stderr)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
         pytest.exit("Database setup/reset failed before tests.")
     else:
-        db_reset_duration = time.time() - db_reset_start
-        print(f"[pytest] ✅ Database reset completed in {db_reset_duration:.2f} seconds")
+        print(f"[pytest] ✅ Database reset completed in {time.time() - db_reset_start:.2f} seconds")
+
+    try:
+        yield
+    finally:
+        if started_container is not None:
+            try:
+                started_container.stop()
+            except Exception:
+                pass
 
 
-def pytest_sessionfinish(session, exitstatus):  # noqa: D401
-    """Cleanup the Postgres container after the entire test session."""
-    if not _RUN_INTEGRATION:
+def pytest_collection_modifyitems(config, items):  # noqa: D401
+    """Skip integration tests unless explicitly enabled via env.
+
+    This prevents accidental DB/network usage on local/unit runs.
+    """
+    if _is_integration_enabled():
         return
-    global _POSTGRES_CONTAINER
-    if _POSTGRES_CONTAINER is not None:
-        try:
-            _POSTGRES_CONTAINER.stop()
-        except Exception:
-            pass  # We tried, nothing else to do
+    skip_integration = pytest.mark.skip(reason="integration tests disabled; set ENABLE_INTEGRATION_TESTS=1")
+    for item in items:
+        if any(marker.name == "integration" for marker in item.iter_markers()):
+            item.add_marker(skip_integration)
 
 
 @pytest.fixture
@@ -574,9 +570,3 @@ def pytest_configure(config):
 
 
 # Test categories for easy selection
-pytest_plugins = [
-    "tests.test_live_trading",
-    "tests.test_risk_management", 
-    "tests.test_strategies",
-    "tests.test_data_providers"
-]
