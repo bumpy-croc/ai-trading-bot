@@ -19,16 +19,21 @@ from src.utils.symbol_factory import SymbolFactory
 from performance.metrics import (
     Side,
     cash_pnl,
-    total_return as perf_total_return,
-    cagr as perf_cagr,
-    sharpe as perf_sharpe,
-    max_drawdown as perf_max_drawdown,
 )
+
+# New modular utilities and models
+from backtesting.utils import (
+    extract_indicators as util_extract_indicators,
+    extract_sentiment_data as util_extract_sentiment,
+    extract_ml_predictions as util_extract_ml,
+    compute_performance_metrics,
+)
+from backtesting.models import Trade as CompletedTrade
 
 logger = logging.getLogger(__name__)
 
-class Trade:
-    """Represents a single trade"""
+class ActiveTrade:
+    """Represents an active trade during backtest iteration"""
     def __init__(
         self,
         symbol: str,
@@ -43,25 +48,12 @@ class Trade:
         self.side = side
         self.entry_price = entry_price
         self.entry_time = entry_time
-        self.size = min(size, 1.0)  # Limit position size to 100% of balance
+        self.size = min(size, 1.0)  # Limit position size to 100% of balance (fraction)
         self.stop_loss = stop_loss
         self.take_profit = take_profit
         self.exit_price: Optional[float] = None
         self.exit_time: Optional[datetime] = None
-        self.pnl: Optional[float] = None
         self.exit_reason: Optional[str] = None
-        
-    def close(self, price: float, time: datetime, reason: str):
-        """Close the trade and calculate PnL"""
-        self.exit_price = price
-        self.exit_time = time
-        self.exit_reason = reason
-        
-        # Calculate percentage return
-        if self.side == 'long':
-            self.pnl = ((self.exit_price - self.entry_price) / self.entry_price) * self.size
-        else:  # short
-            self.pnl = ((self.entry_price - self.exit_price) / self.entry_price) * self.size
 
 class Backtester:
     """Backtesting engine for trading strategies"""
@@ -83,8 +75,11 @@ class Backtester:
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.peak_balance = initial_balance
-        self.trades: List[Trade] = []
-        self.current_trade: Optional[Trade] = None
+        self.trades: List[CompletedTrade] = []
+        self.current_trade: Optional[ActiveTrade] = None
+        
+        # Risk manager (parity with live engine)
+        self.risk_manager = RiskManager(risk_parameters)
         
         # Early stop tracking
         self.early_stop_reason: Optional[str] = None
@@ -186,22 +181,9 @@ class Backtester:
                     # If conversion fails, create a dummy datetime index
                     df.index = pd.date_range(start=start, periods=len(df), freq='h')
                 
-            # Fetch sentiment data if provider is available
+            # Fetch/merge sentiment data if provider is available
             if self.sentiment_provider:
-                sentiment_df = self.sentiment_provider.get_historical_sentiment(
-                    symbol, start, end
-                )
-                if not sentiment_df.empty:
-                    # Aggregate sentiment data to match price timeframe
-                    sentiment_df = self.sentiment_provider.aggregate_sentiment(
-                        sentiment_df, window=timeframe
-                    )
-                    # Merge sentiment data with price data
-                    df = df.join(sentiment_df, how='left')
-                    # Forward fill sentiment scores
-                    df['sentiment_score'] = df['sentiment_score'].ffill()
-                    # Fill any remaining NaN values with 0
-                    df['sentiment_score'] = df['sentiment_score'].fillna(0)
+                df = self._merge_sentiment_data(df, symbol, timeframe, start, end)
             
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
@@ -221,20 +203,22 @@ class Backtester:
             max_drawdown_running = 0  # interim tracker (still used for intra-loop stopping)
 
             # Track balance over time to enable robust performance stats
-            balance_history = []  # (timestamp, balance)
+            balance_history: List[tuple] = []  # (timestamp, balance)
 
             # Helper dict to track first/last balance of each calendar year
-            yearly_balance = {}
+            yearly_balance: Dict[int, Dict[str, float]] = {}
             
             # Iterate through candles
             for i in range(len(df)):
                 candle = df.iloc[i]
+                current_time = candle.name
+                current_price = float(candle['close'])
                 
                 # Record current balance for time-series analytics
-                balance_history.append((candle.name, self.balance))
+                balance_history.append((current_time, self.balance))
 
                 # Track yearly start/end balances for return calc
-                yr = candle.name.year
+                yr = current_time.year
                 if yr not in yearly_balance:
                     yearly_balance[yr] = {
                         'start': self.balance,
@@ -246,7 +230,7 @@ class Backtester:
                 # Update max drawdown
                 if self.balance > self.peak_balance:
                     self.peak_balance = self.balance
-                current_drawdown = (self.peak_balance - self.balance) / self.peak_balance
+                current_drawdown = (self.peak_balance - self.balance) / self.peak_balance if self.peak_balance > 0 else 0.0
                 max_drawdown_running = max(max_drawdown_running, current_drawdown)
                 
                 # Check for exit if in position
@@ -257,26 +241,30 @@ class Backtester:
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
                         sentiment_data = self._extract_sentiment_data(df, i)
+                        ml_predictions = self._extract_ml_predictions(df, i)
                         
-                        # Calculate current P&L for context
-                        current_pnl = (candle['close'] - self.current_trade.entry_price) / self.current_trade.entry_price
+                        # Calculate current P&L for context (percentage vs entry)
+                        current_pnl_pct = ((current_price - self.current_trade.entry_price) / self.current_trade.entry_price)
+                        if self.current_trade.side != 'long':
+                            current_pnl_pct = -current_pnl_pct
                         
                         self.db_manager.log_strategy_execution(
                             strategy_name=self.strategy.__class__.__name__,
                             symbol=symbol,
                             signal_type='exit',
                             action_taken='closed_position' if exit_signal else 'hold_position',
-                            price=candle['close'],
+                            price=current_price,
                             timeframe=timeframe,
                             signal_strength=1.0 if exit_signal else 0.0,
                             confidence_score=indicators.get('prediction_confidence', 0.5),
                             indicators=indicators,
                             sentiment_data=sentiment_data if sentiment_data else None,
+                            ml_predictions=ml_predictions if ml_predictions else None,
                             position_size=self.current_trade.size,
                             reasons=[
                                 'exit_signal' if exit_signal else 'holding_position',
-                                f'current_pnl_{current_pnl:.4f}',
-                                f'position_age_{(candle.name - self.current_trade.entry_time).total_seconds():.0f}s',
+                                f'current_pnl_{current_pnl_pct:.4f}',
+                                f'position_age_{(current_time - self.current_trade.entry_time).total_seconds():.0f}s',
                                 f'entry_price_{self.current_trade.entry_price:.2f}'
                             ],
                             volume=indicators.get('volume'),
@@ -286,43 +274,45 @@ class Backtester:
                     
                     if exit_signal:
                         # Close the trade
-                        self.current_trade.close(candle['close'], candle.name, "Strategy exit")
+                        exit_reason = "Strategy exit"
+                        exit_price = current_price
+                        exit_time = current_time
                         
-                        # Update balance (convert percentage PnL to absolute currency)
-                        trade_pnl_percent: float = float(self.current_trade.pnl or 0.0)  # e.g. 0.02 for +2%
-                        # Convert to absolute profit/loss based on current balance BEFORE applying PnL
-                        trade_pnl: float = cash_pnl(trade_pnl_percent, self.balance)
+                        # Calculate PnL percent (sized) and then convert to cash
+                        if self.current_trade.side == 'long':
+                            trade_pnl_pct = ((exit_price - self.current_trade.entry_price) / self.current_trade.entry_price) * self.current_trade.size
+                        else:
+                            trade_pnl_pct = ((self.current_trade.entry_price - exit_price) / self.current_trade.entry_price) * self.current_trade.size
+                        trade_pnl_cash = cash_pnl(trade_pnl_pct, self.balance)
 
-                        self.balance += trade_pnl
+                        # Update balance
+                        self.balance += trade_pnl_cash
 
                         # Update metrics
                         total_trades += 1
-                        if trade_pnl > 0:
+                        if trade_pnl_cash > 0:
                             winning_trades += 1
                         
                         # Log trade
-                        logger.info(f"Exited position at {candle['close']}, Balance: {self.balance:.2f}")
+                        logger.info(f"Exited position at {current_price}, Balance: {self.balance:.2f}")
                         
                         # After updating self.balance, update yearly_balance for the exit year
-                        exit_year = candle.name.year
+                        exit_year = exit_time.year
                         if exit_year in yearly_balance:
                             yearly_balance[exit_year]['end'] = self.balance
                         
                         # Log to database if enabled
-                        if (self.log_to_database and self.db_manager and
-                                self.current_trade.exit_price is not None and
-                                self.current_trade.exit_time is not None and
-                                self.current_trade.exit_reason is not None):
+                        if (self.log_to_database and self.db_manager):
                             self.db_manager.log_trade(
                                 symbol=symbol,
-                                side="long",  # Backtester only does long trades currently
+                                side="long",  # Backtester currently tracks long
                                 entry_price=self.current_trade.entry_price,
-                                exit_price=self.current_trade.exit_price,
+                                exit_price=exit_price,
                                 size=self.current_trade.size,
                                 entry_time=self.current_trade.entry_time,
-                                exit_time=self.current_trade.exit_time,
-                                pnl=trade_pnl,
-                                exit_reason=self.current_trade.exit_reason,
+                                exit_time=exit_time,
+                                pnl=trade_pnl_cash,
+                                exit_reason=exit_reason,
                                 strategy_name=self.strategy.__class__.__name__,
                                 source=TradeSource.BACKTEST,
                                 stop_loss=self.current_trade.stop_loss,
@@ -330,43 +320,60 @@ class Backtester:
                                 session_id=self.trading_session_id
                             )
                         
-                        # Store trade
-                        self.trades.append(self.current_trade)
+                        # Store completed trade
+                        self.trades.append(
+                            CompletedTrade(
+                                symbol=symbol,
+                                side=self.current_trade.side,
+                                entry_price=self.current_trade.entry_price,
+                                exit_price=exit_price,
+                                entry_time=self.current_trade.entry_time,
+                                exit_time=exit_time,
+                                size=self.current_trade.size,
+                                pnl=trade_pnl_cash,
+                                exit_reason=exit_reason,
+                                stop_loss=self.current_trade.stop_loss,
+                                take_profit=self.current_trade.take_profit,
+                            )
+                        )
                         self.current_trade = None
                         
-                        # Check if maximum drawdown exceeded
-                        if current_drawdown > 0.5:  # 50% max drawdown
+                        # Check if maximum drawdown exceeded (use risk params if present)
+                        max_dd_threshold = getattr(self.risk_manager.params, 'max_drawdown', 0.5)
+                        if current_drawdown > max_dd_threshold:
                             self.early_stop_reason = f"Maximum drawdown exceeded ({current_drawdown:.1%})"
-                            self.early_stop_date = candle.name
+                            self.early_stop_date = current_time
                             self.early_stop_candle_index = i
                             logger.warning(f"Maximum drawdown exceeded ({current_drawdown:.1%}). Stopping backtest.")
                             break
                 
                 # Check for entry if not in position
                 elif self.strategy.check_entry_conditions(df, i):
-                    # Calculate position size
-                    size = self.strategy.calculate_position_size(df, i, self.balance)
+                    # Calculate position size (as fraction of balance)
+                    size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
                     
                     # Log entry decision
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
                         sentiment_data = self._extract_sentiment_data(df, i)
+                        ml_predictions = self._extract_ml_predictions(df, i)
                         
                         self.db_manager.log_strategy_execution(
                             strategy_name=self.strategy.__class__.__name__,
                             symbol=symbol,
                             signal_type='entry',
-                            action_taken='opened_long' if size > 0 else 'no_action',
-                            price=candle['close'],
+                            action_taken='opened_long' if size_fraction > 0 else 'no_action',
+                            price=current_price,
                             timeframe=timeframe,
-                            signal_strength=1.0 if size > 0 else 0.0,
+                            signal_strength=1.0 if size_fraction > 0 else 0.0,
                             confidence_score=indicators.get('prediction_confidence', 0.5),
                             indicators=indicators,
                             sentiment_data=sentiment_data if sentiment_data else None,
-                            position_size=size if size > 0 else None,
+                            ml_predictions=ml_predictions if ml_predictions else None,
+                            position_size=size_fraction if size_fraction > 0 else None,
                             reasons=[
                                 'entry_conditions_met',
-                                f'position_size_{size:.4f}' if size > 0 else 'no_position_size',
+                                f'position_size_{size_fraction:.4f}' if size_fraction > 0 else 'no_position_size',
                                 f'balance_{self.balance:.2f}'
                             ],
                             volume=indicators.get('volume'),
@@ -374,19 +381,18 @@ class Backtester:
                             session_id=self.trading_session_id
                         )
                     
-                    if size > 0:
+                    if size_fraction > 0:
                         # Enter new trade
-                        # Assuming df and index are available in this context
-                        stop_loss = self.strategy.calculate_stop_loss(df, len(df) - 1, candle['close'], 'long')
-                        self.current_trade = Trade(
+                        stop_loss = self.strategy.calculate_stop_loss(df, i, current_price, 'long')
+                        self.current_trade = ActiveTrade(
                             symbol=symbol,
                             side='long',
-                            entry_price=candle['close'],
-                            entry_time=candle.name,
-                            size=size,
+                            entry_price=current_price,
+                            entry_time=current_time,
+                            size=size_fraction,
                             stop_loss=stop_loss
                         )
-                        logger.info(f"Entered long position at {candle['close']}")
+                        logger.info(f"Entered long position at {current_price}")
                 
                 # Log no-action cases (when no position and no entry signal)
                 else:
@@ -394,18 +400,20 @@ class Backtester:
                     if i % 10 == 0 and self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
                         sentiment_data = self._extract_sentiment_data(df, i)
+                        ml_predictions = self._extract_ml_predictions(df, i)
                         
                         self.db_manager.log_strategy_execution(
                             strategy_name=self.strategy.__class__.__name__,
                             symbol=symbol,
                             signal_type='entry',
                             action_taken='no_action',
-                            price=candle['close'],
+                            price=current_price,
                             timeframe=timeframe,
                             signal_strength=0.0,
                             confidence_score=indicators.get('prediction_confidence', 0.5),
                             indicators=indicators,
                             sentiment_data=sentiment_data if sentiment_data else None,
+                            ml_predictions=ml_predictions if ml_predictions else None,
                             reasons=[
                                 'no_entry_conditions',
                                 f'balance_{self.balance:.2f}',
@@ -418,34 +426,21 @@ class Backtester:
             
             # Calculate final metrics
             win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-            total_return = perf_total_return(self.initial_balance, self.balance)
-            
-            # ----------------------------------------------
-            # Sharpe ratio ‑ use *daily* returns of balance
-            # ----------------------------------------------
-            if balance_history:
-                bh_df = pd.DataFrame(balance_history, columns=['timestamp', 'balance']).set_index('timestamp')
-                # Resample to 1-day frequency for stability
-                daily_balance = bh_df['balance'].resample('1D').last().ffill()
-                daily_returns = daily_balance.pct_change().dropna()
-                if not daily_returns.empty and daily_returns.std() != 0:
-                    sharpe_ratio = perf_sharpe(daily_balance)
-                else:
-                    sharpe_ratio = 0
-                # Re-calculate max drawdown from full equity curve
-                max_drawdown_pct = perf_max_drawdown(daily_balance)
-            else:
-                sharpe_ratio = 0
-                max_drawdown_pct = 0
-            
-            # Calculate annualized return
-            days = (end - start).days if end else (datetime.now() - start).days
-            annualized_return = perf_cagr(self.initial_balance, self.balance, days)
 
+            # Build balance history DataFrame for metrics
+            bh_df = pd.DataFrame(balance_history, columns=['timestamp', 'balance']).set_index('timestamp') if balance_history else pd.DataFrame()
+            total_return, max_drawdown_pct, sharpe_ratio, annualized_return = compute_performance_metrics(
+                self.initial_balance,
+                self.balance,
+                pd.Timestamp(start),
+                pd.Timestamp(end) if end else None,
+                bh_df
+            )
+            
             # ---------------------------------------------
             # Yearly returns based on account balance
             # ---------------------------------------------
-            yearly_returns = {}
+            yearly_returns: Dict[str, float] = {}
             for yr, bal in yearly_balance.items():
                 start_bal = bal['start']
                 end_bal = bal['end']
@@ -478,57 +473,34 @@ class Backtester:
             logger.error(f"Error running backtest: {str(e)}")
             raise 
     
+    # --------------------
+    # Modularized helpers
+    # --------------------
+    def _merge_sentiment_data(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: Optional[datetime]
+    ) -> pd.DataFrame:
+        if not self.sentiment_provider:
+            return df
+        sentiment_df = self.sentiment_provider.get_historical_sentiment(symbol, start, end)
+        if not sentiment_df.empty:
+            sentiment_df = self.sentiment_provider.aggregate_sentiment(sentiment_df, window=timeframe)
+            df = df.join(sentiment_df, how='left')
+            # Forward fill sentiment scores and freshness flag for parity
+            if 'sentiment_score' in df.columns:
+                df['sentiment_score'] = df['sentiment_score'].ffill()
+                df['sentiment_score'] = df['sentiment_score'].fillna(0)
+        return df
+
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> Dict:
-        """Extract indicator values from dataframe for logging"""
-        if index >= len(df):
-            return {}
-            
-        indicators = {}
-        current_row = df.iloc[index]
-        
-        # Common indicators to extract
-        indicator_columns = [
-            'rsi', 'macd', 'macd_signal', 'macd_hist', 'atr', 'volatility',
-            'trend_ma', 'short_ma', 'long_ma', 'volume_ma', 'trend_strength',
-            'regime', 'body_size', 'upper_wick', 'lower_wick', 'onnx_pred',
-            'ml_prediction', 'prediction_confidence'
-        ]
-        
-        for col in indicator_columns:
-            if col in df.columns and not pd.isna(current_row[col]):
-                # Only convert to float if the value is numeric (int or float)
-                if col == 'regime':
-                    indicators[col] = current_row[col]  # Keep as string
-                else:
-                    try:
-                        indicators[col] = float(current_row[col])
-                    except (ValueError, TypeError):
-                        # Skip non-numeric values
-                        continue
-        
-        # Add basic OHLCV data
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            if col in df.columns:
-                indicators[col] = float(current_row[col])
-        
-        return indicators
-    
+        return util_extract_indicators(df, index)
+
     def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> Dict:
-        """Extract sentiment data from dataframe for logging"""
-        if index >= len(df):
-            return {}
-            
-        sentiment_data = {}
-        current_row = df.iloc[index]
-        
-        # Sentiment columns to extract
-        sentiment_columns = [
-            'sentiment_score', 'sentiment_primary', 'sentiment_momentum', 
-            'sentiment_volatility', 'sentiment_confidence'
-        ]
-        
-        for col in sentiment_columns:
-            if col in df.columns and not pd.isna(current_row[col]):
-                sentiment_data[col] = float(current_row[col])
-        
-        return sentiment_data   
+        return util_extract_sentiment(df, index)
+
+    def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> Dict:
+        return util_extract_ml(df, index)   
