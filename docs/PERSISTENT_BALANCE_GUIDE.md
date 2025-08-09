@@ -115,10 +115,10 @@ python scripts/run_live_trading.py ml_basic --balance 1000 --no-resume
 4. **Seamless Continuation**: Trading continues without interruption
 
 ### Scenario 3: Strategy Change
-1. **Switch Strategies**: Change from ml_basic to ml_with_sentiment strategy
+1. **Switch Strategies**: Change configuration of `ml_basic` (e.g., model update)
 2. **Keep Positions**: Existing positions remain open
 3. **Preserve Balance**: Current balance maintained
-4. **New Strategy**: Uses recovered balance for new trades
+4. **Updated Strategy**: Uses recovered balance for new trades
 
 ## 🛠️ Database Schema
 
