@@ -53,6 +53,7 @@ def maybe_setup_database():
     """
     if not _is_integration_enabled():
         os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+        yield
         return
 
     started_container = None
