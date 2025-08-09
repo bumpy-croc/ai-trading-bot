@@ -44,29 +44,29 @@ The AI Trading Bot now features a secure, flexible configuration system that eli
 └─────────────────────────────────────────────────┘
 ```
 
-## Implementation Details
+## Implementation details
 
-### Core Components
+### Core components
 
-1. **ConfigManager** (`core/config/config_manager.py`)
+1. **ConfigManager** (`src/config/config_manager.py`)
    - Manages multiple providers
    - Implements fallback logic
    - Provides typed access methods
 
-2. **Providers** (`core/config/providers/`)
+2. **Providers** (`src/config/providers/`)
    - `EnvVarProvider`: Reads from environment variables
    - `DotEnvProvider`: Parses .env files
 
 3. **Usage Pattern**
    ```python
-   from core.config import get_config
-   
-   config = get_config()
-   api_key = config.get_required('BINANCE_API_KEY')
-   balance = config.get_int('INITIAL_BALANCE', 1000)
-   ```
+from config import get_config
 
-## Configuration Variables
+config = get_config()
+api_key = config.get_required('BINANCE_API_KEY')
+balance = config.get_int('INITIAL_BALANCE', 1000)
+```
+
+## Configuration variables
 
 ### Required
 - `BINANCE_API_KEY`: Binance API key
@@ -88,11 +88,11 @@ The AI Trading Bot now features a secure, flexible configuration system that eli
 # Test configuration locally
 python scripts/test_config_system.py
 
-# Test on EC2 instance
+# Test staged environment
 ENVIRONMENT=staging python scripts/test_secrets_access.py
 ```
 
-## Future Enhancements
+## Future enhancements
 
 1. **Hot reload**: Refresh secrets without restart
 2. **Secret rotation**: Automatic key rotation support

@@ -47,7 +47,7 @@ def main():
         print("\n🛑 Dashboard stopped by user")
     except ImportError as e:
         print(f"❌ Missing dependencies: {e}")
-        print("💡 Please install requirements: pip install -r monitoring/requirements.txt")
+        print("💡 Please install requirements: pip install -r requirements-server.txt")
     except Exception as e:
         print(f"❌ Error starting dashboard: {e}")
         sys.exit(1)

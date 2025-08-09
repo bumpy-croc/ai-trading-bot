@@ -1,3 +1,7 @@
+# Engine Integration Status
+
+Note: The prediction engine is available and strategies will migrate to it; database layer is PostgreSQL-only; monitoring and admin UI are available. See root README for current usage.
+
 ### Prediction Engine ↔ MlBasic Integration: Status and Next Steps
 
 #### What was integrated

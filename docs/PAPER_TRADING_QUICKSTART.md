@@ -47,9 +47,9 @@ EOF
 ```bash
 # Test that Binance connection works
 python -c "
-from core.data_providers.binance_provider import BinanceProvider
+from data_providers.binance_provider import BinanceProvider
 provider = BinanceProvider()
-price = provider.get_current_price('BTC-USD')  # Use SymbolFactory for conversion if needed
+price = provider.get_current_price('BTCUSDT')
 print(f'✅ Connection successful! BTC Price: ${price:,.2f}')
 "
 ```
@@ -59,7 +59,7 @@ print(f'✅ Connection successful! BTC Price: ${price:,.2f}')
 #### Option A: Conservative ML Basic Strategy
 ```bash
 python scripts/run_live_trading.py ml_basic \
-    --symbol BTC-USD \
+    --symbol BTCUSDT \
     --paper-trading \
     --balance 10000 \
     --max-position 0.05 \
