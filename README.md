@@ -2,6 +2,8 @@
 
 A modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live), ML-driven models (price and sentiment), PostgreSQL logging, and optional Railway deployment.
 
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/LOCAL_POSTGRESQL_SETUP.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
+
 ---
 
 ## What’s inside
@@ -117,6 +119,12 @@ src/
 
 ---
 
+## Documentation
+
+See `docs/README.md` for the full documentation index.
+
+---
+
 ## Configuration
 
 Priority order:
@@ -150,6 +158,13 @@ See `docs/CONFIGURATION_SYSTEM_SUMMARY.md`.
 Sentiment data (SentiCrypt) and ML training are supported. Pretrained models live in `src/ml`. For details and training examples, see:
 - `docs/LIVE_SENTIMENT_ANALYSIS.md`
 - `docs/MODEL_TRAINING_AND_INTEGRATION_GUIDE.md`
+
+---
+
+## Getting help
+- Open issues for bugs or questions
+- Check `docs/README.md` for detailed guides
+- Use `scripts/verify_database_connection.py` to diagnose DB issues quickly
 
 ---
 
