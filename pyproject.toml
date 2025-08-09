@@ -1,0 +1,10 @@
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","I","B","UP"]
+ignore = ["E203","E501"]
+
+[tool.ruff.isort]
+known-first-party = ["config","data_providers","database","live","monitoring","prediction","risk","strategies","utils","backtesting"]
