@@ -45,11 +45,9 @@ The database includes the following tables:
 
 ## Configuration
 
-### Default Database (PostgreSQL)
+### Database (PostgreSQL only)
 
-By default, the system connects to PostgreSQL via the `DATABASE_URL`
-environment variable.  During tests a PostgreSQL Testcontainers instance is
-started automatically.
+The system connects to PostgreSQL via the `DATABASE_URL` environment variable. During tests, a PostgreSQL Testcontainers instance is started automatically.
 
 ### PostgreSQL Configuration
 
@@ -62,7 +60,7 @@ export DATABASE_URL="postgresql://username:password@localhost:5432/ai-trading-bo
 Or pass it directly when initializing:
 
 ```python
-from core.database.manager import DatabaseManager
+from database.manager import DatabaseManager
 
 db_manager = DatabaseManager("postgresql://username:password@localhost:5432/ai-trading-bot")
 ```
@@ -86,7 +84,7 @@ engine = LiveTradingEngine(
     data_provider=data_provider,
     initial_balance=10000,
     enable_live_trading=False,  # Paper trading
-    database_url=None  # Uses default SQLite
+    database_url=None  # Uses DATABASE_URL (PostgreSQL) if not provided
 )
 
 # Start trading (automatically logs to database)
@@ -121,7 +119,7 @@ print(f"Session ID: {results['session_id']}")
 ### Querying Performance Data
 
 ```python
-from core.database.manager import DatabaseManager
+from database.manager import DatabaseManager
 
 db_manager = DatabaseManager()
 
@@ -155,30 +153,25 @@ db_manager.cleanup_old_data(days_to_keep=90)  # Keep last 90 days
 
 ### Backup Strategy
 
-For SQLite:
-```bash
-cp data/trading_bot.db data/backup/trading_bot_$(date +%Y%m%d).db
-```
-
 For PostgreSQL:
 ```bash
-pg_dump ai-trading-bot > backup/ai-trading-bot_$(date +%Y%m%d).sql
+pg_dump --dbname="$DATABASE_URL" > backup/ai-trading-bot_$(date +%Y%m%d).sql
 ```
 
 ## Viewing Data
 
-### SQLite Viewers
-- **DB Browser for SQLite** (Free, cross-platform)
-- **TablePlus** (Mac/Windows/Linux)
-- **DBeaver** (Free, cross-platform)
+### PostgreSQL Tools
+- DBeaver (cross-platform)
+- TablePlus (Mac/Windows/Linux)
+- psql (CLI)
 
 ### Command Line
 ```bash
-# Open SQLite database
-sqlite3 data/trading_bot.db
+# Using psql with DATABASE_URL
+psql "$DATABASE_URL"
 
 # View tables
-.tables
+\dt
 
 # Query trades
 SELECT * FROM trades ORDER BY exit_time DESC LIMIT 10;
@@ -215,7 +208,7 @@ The database is designed to support the monitoring dashboard outlined in the go-
    pip install sqlalchemy psycopg2-binary
    ```
 
-2. **Database locked** *(historical SQLite issue – should no longer occur)*
+2. Ensure `DATABASE_URL` is correctly set and reachable from the process environment.
 
 ### Debug Mode
 

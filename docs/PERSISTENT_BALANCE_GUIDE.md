@@ -26,8 +26,8 @@ The AI Trading Bot now includes a comprehensive persistent balance and position 
 
 ### 1. **First Time Setup**
 ```bash
-# Run database migration (required for existing installations)
-python scripts/migrate_database.py migrate
+# Ensure PostgreSQL is running and DATABASE_URL is set
+python scripts/verify_database_connection.py
 
 # Start trading with initial balance
 python scripts/run_live_trading.py ml_basic --balance 1000 --paper-trading
@@ -146,8 +146,8 @@ CREATE TABLE account_balances (
 # 2. Run database migration
 python scripts/migrate_database.py migrate
 
-# 3. Validate migration
-python scripts/migrate_database.py validate
+# 3. Validate database connectivity
+python scripts/verify_database_connection.py --verify
 
 # 4. Restart trading bot
 python scripts/run_live_trading.py ml_basic --paper-trading
@@ -215,14 +215,14 @@ GET /api/balance/history?limit=50
 
 ### Balance Not Recovering
 ```bash
-# Check for active sessions
-python scripts/migrate_database.py validate
+# Check DB connectivity
+python scripts/verify_database_connection.py --verify
 
 # View current balance
 python -c "from database.manager import DatabaseManager; dm = DatabaseManager(); print(f'Current balance: ${dm.get_current_balance():.2f}')"
 
-# Force balance recovery
-python scripts/migrate_database.py migrate
+# Ensure tables exist and connection is healthy
+python scripts/verify_database_connection.py --verify
 ```
 
 ### Positions Not Restored
