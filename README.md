@@ -132,6 +132,8 @@ Priority order:
 2. Environment variables (Docker/CI/local)
 3. .env file (local development)
 
+For MCP tooling, use `mcp.example.json` as a template and create your own `mcp.json` locally with `RAILWAY_API_KEY` set in your environment. Do not commit secrets.
+
 Minimal variables:
 
 ```env

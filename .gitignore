@@ -17,3 +17,5 @@ staging/
 
 # Ephemeral SQLite shared memory files created during unit tests
 file:unit_test_db_*
+# Local MCP config (contains secrets); use mcp.example.json as template
+mcp.json
