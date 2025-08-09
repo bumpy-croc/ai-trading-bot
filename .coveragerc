@@ -10,3 +10,5 @@ omit =
 precision = 2
 show_missing = True
 skip_covered = False
+# Uncomment to enforce a coverage floor in CI once stable
+# fail_under = 60
