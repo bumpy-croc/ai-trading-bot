@@ -10,7 +10,7 @@ jobs:
   test:
     strategy:
       matrix:
-        test-group: [group-1, group-2, group-3, group-4]
+        split-index: [1, 2, 3, 4]
         python-version: [3.12]
       fail-fast: false  # Continue running other groups if one fails
     
@@ -35,37 +35,21 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Show test group info
+    - name: Run split ${{ matrix.split-index }} of 4
       run: |
-        echo "=== Test Group Information ==="
-        echo "Group: ${{ matrix.test-group }}"
-        echo "Python version: ${{ matrix.python-version }}"
-        echo "Runner: ${{ runner.os }}"
-        echo "Available memory: $(free -h || echo 'free command not available')"
-        echo "CPU cores: $(nproc || echo 'nproc not available')"
-        echo "=== Test files in this group ==="
-        python tests/group_tests.py get-patterns ${{ matrix.test-group }}
-
-    - name: Run test group ${{ matrix.test-group }}
-      run: |
-        echo "=== Starting test group: ${{ matrix.test-group }} ==="
-        echo "Current time: $(date)"
-        
-        # Get test patterns for this group
-        patterns=$(python tests/group_tests.py get-patterns ${{ matrix.test-group }})
-        
-        # Run tests with patterns
+        echo "=== Starting split: ${{ matrix.split-index }}/4 ==="
         python -m pytest \
           -v \
           --tb=short \
           --timeout=300 \
           -m "not integration" \
-          $patterns
-        
-        echo "=== Completed test group: ${{ matrix.test-group }} ==="
-        echo "End time: $(date)"
+          --splits 4 \
+          --group ${{ matrix.split-index }} \
+          --cov=src \
+          --cov-report=term-missing \
+          --cov-report=xml
 
-  # Optional: Add a summary job that runs after all test groups complete
+  # Optional: Add a summary job that runs after all splits complete
   test-summary:
     needs: test
     runs-on: ubuntu-latest
@@ -78,30 +62,5 @@ jobs:
     - name: Test Summary
       run: |
         echo "=== Test Matrix Summary ==="
-        echo "All test groups have completed."
-        echo "Check individual group results above for details."
-        
-        # Show which groups passed/failed
-        if [ "${{ needs.test.result }}" == "success" ]; then
-          echo "✅ All test groups passed!"
-          echo ""
-          echo "=== Test Results Summary ==="
-          echo "All 4 test groups completed successfully."
-          echo "Individual test results are shown in each group's logs above."
-          echo ""
-          echo "To see detailed test results, check the logs for each group:"
-          echo "- group-1: Basic functionality tests"
-          echo "- group-2: Strategy and backtesting tests"
-          echo "- group-3: Data provider and integration tests"
-          echo "- group-4: Performance and advanced tests"
-        else
-          echo "❌ Some test groups failed. Check the logs above for details."
-          echo ""
-          echo "=== Failure Summary ==="
-          echo "One or more test groups failed. Check the individual group logs for:"
-          echo "- Specific test failures"
-          echo "- Error messages and stack traces"
-          echo "- Test execution details"
-          echo ""
-          echo "Failed groups will be highlighted in red above."
-        fi
+        echo "All splits have completed."
+        echo "Check individual split results above for details."
