@@ -101,11 +101,7 @@ Cryptocurrency trading system with trend-following risk containment. Supports ba
 ## Strategy System
 
 ### Available Strategies
-- **Adaptive Strategy**: Adaptive EMA crossover with market regime detection
-- **Enhanced Strategy**: Multi-indicator confluence (RSI + EMA + MACD)
-- **ML Basic Strategy**: Uses ML price predictions for entry/exit decisions
-- **ML with Sentiment Strategy**: Combines ML predictions with sentiment analysis
-- **High Risk High Reward Strategy**: Aggressive trading with higher risk tolerance
+- `MlBasic`, `MlAdaptive`, `MlWithSentiment` (see `src/strategies/`)
 
 ### Strategy Base Class
 All strategies implement:

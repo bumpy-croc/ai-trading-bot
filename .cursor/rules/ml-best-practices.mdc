@@ -1,0 +1,6 @@
+- Start simple (5–8 features), add complexity only with validation gains.
+- Use time-based CV; avoid random splits. Validate across regimes.
+- Monitor training vs validation gap; >10% suggests overfitting.
+- Prefer interpretable features (returns, volatility, RSI). Avoid leakage.
+- Keep ONNX for inference; include metadata JSON alongside models.
+- Paper trade before live; monitor drift and retrain on schedule.
