@@ -63,11 +63,11 @@ class Trade:
     side: PositionSide
     size: float
     entry_price: float
-    exit_price: float
     entry_time: datetime
-    exit_time: datetime
-    pnl: float
-    exit_reason: str
+    exit_price: float | None = None
+    exit_time: datetime | None = None
+    pnl: float | None = None
+    exit_reason: str | None = None
     
 def _create_exchange_provider(provider: str, config: dict):
     """Factory to create exchange provider and return (provider_instance, provider_name)."""
@@ -804,8 +804,8 @@ class LiveTradingEngine:
                 side=position.side,
                 size=position.size,
                 entry_price=position.entry_price,
-                exit_price=exit_price,
                 entry_time=position.entry_time,
+                exit_price=exit_price,
                 exit_time=datetime.now(),
                 pnl=pnl_dollar,
                 exit_reason=reason

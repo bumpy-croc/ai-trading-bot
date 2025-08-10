@@ -160,14 +160,14 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         df['returns'] = df['close'].pct_change()
         
         # Calculate volatility metrics
-        atr = calculate_atr(df, period=self.atr_period)
-        df['atr'] = atr
-        df['volatility'] = atr / df['close'].replace(0, np.nan)
+        atr_df = calculate_atr(df, period=self.atr_period)
+        df['atr'] = atr_df['atr']
+        df['volatility'] = df['atr'] / df['close'].replace(0, np.nan)
         
         # Calculate trend measures
         mas = calculate_moving_averages(df, periods=self.ma_periods)
-        for period, ma in mas.items():
-            df[f'ma_{period}'] = ma
+        for period in self.ma_periods:
+            df[f'ma_{period}'] = mas[f'ma_{period}']
         
         return df
     
