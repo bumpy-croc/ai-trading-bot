@@ -236,6 +236,30 @@ class Backtester:
                 # Check for exit if in position
                 if self.current_trade is not None:
                     exit_signal = self.strategy.check_exit_conditions(df, i, self.current_trade.entry_price)
+
+                    # Additional parity checks: stop loss, take profit, and time-limit
+                    hit_stop_loss = False
+                    hit_take_profit = False
+                    if self.current_trade.stop_loss is not None:
+                        if self.current_trade.side == 'long':
+                            hit_stop_loss = current_price <= float(self.current_trade.stop_loss)
+                        else:
+                            hit_stop_loss = current_price >= float(self.current_trade.stop_loss)
+                    if self.current_trade.take_profit is not None:
+                        if self.current_trade.side == 'long':
+                            hit_take_profit = current_price >= float(self.current_trade.take_profit)
+                        else:
+                            hit_take_profit = current_price <= float(self.current_trade.take_profit)
+                    hit_time_limit = (current_time - self.current_trade.entry_time).total_seconds() > 86400
+
+                    should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_limit
+                    exit_reason = (
+                        'Strategy signal' if exit_signal else
+                        'Stop loss' if hit_stop_loss else
+                        'Take profit' if hit_take_profit else
+                        'Time limit' if hit_time_limit else
+                        'Hold'
+                    )
                     
                     # Log exit decision
                     if self.log_to_database and self.db_manager:
@@ -252,17 +276,17 @@ class Backtester:
                             strategy_name=self.strategy.__class__.__name__,
                             symbol=symbol,
                             signal_type='exit',
-                            action_taken='closed_position' if exit_signal else 'hold_position',
+                            action_taken='closed_position' if should_exit else 'hold_position',
                             price=current_price,
                             timeframe=timeframe,
-                            signal_strength=1.0 if exit_signal else 0.0,
+                            signal_strength=1.0 if should_exit else 0.0,
                             confidence_score=indicators.get('prediction_confidence', 0.5),
                             indicators=indicators,
                             sentiment_data=sentiment_data if sentiment_data else None,
                             ml_predictions=ml_predictions if ml_predictions else None,
                             position_size=self.current_trade.size,
                             reasons=[
-                                'exit_signal' if exit_signal else 'holding_position',
+                                exit_reason if should_exit else 'holding_position',
                                 f'current_pnl_{current_pnl_pct:.4f}',
                                 f'position_age_{(current_time - self.current_trade.entry_time).total_seconds():.0f}s',
                                 f'entry_price_{self.current_trade.entry_price:.2f}'
@@ -272,9 +296,8 @@ class Backtester:
                             session_id=self.trading_session_id
                         )
                     
-                    if exit_signal:
+                    if should_exit:
                         # Close the trade
-                        exit_reason = "Strategy exit"
                         exit_price = current_price
                         exit_time = current_time
                         
@@ -294,7 +317,7 @@ class Backtester:
                             winning_trades += 1
                         
                         # Log trade
-                        logger.info(f"Exited position at {current_price}, Balance: {self.balance:.2f}")
+                        logger.info(f"Exited {self.current_trade.side} at {current_price}, Balance: {self.balance:.2f}")
                         
                         # After updating self.balance, update yearly_balance for the exit year
                         exit_year = exit_time.year
@@ -305,7 +328,7 @@ class Backtester:
                         if (self.log_to_database and self.db_manager):
                             self.db_manager.log_trade(
                                 symbol=symbol,
-                                side="long",  # Backtester currently tracks long
+                                side=self.current_trade.side,
                                 entry_price=self.current_trade.entry_price,
                                 exit_price=exit_price,
                                 size=self.current_trade.size,
@@ -384,15 +407,64 @@ class Backtester:
                     if size_fraction > 0:
                         # Enter new trade
                         stop_loss = self.strategy.calculate_stop_loss(df, i, current_price, 'long')
+                        # Parity with live engine: 4% TP for long
+                        take_profit = current_price * 1.04
                         self.current_trade = ActiveTrade(
                             symbol=symbol,
                             side='long',
                             entry_price=current_price,
                             entry_time=current_time,
                             size=size_fraction,
-                            stop_loss=stop_loss
+                            stop_loss=stop_loss,
+                            take_profit=take_profit
                         )
                         logger.info(f"Entered long position at {current_price}")
+
+                # Optional short entry if supported by strategy
+                elif hasattr(self.strategy, 'check_short_entry_conditions') and self.strategy.check_short_entry_conditions(df, i):
+                    size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+
+                    if self.log_to_database and self.db_manager:
+                        indicators = self._extract_indicators(df, i)
+                        sentiment_data = self._extract_sentiment_data(df, i)
+                        ml_predictions = self._extract_ml_predictions(df, i)
+                        self.db_manager.log_strategy_execution(
+                            strategy_name=self.strategy.__class__.__name__,
+                            symbol=symbol,
+                            signal_type='entry',
+                            action_taken='opened_short' if size_fraction > 0 else 'no_action',
+                            price=current_price,
+                            timeframe=timeframe,
+                            signal_strength=1.0 if size_fraction > 0 else 0.0,
+                            confidence_score=indicators.get('prediction_confidence', 0.5),
+                            indicators=indicators,
+                            sentiment_data=sentiment_data if sentiment_data else None,
+                            ml_predictions=ml_predictions if ml_predictions else None,
+                            position_size=size_fraction if size_fraction > 0 else None,
+                            reasons=[
+                                'short_entry_conditions_met',
+                                f'position_size_{size_fraction:.4f}' if size_fraction > 0 else 'no_position_size',
+                                f'balance_{self.balance:.2f}'
+                            ],
+                            volume=indicators.get('volume'),
+                            volatility=indicators.get('volatility'),
+                            session_id=self.trading_session_id
+                        )
+
+                    if size_fraction > 0:
+                        stop_loss = self.strategy.calculate_stop_loss(df, i, current_price, 'short')
+                        tp_pct = getattr(self.strategy, 'take_profit_pct', 0.04)
+                        take_profit = current_price * (1 - tp_pct)
+                        self.current_trade = ActiveTrade(
+                            symbol=symbol,
+                            side='short',
+                            entry_price=current_price,
+                            entry_time=current_time,
+                            size=size_fraction,
+                            stop_loss=stop_loss,
+                            take_profit=take_profit
+                        )
+                        logger.info(f"Entered short position at {current_price}")
                 
                 # Log no-action cases (when no position and no entry signal)
                 else:
