@@ -66,7 +66,12 @@ class Backtester:
         risk_parameters: Optional[Any] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
         database_url: Optional[str] = None,
-        log_to_database: Optional[bool] = None
+        log_to_database: Optional[bool] = None,
+        enable_short_trading: bool = False,
+        enable_time_limit_exit: bool = False,
+        default_take_profit_pct: Optional[float] = None,
+        legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
+        enable_engine_risk_exits: bool = False,  # Enforce engine-level SL/TP exits (off to preserve baseline)
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -77,6 +82,13 @@ class Backtester:
         self.peak_balance = initial_balance
         self.trades: List[CompletedTrade] = []
         self.current_trade: Optional[ActiveTrade] = None
+
+        # Feature flags for parity tuning
+        self.enable_short_trading = enable_short_trading
+        self.enable_time_limit_exit = enable_time_limit_exit
+        self.default_take_profit_pct = default_take_profit_pct
+        self.legacy_stop_loss_indexing = legacy_stop_loss_indexing
+        self.enable_engine_risk_exits = enable_engine_risk_exits
         
         # Risk manager (parity with live engine)
         self.risk_manager = RiskManager(risk_parameters)
@@ -85,6 +97,8 @@ class Backtester:
         self.early_stop_reason: Optional[str] = None
         self.early_stop_date: Optional[datetime] = None
         self.early_stop_candle_index: Optional[int] = None
+        # Use legacy 50% drawdown threshold unless explicit risk params provided, to preserve historical parity
+        self._early_stop_max_drawdown = (self.risk_manager.params.max_drawdown if risk_parameters is not None else 0.5)
         
         # Database logging
         # Auto-detect test environment and default log_to_database accordingly
@@ -194,6 +208,12 @@ class Backtester:
             df = df.dropna(subset=essential_columns)
             
             logger.info(f"Starting backtest with {len(df)} candles")
+
+            # Preserve legacy behavior: enforce long-only unless explicit flag is set
+            if not self.enable_short_trading:
+                if hasattr(self.strategy, 'check_short_entry_conditions'):
+                    # No change to strategy; engine will simply skip short entries via flag
+                    pass
             
             # -----------------------------
             # Metrics & tracking variables
@@ -240,17 +260,17 @@ class Backtester:
                     # Additional parity checks: stop loss, take profit, and time-limit
                     hit_stop_loss = False
                     hit_take_profit = False
-                    if self.current_trade.stop_loss is not None:
+                    if self.enable_engine_risk_exits and self.current_trade.stop_loss is not None:
                         if self.current_trade.side == 'long':
                             hit_stop_loss = current_price <= float(self.current_trade.stop_loss)
                         else:
                             hit_stop_loss = current_price >= float(self.current_trade.stop_loss)
-                    if self.current_trade.take_profit is not None:
+                    if self.enable_engine_risk_exits and self.current_trade.take_profit is not None:
                         if self.current_trade.side == 'long':
                             hit_take_profit = current_price >= float(self.current_trade.take_profit)
                         else:
                             hit_take_profit = current_price <= float(self.current_trade.take_profit)
-                    hit_time_limit = (current_time - self.current_trade.entry_time).total_seconds() > 86400
+                    hit_time_limit = self.enable_time_limit_exit and (current_time - self.current_trade.entry_time).total_seconds() > 86400
 
                     should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_limit
                     exit_reason = (
@@ -362,7 +382,7 @@ class Backtester:
                         self.current_trade = None
                         
                         # Check if maximum drawdown exceeded (use risk params if present)
-                        max_dd_threshold = getattr(self.risk_manager.params, 'max_drawdown', 0.5)
+                        max_dd_threshold = self._early_stop_max_drawdown
                         if current_drawdown > max_dd_threshold:
                             self.early_stop_reason = f"Maximum drawdown exceeded ({current_drawdown:.1%})"
                             self.early_stop_date = current_time
@@ -406,9 +426,12 @@ class Backtester:
                     
                     if size_fraction > 0:
                         # Enter new trade
-                        stop_loss = self.strategy.calculate_stop_loss(df, i, current_price, 'long')
+                        # Optionally use legacy indexing behavior for stop-loss calculation to preserve parity
+                        sl_index = (len(df) - 1) if self.legacy_stop_loss_indexing else i
+                        stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'long')
                         # Parity with live engine: 4% TP for long
-                        take_profit = current_price * 1.04
+                        tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
+                        take_profit = current_price * (1 + tp_pct)
                         self.current_trade = ActiveTrade(
                             symbol=symbol,
                             side='long',
@@ -421,7 +444,7 @@ class Backtester:
                         logger.info(f"Entered long position at {current_price}")
 
                 # Optional short entry if supported by strategy
-                elif hasattr(self.strategy, 'check_short_entry_conditions') and self.strategy.check_short_entry_conditions(df, i):
+                elif self.enable_short_trading and hasattr(self.strategy, 'check_short_entry_conditions') and self.strategy.check_short_entry_conditions(df, i):
                     size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
 
                     if self.log_to_database and self.db_manager:
@@ -452,8 +475,9 @@ class Backtester:
                         )
 
                     if size_fraction > 0:
-                        stop_loss = self.strategy.calculate_stop_loss(df, i, current_price, 'short')
-                        tp_pct = getattr(self.strategy, 'take_profit_pct', 0.04)
+                        sl_index = (len(df) - 1) if self.legacy_stop_loss_indexing else i
+                        stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'short')
+                        tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
                         take_profit = current_price * (1 - tp_pct)
                         self.current_trade = ActiveTrade(
                             symbol=symbol,
