@@ -194,7 +194,7 @@ class SafeModelTrainer:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         if with_sentiment:
-            strategy_name = "ml_with_sentiment"
+            strategy_name = "ml_basic"  # sentiment variant no longer uses a separate strategy
             model_type = "sentiment"
         else:
             strategy_name = "ml_basic"
@@ -258,36 +258,21 @@ class SafeModelTrainer:
             # Create compatible metadata for safe trainer
             metadata = {
                 'symbol': symbol,
-                'with_sentiment': with_sentiment,
-                'training_days': days,
-                'epochs': epochs,
-                'timestamp': timestamp,
-                'strategy_name': strategy_name,
                 'model_type': model_type,
-                'training_output': result.stdout
+                'timestamp': timestamp,
             }
-            
-            # Save metadata to staging
-            with open(staging_metadata, 'w') as f:
-                json.dump(metadata, f, indent=2, default=str)
             
             return {
                 'symbol': symbol,
-                'with_sentiment': with_sentiment,
-                'staging_model_path': str(staging_model),
-                'staging_metadata_path': str(staging_metadata),
                 'strategy_name': strategy_name,
-                'timestamp': timestamp,
-                'training_output': result.stdout,
-                'model_type': model_type
+                'staging_model': str(staging_model),
+                'staging_metadata': str(staging_metadata),
+                'metadata': metadata
             }
-            
-        except subprocess.TimeoutExpired:
-            raise Exception("Training timed out after 1 hour")
         except Exception as e:
-            logger.error(f"❌ Training failed: {e}")
+            logger.error(f"Training in staging failed: {e}")
             raise
-    
+
     def _validate_model(self, model_info: Dict[str, Any]) -> Dict[str, Any]:
         """Validate trained model"""
         
@@ -299,7 +284,7 @@ class SafeModelTrainer:
         }
         
         try:
-            model_path = model_info['staging_model_path']
+            model_path = model_info['staging_model']
             
             # Test 1: Can load ONNX model
             try:
@@ -336,7 +321,7 @@ class SafeModelTrainer:
                         validation_results['metrics']['validation_loss'] = val_loss
             
             # Test 4: Metadata validation
-            metadata_path = model_info.get('staging_metadata_path')
+            metadata_path = model_info.get('staging_metadata')
             if metadata_path and os.path.exists(metadata_path):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
@@ -353,14 +338,11 @@ class SafeModelTrainer:
         return validation_results
     
     def _prepare_deployment_package(self, model_info: Dict[str, Any]) -> Dict[str, Any]:
-        """Prepare model for deployment"""
-        
+        """Prepare the deployment package from trained model info"""
+        staging_path = model_info['staging_model']
         return {
-            'staging_path': model_info['staging_model_path'],
-            'metadata_path': model_info.get('staging_metadata_path'),
+            'staging_path': staging_path,
             'strategy_name': model_info['strategy_name'],
-            'symbol': model_info['symbol'],
-            'timestamp': model_info['timestamp'],
             'ready_for_deployment': True
         }
     
@@ -469,7 +451,7 @@ def main():
         # Create deployment package from model path
         deployment_package = {
             'staging_path': args.model_path,
-            'strategy_name': 'ml_with_sentiment' if 'sentiment' in args.model_path else 'ml_basic',
+            'strategy_name': 'ml_basic' if 'sentiment' in args.model_path else 'ml_basic',
             'ready_for_deployment': True
         }
         

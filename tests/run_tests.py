@@ -285,13 +285,13 @@ def run_quick_smoke_test():
     
     # Test basic imports
     try:
-        from strategies.ml_adaptive import MlAdaptive
+        from strategies.ml_basic import MlBasic
         from risk.risk_manager import RiskManager
         from live.trading_engine import LiveTradingEngine
         print_success("All core modules import successfully")
         
         # Test basic functionality
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         risk_manager = RiskManager()
         print_success("Core objects can be instantiated")
         
@@ -398,7 +398,6 @@ def run_grouped_tests():
     compute_cmd = [
         sys.executable, '-m', 'pytest',
         'tests/test_backtesting.py',
-        'tests/test_ml_adaptive.py',
         'tests/test_monitoring.py',
         '-v', '--tb=short',
         '-n', '2'  # Limited parallelization for heavy tests

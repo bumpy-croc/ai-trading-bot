@@ -24,7 +24,6 @@ from risk import RiskParameters
 from backtesting import Backtester
 
 from strategies import MlBasic  # Direct import after removing deprecated strategies
-from strategies.ml_adaptive import MlAdaptive
 from src.utils.symbol_factory import SymbolFactory
 
 from utils.logging_config import configure_logging
@@ -38,15 +37,9 @@ def load_strategy(strategy_name: str):
         if strategy_name == 'ml_basic':
             from strategies.ml_basic import MlBasic
             strategy = MlBasic()
-        elif strategy_name == 'ml_with_sentiment':
-            from strategies.ml_with_sentiment import MlWithSentiment
-            strategy = MlWithSentiment(use_sentiment=True)
-        elif strategy_name == 'ml_adaptive':
-            from strategies.ml_adaptive import MlAdaptive
-            strategy = MlAdaptive()
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ['ml_basic', 'ml_with_sentiment', 'ml_adaptive']
+            available_strategies = ['ml_basic']
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
         
@@ -59,7 +52,7 @@ def load_strategy(strategy_name: str):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Run strategy backtest')
-    parser.add_argument('strategy', help='Strategy name (e.g., ml_basic, ml_with_sentiment)')
+    parser.add_argument('strategy', help='Strategy name (e.g., ml_basic)')
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol')
     parser.add_argument('--timeframe', default='1h', help='Candle timeframe')
     parser.add_argument('--days', type=int, default=30, help='Number of days to backtest')

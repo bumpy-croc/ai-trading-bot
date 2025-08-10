@@ -26,8 +26,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
     """
     Extracts technical indicators and normalized price features from OHLCV data.
     
-    This extractor consolidates all technical analysis functionality from existing
-    strategies (MlAdaptive, MlBasic, MlWithSentiment) into a single, reusable component.
+    This extractor consolidates technical analysis functionality into a single, reusable component used by `MlBasic`.
     """
     
     def __init__(self, 
@@ -160,16 +159,15 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         # Calculate returns
         df['returns'] = df['close'].pct_change()
         
-        # Calculate volatility metrics (from MlAdaptive)
-        df['volatility_20'] = df['returns'].rolling(window=20).std()
-        df['volatility_50'] = df['returns'].rolling(window=50).std()
+        # Calculate volatility metrics
+        atr_df = calculate_atr(df, period=self.atr_period)
+        df['atr'] = atr_df['atr']
+        df['volatility'] = df['atr'] / df['close'].replace(0, np.nan)
         
-        # Calculate ATR as percentage of price
-        df['atr_pct'] = df['atr'] / df['close']
-        
-        # Calculate trend measures (from MlAdaptive)
-        df['trend_strength'] = (df['close'] - df['ma_50']) / df['ma_50']
-        df['trend_direction'] = np.where(df['ma_20'] > df['ma_50'], 1, -1)
+        # Calculate trend measures
+        mas = calculate_moving_averages(df, periods=self.ma_periods)
+        for period in self.ma_periods:
+            df[f'ma_{period}'] = mas[f'ma_{period}']
         
         return df
     

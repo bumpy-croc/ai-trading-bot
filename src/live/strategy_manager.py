@@ -12,8 +12,6 @@ import logging
 
 from strategies.base import BaseStrategy
 from strategies.ml_basic import MlBasic
-from strategies.ml_adaptive import MlAdaptive
-from strategies.ml_with_sentiment import MlWithSentiment
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +55,7 @@ class StrategyManager:
         
         # Strategy registry
         self.strategy_registry = {
-            'ml_basic': MlBasic,
-            'ml_adaptive': MlAdaptive,
-            'ml_with_sentiment': MlWithSentiment
+            'ml_basic': MlBasic
         }
         
         # Version history

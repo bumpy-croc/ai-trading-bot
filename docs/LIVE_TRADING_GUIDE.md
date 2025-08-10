@@ -79,9 +79,6 @@ export BINANCE_API_SECRET="your_api_secret"
 # Safe paper trading - no real money
 python scripts/run_live_trading.py ml_basic --symbol BTC-USD --paper-trading
 
-# With sentiment analysis
-python scripts/run_live_trading.py ml_with_sentiment --symbol BTC-USD --paper-trading --use-sentiment
-
 # Custom configuration
 python scripts/run_live_trading.py ml_basic --balance 5000 --max-position 0.05 --check-interval 30
 ```
@@ -147,28 +144,7 @@ python scripts/run_live_trading.py ml_basic --symbol BTC-USD --live-trading --i-
 
 ---
 
-## 🔍 **Monitoring & Alerts**
-
-### **Console Output:**
-```
-2025-01-27 15:30:00 - Status: BTCUSDT @ $95,234.56 | Balance: $10,245.67 | Positions: 1 | Unrealized: +$145.67 | Trades: 15 (67% win)
-```
-
-### **Log Files:**
-- **`live_trading_YYYYMMDD.log`** - Detailed trading logs
-- **`logs/trades/trades_YYYYMM.json`** - Trade history in JSON format
-
-### **Webhook Alerts:**
-```json
-{
-  "text": "🤖 Trading Bot: Position Opened: BTCUSDT long @ $95,234.56",
-  "timestamp": "2025-01-27T15:30:00Z"
-}
-```
-
----
-
 ## 📈 **Strategy Integration**
 
 ### **Supported Strategies:**
-- **`
+- **`ml_basic`**

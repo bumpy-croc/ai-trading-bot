@@ -10,7 +10,6 @@ Vectorized historical simulation engine for evaluating strategies.
 ## CLI
 ```bash
 python scripts/run_backtest.py ml_basic --symbol BTCUSDT --days 90
-python scripts/run_backtest.py ml_with_sentiment --symbol BTCUSDT --days 365 --no-cache
 ```
 
 ## Programmatic

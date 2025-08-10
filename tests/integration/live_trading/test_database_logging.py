@@ -43,7 +43,7 @@ class TestDatabaseLogging:
         session_id = db_manager.create_trading_session(strategy_name="TestStrategy", symbol="BTCUSDT", timeframe="1h", initial_balance=10000, mode="live")
         events = [
             {'event_type': EventType.ENGINE_START, 'message': 'Trading engine started', 'severity': 'info', 'component': 'trading_engine', 'session_id': session_id},
-            {'event_type': EventType.STRATEGY_CHANGE, 'message': 'Strategy changed to MlAdaptive', 'severity': 'info', 'component': 'strategy_manager', 'details': {'old_strategy': 'BasicStrategy', 'new_strategy': 'MlAdaptive'}, 'session_id': session_id},
+            {'event_type': EventType.STRATEGY_CHANGE, 'message': 'Strategy changed', 'severity': 'info', 'component': 'strategy_manager', 'details': {'old_strategy': 'BasicStrategy', 'new_strategy': 'MlBasic'}, 'session_id': session_id},
             {'event_type': EventType.ERROR, 'message': 'API rate limit exceeded', 'severity': 'warning', 'component': 'data_provider', 'session_id': session_id},
         ]
         ids = [db_manager.log_event(**e) for e in events]
@@ -119,8 +119,8 @@ class TestDatabaseLogging:
         }
         db_manager.log_strategy_execution(**execution_data)
         with db_manager.get_session() as session:
-            execution = session.query(StrategyExecution).filter_by(session_id=session_id).first()
-            assert execution is not None
+            exec_record = session.query(StrategyExecution).filter_by(session_id=session_id).first()
+            assert exec_record is not None
         db_manager.end_trading_session(session_id)
 
     def test_trading_sessions_logged(self, mock_strategy, mock_data_provider):
