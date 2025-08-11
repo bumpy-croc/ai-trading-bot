@@ -30,6 +30,8 @@ from performance.metrics import (
     cash_pnl,
 )
 from src.utils.symbol_factory import SymbolFactory
+from src.config.feature_flags import is_enabled, get_flag
+from src.regime import RegimeDetector, RegimeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +248,18 @@ class LiveTradingEngine:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
+        # Optional regime detection (disabled by default)
+        self.regime_detector: Optional[RegimeDetector] = None
+        if is_enabled("enable_regime_detection", default=False):
+            try:
+                hysteresis_k = int(get_flag("regime_hysteresis_k", 3) or 3)
+                min_dwell = int(get_flag("regime_min_dwell", 12) or 12)
+                cfg = RegimeConfig(hysteresis_k=hysteresis_k, min_dwell=min_dwell)
+                self.regime_detector = RegimeDetector(cfg)
+                logger.info("RegimeDetector initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RegimeDetector: {e}")
+
         logger.info(f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}")
         
     def start(self, symbol: str, timeframe: str = "1h", max_steps: int = None):
@@ -441,6 +455,12 @@ class LiveTradingEngine:
                         logger.error("❌ Failed to apply strategy/model update")
                 # Calculate indicators
                 df = self.strategy.calculate_indicators(df)
+                # Annotate regimes if enabled
+                if self.regime_detector is not None:
+                    try:
+                        df = self.regime_detector.annotate(df)
+                    except Exception as e:
+                        logger.debug(f"Regime annotation failed: {e}")
                 # Remove warmup period and ensure we have enough data
                 df = df.dropna()
                 if len(df) < 2:
@@ -463,6 +483,17 @@ class LiveTradingEngine:
                         short_entry_signal = self.strategy.check_short_entry_conditions(df, current_index)
                         if short_entry_signal:
                             short_position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+                            # Regime-aware sizing for short if enabled
+                            if self.regime_detector is not None and is_enabled("regime_adjust_position_size", default=False):
+                                tl, vl, conf = self.regime_detector.current_labels(df)
+                                mult = 1.0  # Keep short multiplier simple for MVP
+                                if vl == 'high_vol':
+                                    mult *= 0.8
+                                if tl == 'trend_up':
+                                    mult *= 0.7
+                                if conf < float(get_flag("regime_min_confidence", 0.5) or 0.5):
+                                    mult *= 0.8
+                                short_position_size = min(short_position_size * mult, self.max_position_size)
                             short_position_size = min(short_position_size, self.max_position_size)
                             if short_position_size > 0:
                                 short_stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, PositionSide.SHORT)
@@ -638,13 +669,26 @@ class LiveTradingEngine:
         indicators = self._extract_indicators(df, current_index)
         sentiment_data = self._extract_sentiment_data(df, current_index)
         ml_predictions = self._extract_ml_predictions(df, current_index)
-        
+
+        # Regime context
+        regime_context: Dict[str, Any] = {}
+        if self.regime_detector is not None:
+            tl, vl, conf = self.regime_detector.current_labels(df)
+            regime_context = {"trend_label": tl, "vol_label": vl, "regime_confidence": conf}
+
         # Calculate position size if entry signal is present
         position_size = 0.0
         if entry_signal:
             position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
             position_size = min(position_size, self.max_position_size)  # Cap at max position size
-        
+            # Optionally adjust by regime
+            if self.regime_detector is not None and is_enabled("regime_adjust_position_size", default=False):
+                tl = regime_context.get("trend_label", "unknown")
+                vl = regime_context.get("vol_label", "unknown")
+                conf = float(regime_context.get("regime_confidence", 0.0))
+                mult = self.regime_detector.long_position_multiplier(tl, vl, conf)
+                position_size = min(position_size * mult, self.max_position_size)
+
         # Log strategy execution decision
         if self.db_manager:
             self.db_manager.log_strategy_execution(
@@ -663,8 +707,8 @@ class LiveTradingEngine:
                 reasons=[
                     'entry_conditions_met' if entry_signal else 'entry_conditions_not_met',
                     f'position_size_{position_size:.4f}' if position_size > 0 else 'no_position_size',
-                    f'max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}'
-                ],
+                    f'max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}',
+                ] + ([f"regime_trend={regime_context.get('trend_label')}", f"regime_vol={regime_context.get('vol_label')}", f"regime_conf={regime_context.get('regime_confidence'):.2f}"] if regime_context else []),
                 volume=indicators.get('volume'),
                 volatility=indicators.get('volatility'),
                 session_id=self.trading_session_id
@@ -751,145 +795,6 @@ class LiveTradingEngine:
                     details={"stack_trace": str(e)},
                     session_id=self.trading_session_id
                 )
-            else:
-                logger.warning("⚠️ Cannot log error to database - no trading session ID available")
-            
-    def _close_position(self, position: Position, reason: str):
-        """Close an existing position"""
-        try:
-            # Get current price for closing
-            exit_price = None
-            try:
-                current_data = self.data_provider.get_live_data(position.symbol, "1h", limit=1)
-                if not current_data.empty:
-                    exit_price = current_data.iloc[-1]['close']
-            except Exception as e:
-                logger.warning(f"Could not get current price for position close: {e}")
-            
-            # Fallback to entry price if we can't get current price (e.g., during shutdown)
-            if exit_price is None:
-                exit_price = position.entry_price
-                logger.warning(f"Using entry price as exit price for position {position.order_id}")
-            
-            if self.enable_live_trading:
-                # Execute real closing order
-                success = self._close_order(position.symbol, position.order_id)
-                if not success:
-                    logger.error("Failed to close order")
-                    return
-            else:
-                logger.info(f"📄 PAPER TRADE - Would close {position.side.value} position")
-            
-            # Calculate PnL
-            pnl_pct = pnl_percent(position.entry_price, exit_price, Side(position.side.value))
-            pnl_dollar = cash_pnl(pnl_pct * position.size, self.current_balance)
-            
-            # Update balance
-            self.current_balance += pnl_dollar
-            self.total_pnl += pnl_dollar
-            
-            # Update persistent balance tracking
-            if self.trading_session_id is not None:
-                self.db_manager.update_balance(
-                    self.current_balance, 
-                    f'trade_pnl_{reason.lower()}', 
-                    'system', 
-                    self.trading_session_id
-                )
-            else:
-                logger.warning("⚠️ Cannot update balance in database - no trading session ID available")
-            
-            # Create trade record
-            trade = Trade(
-                symbol=position.symbol,
-                side=position.side,
-                size=position.size,
-                entry_price=position.entry_price,
-                entry_time=position.entry_time,
-                exit_price=exit_price,
-                exit_time=datetime.now(),
-                pnl=pnl_dollar,
-                exit_reason=reason
-            )
-            
-            self.completed_trades.append(trade)
-            self.total_trades += 1
-            if pnl_dollar > 0:
-                self.winning_trades += 1
-            
-            # Log trade to database
-            if self.trading_session_id is not None:
-                source = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
-                try:
-                    trade_db_id = self.db_manager.log_trade(
-                        symbol=position.symbol,
-                        side=position.side.value,
-                        entry_price=position.entry_price,
-                        exit_price=exit_price,
-                        size=position.size,
-                        entry_time=position.entry_time,
-                        exit_time=trade.exit_time,
-                        pnl=pnl_dollar,
-                        exit_reason=reason,
-                        strategy_name=self.strategy.__class__.__name__,
-                        source=source,
-                        stop_loss=position.stop_loss,
-                        take_profit=position.take_profit,
-                        order_id=position.order_id,
-                        session_id=self.trading_session_id
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log trade to database: {e}")
-            else:
-                logger.warning("⚠️ Cannot log trade to database - no trading session ID available")
-            
-            # Update position status in database
-            if position.order_id in self.position_db_ids:
-                position_db_id = self.position_db_ids[position.order_id]
-                if position_db_id is not None:
-                    try:
-                        self.db_manager.close_position(position_db_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to update position in database: {e}")
-                else:
-                    logger.debug(f"Position {position.order_id} was not logged to database (no session ID)")
-                del self.position_db_ids[position.order_id]
-                
-            # Remove from active positions
-            if position.order_id in self.positions:
-                del self.positions[position.order_id]
-            
-            # Log trade
-            pnl_str = f"+${pnl_dollar:.2f}" if pnl_dollar > 0 else f"${pnl_dollar:.2f}"
-            logger.info(f"🏁 Closed {position.side.value} position: {position.symbol} @ ${exit_price:.2f} ({reason}) - PnL: {pnl_str}")
-            
-            # Save trade log (file-based for backward compatibility)
-            if self.log_trades:
-                try:
-                    self._log_trade(trade)
-                except Exception as e:
-                    logger.warning(f"Failed to log trade to file: {e}")
-            
-            # Send alert
-            try:
-                self._send_alert(f"Position Closed: {position.symbol} {reason} - PnL: {pnl_str}")
-            except Exception as e:
-                logger.warning(f"Failed to send alert: {e}")
-            
-        except Exception as e:
-            logger.error(f"Failed to close position: {e}", exc_info=True)
-            if self.trading_session_id is not None:
-                try:
-                    self.db_manager.log_event(
-                        event_type="ERROR",
-                        message=f"Failed to close position: {str(e)}",
-                        severity="error",
-                        component="LiveTradingEngine",
-                        details={"stack_trace": str(e)},
-                        session_id=self.trading_session_id
-                    )
-                except Exception as db_e:
-                    logger.error(f"Failed to log error to database: {db_e}", exc_info=True)
             else:
                 logger.warning("⚠️ Cannot log error to database - no trading session ID available")
             

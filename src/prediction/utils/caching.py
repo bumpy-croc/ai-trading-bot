@@ -65,37 +65,32 @@ class FeatureCache:
     
     def _generate_quick_hash(self, data: pd.DataFrame) -> str:
         """
-        Generate a quick hash based on DataFrame shape and sample values.
-        
-        This is much faster than full content hashing and provides a good
-        first-level filter for cache lookups.
-        
-        Args:
-            data: DataFrame to hash
-            
-        Returns:
-            Quick hash string
+        Generate a quick hash based on DataFrame shape, schema, and tiny samples.
+        Designed to be faster than full content hashing by avoiding large string
+        construction and using raw bytes where possible.
         """
         try:
-            # Use shape, dtypes, and sample values for quick identification
-            shape_str = f"{data.shape[0]}_{data.shape[1]}"
-            dtypes_str = str(sorted(data.dtypes.astype(str).items()))
-            
-            # Sample first and last few values for quick comparison
+            hasher = hashlib.md5()
+            # Shape
+            shape_arr = np.asarray(data.shape, dtype=np.int64)
+            hasher.update(shape_arr.tobytes())
+            # Columns and dtypes (order matters)
+            for col, dtype in zip(data.columns, data.dtypes):
+                hasher.update(str(col).encode('utf-8', 'ignore'))
+                hasher.update(str(dtype).encode('utf-8', 'ignore'))
+            # Sample first and last few rows
             sample_size = min(3, len(data))
-            if len(data) > 0:
-                first_values = data.iloc[:sample_size].values.flatten()
-                last_values = data.iloc[-sample_size:].values.flatten()
-                sample_str = f"{first_values.tobytes().hex()}_{last_values.tobytes().hex()}"
+            if sample_size > 0:
+                first_vals = data.iloc[:sample_size].to_numpy(copy=False)
+                last_vals = data.iloc[-sample_size:].to_numpy(copy=False)
+                hasher.update(np.ascontiguousarray(first_vals).tobytes())
+                hasher.update(np.ascontiguousarray(last_vals).tobytes())
             else:
-                sample_str = "empty"
-            
-            # Combine shape, dtypes, and samples for quick hash
-            quick_content = f"{shape_str}_{dtypes_str}_{sample_str}"
-            return hashlib.md5(quick_content.encode()).hexdigest()
+                hasher.update(b'empty')
+            return hasher.hexdigest()
         except Exception:
-            # Fallback to simple shape-based hash
-            return hashlib.md5(f"{data.shape}_{data.dtypes.astype(str)}".encode()).hexdigest()
+            # Fallback to simple shape/dtype string
+            return hashlib.md5(f"{data.shape}{tuple(data.dtypes.astype(str))}".encode()).hexdigest()
     
     def _generate_full_data_hash(self, data: pd.DataFrame) -> str:
         """
