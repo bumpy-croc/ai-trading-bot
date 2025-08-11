@@ -376,7 +376,7 @@ class MonitoringDashboard:
             if "order_latency" in enabled_metrics:
                 metrics["order_latency"] = self._get_order_latency()
             if "execution_quality" in enabled_metrics:
-                metrics["execution_quality"] = self._get_execution_quality()
+                metrics["execution_quality"] = float(self._get_execution_quality())
 
             # Balance & Positions
             if "current_balance" in enabled_metrics:
@@ -1011,25 +1011,20 @@ class MonitoringDashboard:
         # For now, return a reasonable estimate
         return 50.0  # 50ms average latency
 
-    def _get_execution_quality(self) -> str:
-        """Get overall execution quality status"""
+    def _get_execution_quality(self) -> float:
+        """Get overall execution quality score (0-100)"""
         try:
-            fill_rate = self._get_fill_rate()
-            slippage = self._get_avg_slippage()
+            fill_rate = self._get_fill_rate()  # percentage
+            slippage = self._get_avg_slippage()  # percentage
             failed_orders = self._get_failed_orders()
 
-            if fill_rate > 95 and slippage < 0.05 and failed_orders < 5:
-                return "Excellent"
-            elif fill_rate > 90 and slippage < 0.1 and failed_orders < 10:
-                return "Good"
-            elif fill_rate > 80 and slippage < 0.2 and failed_orders < 20:
-                return "Fair"
-            else:
-                return "Poor"
-
+            score = fill_rate
+            score -= min(slippage * 100.0, 20.0)  # penalize slippage up to 20 points
+            score -= min(failed_orders, 20)  # penalize failures up to 20 points
+            return max(0.0, min(100.0, float(score)))
         except Exception as e:
             logger.error(f"Error calculating execution quality: {e}")
-            return "Unknown"
+            return 0.0
 
     # ========== BALANCE & POSITIONS ==========
 
