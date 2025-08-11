@@ -29,8 +29,11 @@ setattr(
 # Ensure src/ directory is on path (handled by sitecustomize), then import
 from src.monitoring.dashboard import MonitoringDashboard
 
+# Mark all tests in this module as integration tests
+pytestmark = pytest.mark.integration
 
-@pytest.fixture
+
+@pytest.fixture(autouse=False)
 def dashboard():
     """Create an instance of the MonitoringDashboard for testing."""
     # Use an in-memory DB (or None) – internal queries will be monkey-patched
@@ -63,4 +66,4 @@ def test_get_balance_history_endpoint(dashboard, monkeypatch):
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == mock_history 
+    assert data == mock_history
