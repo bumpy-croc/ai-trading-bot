@@ -113,9 +113,6 @@ alwaysApply: true
 ### 4.10. Documentation
 - Don't create excess documentation. When you do, it should live in the `docs` folder.
 
-### 4.11. Git
-- Important: Never commit to git unless specifically asked to!
-
 # 5. Pull Request (PR) Reviews
 
 When I ask you to review a pull request:
