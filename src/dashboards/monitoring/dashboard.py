@@ -329,7 +329,7 @@ class MonitoringDashboard:
     def _collect_metrics(self) -> dict[str, Any]:
         """Collect all monitoring metrics"""
         try:
-            metrics = {}
+            metrics: dict[str, Any] = {}
 
             # Get enabled metrics only
             enabled_metrics = {
@@ -348,7 +348,7 @@ class MonitoringDashboard:
             if "last_data_update" in enabled_metrics:
                 metrics["last_data_update"] = datetime.now().isoformat()
             if "system_uptime" in enabled_metrics:
-                metrics["system_uptime"] = self._get_system_uptime()
+                metrics["system_uptime"] = float(self._get_system_uptime())
 
             # Risk Metrics
             if "current_drawdown" in enabled_metrics:
@@ -833,17 +833,15 @@ class MonitoringDashboard:
             logger.error(f"Error measuring API latency: {e}")
             return 0.0
 
-    def _get_system_uptime(self) -> str:
-        """Get system uptime"""
+    def _get_system_uptime(self) -> float:
+        """Get system uptime in minutes"""
         try:
             uptime = datetime.now() - self.start_time
-            days = uptime.days
-            hours, remainder = divmod(uptime.seconds, 3600)
-            minutes, _ = divmod(remainder, 60)
-            return f"{days}d {hours}h {minutes}m"
+            total_minutes = uptime.total_seconds() / 60.0
+            return float(total_minutes)
         except Exception as e:
             logger.error(f"Error getting system uptime: {e}")
-            return "Unknown"
+            return 0.0
 
     # ========== RISK METRICS ==========
 
