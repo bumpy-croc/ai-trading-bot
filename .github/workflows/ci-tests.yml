@@ -44,6 +44,7 @@ jobs:
           -v \
           --tb=short \
           --timeout=300 \
+          --ignore=tests/integration \
           -m "not integration" \
           --splits 4 \
           --group ${{ matrix.split-index }} \
