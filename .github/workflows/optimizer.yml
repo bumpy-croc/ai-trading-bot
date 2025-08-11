@@ -1,0 +1,41 @@
+name: Optimizer MVP
+
+on:
+  schedule:
+    - cron: '25 3 * * *'  # daily at 03:25 UTC
+  workflow_dispatch: {}
+
+jobs:
+  run-optimizer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run optimizer (fixture provider)
+        env:
+          ENABLE_INTEGRATION_TESTS: '0'
+        run: |
+          python scripts/run_optimizer.py \
+            --strategy ml_basic \
+            --symbol BTCUSDT \
+            --timeframe 1h \
+            --days 90 \
+            --provider fixture \
+            --output artifacts/optimizer_report.json
+
+      - name: Upload optimizer report
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimizer-report
+          path: artifacts/optimizer_report.json
