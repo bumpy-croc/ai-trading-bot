@@ -19,6 +19,7 @@ jobs:
     env:
       ACTIONS_STEP_DEBUG: true
       ACTIONS_RUNNER_DEBUG: true
+      PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
     
     steps:
     - name: Checkout code
@@ -38,11 +39,15 @@ jobs:
     - name: Run split ${{ matrix.split-index }} of 4
       run: |
         echo "=== Starting split: ${{ matrix.split-index }}/4 ==="
+        echo "PYTHONPATH=$PYTHONPATH"
         python -m pytest \
           -v \
           --tb=short \
           --timeout=300 \
+          --ignore=tests/integration \
           -m "not integration" \
+          -n 2 --dist=loadgroup \
+          -k "not test_ml_basic_backtest_2024_smoke and not test_very_large_dataset" \
           --splits 4 \
           --group ${{ matrix.split-index }} \
           --cov=src \

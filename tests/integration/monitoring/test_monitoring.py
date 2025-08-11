@@ -1,13 +1,5 @@
 """
-Tests for the monitoring dashboard system.
-
-The monitoring dashboard is critical for real-time system oversight. Tests cover:
-- Dashboard initialization and configuration
-- API endpoints and data retrieval
-- Real-time metrics calculation
-- WebSocket functionality
-- System health monitoring
-- Performance data aggregation
+Integration tests for the monitoring dashboard system.
 """
 
 import pytest

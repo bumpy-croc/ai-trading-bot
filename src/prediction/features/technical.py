@@ -26,8 +26,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
     """
     Extracts technical indicators and normalized price features from OHLCV data.
     
-    This extractor consolidates all technical analysis functionality from existing
-    strategies (MlAdaptive, MlBasic, MlWithSentiment) into a single, reusable component.
+    This extractor consolidates technical analysis functionality into a single, reusable component used by `MlBasic`.
     """
     
     def __init__(self, 
@@ -112,6 +111,8 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         """Extract core technical indicators."""
         # Calculate ATR
         df = calculate_atr(df, period=self.atr_period)
+        # ATR as percentage of close
+        df['atr_pct'] = df['atr'] / df['close'].replace(0, np.nan)
         
         # Calculate moving averages
         df = calculate_moving_averages(df, periods=self.ma_periods)
@@ -160,16 +161,30 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         # Calculate returns
         df['returns'] = df['close'].pct_change()
         
-        # Calculate volatility metrics (from MlAdaptive)
-        df['volatility_20'] = df['returns'].rolling(window=20).std()
-        df['volatility_50'] = df['returns'].rolling(window=50).std()
+        # Volatility metrics
+        # Keep legacy 'volatility' as ATR-based for backward compatibility
+        if 'atr' not in df.columns:
+            df = calculate_atr(df, period=self.atr_period)
+        df['volatility'] = df['atr'] / df['close'].replace(0, np.nan)
+        # Rolling volatility of returns for 20 and 50 periods
+        df['volatility_20'] = df['returns'].rolling(window=20, min_periods=1).std()
+        df['volatility_50'] = df['returns'].rolling(window=50, min_periods=1).std()
         
-        # Calculate ATR as percentage of price
-        df['atr_pct'] = df['atr'] / df['close']
-        
-        # Calculate trend measures (from MlAdaptive)
-        df['trend_strength'] = (df['close'] - df['ma_50']) / df['ma_50']
-        df['trend_direction'] = np.where(df['ma_20'] > df['ma_50'], 1, -1)
+        # Trend measures
+        # Ensure moving averages exist
+        missing_mas = [p for p in self.ma_periods if f'ma_{p}' not in df.columns]
+        if missing_mas:
+            df = calculate_moving_averages(df, periods=missing_mas)
+        # Trend strength relative to MA50
+        if 'ma_50' in df.columns:
+            df['trend_strength'] = (df['close'] - df['ma_50']) / df['ma_50']
+        else:
+            df['trend_strength'] = 0.0
+        # Trend direction based on MA20 vs MA50; ensure values are only -1 or 1
+        if 'ma_20' in df.columns and 'ma_50' in df.columns:
+            df['trend_direction'] = np.where(df['ma_20'] >= df['ma_50'], 1, -1)
+        else:
+            df['trend_direction'] = 1
         
         return df
     

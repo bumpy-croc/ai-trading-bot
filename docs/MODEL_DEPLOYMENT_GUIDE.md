@@ -39,14 +39,14 @@ The AI Trading Bot uses a simplified, production-safe model deployment architect
 
 ### 1. Local Training
 ```bash
-# Train a new model locally
-python scripts/train_model.py BTCUSDT --force-sentiment
+# Train a new model locally (price-only)
+python scripts/train_model.py BTCUSDT --force-price-only
 
 # Validate with backtesting
-python scripts/run_backtest.py ml_with_sentiment --days 90 --no-db
+python scripts/run_backtest.py ml_basic --days 90 --no-db
 
 # Test in paper trading mode
-python scripts/run_live_trading.py ml_with_sentiment --paper-trading
+python scripts/run_live_trading.py ml_basic --paper-trading
 ```
 
 ### 2. Model Packaging
