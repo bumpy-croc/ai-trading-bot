@@ -1,4 +1,5 @@
 from importlib import import_module
-from .engine import Backtester, Trade
+from .engine import Backtester
+from .models import Trade  # Completed trade record for backtests
 # Expose BacktestDashboard at package level for easy import
 BacktestDashboard = import_module('backtesting.dashboard.dashboard').BacktestDashboard  # type: ignore
