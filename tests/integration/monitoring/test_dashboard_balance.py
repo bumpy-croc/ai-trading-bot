@@ -29,9 +29,11 @@ setattr(
 # Ensure src/ directory is on path (handled by sitecustomize), then import
 from src.monitoring.dashboard import MonitoringDashboard
 
+# Mark all tests in this module as integration tests
+pytestmark = pytest.mark.integration
 
-@pytest.fixture
-autouse=False
+
+@pytest.fixture(autouse=False)
 def dashboard():
     """Create an instance of the MonitoringDashboard for testing."""
     # Use an in-memory DB (or None) – internal queries will be monkey-patched
