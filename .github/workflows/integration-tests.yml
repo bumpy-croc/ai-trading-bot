@@ -9,6 +9,8 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
     
     services:
       postgres:
@@ -58,4 +60,5 @@ jobs:
         DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
         ENABLE_INTEGRATION_TESTS: '1'
       run: |
+        echo "PYTHONPATH=$PYTHONPATH"
         python tests/run_tests.py integration -q
