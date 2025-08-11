@@ -277,7 +277,7 @@ class MonitoringDashboard:
         @self.app.route("/api/balance", methods=["POST"])
         def update_balance():
             """Manually update balance"""
-            data = request.json
+            data = request.json or {}
             new_balance = data.get("balance")
             reason = data.get("reason", "Manual adjustment via dashboard")
             updated_by = data.get("updated_by", "dashboard_user")
@@ -979,7 +979,7 @@ class MonitoringDashboard:
                 return 0.0
 
             # Simple slippage estimation based on price movement
-            total_slippage = 0
+            total_slippage = 0.0
             count = 0
 
             for _trade in result:
