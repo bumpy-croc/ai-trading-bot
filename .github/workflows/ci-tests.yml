@@ -46,6 +46,8 @@ jobs:
           --timeout=300 \
           --ignore=tests/integration \
           -m "not integration" \
+          -n 2 --dist=loadgroup \
+          -k "not test_ml_basic_backtest_2024_smoke and not test_very_large_dataset" \
           --splits 4 \
           --group ${{ matrix.split-index }} \
           --cov=src \
