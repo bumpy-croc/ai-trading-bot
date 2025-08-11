@@ -9,6 +9,7 @@ class BaseStrategy(ABC):
     Abstract base class for all trading strategies.
     All concrete strategy implementations must inherit from this class.
     Default trading pair is Binance style (e.g., BTCUSDT).
+    
     """
     
     def __init__(self, name: str):
@@ -26,7 +27,7 @@ class BaseStrategy(ABC):
     def set_database_manager(self, db_manager, session_id: Optional[int] = None):
         """Set database manager for strategy execution logging"""
         self.db_manager = db_manager
-        self.session_id = session_id
+
         
     def log_execution(
         self,
@@ -51,20 +52,24 @@ class BaseStrategy(ABC):
         
         This allows strategies to log their internal decision-making process,
         providing insights into why certain signals were generated.
+        
         """
-        if not self.enable_execution_logging or not self.db_manager:
-            return
-            
         try:
-            # Merge additional context into reasons if provided
-            final_reasons = reasons or []
+            if not self.db_manager or not self.enable_execution_logging:
+                return
+            # Merge additional context into reasons for auditability
+            final_reasons = list(reasons) if reasons else []
             if additional_context:
-                context_reasons = [f"{k}={v}" for k, v in additional_context.items()]
-                final_reasons.extend(context_reasons)
-            
+                try:
+                    context_pairs = [f"{k}={v}" for k, v in additional_context.items()]
+                    final_reasons.extend(context_pairs)
+                except Exception:
+                    pass
+            # Use the SymbolFactory for consistent formatting
+            symbol_code = SymbolFactory.normalize(symbol) if symbol else None
             self.db_manager.log_strategy_execution(
-                strategy_name=self.name,
-                symbol=symbol or self.trading_pair,
+                strategy_name=self.__class__.__name__,
+                symbol=symbol_code,
                 signal_type=signal_type,
                 action_taken=action_taken,
                 price=price,
@@ -80,6 +85,7 @@ class BaseStrategy(ABC):
                 volatility=volatility,
                 session_id=self.session_id
             )
+
         except Exception as e:
             self.logger.warning(f"Failed to log strategy execution: {e}")
     
@@ -123,4 +129,18 @@ class BaseStrategy(ABC):
         
     def prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Prepare data for strategy execution"""
-        return self.calculate_indicators(df.copy()) 
+        return self.calculate_indicators(df.copy())
+
+    def get_risk_overrides(self) -> Optional[Dict[str, Any]]:
+        """
+        Optional hook: strategies can provide risk/position management overrides.
+        Expected keys may include:
+          - position_sizer: 'fixed_fraction' | 'confidence_weighted'
+          - base_fraction: float (e.g., 0.02 for 2%)
+          - min_fraction: float
+          - max_fraction: float
+          - stop_loss_pct: float
+          - take_profit_pct: float or None
+        If None, the RiskManager defaults are used.
+        """
+        return None 

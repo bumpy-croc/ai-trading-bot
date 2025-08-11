@@ -393,7 +393,21 @@ class Backtester:
                 # Check for entry if not in position
                 elif self.strategy.check_entry_conditions(df, i):
                     # Calculate position size (as fraction of balance)
-                    size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+                    try:
+                        overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
+                    except Exception:
+                        overrides = None
+                    if overrides and overrides.get('position_sizer'):
+                        size_fraction = self.risk_manager.calculate_position_fraction(
+                            df=df,
+                            index=i,
+                            balance=self.balance,
+                            price=current_price,
+                            indicators=self._extract_indicators(df, i),
+                            strategy_overrides=overrides,
+                        )
+                    else:
+                        size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
                     
                     # Log entry decision
                     if self.log_to_database and self.db_manager:
@@ -428,10 +442,25 @@ class Backtester:
                         # Enter new trade
                         # Optionally use legacy indexing behavior for stop-loss calculation to preserve parity
                         sl_index = (len(df) - 1) if self.legacy_stop_loss_indexing else i
-                        stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'long')
-                        # Parity with live engine: 4% TP for long
-                        tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
-                        take_profit = current_price * (1 + tp_pct)
+                        try:
+                            overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
+                        except Exception:
+                            overrides = None
+                        if overrides and (('stop_loss_pct' in overrides) or ('take_profit_pct' in overrides)):
+                            stop_loss, take_profit = self.risk_manager.compute_sl_tp(
+                                df=df,
+                                index=sl_index,
+                                entry_price=current_price,
+                                side='long',
+                                strategy_overrides=overrides,
+                            )
+                            if take_profit is None:
+                                tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
+                                take_profit = current_price * (1 + tp_pct)
+                        else:
+                            stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'long')
+                            tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
+                            take_profit = current_price * (1 + tp_pct)
                         self.current_trade = ActiveTrade(
                             symbol=symbol,
                             side='long',
@@ -445,7 +474,21 @@ class Backtester:
 
                 # Optional short entry if supported by strategy
                 elif self.enable_short_trading and hasattr(self.strategy, 'check_short_entry_conditions') and self.strategy.check_short_entry_conditions(df, i):
-                    size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+                    try:
+                        overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
+                    except Exception:
+                        overrides = None
+                    if overrides and overrides.get('position_sizer'):
+                        size_fraction = self.risk_manager.calculate_position_fraction(
+                            df=df,
+                            index=i,
+                            balance=self.balance,
+                            price=current_price,
+                            indicators=self._extract_indicators(df, i),
+                            strategy_overrides=overrides,
+                        )
+                    else:
+                        size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
 
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
@@ -476,9 +519,21 @@ class Backtester:
 
                     if size_fraction > 0:
                         sl_index = (len(df) - 1) if self.legacy_stop_loss_indexing else i
-                        stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'short')
-                        tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
-                        take_profit = current_price * (1 - tp_pct)
+                        if overrides and (('stop_loss_pct' in overrides) or ('take_profit_pct' in overrides)):
+                            stop_loss, take_profit = self.risk_manager.compute_sl_tp(
+                                df=df,
+                                index=sl_index,
+                                entry_price=current_price,
+                                side='short',
+                                strategy_overrides=overrides,
+                            )
+                            if take_profit is None:
+                                tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
+                                take_profit = current_price * (1 - tp_pct)
+                        else:
+                            stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'short')
+                            tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
+                            take_profit = current_price * (1 - tp_pct)
                         self.current_trade = ActiveTrade(
                             symbol=symbol,
                             side='short',

@@ -462,12 +462,38 @@ class LiveTradingEngine:
                     if hasattr(self.strategy, 'check_short_entry_conditions'):
                         short_entry_signal = self.strategy.check_short_entry_conditions(df, current_index)
                         if short_entry_signal:
-                            short_position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
-                            short_position_size = min(short_position_size, self.max_position_size)
+                            try:
+                                overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
+                            except Exception:
+                                overrides = None
+                            if overrides and overrides.get('position_sizer'):
+                                short_fraction = self.risk_manager.calculate_position_fraction(
+                                    df=df,
+                                    index=current_index,
+                                    balance=self.current_balance,
+                                    price=current_price,
+                                    indicators=indicators,
+                                    strategy_overrides=overrides,
+                                )
+                                short_fraction = min(short_fraction, self.max_position_size)
+                                short_position_size = short_fraction
+                            else:
+                                short_position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+                                short_position_size = min(short_position_size, self.max_position_size)
                             if short_position_size > 0:
-                                short_stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, PositionSide.SHORT)
-                                # Use strategy's take profit percentage for consistency
-                                short_take_profit = current_price * (1 - self.strategy.take_profit_pct)
+                                if overrides and (('stop_loss_pct' in overrides) or ('take_profit_pct' in overrides)):
+                                    short_stop_loss, short_take_profit = self.risk_manager.compute_sl_tp(
+                                        df=df,
+                                        index=current_index,
+                                        entry_price=current_price,
+                                        side='short',
+                                        strategy_overrides=overrides,
+                                    )
+                                    if short_take_profit is None:
+                                        short_take_profit = current_price * (1 - getattr(self.strategy, 'take_profit_pct', 0.04))
+                                else:
+                                    short_stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, PositionSide.SHORT)
+                                    short_take_profit = current_price * (1 - getattr(self.strategy, 'take_profit_pct', 0.04))
                                 self._open_position(symbol, PositionSide.SHORT, short_position_size, current_price, short_stop_loss, short_take_profit)
                 # Update performance metrics
                 self._update_performance_metrics()
@@ -642,8 +668,26 @@ class LiveTradingEngine:
         # Calculate position size if entry signal is present
         position_size = 0.0
         if entry_signal:
-            position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
-            position_size = min(position_size, self.max_position_size)  # Cap at max position size
+            # Prefer strategy sizing by default; use risk manager only if overrides specify a sizer
+            try:
+                overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
+            except Exception:
+                overrides = None
+            if overrides and overrides.get('position_sizer'):
+                fraction = self.risk_manager.calculate_position_fraction(
+                    df=df,
+                    index=current_index,
+                    balance=self.current_balance,
+                    price=current_price,
+                    indicators=indicators,
+                    strategy_overrides=overrides,
+                )
+                # Enforce engine-level cap
+                fraction = min(fraction, self.max_position_size)
+                position_size = fraction
+            else:
+                position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+                position_size = min(position_size, self.max_position_size)
         
         # Log strategy execution decision
         if self.db_manager:
@@ -675,8 +719,23 @@ class LiveTradingEngine:
             return
             
         # Calculate risk management levels
-        stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, 'long')
-        take_profit = current_price * 1.04  # 4% take profit target
+        try:
+            overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
+        except Exception:
+            overrides = None
+        if overrides and (('stop_loss_pct' in overrides) or ('take_profit_pct' in overrides)):
+            stop_loss, take_profit = self.risk_manager.compute_sl_tp(
+                df=df,
+                index=current_index,
+                entry_price=current_price,
+                side='long',
+                strategy_overrides=overrides,
+            )
+            if take_profit is None:
+                take_profit = current_price * 1.04
+        else:
+            stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, 'long')
+            take_profit = current_price * 1.04
         
         # Open new position
         self._open_position(symbol, PositionSide.LONG, position_size, current_price, stop_loss, take_profit)
