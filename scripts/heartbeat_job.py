@@ -10,6 +10,7 @@ Environment variables:
 • DATABASE_URL – PostgreSQL URL (inherited from existing config system)
 • HEARTBEAT_COMPONENT – Optional component name (default: 'scheduler')
 """
+
 from __future__ import annotations
 
 import os
@@ -18,6 +19,7 @@ from datetime import datetime
 
 # Ensure project root is on path
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from database.manager import DatabaseManager  # type: ignore

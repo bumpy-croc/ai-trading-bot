@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 from pathlib import Path
 
 # If running under pytest, avoid altering sys.path/PYTHONPATH to keep imports predictable
@@ -25,7 +25,7 @@ else:
             sys.path.insert(1, src_path_str)
 
     # Also add to PYTHONPATH environment variable for subprocess calls
-    existing_pythonpath = os.environ.get('PYTHONPATH', '')
+    existing_pythonpath = os.environ.get("PYTHONPATH", "")
     paths_to_add = [project_root_str, str(_src_path)]
 
     # Build a colon-separated PYTHONPATH ensuring no duplicates and preserving order
@@ -36,7 +36,7 @@ else:
     if existing_pythonpath:
         new_pythonpath_parts.append(existing_pythonpath)
 
-    os.environ['PYTHONPATH'] = ':'.join(new_pythonpath_parts)
+    os.environ["PYTHONPATH"] = ":".join(new_pythonpath_parts)
 
 # ---------------------------------------------------------------------------
 # Removed pandas fallback – real pandas will be installed in the

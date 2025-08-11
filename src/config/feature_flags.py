@@ -15,15 +15,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
-from src.config.paths import get_project_root
-
+from config.paths import get_project_root
 
 _DEFAULT_FLAGS_FILENAME = "feature_flags.json"
 
 
-def _load_repo_defaults() -> Dict[str, Any]:
+def _load_repo_defaults() -> dict[str, Any]:
     """Load defaults from the git-tracked feature_flags.json file.
 
     Returns:
@@ -43,7 +42,7 @@ def _load_repo_defaults() -> Dict[str, Any]:
         return {}
 
 
-def _load_env_json(var_name: str) -> Dict[str, Any]:
+def _load_env_json(var_name: str) -> dict[str, Any]:
     """Parse a JSON string from an environment variable into a dict.
 
     Args:
@@ -66,7 +65,7 @@ def _to_upper_snake(key: str) -> str:
     return key.upper().replace("-", "_")
 
 
-def _parse_bool(value: str) -> Optional[bool]:
+def _parse_bool(value: str) -> bool | None:
     """Parse a string into a boolean if it matches common representations.
 
     Returns True/False for recognized values, otherwise None.
@@ -79,7 +78,7 @@ def _parse_bool(value: str) -> Optional[bool]:
     return None
 
 
-def _resolve_from_sources(key: str) -> Optional[Union[bool, str]]:
+def _resolve_from_sources(key: str) -> bool | str | None:
     """Resolve a flag value across sources without applying a default."""
     # 1) Emergency per-flag env var: FEATURE_<UPPER_SNAKE_KEY>
     env_key = f"FEATURE_{_to_upper_snake(key)}"
@@ -106,7 +105,7 @@ def _resolve_from_sources(key: str) -> Optional[Union[bool, str]]:
     return None
 
 
-def get_flag(key: str, default: Optional[Union[bool, str]] = None) -> Optional[Union[bool, str]]:
+def get_flag(key: str, default: bool | str | None = None) -> bool | str | None:
     """Get a feature flag as bool or string.
 
     Args:
@@ -142,12 +141,12 @@ def is_enabled(key: str, default: bool = False) -> bool:
     return default
 
 
-def resolve_all() -> Dict[str, Union[bool, str]]:
+def resolve_all() -> dict[str, bool | str]:
     """Resolve and return a merged view of all flags for diagnostics.
 
     Precedence is applied per key across the three sources.
     """
-    merged: Dict[str, Union[bool, str]] = {}
+    merged: dict[str, bool | str] = {}
 
     # Start with repo defaults
     merged.update({k: v for k, v in _load_repo_defaults().items() if isinstance(v, (bool, str))})
@@ -162,11 +161,9 @@ def resolve_all() -> Dict[str, Union[bool, str]]:
     # To capture keys from env, iterate over existing keys and any FEATURE_* present
     for env_k, env_v in os.environ.items():
         if env_k.startswith("FEATURE_") and env_k not in {"FEATURE_FLAGS_OVERRIDES"}:
-            key_lower = env_k[len("FEATURE_"):].lower()
+            key_lower = env_k[len("FEATURE_") :].lower()
             key_lower = key_lower.replace("_", " ").replace("-", " ").strip().replace(" ", "_")
             parsed_bool = _parse_bool(env_v)
             merged[key_lower] = parsed_bool if parsed_bool is not None else env_v
 
     return merged
-
-
