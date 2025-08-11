@@ -145,7 +145,6 @@ class TestPerformanceBenchmark:
         compute_result = self.run_test_command([
             sys.executable, "-m", "pytest", 
             "tests/test_backtesting.py",
-            "tests/test_ml_adaptive.py",
             "-v", "--tb=short", "-q",
             "-n", "2",
             "-m", "not integration"

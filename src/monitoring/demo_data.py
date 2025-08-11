@@ -117,7 +117,7 @@ class DemoDataGenerator:
         cursor = self.connection.cursor()
         
         # Create trading session
-        strategies = ['adaptive', 'ml_with_sentiment', 'enhanced', 'ml_basic']
+        strategies = ['ml_basic']
         strategy = random.choice(strategies)
         
         cursor.execute("""

@@ -39,7 +39,10 @@ class SymbolFactory:
             # Already Binance style
             return symbol
         elif exchange == 'coinbase':
-            # Convert 'BTCUSDT' or 'BTC/USDT' to 'BTC-USD'
+            # If already Coinbase style with '-', return as-is
+            if '-' in symbol:
+                return symbol
+            # Convert Binance-style to Coinbase-style
             if symbol.endswith('USDT'):
                 base = symbol[:-4]
                 return f"{base}-USD"
@@ -49,9 +52,7 @@ class SymbolFactory:
             if '/' in symbol:
                 base, quote = symbol.split('/')
                 return f"{base}-{quote}"
-            if '-' in symbol:
-                return symbol
-            # Fallback: try regex for 3-4 letter base/quote
+            # Fallback: try regex for 3-5 letter base/quote
             m = re.match(r"([A-Z]{3,5})([A-Z]{3,5})", symbol)
             if m:
                 return f"{m.group(1)}-{m.group(2)}"

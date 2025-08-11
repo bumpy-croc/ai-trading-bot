@@ -13,7 +13,7 @@ Usage:
     python run_live_trading.py ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
     
     # With custom settings
-    python run_live_trading.py ml_with_sentiment --symbol BTCUSDT --balance 5000 --max-position 0.05
+    python run_live_trading.py ml_basic --symbol BTCUSDT --balance 5000 --max-position 0.05
 """
 
 import argparse
@@ -40,7 +40,6 @@ from live.trading_engine import LiveTradingEngine
 
 # Import strategies
 from strategies.ml_basic import MlBasic
-from strategies.ml_with_sentiment import MlWithSentiment
 from strategies.test_high_frequency import TestHighFrequencyStrategy
 
 # Configure logging - ensure the logs directory exists at project root
@@ -57,10 +56,8 @@ def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
         'ml_basic': MlBasic,
-        'ml_with_sentiment': lambda: MlWithSentiment(use_sentiment=True),
         'test_high_frequency': TestHighFrequencyStrategy
     }
-    #
     
     if strategy_name not in strategies:
         logger.error(f"Unknown strategy: {strategy_name}")
@@ -80,7 +77,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Run live trading bot')
     
     # Strategy selection
-    parser.add_argument('strategy', help='Strategy name (e.g., ml_basic, ml_with_sentiment)')
+    parser.add_argument('strategy', help='Strategy name (e.g., ml_basic)')
     
     # Trading parameters
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading pair symbol (e.g., BTCUSDT, ETHUSDT)')

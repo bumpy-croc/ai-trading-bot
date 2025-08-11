@@ -11,7 +11,7 @@ A short, plain-language reference for understanding the decisions made in this t
 | **Long / Short** | Betting price goes **up** (long) or **down** (short). | Like cheering for a team to win or lose. |
 | **Market / Limit Order** | Buy/Sell immediately (**market**) or at a chosen price (**limit**). | Instant purchase vs. setting an alarm-clock price. |
 | **Liquidity & Spread** | How easy it is to trade and the gap between buy/sell quotes. | Busy farmers’ market vs. remote roadside stall. |
-| **Leverage** | Borrowing funds to amplify gains *and* losses. | Driving faster: you reach sooner, but crashes hurt more. |
+| **Leverage** | Borrowing funds to amplify gains and losses. | Driving faster: you reach sooner, but crashes hurt more. |
 | **Pip / Tick** | The smallest price movement. | Cents on a dollar. |
 | **Drawdown** | Drop from a peak account value. | Hiking downhill before climbing higher. |
 | **Volatility** | How quickly prices wiggle. | Calm lake vs. stormy sea. |
@@ -41,7 +41,7 @@ Our bot ingests multiple data flavours; combining them tends to outperform any s
 4. **Machine-Learning Models**
    - **Feature Engineering**: stack indicators + sentiment + macro signals.
    - **Algorithms**: Gradient Boosting, LSTM/CNN, ensembles.  
-   - **ONNX exports** for fast inference inside `ml_adaptive`.
+   - **ONNX exports** for fast inference inside strategies.
    - Goal: Predict *direction* or *probability* of price move > threshold.
 
 5. **Meta-Signals**
@@ -56,10 +56,7 @@ Our bot ingests multiple data flavours; combining them tends to outperform any s
 
 | Strategy | Primary Edge | File |
 |----------|--------------|------|
-| **Trend-Following** | Ride sustained moves via moving averages | `strategies.ml_adaptive` |
-| **ML Adaptive** | Model-driven signals + dynamic risk | `strategies.ml_adaptive` |
 | **ML Basic** | Simplified ML without adaptation | `strategies.ml_basic` |
-| **Sentiment-Aware** | Blend price + sentiment | `strategies.ml_with_sentiment` |
 
 Each strategy plugs into a common base class (`strategies.base`) and is orchestrated by `live.strategy_manager`.
 

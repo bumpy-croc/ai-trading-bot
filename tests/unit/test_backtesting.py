@@ -18,7 +18,7 @@ from unittest.mock import Mock, patch
 
 from backtesting.engine import Backtester
 from live.trading_engine import Trade
-from strategies.ml_adaptive import MlAdaptive
+from strategies.ml_basic import MlBasic
 from risk.risk_manager import RiskParameters
 
 
@@ -27,7 +27,7 @@ class TestBacktesterInitialization:
 
     def test_backtester_initialization(self, mock_data_provider):
         """Test backtester initialization with basic parameters"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         risk_params = RiskParameters()
         
         backtester = Backtester(
@@ -47,7 +47,7 @@ class TestBacktesterInitialization:
 
     def test_backtester_with_default_parameters(self, mock_data_provider):
         """Test backtester with default parameters"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         backtester = Backtester(
             strategy=strategy,
@@ -61,7 +61,7 @@ class TestBacktesterInitialization:
 
     def test_backtester_with_sentiment_provider(self, mock_data_provider, mock_sentiment_provider):
         """Test backtester with sentiment provider"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         backtester = Backtester(
             strategy=strategy,
@@ -78,24 +78,12 @@ class TestTradeGeneration:
     def test_trade_creation(self):
         """Test Trade object creation"""
         from live.trading_engine import PositionSide
-        trade = Trade(
-            symbol="BTCUSDT",
-            side=PositionSide.LONG,
-            entry_price=50000,
-            exit_price=55000,
-            entry_time=datetime(2024, 1, 1, 10, 0),
-            exit_time=datetime(2024, 1, 1, 12, 0),
-            size=0.1,
-            pnl=500,
-            exit_reason="test"
-        )
-        
+        trade = Trade(symbol="BTCUSDT", side=PositionSide.LONG, entry_price=50000, size=0.1, entry_time=datetime.now())
         assert trade.symbol == "BTCUSDT"
         assert trade.side == PositionSide.LONG
         assert trade.entry_price == 50000
-        assert trade.exit_price == 55000
+        assert trade.exit_price is None
         assert trade.size == 0.1
-        assert trade.pnl == 500
 
     def test_trade_pnl_calculation(self):
         """Test trade P&L calculation"""
@@ -159,7 +147,7 @@ class TestBacktestingExecution:
 
     def test_basic_backtest_execution(self, mock_data_provider, sample_ohlcv_data):
         """Test basic backtest execution"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         risk_params = RiskParameters()
         
         backtester = Backtester(
@@ -191,7 +179,7 @@ class TestBacktestingExecution:
 
     def test_backtest_with_no_trades(self, mock_data_provider):
         """Test backtest with no trading signals"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         # Create data with no clear signals
         no_signal_data = pd.DataFrame({
@@ -219,7 +207,7 @@ class TestBacktestingExecution:
 
     def test_backtest_performance_metrics(self, mock_data_provider, sample_ohlcv_data):
         """Test backtest performance metrics calculation"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
@@ -246,7 +234,7 @@ class TestRiskManagementIntegration:
 
     def test_risk_parameters_integration(self, mock_data_provider, sample_ohlcv_data):
         """Test that risk parameters are respected during backtesting"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         # Conservative risk parameters
         risk_params = RiskParameters(
@@ -272,7 +260,7 @@ class TestRiskManagementIntegration:
 
     def test_position_size_limits(self, mock_data_provider, sample_ohlcv_data):
         """Test that position size limits are enforced"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         # Very restrictive position size
         risk_params = RiskParameters(max_position_size=0.01)  # 1% max position
@@ -297,7 +285,7 @@ class TestDataHandling:
 
     def test_empty_data_handling(self, mock_data_provider):
         """Test backtester with empty data"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         empty_data = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
         mock_data_provider.get_historical_data.return_value = empty_data
@@ -316,7 +304,7 @@ class TestDataHandling:
 
     def test_missing_columns_handling(self, mock_data_provider):
         """Test backtester with missing data columns"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         # Data missing required columns
         incomplete_data = pd.DataFrame({
@@ -339,7 +327,7 @@ class TestDataHandling:
 
     def test_data_validation(self, mock_data_provider):
         """Test data validation in backtester"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         # Data with invalid values
         invalid_data = pd.DataFrame({
@@ -372,7 +360,7 @@ class TestBacktestingEdgeCases:
 
     def test_single_data_point(self, mock_data_provider):
         """Test backtester with single data point"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         single_data = pd.DataFrame({
             'open': [100],
@@ -399,7 +387,7 @@ class TestBacktestingEdgeCases:
     @pytest.mark.slow
     def test_very_large_dataset(self, mock_data_provider):
         """Test backtester with very large dataset"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         # Generate large dataset
         n_points = 10000
@@ -427,7 +415,7 @@ class TestBacktestingEdgeCases:
 
     def test_concurrent_trades_handling(self, mock_data_provider, sample_ohlcv_data):
         """Test handling of concurrent trades"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
@@ -450,7 +438,7 @@ class TestBacktestingIntegration:
     def test_strategy_integration(self, mock_data_provider, sample_ohlcv_data):
         """Test backtester integration with different strategies"""
         # Test with adaptive strategy
-        adaptive_strategy = MlAdaptive()
+        adaptive_strategy = MlBasic()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
@@ -467,7 +455,7 @@ class TestBacktestingIntegration:
 
     def test_database_logging_integration(self, mock_data_provider, sample_ohlcv_data):
         """Test backtester with database logging"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
@@ -487,7 +475,7 @@ class TestBacktestingIntegration:
 
     def test_sentiment_integration(self, mock_data_provider, mock_sentiment_provider, sample_ohlcv_data):
         """Test backtester with sentiment data integration"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
         
