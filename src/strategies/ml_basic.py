@@ -39,7 +39,7 @@ class MlBasic(BaseStrategy):
     # * Strategy configuration constants
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
     CONFIDENCE_MULTIPLIER = 10  # Multiplier for confidence calculation
-    BASE_POSITION_SIZE = 0.11  # Base position size (11% of balance)
+    BASE_POSITION_SIZE = 0.12  # Base position size (12% of balance)
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
 
