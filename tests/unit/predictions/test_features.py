@@ -340,39 +340,4 @@ class TestFeatureSchemas:
             if feature_def.max_value is not None:
                 assert isinstance(feature_def.max_value, (int, float))
             if feature_def.default_value is not None:
-<<<<<<< HEAD:tests/predictions/test_features.py
                 assert isinstance(feature_def.default_value, (int, float))
-
-
-@pytest.fixture
-def sample_market_data():
-    """Create sample market data for integration tests."""
-    dates = pd.date_range("2023-01-01", periods=200, freq="1H")
-    np.random.seed(42)
-
-    # Generate realistic crypto price data
-    base_price = 30000
-    returns = np.random.normal(0, 0.02, len(dates))
-    prices = [base_price]
-
-    for ret in returns[1:]:
-        new_price = prices[-1] * (1 + ret)
-        prices.append(max(new_price, 100))
-
-    # Add realistic spread and volume
-    spread_pct = np.random.uniform(0.001, 0.005, len(dates))
-    volume = np.random.uniform(50, 500, len(dates))
-
-    return pd.DataFrame(
-        {
-            "open": prices,
-            "high": [p * (1 + s + np.random.uniform(0, 0.01)) for p, s in zip(prices, spread_pct)],
-            "low": [p * (1 - s - np.random.uniform(0, 0.01)) for p, s in zip(prices, spread_pct)],
-            "close": prices,
-            "volume": volume,
-        },
-        index=dates,
-    )
-=======
-                assert isinstance(feature_def.default_value, (int, float))
->>>>>>> origin/develop:tests/unit/predictions/test_features.py
