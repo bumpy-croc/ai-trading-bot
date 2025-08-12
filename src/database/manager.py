@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 PostgreSQL database manager for handling all database operations
 """

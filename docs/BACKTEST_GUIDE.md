@@ -21,11 +21,10 @@ python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-bal
 ## Available Strategies
 
 - `ml_basic` - Machine Learning Basic Strategy (recommended for 1h timeframe)
-- `ml_with_sentiment` - ML Strategy with sentiment analysis
 
 ## Timeframe Recommendations
 
-### For ML Strategies (ml_basic, ml_with_sentiment)
+### For ML Strategies (ml_basic)
 **Always use 1-hour candles (`--timeframe 1h`)**
 
 - ML strategies perform significantly better with 1-hour data
@@ -88,7 +87,6 @@ Candle: 8760 of 43780
 2. **Use `--no-cache` for fresh data**
 3. **Start with 1-year tests before running 5-year tests**
 4. **Monitor the early stop warnings**
-5. **Compare multiple strategies with the same parameters**
 
 ## Example Commands
 
@@ -100,18 +98,6 @@ python scripts/run_backtest.py ml_basic --days 365 --timeframe 1h --initial-bala
 ### Full 5-Year Test with Fresh Data
 ```bash
 python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-balance 10000 --no-cache
-```
-
-### Test with Sentiment Analysis
-```bash
-python scripts/run_backtest.py ml_with_sentiment --days 365 --timeframe 1h --initial-balance 10000 --use-sentiment
-```
-
-### Compare Strategies
-```bash
-# Test multiple strategies
-python scripts/run_backtest.py ml_basic --days 365 --timeframe 1h --initial-balance 10000
-python scripts/run_backtest.py ml_with_sentiment --days 365 --timeframe 1h --initial-balance 10000
 ```
 
 ## Troubleshooting

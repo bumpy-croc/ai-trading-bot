@@ -26,11 +26,9 @@ src/
 │
 ├── strategies/              # Trading strategy implementations
 │   ├── base.py              # Abstract base class
-│   ├── adaptive.py          # Adaptive EMA strategy
-│   ├── enhanced.py          # Multi-indicator strategy
 │   ├── ml_basic.py          # ML price prediction strategy
-│   ├── ml_with_sentiment.py # Advanced ML + sentiment strategy
-│   └── high_risk_high_reward.py # Aggressive trading strategy
+│   ├── ml_adaptive.py       # Adaptive ML strategy
+│   └── ml_with_sentiment.py # ML + sentiment strategy
 │
 ├── risk/                    # Risk management system
 │   └── risk_manager.py      # Position sizing, stop-loss, exposure limits

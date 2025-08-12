@@ -70,18 +70,11 @@ python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-bal
 python scripts/run_backtest.py ml_basic --days 365 --timeframe 1h --initial-balance 10000
 ```
 
-#### Strategy Comparison
-```bash
-# Test multiple strategies
-python scripts/run_backtest.py ml_basic --days 365 --timeframe 1h --initial-balance 10000
-```
-
 ### 6. Available Strategies
 
 | Strategy | Best Timeframe | Use Case |
 |----------|----------------|----------|
 | `ml_basic` | 1h | Primary ML strategy |
-| `ml_with_sentiment` | 1h | ML with sentiment analysis |
 
 ### 7. Troubleshooting
 
@@ -145,6 +138,5 @@ If present, shows why the backtest stopped early and when.
 2. **Use `--no-cache` for fresh data** - Ensures up-to-date results
 3. **Monitor early stop warnings** - Understand when and why backtests stop
 4. **Start with 1-year tests** - Before running 5-year tests
-5. **Compare strategies** - Use same parameters for fair comparison
 
 The MLBasic strategy with 1-hour candles consistently outperforms daily candles and provides a solid foundation for ML-based trading strategies. 

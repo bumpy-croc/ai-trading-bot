@@ -11,6 +11,13 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
+<<<<<<< HEAD
+=======
+from live.trading_engine import LiveTradingEngine
+from live.strategy_manager import StrategyManager
+from strategies.ml_basic import MlBasic
+from risk.risk_manager import RiskManager, RiskParameters
+>>>>>>> origin/develop
 from backtesting.engine import Backtester
 from live.strategy_manager import StrategyManager
 from live.trading_engine import LiveTradingEngine
@@ -27,7 +34,7 @@ class TestEndToEndWorkflows:
     def test_complete_backtesting_workflow(self, mock_data_provider, sample_ohlcv_data):
         """Test complete backtesting from start to finish"""
         # Setup
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         risk_params = RiskParameters()
         backtester = Backtester(
             strategy=strategy,
@@ -66,8 +73,13 @@ class TestEndToEndWorkflows:
     def test_strategy_to_live_trading_workflow(self, mock_data_provider, temp_directory):
         """Test strategy development to live trading deployment"""
         # 1. Strategy Development Phase
+<<<<<<< HEAD
         strategy = MlAdaptive()
 
+=======
+        strategy = MlBasic()
+        
+>>>>>>> origin/develop
         # Verify strategy has required methods
         assert hasattr(strategy, "calculate_indicators")
         assert hasattr(strategy, "check_entry_conditions")
@@ -109,9 +121,17 @@ class TestEndToEndWorkflows:
     def test_data_flow_integration(self, mock_data_provider):
         """Test data flow from provider through strategy to trading decisions"""
         # Setup components
+<<<<<<< HEAD
         strategy = MlAdaptive()
         _engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
+=======
+        strategy = MlBasic()
+        engine = LiveTradingEngine(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            enable_live_trading=False
+>>>>>>> origin/develop
         )
 
         # Mock data provider responses
@@ -149,8 +169,13 @@ class TestEndToEndWorkflows:
         """Test hot-swapping strategies during live trading"""
         # Setup strategy manager
         manager = StrategyManager(staging_dir=str(temp_directory))
+<<<<<<< HEAD
         initial_strategy = manager.load_strategy("ml_adaptive", version="v1")
 
+=======
+        initial_strategy = manager.load_strategy("ml_basic", version="v1")
+        
+>>>>>>> origin/develop
         # Setup trading engine with hot-swapping enabled
         engine = LiveTradingEngine(
             strategy=initial_strategy,
@@ -164,9 +189,15 @@ class TestEndToEndWorkflows:
 
         # Test hot-swap workflow
         # 1. Prepare new strategy
+<<<<<<< HEAD
         swap_success = manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
         assert swap_success
 
+=======
+        swap_success = manager.hot_swap_strategy("ml_basic", new_config={"sequence_length": 120})
+        assert swap_success == True
+        
+>>>>>>> origin/develop
         # 2. Engine detects pending update
         has_update = manager.has_pending_update()
         assert has_update
@@ -189,8 +220,13 @@ class TestEndToEndWorkflows:
             max_position_size=0.10,  # 10% max position
             max_daily_risk=0.05,  # 5% daily risk
         )
+<<<<<<< HEAD
 
         strategy = MlAdaptive()
+=======
+        
+        strategy = MlBasic()
+>>>>>>> origin/develop
         risk_manager = RiskManager(risk_params)
 
         _engine = LiveTradingEngine(
@@ -229,8 +265,13 @@ class TestComponentInteractions:
 
     def test_strategy_data_provider_interaction(self, mock_data_provider):
         """Test strategy working with different data providers"""
+<<<<<<< HEAD
         strategy = MlAdaptive()
 
+=======
+        strategy = MlBasic()
+        
+>>>>>>> origin/develop
         # Test with mock provider
         market_data = pd.DataFrame(
             {
@@ -256,8 +297,13 @@ class TestComponentInteractions:
 
     def test_backtester_strategy_integration(self, mock_data_provider, sample_ohlcv_data):
         """Test backtester working with different strategies"""
+<<<<<<< HEAD
         strategies = [MlAdaptive()]
 
+=======
+        strategies = [MlBasic()]
+        
+>>>>>>> origin/develop
         for strategy in strategies:
             backtester = Backtester(
                 strategy=strategy, data_provider=mock_data_provider, initial_balance=10000
@@ -275,7 +321,7 @@ class TestComponentInteractions:
     def test_live_engine_component_integration(self, mock_data_provider):
         """Test live engine integrating all components"""
         # Setup all components
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         risk_params = RiskParameters()
 
         engine = LiveTradingEngine(
@@ -318,7 +364,7 @@ class TestRealTimeScenarios:
 
     def test_market_volatility_scenario(self, mock_data_provider):
         """Test system behavior during high volatility"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
         )
@@ -354,7 +400,7 @@ class TestRealTimeScenarios:
 
     def test_network_interruption_scenario(self, mock_data_provider):
         """Test system behavior during network issues"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         engine = LiveTradingEngine(
             strategy=strategy,
             data_provider=mock_data_provider,
@@ -394,7 +440,7 @@ class TestRealTimeScenarios:
 
     def test_memory_usage_during_extended_operation(self, mock_data_provider):
         """Test memory usage during extended operation"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
         )
@@ -434,7 +480,7 @@ class TestProductionReadiness:
         manager = StrategyManager(staging_dir=str(temp_directory))
 
         # 2. Load strategy
-        strategy = manager.load_strategy("ml_adaptive")
+        strategy = manager.load_strategy("ml_basic")
         assert strategy is not None
 
         # 3. Initialize trading engine
@@ -458,7 +504,7 @@ class TestProductionReadiness:
 
     def test_graceful_shutdown_sequence(self, mock_data_provider):
         """Test graceful shutdown of all components"""
-        strategy = MlAdaptive()
+        strategy = MlBasic()
         engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
         )
@@ -505,8 +551,13 @@ class TestProductionReadiness:
     def test_logging_integration(self, mock_data_provider, caplog):
         """Test that logging works correctly across components"""
         import logging
+<<<<<<< HEAD
 
         strategy = MlAdaptive()
+=======
+        
+        strategy = MlBasic()
+>>>>>>> origin/develop
         engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
         )

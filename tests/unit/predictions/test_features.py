@@ -340,6 +340,7 @@ class TestFeatureSchemas:
             if feature_def.max_value is not None:
                 assert isinstance(feature_def.max_value, (int, float))
             if feature_def.default_value is not None:
+<<<<<<< HEAD:tests/predictions/test_features.py
                 assert isinstance(feature_def.default_value, (int, float))
 
 
@@ -372,3 +373,6 @@ def sample_market_data():
         },
         index=dates,
     )
+=======
+                assert isinstance(feature_def.default_value, (int, float))
+>>>>>>> origin/develop:tests/unit/predictions/test_features.py

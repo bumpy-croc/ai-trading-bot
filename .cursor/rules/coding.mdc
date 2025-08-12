@@ -1,30 +1,22 @@
----
-description: General coding standards to be used with every request
-globs: 
-alwaysApply: true
----
+### General
+- Follow repo patterns; match existing style and imports (absolute imports under `src/`).
+- Add only essential comments; explain non-obvious decisions.
+- Place constants/config in `src/config/constants.py` when cross-cutting.
+- Do not create ad-hoc scripts; use existing `scripts/` and `tests/run_tests.py`.
 
-## 1. General Cooperation & Workflow
+### Security
+- Never commit secrets. Use environment variables; see `src/utils/secrets.py`.
+- Use parameterized queries with SQL; validate external inputs.
 
-- **Role Definition:** I am your Software Architect, and you are the Developer executing my tasks. You are an expert in Python, Typescript, Javascript, Data Analysis, Visualisation and Deep Learning. You also have deep knowldge of the financial markets, cryptocurrencies, mathematics, statistics, trading and financial analysis. You can analyse trends and take into account political and financial changes in order to adapt trading strategies to market conditions. Ray Dalio is an inspiration that influences your thinking. You are in the top 1% of traders who have had long term success and are keen to help others share your secrets.
+### Python
+- Prefer clear names; avoid 1–2 char identifiers.
+- Type hints for public APIs; avoid `Any` where possible.
+- Early returns; handle edge cases first.
 
-- **Current Time:** July of 2025 or further
-- **IDE Context:** We operate on MacOS within Cursor IDE (a VSCode-like environment).
-- **Output Structure:** At the end of your response, provide the following:
-	- **Changes Made:** A list of modifications you implemented.
-	- **Unfulfilled Tasks:** (Optional) Any tasks you could not complete.
-	- **Manual Changes Required:** (Optional) Operations you couldn't perform that require my manual intervention.
-	- **Special Attention Required:** (Optional) Critical aspects needing special review during manual checks.
-	- **Rationale for significant deviations:** (Optional) If you deviate significantly from a common pattern or a previous instruction, briefly explain your reasoning.
-- **Error Correction Loop:** Actively correct any errors you identify.
-- **Bug Suppression:** Do not suppress bugs unless explicitly authorized by Architect.
-- **Workspace Integrity:** Do not modify files outside the defined workspace without explicit permission. Viewing external files is permissible.
-- **Linter Rules:** Linters are intentionally set up aggressively to catch as many of your mistakes as possible. However, some rules may be too rigid or conflict with the approach of a particular project. You can suggest Architect to disable them, but don't do it yourself.
-- **Proactive Evaluation:** If the Architect makes an assertion about a technical approach or pattern, the Developer should evaluate this assertion. If there are significant trade-offs or a potentially better alternative for the given context, the Developer should briefly present them before proceeding.
-- **Rigorous Explanations:** For complex implementations, non-obvious logic, or significant architectural decisions, provide explanation in the 'Rationale for significant deviations' section. This may include historical context or multi-layered analysis where relevant.
-- **Preservation of Effort:** Iterative backtracking is a valid part of the development process. However, if all attempted paths fail, the final state of your work must be preserved. Do not revert all changes; instead, document the final failed attempt in your report.
-- **No Disposable Code:** All code verification must be conducted using the project's unit testing framework. Temporary validation scripts are prohibited.
-- **No scripts to prove functionality works** Don't create any scripts unless explicitely asked to. 
+### Testing
+- Add tests for new code; keep fast by default.
+- Use fixtures; mock network/IO.
+- Run `python tests/run_tests.py unit` locally; aim for green before PRs.
 
 ## 2. Security & Sensitive Information
 
@@ -114,7 +106,8 @@ alwaysApply: true
 - Don't create excess documentation. When you do, it should live in the `docs` folder.
 
 ### 4.11. Git
-- Important: Never commit to git unless specifically asked to!
+- Do not commit/push without explicit user approval.
+- Verify correct branch before committing; fetch `origin/develop` before merge/rebase.
 
 # 5. Pull Request (PR) Reviews
 

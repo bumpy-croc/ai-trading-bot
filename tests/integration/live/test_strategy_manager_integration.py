@@ -11,12 +11,17 @@ class TestStrategyManagerIntegration:
         from live.trading_engine import LiveTradingEngine
 
         manager = StrategyManager(staging_dir=str(temp_directory))
+<<<<<<< HEAD
         initial_strategy = manager.load_strategy("ml_adaptive")
         engine = LiveTradingEngine(
             strategy=initial_strategy, data_provider=mock_data_provider, enable_hot_swapping=True
         )
+=======
+        initial_strategy = manager.load_strategy("ml_basic")
+        engine = LiveTradingEngine(strategy=initial_strategy, data_provider=mock_data_provider, enable_hot_swapping=True)
+>>>>>>> origin/develop
         engine.strategy_manager = manager
-        manager.hot_swap_strategy("ml_adaptive", new_config={"sequence_length": 60})
+        manager.hot_swap_strategy("ml_basic", new_config={"sequence_length": 120})
         assert manager.has_pending_update() is True
         success = manager.apply_pending_update()
         assert success is True

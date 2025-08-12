@@ -21,8 +21,11 @@ _dashboard_module.CachedDataProvider = lambda provider, cache_ttl_hours=0: provi
 
 from src.dashboards.monitoring import MonitoringDashboard  # noqa: E402
 
+# Mark all tests in this module as integration tests
+pytestmark = pytest.mark.integration
 
-@pytest.fixture
+
+@pytest.fixture(autouse=False)
 def dashboard():
     """Create an instance of the MonitoringDashboard for testing."""
     # Use an in-memory DB (or None) – internal queries will be monkey-patched
@@ -55,4 +58,8 @@ def test_get_balance_history_endpoint(dashboard, monkeypatch):
 
     assert resp.status_code == 200
     data = resp.get_json()
+<<<<<<< HEAD:tests/test_dashboard_balance.py
     assert data == mock_history
+=======
+    assert data == mock_history
+>>>>>>> origin/develop:tests/integration/monitoring/test_dashboard_balance.py

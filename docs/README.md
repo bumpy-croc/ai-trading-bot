@@ -26,7 +26,6 @@ Use this index to quickly find the right guide.
 - [Trading Concepts Overview](TRADING_CONCEPTS_OVERVIEW.md)
 - [Model Training & Integration Guide](MODEL_TRAINING_AND_INTEGRATION_GUIDE.md)
 - [Model Deployment Guide](MODEL_DEPLOYMENT_GUIDE.md)
-- [ML Adaptive Strategy Improvements](ML_ADAPTIVE_STRATEGY_IMPROVEMENTS.md)
 - [Live Sentiment Analysis](LIVE_SENTIMENT_ANALYSIS.md)
 - [Live Trading Guide](LIVE_TRADING_GUIDE.md)
 

@@ -99,7 +99,7 @@ src/
   performance/       # Performance metrics utilities
   prediction/        # Centralized model registry, ONNX runtime, caching
   risk/              # Risk parameters and position sizing utilities
-  strategies/        # Built-in strategies (ML basic/adaptive/sentiment)
+  strategies/        # Built-in strategies (ML basic only)
   utils/             # Shared utilities (paths, symbols, etc.)
 ```
 
@@ -109,7 +109,7 @@ src/
 
 - Data providers: `data_providers.BinanceProvider`, `CoinbaseProvider`, `SentiCryptProvider`, `CachedDataProvider`
 - ML prediction: `prediction.models.registry.PredictionModelRegistry` (ONNX), caching in `prediction.utils.caching`
-- Strategies: `strategies.ml_basic`, `strategies.ml_with_sentiment`, `strategies.ml_adaptive`
+- Strategies: `strategies.ml_basic`
 - Backtesting: `backtesting.engine.Backtester` (CLI: `scripts/run_backtest.py`)
 - Live engine: `live.trading_engine.LiveTradingEngine` (CLI: `scripts/run_live_trading.py`)
 - Risk: `risk.risk_manager.RiskManager`

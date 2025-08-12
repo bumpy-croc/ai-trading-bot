@@ -48,12 +48,16 @@ Data Providers → Indicators → Strategies → Risk Manager → Execution Laye
 
 ---
 
-## Available Strategies
-- **Adaptive**: Adaptive EMA crossover with market regime detection
-- **Enhanced**: Multi-indicator confluence (RSI + EMA + MACD)
-- **ML Basic**: Uses ML price predictions for entry/exit decisions
-- **ML with Sentiment**: Combines ML predictions with sentiment analysis
-- **High Risk High Reward**: Aggressive trading with higher risk tolerance
+## Strategy Base Interface
+`BaseStrategy` requires: `calculate_indicators(df)`, `check_entry_conditions(df, i)`, `check_exit_conditions(df, i, entry_price)`, `calculate_position_size(df, i, balance)`, `calculate_stop_loss(df, i, price, side='long')`, `get_parameters()`.
+
+---
+
+## Available Strategies (as implemented)
+- `MlBasic` (`src/strategies/ml_basic.py`)
+- `MlAdaptive` (`src/strategies/ml_adaptive.py`)
+- `MlWithSentiment` (`src/strategies/ml_with_sentiment.py`)
+Registry exports in `src/strategies/__init__.py`.
 
 ---
 
@@ -64,13 +68,13 @@ Data Providers → Indicators → Strategies → Risk Manager → Execution Laye
 
 ---
 
-## Risk Management
+## Risk Management (defaults in `RiskParameters`)
 ```python
-base_risk_per_trade: float = 0.02      # 2% risk per trade
-max_risk_per_trade: float = 0.03       # 3% maximum risk per trade
-max_position_size: float = 0.25        # 25% maximum position size
-max_daily_risk: float = 0.06           # 6% maximum daily risk
-max_drawdown: float = 0.20             # 20% maximum drawdown
+base_risk_per_trade = 0.02
+max_risk_per_trade = 0.03
+max_position_size = 0.25
+max_daily_risk = 0.06
+max_drawdown = 0.20
 ```
 
 ---
@@ -154,13 +158,13 @@ python scripts/run_live_trading.py --stop
 - "run all tests" → `python tests/run_tests.py all`
 
 ### Backtesting
-- "run backtest" → `python scripts/run_backtest.py adaptive --days 30 --no-db`
+- "run backtest" → `python scripts/run_backtest.py ml_basic --days 30 --no-db`
 - "run backtest for [strategy]" → `python scripts/run_backtest.py [strategy] --days 30 --no-db`
-- "run production backtest" → `python scripts/run_backtest.py adaptive --days 30`
+- "run production backtest" → `python scripts/run_backtest.py ml_basic --days 30`
 
 ### Live Trading
-- "start paper trading" → `python scripts/run_live_trading.py adaptive --paper-trading`
-- "start live trading" → `python scripts/run_live_trading.py adaptive --live-trading --i-understand-the-risks`
+- "start paper trading" → `python scripts/run_live_trading.py ml_basic --paper-trading`
+- "start live trading" → `python scripts/run_live_trading.py ml_basic --live-trading --i-understand-the-risks`
 - "start dashboard" → `python scripts/start_dashboard.py`
 
 ### Health & Monitoring
