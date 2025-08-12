@@ -38,8 +38,8 @@ from flask_socketio import SocketIO, emit
 
 # Ensure absolute imports resolve when running as a module or script
 try:
-    from performance.metrics import max_drawdown as perf_max_drawdown
-    from performance.metrics import sharpe as perf_sharpe
+    from src.performance.metrics import max_drawdown as perf_max_drawdown
+    from src.performance.metrics import sharpe as perf_sharpe
 except ModuleNotFoundError:
     # Add project root and src to sys.path dynamically as a last resort
     import sys
@@ -50,12 +50,12 @@ except ModuleNotFoundError:
     src_path = project_root / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(1, str(src_path))
-    from performance.metrics import max_drawdown as perf_max_drawdown
-    from performance.metrics import sharpe as perf_sharpe
+    from src.performance.metrics import max_drawdown as perf_max_drawdown
+    from src.performance.metrics import sharpe as perf_sharpe
 
-from data_providers.binance_provider import BinanceProvider
-from data_providers.cached_data_provider import CachedDataProvider
-from database.manager import DatabaseManager
+from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.cached_data_provider import CachedDataProvider
+from src.database.manager import DatabaseManager
 
 # Configure logging via centralized config (set by entry points)
 logger = logging.getLogger(__name__)

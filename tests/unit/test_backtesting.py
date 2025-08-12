@@ -73,11 +73,20 @@ class TestTradeGeneration:
         """Test Trade object creation"""
         from live.trading_engine import PositionSide
 
-        trade = Trade(symbol="BTCUSDT", side=PositionSide.LONG, entry_price=50000, size=0.1, entry_time=datetime.now())
+        trade = Trade(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            entry_price=50000,
+            exit_price=50000,
+            entry_time=datetime.now(),
+            exit_time=datetime.now(),
+            pnl=0.0,
+            exit_reason="init",
+        )
         assert trade.symbol == "BTCUSDT"
         assert trade.side == PositionSide.LONG
         assert trade.entry_price == 50000
-        assert trade.exit_price is None
         assert trade.size == 0.1
 
     def test_trade_pnl_calculation(self):
