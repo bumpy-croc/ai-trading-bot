@@ -117,19 +117,28 @@ class RegimeDetector:
     def annotate(self, df: pd.DataFrame) -> pd.DataFrame:
         cfg = self.config
         out = df.copy()
+<<<<<<< HEAD
         # Trend
+=======
+>>>>>>> feature/regime-detection-mvp
         slope, r2 = self._rolling_ols_slope_and_r2(out["close"], cfg.slope_window)
         trend_score = slope * r2
         trend_score[r2 < cfg.r2_min] = 0.0
         out["trend_score"] = trend_score
         trend_label = trend_score.apply(self._label_trend)
+<<<<<<< HEAD
         # Volatility
+=======
+>>>>>>> feature/regime-detection-mvp
         atr = self._atr(out, cfg.atr_window)
         out["atr"] = atr
         atr_pct = self._percentile_rank(atr, cfg.atr_percentile_lookback)
         out["atr_percentile"] = atr_pct
         vol_label = atr_pct.apply(lambda p: VolLabel.HIGH if (not pd.isna(p) and p >= cfg.atr_high_percentile) else VolLabel.LOW)
+<<<<<<< HEAD
         # Hysteresis on combined trend label only (vol used as overlay)
+=======
+>>>>>>> feature/regime-detection-mvp
         labels = []
         dwell = self._dwell
         cons = self._consecutive
