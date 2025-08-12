@@ -182,3 +182,4 @@ Sentiment data (SentiCrypt) and ML training are supported. Pretrained models liv
 ## Disclaimer
 
 This project is for educational purposes only. Trading cryptocurrencies involves significant risk. Use paper trading, test thoroughly, and never risk funds you cannot afford to lose. 
+<!-- chore: trigger CI test -->
