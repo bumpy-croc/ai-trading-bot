@@ -30,6 +30,10 @@ from performance.metrics import (
     cash_pnl,
 )
 from src.utils.symbol_factory import SymbolFactory
+from trading.shared.indicators import extract_indicators as shared_extract_indicators, extract_sentiment_data as shared_extract_sentiment, extract_ml_predictions as shared_extract_ml
+from trading.shared.sentiment import apply_live_sentiment
+from trading.shared.sizing import normalize_position_size
+from src.config.feature_flags import is_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -428,7 +432,8 @@ class LiveTradingEngine:
                     continue
                 # Add sentiment data if available
                 if self.sentiment_provider:
-                    df = self._add_sentiment_data(df, symbol)
+                    # parity: apply shared live sentiment behavior
+                    df = apply_live_sentiment(df, self.sentiment_provider, recent_hours=4)
                 # Check for pending strategy/model updates
                 if self.strategy_manager and self.strategy_manager.has_pending_update():
                     logger.info("🔄 Applying pending strategy/model update...")
@@ -442,7 +447,8 @@ class LiveTradingEngine:
                 # Calculate indicators
                 df = self.strategy.calculate_indicators(df)
                 # Remove warmup period and ensure we have enough data
-                df = df.dropna()
+                # Parity warmup: only ensure essential OHLCV present
+                df = df.dropna(subset=['open','high','low','close','volume'])
                 if len(df) < 2:
                     logger.warning("Insufficient data for analysis")
                     self._sleep_with_interrupt(self.check_interval)
@@ -462,12 +468,15 @@ class LiveTradingEngine:
                     if hasattr(self.strategy, 'check_short_entry_conditions'):
                         short_entry_signal = self.strategy.check_short_entry_conditions(df, current_index)
                         if short_entry_signal:
-                            short_position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+                            raw_short_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+                            legacy = is_enabled('legacy_engine_behavior', default=False)
+                            mode = 'notional' if legacy else 'fraction'
+                            short_position_size = normalize_position_size(raw_short_size, self.current_balance, mode=mode)
                             short_position_size = min(short_position_size, self.max_position_size)
                             if short_position_size > 0:
                                 short_stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, PositionSide.SHORT)
-                                # Use strategy's take profit percentage for consistency
-                                short_take_profit = current_price * (1 - self.strategy.take_profit_pct)
+                                tp_pct = getattr(self.strategy, 'take_profit_pct', 0.04)
+                                short_take_profit = current_price * (1 - tp_pct)
                                 self._open_position(symbol, PositionSide.SHORT, short_position_size, current_price, short_stop_loss, short_take_profit)
                 # Update performance metrics
                 self._update_performance_metrics()
@@ -604,7 +613,7 @@ class LiveTradingEngine:
                     signal_type='exit',
                     action_taken='closed_position' if should_exit else 'hold_position',
                     price=current_price,
-                    timeframe='1m',
+                    timeframe=timeframe,
                     signal_strength=1.0 if should_exit else 0.0,
                     confidence_score=indicators.get('prediction_confidence', 0.5),
                     indicators=indicators,
@@ -642,7 +651,10 @@ class LiveTradingEngine:
         # Calculate position size if entry signal is present
         position_size = 0.0
         if entry_signal:
-            position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+            raw_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
+            legacy = is_enabled('legacy_engine_behavior', default=False)
+            mode = 'notional' if legacy else 'fraction'
+            position_size = normalize_position_size(raw_size, self.current_balance, mode=mode)
             position_size = min(position_size, self.max_position_size)  # Cap at max position size
         
         # Log strategy execution decision
@@ -653,7 +665,7 @@ class LiveTradingEngine:
                 signal_type='entry',
                 action_taken='opened_long' if entry_signal and position_size > 0 else 'no_action',
                 price=current_price,
-                timeframe='1m',  # Could be made configurable
+                timeframe=timeframe,
                 signal_strength=1.0 if entry_signal else 0.0,
                 confidence_score=indicators.get('prediction_confidence', 0.5),
                 indicators=indicators,
@@ -676,7 +688,8 @@ class LiveTradingEngine:
             
         # Calculate risk management levels
         stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, 'long')
-        take_profit = current_price * 1.04  # 4% take profit target
+        tp_pct = getattr(self.strategy, 'take_profit_pct', 0.04)
+        take_profit = current_price * (1 + tp_pct)
         
         # Open new position
         self._open_position(symbol, PositionSide.LONG, position_size, current_price, stop_loss, take_profit)

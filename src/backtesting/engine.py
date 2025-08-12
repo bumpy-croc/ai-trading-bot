@@ -23,11 +23,16 @@ from performance.metrics import (
 
 # New modular utilities and models
 from backtesting.utils import (
+    compute_performance_metrics,
+)
+from trading.shared.indicators import (
     extract_indicators as util_extract_indicators,
     extract_sentiment_data as util_extract_sentiment,
     extract_ml_predictions as util_extract_ml,
-    compute_performance_metrics,
 )
+from trading.shared.sentiment import merge_historical_sentiment
+from trading.shared.sizing import normalize_position_size
+from src.config.feature_flags import is_enabled
 from backtesting.models import Trade as CompletedTrade
 
 logger = logging.getLogger(__name__)
@@ -197,13 +202,13 @@ class Backtester:
                 
             # Fetch/merge sentiment data if provider is available
             if self.sentiment_provider:
-                df = self._merge_sentiment_data(df, symbol, timeframe, start, end)
+                # parity: shared merge behavior
+                df = merge_historical_sentiment(df, self.sentiment_provider, symbol, timeframe, start, end)
             
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
             
-            # Remove warmup period - only drop rows where essential price data is missing
-            # Don't drop rows just because ML predictions or sentiment data is missing
+            # Parity warmup: only ensure essential price columns are present
             essential_columns = ['open', 'high', 'low', 'close', 'volume']
             df = df.dropna(subset=essential_columns)
             
@@ -392,8 +397,11 @@ class Backtester:
                 
                 # Check for entry if not in position
                 elif self.strategy.check_entry_conditions(df, i):
-                    # Calculate position size (as fraction of balance)
-                    size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+                    # Calculate position size and normalize for parity (fraction by default)
+                    raw_size = self.strategy.calculate_position_size(df, i, self.balance)
+                    legacy = is_enabled('legacy_engine_behavior', default=False)
+                    mode = 'notional' if legacy else 'fraction'
+                    size_fraction = normalize_position_size(raw_size, self.balance, mode=mode)
                     
                     # Log entry decision
                     if self.log_to_database and self.db_manager:
@@ -429,7 +437,7 @@ class Backtester:
                         # Optionally use legacy indexing behavior for stop-loss calculation to preserve parity
                         sl_index = (len(df) - 1) if self.legacy_stop_loss_indexing else i
                         stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'long')
-                        # Parity with live engine: 4% TP for long
+                        # Parity with live engine: use strategy.take_profit_pct by default
                         tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
                         take_profit = current_price * (1 + tp_pct)
                         self.current_trade = ActiveTrade(
@@ -445,7 +453,10 @@ class Backtester:
 
                 # Optional short entry if supported by strategy
                 elif self.enable_short_trading and hasattr(self.strategy, 'check_short_entry_conditions') and self.strategy.check_short_entry_conditions(df, i):
-                    size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+                    raw_size = self.strategy.calculate_position_size(df, i, self.balance)
+                    legacy = is_enabled('legacy_engine_behavior', default=False)
+                    mode = 'notional' if legacy else 'fraction'
+                    size_fraction = normalize_position_size(raw_size, self.balance, mode=mode)
 
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
