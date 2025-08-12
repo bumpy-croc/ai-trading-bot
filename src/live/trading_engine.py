@@ -466,6 +466,7 @@ class LiveTradingEngine:
                                 overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
                             except Exception:
                                 overrides = None
+                            indicators = self._extract_indicators(df, current_index)
                             if overrides and overrides.get('position_sizer'):
                                 short_fraction = self.risk_manager.calculate_position_fraction(
                                     df=df,
@@ -481,7 +482,7 @@ class LiveTradingEngine:
                                 short_position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
                                 short_position_size = min(short_position_size, self.max_position_size)
                             if short_position_size > 0:
-                                if overrides and (('stop_loss_pct' in overrides) or ('take_profit_pct' in overrides)):
+                                if overrides and (("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)):
                                     short_stop_loss, short_take_profit = self.risk_manager.compute_sl_tp(
                                         df=df,
                                         index=current_index,
