@@ -30,9 +30,9 @@ from performance.metrics import (
     cash_pnl,
 )
 from src.utils.symbol_factory import SymbolFactory
-from trading.shared.indicators import extract_indicators as shared_extract_indicators, extract_sentiment_data as shared_extract_sentiment, extract_ml_predictions as shared_extract_ml
-from trading.shared.sentiment import apply_live_sentiment
-from trading.shared.sizing import normalize_position_size
+from src.trading.shared.indicators import extract_indicators as shared_extract_indicators, extract_sentiment_data as shared_extract_sentiment, extract_ml_predictions as shared_extract_ml
+from src.trading.shared.sentiment import apply_live_sentiment
+from src.trading.shared.sizing import normalize_position_size
 from src.config.feature_flags import is_enabled
 
 logger = logging.getLogger(__name__)

@@ -25,13 +25,13 @@ from performance.metrics import (
 from backtesting.utils import (
     compute_performance_metrics,
 )
-from trading.shared.indicators import (
+from src.trading.shared.indicators import (
     extract_indicators as util_extract_indicators,
     extract_sentiment_data as util_extract_sentiment,
     extract_ml_predictions as util_extract_ml,
 )
-from trading.shared.sentiment import merge_historical_sentiment
-from trading.shared.sizing import normalize_position_size
+from src.trading.shared.sentiment import merge_historical_sentiment
+from src.trading.shared.sizing import normalize_position_size
 from src.config.feature_flags import is_enabled
 from backtesting.models import Trade as CompletedTrade
 
