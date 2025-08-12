@@ -451,7 +451,7 @@ class MonitoringDashboard:
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
-            return result[0]["balance"] if result else 0.0
+            return self._safe_float(result[0]["balance"]) if result else 0.0
         except Exception as e:
             logger.error(f"Error getting current balance: {e}")
             return 0.0
