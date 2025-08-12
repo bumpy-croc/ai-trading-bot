@@ -39,7 +39,7 @@ class CachedDataProvider(DataProvider):
         self.provider = data_provider  # Add this alias for backward compatibility
         self.cache_dir = cache_dir or str(get_cache_dir())
         self.cache_ttl_hours = cache_ttl_hours
-        self.cache = {}  # Add cache attribute for backward compatibility
+        self.cache: dict[str, pd.DataFrame] = {}
 
         # Create cache directory if it doesn't exist
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -219,7 +219,7 @@ class CachedDataProvider(DataProvider):
     def get_historical_data(
         self,
         symbol: str,
-        timeframe,
+        timeframe: str,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
     ) -> pd.DataFrame:
@@ -249,6 +249,10 @@ class CachedDataProvider(DataProvider):
         if end > current_time:
             logger.info(f"Adjusting end time from {end} to {current_time} to avoid future data")
             end = current_time
+
+        if start is None:
+            logger.warning("Start time not provided; returning empty DataFrame")
+            return pd.DataFrame()
 
         if start > current_time:
             logger.warning(f"Start time {start} is in the future, returning empty DataFrame")
