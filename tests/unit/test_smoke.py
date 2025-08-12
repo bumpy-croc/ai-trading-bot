@@ -42,8 +42,8 @@ def test_ml_basic_backtest_2024_smoke(btcusdt_1h_2023_2024):
     data_provider.get_live_data.return_value = btcusdt_1h_2023_2024.tail(1)
 
     # Stabilize engine path to match baseline
-    os.environ.setdefault("USE_PREDICTION_ENGINE", "1")
-    os.environ.setdefault("ENGINE_BATCH_INFERENCE", "0")
+    os.environ["USE_PREDICTION_ENGINE"] = "1"
+    os.environ["ENGINE_BATCH_INFERENCE"] = "0"
 
     strategy = MlBasic()
     backtester = Backtester(
