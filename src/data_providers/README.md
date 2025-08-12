@@ -4,7 +4,7 @@ Abstractions and implementations for market and sentiment data.
 
 ## Modules
 - `binance_provider.py`, `coinbase_provider.py`: Exchange price/candle data
-- `senticrypt_provider.py`, `cryptocompare_sentiment.py`, `augmento_provider.py`: Sentiment data
+- `feargreed_provider.py`, `senticrypt_provider.py`, `augmento_provider.py`: Sentiment data
 - `cached_data_provider.py`: File-based caching wrapper
 - `data_provider.py`, `exchange_interface.py`: Base interfaces
 
