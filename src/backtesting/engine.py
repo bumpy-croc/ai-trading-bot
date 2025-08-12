@@ -379,6 +379,13 @@ class Backtester:
                                 take_profit=self.current_trade.take_profit,
                             )
                         )
+                        
+                        # Notify risk manager to close tracked position
+                        try:
+                            self.risk_manager.close_position(symbol)
+                        except Exception as e:
+                            logger.warning(f"Failed to update risk manager on close for {symbol}: {e}")
+                        
                         self.current_trade = None
                         
                         # Check if maximum drawdown exceeded (use risk params if present)
@@ -471,6 +478,12 @@ class Backtester:
                             take_profit=take_profit
                         )
                         logger.info(f"Entered long position at {current_price}")
+                        
+                        # Update risk manager with opened position to track daily risk usage
+                        try:
+                            self.risk_manager.update_position(symbol=symbol, side='long', size=size_fraction, entry_price=current_price)
+                        except Exception as e:
+                            logger.warning(f"Failed to update risk manager for opened long on {symbol}: {e}")
 
                 # Optional short entry if supported by strategy
                 elif self.enable_short_trading and hasattr(self.strategy, 'check_short_entry_conditions') and self.strategy.check_short_entry_conditions(df, i):
@@ -544,6 +557,12 @@ class Backtester:
                             take_profit=take_profit
                         )
                         logger.info(f"Entered short position at {current_price}")
+                        
+                        # Update risk manager with opened position to track daily risk usage
+                        try:
+                            self.risk_manager.update_position(symbol=symbol, side='short', size=size_fraction, entry_price=current_price)
+                        except Exception as e:
+                            logger.warning(f"Failed to update risk manager for opened short on {symbol}: {e}")
                 
                 # Log no-action cases (when no position and no entry signal)
                 else:

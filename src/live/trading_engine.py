@@ -800,6 +800,13 @@ class LiveTradingEngine:
             # Send alert if configured
             self._send_alert(f"Position Opened: {symbol} {side.value} @ ${price:.2f}")
             
+            # Update risk manager with the newly opened position so daily risk is tracked
+            if self.risk_manager:
+                try:
+                    self.risk_manager.update_position(symbol=symbol, side=side.value, size=size, entry_price=price)
+                except Exception as e:
+                    logger.warning(f"Failed to update risk manager for opened position {symbol}: {e}")
+            
         except Exception as e:
             logger.error(f"Failed to open position: {e}", exc_info=True)
             if self.trading_session_id is not None:
@@ -811,145 +818,6 @@ class LiveTradingEngine:
                     details={"stack_trace": str(e)},
                     session_id=self.trading_session_id
                 )
-            else:
-                logger.warning("⚠️ Cannot log error to database - no trading session ID available")
-            
-    def _close_position(self, position: Position, reason: str):
-        """Close an existing position"""
-        try:
-            # Get current price for closing
-            exit_price = None
-            try:
-                current_data = self.data_provider.get_live_data(position.symbol, "1h", limit=1)
-                if not current_data.empty:
-                    exit_price = current_data.iloc[-1]['close']
-            except Exception as e:
-                logger.warning(f"Could not get current price for position close: {e}")
-            
-            # Fallback to entry price if we can't get current price (e.g., during shutdown)
-            if exit_price is None:
-                exit_price = position.entry_price
-                logger.warning(f"Using entry price as exit price for position {position.order_id}")
-            
-            if self.enable_live_trading:
-                # Execute real closing order
-                success = self._close_order(position.symbol, position.order_id)
-                if not success:
-                    logger.error("Failed to close order")
-                    return
-            else:
-                logger.info(f"📄 PAPER TRADE - Would close {position.side.value} position")
-            
-            # Calculate PnL
-            pnl_pct = pnl_percent(position.entry_price, exit_price, Side(position.side.value))
-            pnl_dollar = cash_pnl(pnl_pct * position.size, self.current_balance)
-            
-            # Update balance
-            self.current_balance += pnl_dollar
-            self.total_pnl += pnl_dollar
-            
-            # Update persistent balance tracking
-            if self.trading_session_id is not None:
-                self.db_manager.update_balance(
-                    self.current_balance, 
-                    f'trade_pnl_{reason.lower()}', 
-                    'system', 
-                    self.trading_session_id
-                )
-            else:
-                logger.warning("⚠️ Cannot update balance in database - no trading session ID available")
-            
-            # Create trade record
-            trade = Trade(
-                symbol=position.symbol,
-                side=position.side,
-                size=position.size,
-                entry_price=position.entry_price,
-                entry_time=position.entry_time,
-                exit_price=exit_price,
-                exit_time=datetime.now(),
-                pnl=pnl_dollar,
-                exit_reason=reason
-            )
-            
-            self.completed_trades.append(trade)
-            self.total_trades += 1
-            if pnl_dollar > 0:
-                self.winning_trades += 1
-            
-            # Log trade to database
-            if self.trading_session_id is not None:
-                source = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
-                try:
-                    trade_db_id = self.db_manager.log_trade(
-                        symbol=position.symbol,
-                        side=position.side.value,
-                        entry_price=position.entry_price,
-                        exit_price=exit_price,
-                        size=position.size,
-                        entry_time=position.entry_time,
-                        exit_time=trade.exit_time,
-                        pnl=pnl_dollar,
-                        exit_reason=reason,
-                        strategy_name=self.strategy.__class__.__name__,
-                        source=source,
-                        stop_loss=position.stop_loss,
-                        take_profit=position.take_profit,
-                        order_id=position.order_id,
-                        session_id=self.trading_session_id
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to log trade to database: {e}")
-            else:
-                logger.warning("⚠️ Cannot log trade to database - no trading session ID available")
-            
-            # Update position status in database
-            if position.order_id in self.position_db_ids:
-                position_db_id = self.position_db_ids[position.order_id]
-                if position_db_id is not None:
-                    try:
-                        self.db_manager.close_position(position_db_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to update position in database: {e}")
-                else:
-                    logger.debug(f"Position {position.order_id} was not logged to database (no session ID)")
-                del self.position_db_ids[position.order_id]
-                
-            # Remove from active positions
-            if position.order_id in self.positions:
-                del self.positions[position.order_id]
-            
-            # Log trade
-            pnl_str = f"+${pnl_dollar:.2f}" if pnl_dollar > 0 else f"${pnl_dollar:.2f}"
-            logger.info(f"🏁 Closed {position.side.value} position: {position.symbol} @ ${exit_price:.2f} ({reason}) - PnL: {pnl_str}")
-            
-            # Save trade log (file-based for backward compatibility)
-            if self.log_trades:
-                try:
-                    self._log_trade(trade)
-                except Exception as e:
-                    logger.warning(f"Failed to log trade to file: {e}")
-            
-            # Send alert
-            try:
-                self._send_alert(f"Position Closed: {position.symbol} {reason} - PnL: {pnl_str}")
-            except Exception as e:
-                logger.warning(f"Failed to send alert: {e}")
-            
-        except Exception as e:
-            logger.error(f"Failed to close position: {e}", exc_info=True)
-            if self.trading_session_id is not None:
-                try:
-                    self.db_manager.log_event(
-                        event_type="ERROR",
-                        message=f"Failed to close position: {str(e)}",
-                        severity="error",
-                        component="LiveTradingEngine",
-                        details={"stack_trace": str(e)},
-                        session_id=self.trading_session_id
-                    )
-                except Exception as db_e:
-                    logger.error(f"Failed to log error to database: {db_e}", exc_info=True)
             else:
                 logger.warning("⚠️ Cannot log error to database - no trading session ID available")
             
@@ -1260,6 +1128,18 @@ class LiveTradingEngine:
                 if position.order_id:
                     self.positions[position.order_id] = position
                     self.position_db_ids[position.order_id] = pos_data['id']
+                
+                # Update risk manager tracking for recovered positions
+                if self.risk_manager:
+                    try:
+                        self.risk_manager.update_position(
+                            symbol=position.symbol,
+                            side=position.side.value,
+                            size=position.size,
+                            entry_price=position.entry_price,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to update risk manager for recovered position {position.symbol}: {e}")
                 
                 logger.info(f"✅ Recovered position: {pos_data['symbol']} {pos_data['side']} @ ${pos_data['entry_price']:.2f}")
             
