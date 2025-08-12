@@ -76,34 +76,28 @@ class TestDatabaseLogging:
             mode="live",
         )
         events = [
-<<<<<<< HEAD
             {
-                "event_type": EventType.ENGINE_START,
-                "message": "Trading engine started",
-                "severity": "info",
-                "component": "trading_engine",
-                "session_id": session_id,
+                'event_type': EventType.ENGINE_START,
+                'message': 'Trading engine started',
+                'severity': 'info',
+                'component': 'trading_engine',
+                'session_id': session_id
             },
             {
-                "event_type": EventType.STRATEGY_CHANGE,
-                "message": "Strategy changed to MlAdaptive",
-                "severity": "info",
-                "component": "strategy_manager",
-                "details": {"old_strategy": "BasicStrategy", "new_strategy": "MlAdaptive"},
-                "session_id": session_id,
+                'event_type': EventType.STRATEGY_CHANGE,
+                'message': 'Strategy changed',
+                'severity': 'info',
+                'component': 'strategy_manager',
+                'details': {'old_strategy': 'BasicStrategy', 'new_strategy': 'MlBasic'},
+                'session_id': session_id
             },
             {
-                "event_type": EventType.ERROR,
-                "message": "API rate limit exceeded",
-                "severity": "warning",
-                "component": "data_provider",
-                "session_id": session_id,
+                'event_type': EventType.ERROR,
+                'message': 'API rate limit exceeded',
+                'severity': 'warning',
+                'component': 'data_provider',
+                'session_id': session_id
             },
-=======
-            {'event_type': EventType.ENGINE_START, 'message': 'Trading engine started', 'severity': 'info', 'component': 'trading_engine', 'session_id': session_id},
-            {'event_type': EventType.STRATEGY_CHANGE, 'message': 'Strategy changed', 'severity': 'info', 'component': 'strategy_manager', 'details': {'old_strategy': 'BasicStrategy', 'new_strategy': 'MlBasic'}, 'session_id': session_id},
-            {'event_type': EventType.ERROR, 'message': 'API rate limit exceeded', 'severity': 'warning', 'component': 'data_provider', 'session_id': session_id},
->>>>>>> origin/develop
         ]
         ids = [db_manager.log_event(**e) for e in events]
         for event_id in ids:

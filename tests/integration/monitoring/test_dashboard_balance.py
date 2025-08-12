@@ -58,8 +58,4 @@ def test_get_balance_history_endpoint(dashboard, monkeypatch):
 
     assert resp.status_code == 200
     data = resp.get_json()
-<<<<<<< HEAD:tests/test_dashboard_balance.py
     assert data == mock_history
-=======
-    assert data == mock_history
->>>>>>> origin/develop:tests/integration/monitoring/test_dashboard_balance.py
