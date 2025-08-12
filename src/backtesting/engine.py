@@ -14,6 +14,14 @@ from database.models import TradeSource, PositionSide
 from sqlalchemy.exc import SQLAlchemyError
 from config.constants import DEFAULT_INITIAL_BALANCE
 from src.utils.symbol_factory import SymbolFactory
+from src.config.feature_flags import is_enabled
+from src.regime import RegimeDetector, RegimeConfig
+from src.config.constants import (
+    DEFAULT_REGIME_ADJUST_POSITION_SIZE,
+    DEFAULT_REGIME_HYSTERESIS_K,
+    DEFAULT_REGIME_MIN_DWELL,
+    DEFAULT_REGIME_MIN_CONFIDENCE,
+)
 
 # Shared performance metrics
 from performance.metrics import (
@@ -93,6 +101,19 @@ class Backtester:
         # Risk manager (parity with live engine)
         self.risk_manager = RiskManager(risk_parameters)
         
+        # Optional regime detector (same gating as live engine)
+        self.regime_detector: Optional[RegimeDetector] = None
+        if is_enabled("enable_regime_detection", default=False):
+            try:
+                cfg = RegimeConfig(
+                    hysteresis_k=DEFAULT_REGIME_HYSTERESIS_K,
+                    min_dwell=DEFAULT_REGIME_MIN_DWELL,
+                )
+                self.regime_detector = RegimeDetector(cfg)
+                logger.info("RegimeDetector initialized (backtesting)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RegimeDetector in backtester: {e}")
+        
         # Early stop tracking
         self.early_stop_reason: Optional[str] = None
         self.early_stop_date: Optional[datetime] = None
@@ -138,7 +159,7 @@ class Backtester:
                             return _noop
 
                     self.db_manager = DummyDBManager()
-        
+    
     def run(
         self,
         symbol: str,
@@ -201,6 +222,12 @@ class Backtester:
             
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
+            # Regime annotation identical to live when enabled
+            if self.regime_detector is not None:
+                try:
+                    df = self.regime_detector.annotate(df)
+                except Exception as e:
+                    logger.debug(f"Regime annotation failed in backtester: {e}")
             
             # Remove warmup period - only drop rows where essential price data is missing
             # Don't drop rows just because ML predictions or sentiment data is missing
@@ -394,12 +421,25 @@ class Backtester:
                 elif self.strategy.check_entry_conditions(df, i):
                     # Calculate position size (as fraction of balance)
                     size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+                    # Optional regime-aware sizing (constant-controlled)
+                    if self.regime_detector is not None and DEFAULT_REGIME_ADJUST_POSITION_SIZE:
+                        tl, vl, conf = self.regime_detector.current_labels(df)
+                        mult = self.regime_detector.long_position_multiplier(tl, vl, conf)
+                        size_fraction = min(size_fraction * mult, 1.0)
                     
                     # Log entry decision
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
                         sentiment_data = self._extract_sentiment_data(df, i)
                         ml_predictions = self._extract_ml_predictions(df, i)
+                        reasons = [
+                            'entry_conditions_met',
+                            f'position_size_{size_fraction:.4f}' if size_fraction > 0 else 'no_position_size',
+                            f'balance_{self.balance:.2f}'
+                        ]
+                        if self.regime_detector is not None:
+                            tl, vl, conf = self.regime_detector.current_labels(df)
+                            reasons += [f'regime_trend={tl}', f'regime_vol={vl}', f'regime_conf={conf:.2f}']
                         
                         self.db_manager.log_strategy_execution(
                             strategy_name=self.strategy.__class__.__name__,
@@ -414,11 +454,7 @@ class Backtester:
                             sentiment_data=sentiment_data if sentiment_data else None,
                             ml_predictions=ml_predictions if ml_predictions else None,
                             position_size=size_fraction if size_fraction > 0 else None,
-                            reasons=[
-                                'entry_conditions_met',
-                                f'position_size_{size_fraction:.4f}' if size_fraction > 0 else 'no_position_size',
-                                f'balance_{self.balance:.2f}'
-                            ],
+                            reasons=reasons,
                             volume=indicators.get('volume'),
                             volatility=indicators.get('volatility'),
                             session_id=self.trading_session_id

@@ -51,7 +51,7 @@ class RegimeDetector:
         y = np.log(x.clip(lower=1e-8))
         idx = np.arange(len(y))
         df = pd.DataFrame({"y": y.values, "t": idx}, index=y.index)
-        # Rolling calculations
+        # Rolling OLS helper
         def _ols(block: pd.DataFrame):
             t = block["t"].values.astype(float)
             yb = block["y"].values.astype(float)
@@ -69,8 +69,7 @@ class RegimeDetector:
             r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
             return pd.Series([slope, r2])
 
-        rolled = df.rolling(window=window, min_periods=window).apply(lambda b: _ols(pd.DataFrame(b, columns=["y", "t"])), raw=False)
-        # The above produces nested Series; recompute more simply using expanding apply for clarity
+        # Compute using a simple sliding window to avoid DataFrame.rolling apply quirks
         slopes = []
         r2s = []
         for i in range(len(df)):
@@ -136,26 +135,30 @@ class RegimeDetector:
         cons = self._consecutive
         last = self._last_label
         for tl in trend_label:
-            current = str(tl.value)
+            proposed = str(tl.value)
+            # Initialize if unset
             if last is None:
-                last = current
+                last = proposed
                 cons = 1
                 dwell = 1
+                labels.append(last)
+                continue
+            # If same as current state, increase dwell/cons and continue
+            if proposed == last:
+                cons += 1
+                dwell += 1
+                labels.append(last)
+                continue
+            # If different, require both dwell and confirmations to switch
+            cons += 1  # confirmation counter on proposed label
+            if dwell >= cfg.min_dwell and cons >= cfg.hysteresis_k:
+                last = proposed
+                dwell = 1
+                cons = 1
             else:
-                if current == last:
-                    cons += 1
-                    dwell += 1
-                else:
-                    # Only switch if we have enough confirmations and minimum dwell satisfied
-                    if cons + 1 >= cfg.hysteresis_k and dwell >= cfg.min_dwell:
-                        last = current
-                        cons = 1
-                        dwell = 1
-                    else:
-                        current = last
-                        cons += 1
-                        dwell += 1
-            labels.append(current)
+                # do not switch; keep current
+                pass
+            labels.append(last)
         self._last_label = last
         self._consecutive = cons
         self._dwell = dwell

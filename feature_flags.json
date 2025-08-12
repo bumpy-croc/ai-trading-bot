@@ -1,9 +1,5 @@
 {
   "use_prediction_engine": true,
-  "enable_regime_detection": false,
-  "regime_adjust_position_size": false,
-  "regime_hysteresis_k": 3,
-  "regime_min_dwell": 12,
-  "regime_min_confidence": 0.5
+  "enable_regime_detection": false
 }
 

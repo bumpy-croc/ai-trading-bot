@@ -30,8 +30,14 @@ from performance.metrics import (
     cash_pnl,
 )
 from src.utils.symbol_factory import SymbolFactory
-from src.config.feature_flags import is_enabled, get_flag
+from src.config.feature_flags import is_enabled
 from src.regime import RegimeDetector, RegimeConfig
+from src.config.constants import (
+    DEFAULT_REGIME_ADJUST_POSITION_SIZE,
+    DEFAULT_REGIME_HYSTERESIS_K,
+    DEFAULT_REGIME_MIN_DWELL,
+    DEFAULT_REGIME_MIN_CONFIDENCE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -252,9 +258,10 @@ class LiveTradingEngine:
         self.regime_detector: Optional[RegimeDetector] = None
         if is_enabled("enable_regime_detection", default=False):
             try:
-                hysteresis_k = int(get_flag("regime_hysteresis_k", 3) or 3)
-                min_dwell = int(get_flag("regime_min_dwell", 12) or 12)
-                cfg = RegimeConfig(hysteresis_k=hysteresis_k, min_dwell=min_dwell)
+                cfg = RegimeConfig(
+                    hysteresis_k=DEFAULT_REGIME_HYSTERESIS_K,
+                    min_dwell=DEFAULT_REGIME_MIN_DWELL
+                )
                 self.regime_detector = RegimeDetector(cfg)
                 logger.info("RegimeDetector initialized")
             except Exception as e:
@@ -484,14 +491,14 @@ class LiveTradingEngine:
                         if short_entry_signal:
                             short_position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
                             # Regime-aware sizing for short if enabled
-                            if self.regime_detector is not None and is_enabled("regime_adjust_position_size", default=False):
+                            if self.regime_detector is not None and DEFAULT_REGIME_ADJUST_POSITION_SIZE:
                                 tl, vl, conf = self.regime_detector.current_labels(df)
                                 mult = 1.0  # Keep short multiplier simple for MVP
                                 if vl == 'high_vol':
                                     mult *= 0.8
                                 if tl == 'trend_up':
                                     mult *= 0.7
-                                if conf < float(get_flag("regime_min_confidence", 0.5) or 0.5):
+                                if conf < DEFAULT_REGIME_MIN_CONFIDENCE:
                                     mult *= 0.8
                                 short_position_size = min(short_position_size * mult, self.max_position_size)
                             short_position_size = min(short_position_size, self.max_position_size)
@@ -682,7 +689,7 @@ class LiveTradingEngine:
             position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
             position_size = min(position_size, self.max_position_size)  # Cap at max position size
             # Optionally adjust by regime
-            if self.regime_detector is not None and is_enabled("regime_adjust_position_size", default=False):
+            if self.regime_detector is not None and DEFAULT_REGIME_ADJUST_POSITION_SIZE:
                 tl = regime_context.get("trend_label", "unknown")
                 vl = regime_context.get("vol_label", "unknown")
                 conf = float(regime_context.get("regime_confidence", 0.0))
