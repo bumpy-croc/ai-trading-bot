@@ -66,7 +66,13 @@ class BaseStrategy(ABC):
                 except Exception:
                     pass
             # Use the SymbolFactory for consistent formatting
-            symbol_code = SymbolFactory.normalize(symbol) if symbol else None
+            # Default to the strategy's trading pair when symbol is omitted or None
+            effective_symbol = symbol or self.trading_pair
+            # Normalize to Binance-style symbol for consistency
+            try:
+                symbol_code = SymbolFactory.to_exchange_symbol(effective_symbol, 'binance')
+            except Exception:
+                symbol_code = effective_symbol
             self.db_manager.log_strategy_execution(
                 strategy_name=self.__class__.__name__,
                 symbol=symbol_code,
