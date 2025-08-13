@@ -4,20 +4,22 @@ Configuration management for the prediction engine.
 This module provides a type-safe configuration class that integrates with the
 existing ConfigManager system to load prediction engine settings.
 """
+
 from dataclasses import dataclass, field
 from typing import List
-from src.config.config_manager import get_config
-from src.config.constants import (
-    DEFAULT_PREDICTION_HORIZONS,
-    DEFAULT_MIN_CONFIDENCE_THRESHOLD,
-    DEFAULT_MAX_PREDICTION_LATENCY,
-    DEFAULT_MODEL_REGISTRY_PATH,
-    DEFAULT_ENABLE_SENTIMENT,
-    DEFAULT_ENABLE_MARKET_MICROSTRUCTURE,
-    DEFAULT_FEATURE_CACHE_TTL,
-    DEFAULT_MODEL_CACHE_TTL,
+
+from config.config_manager import get_config
+from config.constants import (
     DEFAULT_CONFIDENCE_SCALE_FACTOR,
-    DEFAULT_DIRECTION_THRESHOLD
+    DEFAULT_DIRECTION_THRESHOLD,
+    DEFAULT_ENABLE_MARKET_MICROSTRUCTURE,
+    DEFAULT_ENABLE_SENTIMENT,
+    DEFAULT_FEATURE_CACHE_TTL,
+    DEFAULT_MAX_PREDICTION_LATENCY,
+    DEFAULT_MIN_CONFIDENCE_THRESHOLD,
+    DEFAULT_MODEL_CACHE_TTL,
+    DEFAULT_MODEL_REGISTRY_PATH,
+    DEFAULT_PREDICTION_HORIZONS,
 )
 
 
@@ -25,11 +27,14 @@ from src.config.constants import (
 class PredictionConfig:
     """
     Configuration for the prediction engine.
-    
+
     This class provides a type-safe way to access prediction engine configuration
     settings loaded from the ConfigManager system.
     """
-    prediction_horizons: List[int] = field(default_factory=lambda: DEFAULT_PREDICTION_HORIZONS.copy())
+
+    prediction_horizons: List[int] = field(
+        default_factory=lambda: DEFAULT_PREDICTION_HORIZONS.copy()
+    )
     min_confidence_threshold: float = DEFAULT_MIN_CONFIDENCE_THRESHOLD
     max_prediction_latency: float = DEFAULT_MAX_PREDICTION_LATENCY
     model_registry_path: str = DEFAULT_MODEL_REGISTRY_PATH
@@ -41,10 +46,10 @@ class PredictionConfig:
     direction_threshold: float = DEFAULT_DIRECTION_THRESHOLD
 
     @classmethod
-    def from_config_manager(cls) -> 'PredictionConfig':
+    def from_config_manager(cls) -> "PredictionConfig":
         """
         Load configuration from ConfigManager.
-        
+
         Returns:
             PredictionConfig: Configured prediction engine settings
         """
@@ -52,55 +57,41 @@ class PredictionConfig:
 
         # Parse prediction horizons as list of integers
         horizons_str_list = config.get_list(
-            'PREDICTION_HORIZONS',
-            default=[str(h) for h in DEFAULT_PREDICTION_HORIZONS]
+            "PREDICTION_HORIZONS", default=[str(h) for h in DEFAULT_PREDICTION_HORIZONS]
         )
         prediction_horizons = [int(h) for h in horizons_str_list]
 
         return cls(
             prediction_horizons=prediction_horizons,
             min_confidence_threshold=config.get_float(
-                'MIN_CONFIDENCE_THRESHOLD',
-                default=DEFAULT_MIN_CONFIDENCE_THRESHOLD
+                "MIN_CONFIDENCE_THRESHOLD", default=DEFAULT_MIN_CONFIDENCE_THRESHOLD
             ),
             max_prediction_latency=config.get_float(
-                'MAX_PREDICTION_LATENCY',
-                default=DEFAULT_MAX_PREDICTION_LATENCY
+                "MAX_PREDICTION_LATENCY", default=DEFAULT_MAX_PREDICTION_LATENCY
             ),
             model_registry_path=config.get(
-                'MODEL_REGISTRY_PATH',
-                default=DEFAULT_MODEL_REGISTRY_PATH
+                "MODEL_REGISTRY_PATH", default=DEFAULT_MODEL_REGISTRY_PATH
             ),
-            enable_sentiment=config.get_bool(
-                'ENABLE_SENTIMENT',
-                default=DEFAULT_ENABLE_SENTIMENT
-            ),
+            enable_sentiment=config.get_bool("ENABLE_SENTIMENT", default=DEFAULT_ENABLE_SENTIMENT),
             enable_market_microstructure=config.get_bool(
-                'ENABLE_MARKET_MICROSTRUCTURE',
-                default=DEFAULT_ENABLE_MARKET_MICROSTRUCTURE
+                "ENABLE_MARKET_MICROSTRUCTURE", default=DEFAULT_ENABLE_MARKET_MICROSTRUCTURE
             ),
             feature_cache_ttl=config.get_int(
-                'FEATURE_CACHE_TTL',
-                default=DEFAULT_FEATURE_CACHE_TTL
+                "FEATURE_CACHE_TTL", default=DEFAULT_FEATURE_CACHE_TTL
             ),
-            model_cache_ttl=config.get_int(
-                'MODEL_CACHE_TTL',
-                default=DEFAULT_MODEL_CACHE_TTL
-            ),
+            model_cache_ttl=config.get_int("MODEL_CACHE_TTL", default=DEFAULT_MODEL_CACHE_TTL),
             confidence_scale_factor=config.get_float(
-                'CONFIDENCE_SCALE_FACTOR',
-                default=DEFAULT_CONFIDENCE_SCALE_FACTOR
+                "CONFIDENCE_SCALE_FACTOR", default=DEFAULT_CONFIDENCE_SCALE_FACTOR
             ),
             direction_threshold=config.get_float(
-                'DIRECTION_THRESHOLD',
-                default=DEFAULT_DIRECTION_THRESHOLD
-            )
+                "DIRECTION_THRESHOLD", default=DEFAULT_DIRECTION_THRESHOLD
+            ),
         )
 
     def validate(self) -> None:
         """
         Validate configuration values.
-        
+
         Raises:
             ValueError: If any configuration value is invalid
         """

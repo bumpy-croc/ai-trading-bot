@@ -8,6 +8,7 @@ from performance.metrics import (
     total_return as perf_total_return,
     cagr as perf_cagr,
 )
+# NOTE: extraction helpers moved to trading.shared.indicators; this file retains only performance math
 
 
 def extract_indicators(df: pd.DataFrame, index: int) -> Dict:

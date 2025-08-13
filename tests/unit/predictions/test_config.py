@@ -1,43 +1,49 @@
 """
 Tests for prediction engine configuration.
 """
-import pytest
+
 import os
 from unittest.mock import patch
+
+import pytest
+
 from prediction.config import PredictionConfig
 
 
 class TestPredictionConfig:
     """Test the prediction engine configuration."""
-    
+
     def test_prediction_config_loading_with_environment_variables(self):
         """Test loading prediction configuration from environment variables."""
-        with patch.dict(os.environ, {
-            'PREDICTION_HORIZONS': '1,5,20',
-            'MIN_CONFIDENCE_THRESHOLD': '0.7',
-            'MAX_PREDICTION_LATENCY': '0.05',
-            'MODEL_REGISTRY_PATH': 'custom/ml/path',
-            'ENABLE_SENTIMENT': 'true',
-            'ENABLE_MARKET_MICROSTRUCTURE': 'false',
-            'FEATURE_CACHE_TTL': '600',
-            'MODEL_CACHE_TTL': '1200'
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "PREDICTION_HORIZONS": "1,5,20",
+                "MIN_CONFIDENCE_THRESHOLD": "0.7",
+                "MAX_PREDICTION_LATENCY": "0.05",
+                "MODEL_REGISTRY_PATH": "custom/ml/path",
+                "ENABLE_SENTIMENT": "true",
+                "ENABLE_MARKET_MICROSTRUCTURE": "false",
+                "FEATURE_CACHE_TTL": "600",
+                "MODEL_CACHE_TTL": "1200",
+            },
+        ):
             config = PredictionConfig.from_config_manager()
-            
+
             # Test list parsing for prediction horizons
             assert config.prediction_horizons == [1, 5, 20]
-            
+
             # Test float parsing
             assert config.min_confidence_threshold == 0.7
             assert config.max_prediction_latency == 0.05
-            
+
             # Test string values
-            assert config.model_registry_path == 'custom/ml/path'
-            
+            assert config.model_registry_path == "custom/ml/path"
+
             # Test boolean parsing
             assert config.enable_sentiment is True
             assert config.enable_market_microstructure is False
-            
+
             # Test integer parsing
             assert config.feature_cache_ttl == 600
             assert config.model_cache_ttl == 1200
@@ -45,15 +51,20 @@ class TestPredictionConfig:
     def test_prediction_config_defaults(self):
         """Test prediction configuration default values."""
         # Clear environment to test defaults
-        prediction_keys = [
-            'PREDICTION_HORIZONS', 'MIN_CONFIDENCE_THRESHOLD', 'MAX_PREDICTION_LATENCY',
-            'MODEL_REGISTRY_PATH', 'ENABLE_SENTIMENT', 'ENABLE_MARKET_MICROSTRUCTURE',
-            'FEATURE_CACHE_TTL', 'MODEL_CACHE_TTL'
+        _prediction_keys = [
+            "PREDICTION_HORIZONS",
+            "MIN_CONFIDENCE_THRESHOLD",
+            "MAX_PREDICTION_LATENCY",
+            "MODEL_REGISTRY_PATH",
+            "ENABLE_SENTIMENT",
+            "ENABLE_MARKET_MICROSTRUCTURE",
+            "FEATURE_CACHE_TTL",
+            "MODEL_CACHE_TTL",
         ]
-        
+
         with patch.dict(os.environ, {}, clear=True):
             config = PredictionConfig.from_config_manager()
-            
+
             # Test default values
             assert config.prediction_horizons == [1]
             assert config.min_confidence_threshold == 0.6
@@ -74,9 +85,9 @@ class TestPredictionConfig:
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
-            model_cache_ttl=600
+            model_cache_ttl=600,
         )
-        
+
         # Should not raise any exception
         valid_config.validate()
 
@@ -90,7 +101,7 @@ class TestPredictionConfig:
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
-            model_cache_ttl=600
+            model_cache_ttl=600,
         )
 
         with pytest.raises(ValueError, match="At least one prediction horizon"):
@@ -106,7 +117,7 @@ class TestPredictionConfig:
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
-            model_cache_ttl=600
+            model_cache_ttl=600,
         )
 
         with pytest.raises(ValueError, match="Prediction horizons must be positive"):
@@ -123,7 +134,7 @@ class TestPredictionConfig:
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
-            model_cache_ttl=600
+            model_cache_ttl=600,
         )
 
         with pytest.raises(ValueError, match="Confidence threshold must be between 0 and 1"):
@@ -138,7 +149,7 @@ class TestPredictionConfig:
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
-            model_cache_ttl=600
+            model_cache_ttl=600,
         )
 
         with pytest.raises(ValueError, match="Confidence threshold must be between 0 and 1"):
@@ -154,7 +165,7 @@ class TestPredictionConfig:
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
-            model_cache_ttl=600
+            model_cache_ttl=600,
         )
 
         with pytest.raises(ValueError, match="Prediction latency must be positive"):
@@ -171,7 +182,7 @@ class TestPredictionConfig:
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=-300,  # Negative TTL
-            model_cache_ttl=600
+            model_cache_ttl=600,
         )
 
         with pytest.raises(ValueError, match="Feature cache TTL must be positive"):
@@ -186,7 +197,7 @@ class TestPredictionConfig:
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
-            model_cache_ttl=-600  # Negative TTL
+            model_cache_ttl=-600,  # Negative TTL
         )
 
         with pytest.raises(ValueError, match="Model cache TTL must be positive"):
@@ -202,11 +213,11 @@ class TestPredictionConfig:
             enable_sentiment=True,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
-            model_cache_ttl=600
+            model_cache_ttl=600,
         )
-        
+
         config_str = str(config)
-        
+
         # Check that important values are in the string representation
         assert "horizons=[1, 5]" in config_str
         assert "confidence_threshold=0.8" in config_str
@@ -217,24 +228,27 @@ class TestPredictionConfig:
     def test_prediction_config_integration_with_config_manager(self):
         """Test that PredictionConfig integrates properly with ConfigManager."""
         from config.config_manager import get_config
-        
-        with patch.dict(os.environ, {
-            'PREDICTION_HORIZONS': '1,10',
-            'MIN_CONFIDENCE_THRESHOLD': '0.75',
-            'ENABLE_SENTIMENT': 'true'
-        }):
+
+        with patch.dict(
+            os.environ,
+            {
+                "PREDICTION_HORIZONS": "1,10",
+                "MIN_CONFIDENCE_THRESHOLD": "0.75",
+                "ENABLE_SENTIMENT": "true",
+            },
+        ):
             # Verify ConfigManager can retrieve the values
             config_manager = get_config()
-            
-            horizons_list = config_manager.get_list('PREDICTION_HORIZONS')
-            assert horizons_list == ['1', '10']
-            
-            confidence = config_manager.get_float('MIN_CONFIDENCE_THRESHOLD')
+
+            horizons_list = config_manager.get_list("PREDICTION_HORIZONS")
+            assert horizons_list == ["1", "10"]
+
+            confidence = config_manager.get_float("MIN_CONFIDENCE_THRESHOLD")
             assert confidence == 0.75
-            
-            sentiment = config_manager.get_bool('ENABLE_SENTIMENT')
+
+            sentiment = config_manager.get_bool("ENABLE_SENTIMENT")
             assert sentiment is True
-            
+
             # Verify PredictionConfig can load from ConfigManager
             prediction_config = PredictionConfig.from_config_manager()
             assert prediction_config.prediction_horizons == [1, 10]
