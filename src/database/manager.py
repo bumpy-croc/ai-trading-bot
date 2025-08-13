@@ -32,6 +32,8 @@ from .models import (
     Trade,
     TradeSource,
     TradingSession,
+    OptimizationCycle,
+    PredictionPerformance,
 )
 
 logger = logging.getLogger(__name__)
@@ -257,24 +259,105 @@ class DatabaseManager:
             Dictionary with database connection details
         """
 
-        def _safe_pool_val(attr_name, default=0):
-            if not self.engine:
-                return default
-            pool_attr = getattr(self.engine.pool, attr_name, default)
+        def _get_pool_attr(*names, default=0):
             try:
-                return pool_attr() if callable(pool_attr) else pool_attr
-            except Exception:  # pragma: no cover
-                return default
+                for nm in names:
+                    if hasattr(self.engine.pool, nm):
+                        val = getattr(self.engine.pool, nm)
+                        return val() if callable(val) else val
+            except Exception:
+                pass
+            return default
 
-        info = {
-            "database_url": self.database_url,
-            "database_type": "postgresql",
-            "connection_pool_size": _safe_pool_val("size"),
-            "checked_in_connections": _safe_pool_val("checkedin"),
-            "checked_out_connections": _safe_pool_val("checkedout"),
-        }
+        if self.engine is None:
+            raise ValueError("Database engine not initialized")
 
-        return info
+        try:
+            # Support multiple attribute name variants across SQLAlchemy/mocks
+            pool_size = _get_pool_attr("size", default=0)
+            checked_in = _get_pool_attr("checkedin", "checked_in", default=0)
+            checked_out = _get_pool_attr("checkedout", "checked_out", default=0)
+            overflow = _get_pool_attr("overflow", default=0)
+
+            db_type = "postgresql" if str(self.database_url).startswith("postgresql") else "sqlite"
+
+            # Backward-compatible keys expected by unit tests
+            return {
+                "database_url": self.database_url,
+                "database_type": db_type,
+                "connection_pool_size": pool_size,
+                "checked_in_connections": checked_in,
+                "checked_out_connections": checked_out,
+                # Extra diagnostic fields
+                "status": "connected",
+                "pool_size": pool_size,
+                "max_overflow": _get_pool_attr("_max_overflow", default=0),
+                "checked_in": checked_in,
+                "checked_out": checked_out,
+                "overflow": overflow,
+            }
+        except Exception as e:
+            logger.error(f"Error getting database info: {e}")
+            return {"status": "error", "message": str(e)}
+
+    # --- Optimizer persistence ---
+    def record_optimization_cycle(
+        self,
+        strategy_name: str,
+        symbol: str,
+        timeframe: str,
+        baseline_metrics: Dict[str, Any],
+        candidate_params: Dict[str, Any] | None,
+        candidate_metrics: Dict[str, Any] | None,
+        validator_report: Dict[str, Any] | None,
+        decision: str,
+        session_id: Optional[int] = None,
+    ) -> int:
+        """Insert a new optimization cycle row and return its id."""
+        with self.get_session() as session:
+            oc = OptimizationCycle(
+                strategy_name=strategy_name,
+                symbol=symbol,
+                timeframe=timeframe,
+                baseline_metrics=baseline_metrics,
+                candidate_params=candidate_params or {},
+                candidate_metrics=candidate_metrics or {},
+                validator_report=validator_report or {},
+                decision=decision,
+                session_id=session_id,
+            )
+            session.add(oc)
+            session.commit()
+            return int(oc.id)
+
+    def fetch_optimization_cycles(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """Fetch recent optimization cycles as plain dicts for API usage."""
+        with self.get_session() as session:
+            q = (
+                session.query(OptimizationCycle)
+                .order_by(OptimizationCycle.timestamp.desc())
+                .offset(max(0, int(offset)))
+                .limit(max(1, int(limit)))
+            )
+            rows = q.all()
+            out: List[Dict[str, Any]] = []
+            for r in rows:
+                out.append(
+                    {
+                        "id": int(r.id),
+                        "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                        "strategy_name": r.strategy_name,
+                        "symbol": r.symbol,
+                        "timeframe": r.timeframe,
+                        "baseline_metrics": r.baseline_metrics or {},
+                        "candidate_params": r.candidate_params or {},
+                        "candidate_metrics": r.candidate_metrics or {},
+                        "validator_report": r.validator_report or {},
+                        "decision": r.decision,
+                        "session_id": int(r.session_id) if r.session_id is not None else None,
+                    }
+                )
+            return out
 
     def create_trading_session(
         self,

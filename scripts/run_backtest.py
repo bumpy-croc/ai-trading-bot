@@ -8,7 +8,10 @@ from pathlib import Path
 
 from backtesting import Backtester
 from config.constants import DEFAULT_INITIAL_BALANCE
-from data_providers.cryptocompare_sentiment import CryptoCompareSentimentProvider
+
+from data_providers import BinanceDataProvider
+from data_providers.cached_data_provider import CachedDataProvider
+from data_providers.feargreed_provider import FearGreedProvider
 from risk import RiskParameters
 from utils.logging_config import configure_logging
 from utils.symbol_factory import SymbolFactory
@@ -142,7 +145,7 @@ def main() -> int:
         # Initialize sentiment provider if requested
         sentiment_provider = None
         if args.use_sentiment:
-            sentiment_provider = CryptoCompareSentimentProvider()
+            sentiment_provider = FearGreedProvider()
             logger.info("Using sentiment analysis in backtest")
 
         # Set up risk parameters

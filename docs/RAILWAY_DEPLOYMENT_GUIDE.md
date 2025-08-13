@@ -90,7 +90,7 @@ railway variables set BINANCE_API_SECRET=your_binance_secret_key
 
 # Optional sentiment API keys
 railway variables set SENTICRYPT_API_KEY=your_senticrypt_key
-railway variables set CRYPTOCOMPARE_API_KEY=your_cryptocompare_key
+
 railway variables set AUGMENTO_API_KEY=your_augmento_key
 ```
 
@@ -109,7 +109,7 @@ railway variables set AUGMENTO_API_KEY=your_augmento_key
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SENTICRYPT_API_KEY` | SentiCrypt sentiment API key | None |
-| `CRYPTOCOMPARE_API_KEY` | CryptoCompare API key | None |
+
 | `AUGMENTO_API_KEY` | Augmento sentiment API key | None |
 | `HEALTH_CHECK_PORT` | Health check server port | `8000` |
 | `DATABASE_URL` | PostgreSQL connection string | Auto-generated |
