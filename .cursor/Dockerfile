@@ -1,35 +1,28 @@
-# Background Agent Dockerfile - Self-contained with PostgreSQL
-FROM python:3.11-slim
+FROM debian:bookworm-slim
 
-# Install system dependencies including PostgreSQL
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Base packages and GitHub CLI installation
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        ca-certificates \
         curl \
         git \
-        build-essential \
-        libpq-dev \
-        postgresql \
-        postgresql-contrib \
-        supervisor \
-        && \
+        gnupg && \
+    rm -rf /var/lib/apt/lists/* && \
+    # Install GitHub CLI
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
+        tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null && \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
+        tee /etc/apt/sources.list.d/github-cli.list >/dev/null && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 
-# Set working directory
-WORKDIR /workspace
+# Non-root user for safety
+RUN useradd -m cursor && chown -R cursor:cursor /home/cursor
+USER cursor
 
-# Create necessary directories
-RUN mkdir -p logs ml data /var/lib/postgresql/data /var/run/postgresql
-
-# Set environment variables
-ENV PYTHONPATH=/app/src
-ENV PYTHONUNBUFFERED=1
-ENV DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
-ENV RAILWAY_STAGING_DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
-ENV RAILWAY_PRODUCTION_DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
-ENV PGDATA=/var/lib/postgresql/data
-
-# Expose PostgreSQL and dashboard ports
-EXPOSE 5432 5000
-
-# Start supervisor to manage PostgreSQL, dashboard, and the application
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
+CMD ["bash"] 
