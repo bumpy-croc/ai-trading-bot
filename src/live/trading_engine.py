@@ -511,24 +511,9 @@ class LiveTradingEngine:
                             df, current_index
                         )
                         if short_entry_signal:
-<<<<<<< HEAD
-                            short_position_size = self.strategy.calculate_position_size(df, current_index, self.current_balance)
-                            # Regime-aware sizing for short if enabled
-                            if self.regime_detector is not None and DEFAULT_REGIME_ADJUST_POSITION_SIZE:
-                                tl, vl, conf = self.regime_detector.current_labels(df)
-                                mult = 1.0  # Keep short multiplier simple for MVP
-                                if vl == 'high_vol':
-                                    mult *= 0.8
-                                if tl == 'trend_up':
-                                    mult *= 0.7
-                                if conf < DEFAULT_REGIME_MIN_CONFIDENCE:
-                                    mult *= 0.8
-                                short_position_size = min(short_position_size * mult, self.max_position_size)
-=======
                             short_position_size = self.strategy.calculate_position_size(
                                 df, current_index, self.current_balance
                             )
->>>>>>> origin/develop
                             short_position_size = min(short_position_size, self.max_position_size)
                             if short_position_size > 0:
                                 short_stop_loss = self.strategy.calculate_stop_loss(
@@ -734,15 +719,6 @@ class LiveTradingEngine:
         sentiment_data = self._extract_sentiment_data(df, current_index)
         ml_predictions = self._extract_ml_predictions(df, current_index)
 
-<<<<<<< HEAD
-        # Regime context
-        regime_context: Dict[str, Any] = {}
-        if self.regime_detector is not None:
-            tl, vl, conf = self.regime_detector.current_labels(df)
-            regime_context = {"trend_label": tl, "vol_label": vl, "regime_confidence": conf}
-
-=======
->>>>>>> origin/develop
         # Calculate position size if entry signal is present
         position_size = 0.0
         if entry_signal:
@@ -750,16 +726,6 @@ class LiveTradingEngine:
                 df, current_index, self.current_balance
             )
             position_size = min(position_size, self.max_position_size)  # Cap at max position size
-<<<<<<< HEAD
-            # Optionally adjust by regime
-            if self.regime_detector is not None and DEFAULT_REGIME_ADJUST_POSITION_SIZE:
-                tl = regime_context.get("trend_label", "unknown")
-                vl = regime_context.get("vol_label", "unknown")
-                conf = float(regime_context.get("regime_confidence", 0.0))
-                mult = self.regime_detector.long_position_multiplier(tl, vl, conf)
-                position_size = min(position_size * mult, self.max_position_size)
-=======
->>>>>>> origin/develop
 
         # Log strategy execution decision
         if self.db_manager:
@@ -777,15 +743,6 @@ class LiveTradingEngine:
                 ml_predictions=ml_predictions if ml_predictions else None,
                 position_size=position_size if position_size > 0 else None,
                 reasons=[
-<<<<<<< HEAD
-                    'entry_conditions_met' if entry_signal else 'entry_conditions_not_met',
-                    f'position_size_{position_size:.4f}' if position_size > 0 else 'no_position_size',
-                    f'max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}',
-                ] + ([f"regime_trend={regime_context.get('trend_label')}", f"regime_vol={regime_context.get('vol_label')}", f"regime_conf={regime_context.get('regime_confidence'):.2f}"] if regime_context else []),
-                volume=indicators.get('volume'),
-                volatility=indicators.get('volatility'),
-                session_id=self.trading_session_id
-=======
                     "entry_conditions_met" if entry_signal else "entry_conditions_not_met",
                     (
                         f"position_size_{position_size:.4f}"
@@ -797,7 +754,7 @@ class LiveTradingEngine:
                 volume=indicators.get("volume"),
                 volatility=indicators.get("volatility"),
                 session_id=self.trading_session_id,
->>>>>>> origin/develop
+
             )
 
         # Only proceed if we have a valid entry signal and position size
