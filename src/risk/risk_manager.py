@@ -137,6 +137,19 @@ class RiskManager:
         Return the fraction of balance to allocate (0..1), enforcing risk limits.
         Uses policy selected by strategy_overrides['position_sizer'].
         Supported sizers: 'fixed_fraction', 'confidence_weighted', 'atr_risk'.
+
+        Examples
+        --------
+        atr_risk sizer (ATR-based sizing converted to fraction):
+            overrides = {
+                'position_sizer': 'atr_risk',
+                'base_fraction': 0.02,  # ignored for atr_risk
+            }
+            fraction = risk_manager.calculate_position_fraction(
+                df=df, index=i, balance=10_000, price=df['close'].iloc[i],
+                strategy_overrides=overrides
+            )
+            # -> returns a fraction such as 0.03 meaning 3% of balance
         """
         if balance <= 0 or index < 0 or index >= len(df):
             return 0.0
@@ -246,7 +259,26 @@ class RiskManager:
         size: float,
         entry_price: float
     ):
-        """Update position tracking"""
+        """Update position tracking.
+
+        Parameters
+        ----------
+        symbol : str
+            Symbol identifier (e.g., 'BTCUSDT').
+        side : str
+            'long' or 'short'.
+        size : float
+            Fraction of account balance allocated to this position (0..1).
+            This function treats `size` as a fraction for daily risk accounting.
+        entry_price : float
+            Entry price of the position.
+
+        Notes
+        -----
+        - Daily risk accounting increments `daily_risk_used` by `size` so that
+          the sum of concurrently open position fractions respects
+          `params.max_daily_risk` across multiple positions.
+        """
         self.positions[symbol] = {
             'side': side,
             'size': size,

@@ -30,6 +30,7 @@ from performance.metrics import (
     cash_pnl,
 )
 from src.utils.symbol_factory import SymbolFactory
+from regime.detector import RegimeDetector
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +242,14 @@ class LiveTradingEngine:
         # Threading
         self.main_thread = None
         self.stop_event = threading.Event()
+        
+        # Optional regime detector (feature-gated)
+        self.regime_detector = None
+        try:
+            if os.getenv("FEATURE_ENABLE_REGIME_DETECTION", "").lower() == "true":
+                self.regime_detector = RegimeDetector()
+        except Exception:
+            self.regime_detector = None
         
         # Setup graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)

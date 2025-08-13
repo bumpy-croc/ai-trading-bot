@@ -14,6 +14,8 @@ from database.models import TradeSource, PositionSide
 from sqlalchemy.exc import SQLAlchemyError
 from config.constants import DEFAULT_INITIAL_BALANCE
 from src.utils.symbol_factory import SymbolFactory
+import os
+from regime.detector import RegimeDetector
 
 # Shared performance metrics
 from performance.metrics import (
@@ -92,6 +94,11 @@ class Backtester:
         
         # Risk manager (parity with live engine)
         self.risk_manager = RiskManager(risk_parameters)
+        # Regime detector (always available for analytics/tests)
+        try:
+            self.regime_detector = RegimeDetector()
+        except Exception:
+            self.regime_detector = None
         
         # Early stop tracking
         self.early_stop_reason: Optional[str] = None
