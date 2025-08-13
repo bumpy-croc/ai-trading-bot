@@ -25,7 +25,7 @@ def parse_args():
     p.add_argument("--timeframe", default="1h")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE)
-    p.add_argument("--provider", choices=["binance", "coinbase", "mock", "fixture"], default="binance")
+    p.add_argument("--provider", choices=["binance", "coinbase", "mock", "fixture"], default="mock")
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--output", default="artifacts/optimizer_report.json")
     return p.parse_args()

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -11,7 +12,7 @@ class BalanceTracker:
     max_drawdown: float = 0.0  # as fraction (0..1)
 
     @classmethod
-    def start(cls, initial_balance: float) -> "BalanceTracker":
+    def start(cls, initial_balance: float) -> BalanceTracker:
         return cls(
             starting_balance=initial_balance,
             current_balance=initial_balance,

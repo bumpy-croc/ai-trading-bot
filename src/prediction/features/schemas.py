@@ -6,12 +6,13 @@ used in the prediction engine.
 """
 
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
 from enum import Enum
+from typing import List, Optional
 
 
 class FeatureType(Enum):
     """Types of features supported by the prediction engine."""
+
     TECHNICAL = "technical"
     SENTIMENT = "sentiment"
     MARKET_MICROSTRUCTURE = "market_microstructure"
@@ -21,6 +22,7 @@ class FeatureType(Enum):
 
 class NormalizationMethod(Enum):
     """Normalization methods for feature scaling."""
+
     MIN_MAX = "min_max"
     Z_SCORE = "z_score"
     ROLLING_MIN_MAX = "rolling_min_max"
@@ -33,6 +35,7 @@ class FeatureDefinition:
     """
     Definition of a single feature including its metadata.
     """
+
     name: str
     feature_type: FeatureType
     description: str
@@ -42,7 +45,7 @@ class FeatureDefinition:
     min_value: Optional[float] = None
     max_value: Optional[float] = None
     dependencies: List[str] = None
-    
+
     def __post_init__(self):
         if self.dependencies is None:
             self.dependencies = []
@@ -53,20 +56,21 @@ class FeatureSchema:
     """
     Schema defining a collection of features for a specific purpose.
     """
+
     name: str
     version: str
     features: List[FeatureDefinition]
     description: str
     sequence_length: int = 120
-    
+
     def get_feature_names(self) -> List[str]:
         """Get list of feature names in this schema."""
         return [f.name for f in self.features]
-    
+
     def get_required_features(self) -> List[str]:
         """Get list of required feature names."""
         return [f.name for f in self.features if f.required]
-    
+
     def get_features_by_type(self, feature_type: FeatureType) -> List[FeatureDefinition]:
         """Get features of a specific type."""
         return [f for f in self.features if f.feature_type == feature_type]
@@ -85,37 +89,36 @@ TECHNICAL_FEATURES_SCHEMA = FeatureSchema(
             feature_type=FeatureType.NORMALIZED_PRICE,
             description="Min-max normalized close price over sequence window",
             normalization=NormalizationMethod.ROLLING_MIN_MAX,
-            required=True
+            required=True,
         ),
         FeatureDefinition(
-            name="volume_normalized", 
+            name="volume_normalized",
             feature_type=FeatureType.NORMALIZED_PRICE,
             description="Min-max normalized volume over sequence window",
             normalization=NormalizationMethod.ROLLING_MIN_MAX,
-            required=True
+            required=True,
         ),
         FeatureDefinition(
             name="high_normalized",
             feature_type=FeatureType.NORMALIZED_PRICE,
-            description="Min-max normalized high price over sequence window", 
+            description="Min-max normalized high price over sequence window",
             normalization=NormalizationMethod.ROLLING_MIN_MAX,
-            required=True
+            required=True,
         ),
         FeatureDefinition(
             name="low_normalized",
             feature_type=FeatureType.NORMALIZED_PRICE,
             description="Min-max normalized low price over sequence window",
             normalization=NormalizationMethod.ROLLING_MIN_MAX,
-            required=True
+            required=True,
         ),
         FeatureDefinition(
             name="open_normalized",
             feature_type=FeatureType.NORMALIZED_PRICE,
             description="Min-max normalized open price over sequence window",
             normalization=NormalizationMethod.ROLLING_MIN_MAX,
-            required=True
+            required=True,
         ),
-        
         # Technical indicators
         FeatureDefinition(
             name="rsi",
@@ -124,15 +127,15 @@ TECHNICAL_FEATURES_SCHEMA = FeatureSchema(
             min_value=0.0,
             max_value=100.0,
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
         FeatureDefinition(
             name="atr",
-            feature_type=FeatureType.TECHNICAL, 
+            feature_type=FeatureType.TECHNICAL,
             description="Average True Range (14 period)",
             min_value=0.0,
             required=True,
-            dependencies=["high", "low", "close"]
+            dependencies=["high", "low", "close"],
         ),
         FeatureDefinition(
             name="atr_pct",
@@ -140,85 +143,81 @@ TECHNICAL_FEATURES_SCHEMA = FeatureSchema(
             description="ATR as percentage of close price",
             min_value=0.0,
             required=True,
-            dependencies=["atr", "close"]
+            dependencies=["atr", "close"],
         ),
-        
         # Moving averages
         FeatureDefinition(
             name="ma_20",
             feature_type=FeatureType.TECHNICAL,
             description="20-period simple moving average",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
         FeatureDefinition(
-            name="ma_50", 
+            name="ma_50",
             feature_type=FeatureType.TECHNICAL,
             description="50-period simple moving average",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
         FeatureDefinition(
             name="ma_200",
             feature_type=FeatureType.TECHNICAL,
             description="200-period simple moving average",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
-        
         # Bollinger Bands
         FeatureDefinition(
             name="bb_upper",
             feature_type=FeatureType.TECHNICAL,
             description="Bollinger Bands upper band",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
         FeatureDefinition(
             name="bb_lower",
             feature_type=FeatureType.TECHNICAL,
-            description="Bollinger Bands lower band", 
+            description="Bollinger Bands lower band",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
         FeatureDefinition(
             name="bb_middle",
             feature_type=FeatureType.TECHNICAL,
             description="Bollinger Bands middle band (SMA)",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
-        
         # MACD
         FeatureDefinition(
             name="macd",
             feature_type=FeatureType.TECHNICAL,
             description="MACD line",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
         FeatureDefinition(
             name="macd_signal",
             feature_type=FeatureType.TECHNICAL,
             description="MACD signal line",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
         FeatureDefinition(
             name="macd_hist",
             feature_type=FeatureType.TECHNICAL,
             description="MACD histogram",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
-        
         # Derived features
         FeatureDefinition(
             name="returns",
             feature_type=FeatureType.DERIVED,
             description="Price returns (close.pct_change())",
             required=True,
-            dependencies=["close"]
+            dependencies=["close"],
         ),
         FeatureDefinition(
             name="volatility_20",
@@ -226,7 +225,7 @@ TECHNICAL_FEATURES_SCHEMA = FeatureSchema(
             description="20-period rolling volatility of returns",
             min_value=0.0,
             required=True,
-            dependencies=["returns"]
+            dependencies=["returns"],
         ),
         FeatureDefinition(
             name="volatility_50",
@@ -234,14 +233,14 @@ TECHNICAL_FEATURES_SCHEMA = FeatureSchema(
             description="50-period rolling volatility of returns",
             min_value=0.0,
             required=True,
-            dependencies=["returns"]
+            dependencies=["returns"],
         ),
         FeatureDefinition(
             name="trend_strength",
             feature_type=FeatureType.DERIVED,
             description="Trend strength relative to MA50",
             required=True,
-            dependencies=["close", "ma_50"]
+            dependencies=["close", "ma_50"],
         ),
         FeatureDefinition(
             name="trend_direction",
@@ -250,15 +249,15 @@ TECHNICAL_FEATURES_SCHEMA = FeatureSchema(
             min_value=-1.0,
             max_value=1.0,
             required=True,
-            dependencies=["ma_20", "ma_50"]
-        )
-    ]
+            dependencies=["ma_20", "ma_50"],
+        ),
+    ],
 )
 
 # Define sentiment features schema (disabled for MVP)
 SENTIMENT_FEATURES_SCHEMA = FeatureSchema(
     name="sentiment_features_v1",
-    version="1.0.0", 
+    version="1.0.0",
     description="Sentiment analysis features (MVP: disabled)",
     features=[
         FeatureDefinition(
@@ -268,14 +267,14 @@ SENTIMENT_FEATURES_SCHEMA = FeatureSchema(
             min_value=0.0,
             max_value=1.0,
             required=False,
-            default_value=0.5
+            default_value=0.5,
         ),
         FeatureDefinition(
             name="sentiment_momentum",
             feature_type=FeatureType.SENTIMENT,
             description="Sentiment momentum",
             required=False,
-            default_value=0.0
+            default_value=0.0,
         ),
         FeatureDefinition(
             name="sentiment_volatility",
@@ -283,7 +282,7 @@ SENTIMENT_FEATURES_SCHEMA = FeatureSchema(
             description="Sentiment volatility",
             min_value=0.0,
             required=False,
-            default_value=0.3
+            default_value=0.3,
         ),
         FeatureDefinition(
             name="sentiment_confidence",
@@ -292,7 +291,7 @@ SENTIMENT_FEATURES_SCHEMA = FeatureSchema(
             min_value=0.0,
             max_value=1.0,
             required=False,
-            default_value=0.7
-        )
-    ]
+            default_value=0.7,
+        ),
+    ],
 )

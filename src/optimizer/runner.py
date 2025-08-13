@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 from pathlib import Path
 
@@ -9,11 +9,11 @@ from src.backtesting.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
-from src.data_providers.mock_data_provider import MockDataProvider
 from src.data_providers.data_provider import DataProvider
 from src.strategies.ml_basic import MlBasic
 from src.risk.risk_manager import RiskParameters
 import pandas as pd
+import numpy as np
 
 
 class _FixtureProvider(DataProvider):
@@ -25,7 +25,6 @@ class _FixtureProvider(DataProvider):
         self.df = self._load()
 
     def _load(self) -> pd.DataFrame:
-        import pandas as pd
         if not self.path.exists():
             return pd.DataFrame()
         df = pd.read_feather(self.path)
@@ -40,14 +39,52 @@ class _FixtureProvider(DataProvider):
         return df
 
 
+class _RandomWalkProvider(DataProvider):
+    """Generates synthetic OHLCV series using a random walk for offline experiments."""
+
+    def __init__(self, start: datetime, end: datetime, timeframe: str = "1h", start_price: float = 30000.0, vol: float = 0.01):
+        super().__init__()
+        self.df = self._generate(start, end, timeframe, start_price, vol)
+
+    def _freq(self, timeframe: str) -> str:
+        mapping = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1d"}
+        return mapping.get(timeframe, "1h")
+
+    def _generate(self, start: datetime, end: datetime, timeframe: str, start_price: float, vol: float) -> pd.DataFrame:
+        idx = pd.date_range(start=pd.Timestamp(start), end=pd.Timestamp(end), freq=self._freq(timeframe))
+        if len(idx) < 2:
+            return pd.DataFrame(index=idx, columns=["open", "high", "low", "close", "volume"]).fillna(0.0)
+        prices = [start_price]
+        for _ in range(1, len(idx)):
+            shock = np.random.normal(0, vol)
+            prices.append(max(1.0, prices[-1] * (1.0 + shock)))
+        prices = np.array(prices)
+        highs = prices * (1.0 + np.abs(np.random.normal(0, vol / 2, size=len(prices))))
+        lows = prices * (1.0 - np.abs(np.random.normal(0, vol / 2, size=len(prices))))
+        opens = np.r_[prices[0], prices[:-1]]
+        volume = np.random.uniform(1000.0, 10000.0, size=len(prices))
+        df = pd.DataFrame({
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "close": prices,
+            "volume": volume,
+        }, index=idx)
+        return df
+
+    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None) -> pd.DataFrame:  # type: ignore[override]
+        end = end or pd.Timestamp.now()
+        return self.df.loc[(self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))].copy()
+
+
 class ExperimentRunner:
     """Runs backtests for given experiment configurations."""
 
-    def _load_provider(self, name: str, use_cache: bool, cache_ttl_hours: int = 24):
+    def _load_provider(self, name: str, use_cache: bool, cache_ttl_hours: int = 24, *, start: Optional[datetime] = None, end: Optional[datetime] = None, timeframe: str = "1h"):
         name = (name or "binance").lower()
         if name == "mock":
-            # Use hourly candles over ~90 days for stability
-            return MockDataProvider(interval_seconds=3600, num_candles=24 * 90)
+            # Internal random-walk provider
+            return _RandomWalkProvider(start or (datetime.utcnow() - timedelta(days=30)), end or datetime.utcnow(), timeframe=timeframe)
         if name == "fixture":
             fixture_path = Path("tests/data/BTCUSDT_1h_2023-01-01_2024-12-31.feather")
             return _FixtureProvider(fixture_path)
@@ -67,7 +104,7 @@ class ExperimentRunner:
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:
         strategy = self._load_strategy(config.strategy_name)
-        provider = self._load_provider(config.provider, config.use_cache)
+        provider = self._load_provider(config.provider, config.use_cache, start=config.start, end=config.end, timeframe=config.timeframe)
 
         risk_params = RiskParameters(**config.risk_parameters) if config.risk_parameters else RiskParameters()
 
