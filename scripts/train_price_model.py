@@ -17,10 +17,11 @@ The script:
 Note: Designed for quick experimentation ‑ not heavy hyper-parameter tuning.
 Note: Use SymbolFactory for symbol conversion if needed.
 """
+
 import argparse
+import sys
 from datetime import datetime
 from pathlib import Path
-import sys
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,7 @@ sys.path.extend([str(ROOT), str(ROOT / "src")])
 from data_providers import BinanceDataProvider  # noqa: E402
 
 # ----------------------- Dataset ------------------------------------------- #
+
 
 class PriceSequenceDataset(Dataset):
     def __init__(self, df: pd.DataFrame, seq_len: int = 120):
@@ -63,7 +65,9 @@ class PriceSequenceDataset(Dataset):
         y = self.targets[idx + self.seq_len]
         return torch.from_numpy(x), torch.from_numpy(np.array([y]))
 
+
 # ----------------------- Model -------------------------------------------- #
+
 
 class GRUModel(nn.Module):
     def __init__(self, input_size: int = 3, hidden_size: int = 32, num_layers: int = 2):
@@ -76,7 +80,9 @@ class GRUModel(nn.Module):
         out, _ = self.gru(x)
         return self.fc(out[:, -1])  # prediction only from last output
 
+
 # ----------------------- Training routine --------------------------------- #
+
 
 def train_model(df: pd.DataFrame, seq_len: int, epochs: int = 10, lr: float = 1e-3):
     ds = PriceSequenceDataset(df, seq_len)
@@ -102,7 +108,9 @@ def train_model(df: pd.DataFrame, seq_len: int, epochs: int = 10, lr: float = 1e
 
     return model.cpu()
 
+
 # ----------------------- Main ------------------------------------------------ #
+
 
 def fetch_data(symbol: str, timeframe: str, start: datetime, end: datetime) -> pd.DataFrame:
     provider = BinanceDataProvider()
@@ -131,7 +139,9 @@ def export_onnx(model: nn.Module, seq_len: int, output_path: Path):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--symbol", default="BTCUSDT")
-    p.add_argument("--timeframe", default="1h", choices=["1h", "4h"], help="Candle timeframe for training")
+    p.add_argument(
+        "--timeframe", default="1h", choices=["1h", "4h"], help="Candle timeframe for training"
+    )
     p.add_argument("--seq_len", type=int, default=120)
     p.add_argument("--start", default="2018-01-01")
     p.add_argument("--end", default=datetime.utcnow().strftime("%Y-%m-%d"))
@@ -149,6 +159,7 @@ def main():
     print(f"Loaded {len(df)} candles")
     model = train_model(df, seq_len=args.seq_len, epochs=args.epochs)
     export_onnx(model, args.seq_len, Path(args.output))
+
 
 if __name__ == "__main__":
     main()

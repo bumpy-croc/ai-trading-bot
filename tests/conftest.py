@@ -5,32 +5,35 @@ This file contains fixtures that are used across multiple test modules,
 especially for setting up mock data, test environments, and common objects.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock
-import tempfile
 import os
-from pathlib import Path
-import sys
 import subprocess
+import sys
+import tempfile
 import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from unittest.mock import Mock
 
+import numpy as np
+import pandas as pd
+import pytest
 
 # Import core components for fixture creation
 from src.data_providers.data_provider import DataProvider
-from src.data_providers.binance_provider import BinanceProvider
-from src.risk.risk_manager import RiskManager, RiskParameters
+from src.risk.risk_manager import RiskParameters
 from src.strategies.base import BaseStrategy
 
 # Import account sync dependencies
 try:
     from src.data_providers.exchange_interface import (
-        AccountBalance, Position, Order, Trade,
-        OrderSide, OrderType, OrderStatus as ExchangeOrderStatus
+        AccountBalance,
+        Order,
+        OrderSide,
+        OrderType,
+        Position,
+        Trade,
     )
-    from database.models import PositionSide, TradeSource
+    from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
 except ImportError as e:
     print(f"Warning: Could not import account sync dependencies: {e}")
 
@@ -39,8 +42,10 @@ except ImportError as e:
 # an in-memory DB for unit tests, or start a Postgres container / use external DB
 # for integration runs when ENABLE_INTEGRATION_TESTS=1.
 
+
 def _is_integration_enabled() -> bool:
     return os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def maybe_setup_database():
@@ -60,7 +65,10 @@ def maybe_setup_database():
     if not os.getenv("DATABASE_URL"):
         try:
             from testcontainers.postgres import PostgresContainer  # type: ignore
-            print(f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}")
+
+            print(
+                f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}"
+            )
             container = PostgresContainer("postgres:15-alpine")
             container.start()
             os.environ["DATABASE_URL"] = container.get_connection_url()
@@ -72,9 +80,11 @@ def maybe_setup_database():
     # Reset DB schema/content before tests
     print("\n[pytest] Running database reset before integration tests...")
     db_reset_start = time.time()
-    result = subprocess.run([
-        sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"
-    ], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"],
+        capture_output=True,
+        text=True,
+    )
     if result.stdout:
         print(result.stdout)
     if result.returncode != 0:
@@ -101,7 +111,9 @@ def pytest_collection_modifyitems(config, items):  # noqa: D401
     """
     if _is_integration_enabled():
         return
-    skip_integration = pytest.mark.skip(reason="integration tests disabled; set ENABLE_INTEGRATION_TESTS=1")
+    skip_integration = pytest.mark.skip(
+        reason="integration tests disabled; set ENABLE_INTEGRATION_TESTS=1"
+    )
     for item in items:
         if any(marker.name == "integration" for marker in item.iter_markers()):
             item.add_marker(skip_integration)
@@ -111,37 +123,39 @@ def pytest_collection_modifyitems(config, items):  # noqa: D401
 def sample_ohlcv_data():
     """Generate realistic OHLCV data for testing"""
     np.random.seed(42)  # For reproducible tests
-    
-    dates = pd.date_range('2024-01-01', periods=100, freq='1h')
-    
+
+    dates = pd.date_range("2024-01-01", periods=100, freq="1h")
+
     # Generate realistic price data with some trends and volatility
     base_price = 50000
     price_changes = np.random.normal(0, 0.02, 100)  # 2% volatility
-    
+
     closes = [base_price]
     for change in price_changes[1:]:
         closes.append(closes[-1] * (1 + change))
-    
+
     # Generate OHLC from closes
     data = []
     for i, close in enumerate(closes):
         volatility = abs(np.random.normal(0, 0.01))  # Daily volatility
         high = close * (1 + volatility)
         low = close * (1 - volatility)
-        open_price = closes[i-1] if i > 0 else close
+        open_price = closes[i - 1] if i > 0 else close
         volume = np.random.uniform(1000, 10000)
-        
-        data.append({
-            'timestamp': dates[i],
-            'open': open_price,
-            'high': high,
-            'low': low,
-            'close': close,
-            'volume': volume
-        })
-    
+
+        data.append(
+            {
+                "timestamp": dates[i],
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+            }
+        )
+
     df = pd.DataFrame(data)
-    df.set_index('timestamp', inplace=True)
+    df.set_index("timestamp", inplace=True)
     return df
 
 
@@ -149,24 +163,24 @@ def sample_ohlcv_data():
 def mock_data_provider():
     """Create a mock data provider for testing"""
     mock_provider = Mock(spec=DataProvider)
-    
+
     # Setup default return values
-    mock_provider.get_historical_data.return_value = pd.DataFrame({
-        'open': [50000, 50100, 50200],
-        'high': [50200, 50300, 50400],
-        'low': [49800, 49900, 50000],
-        'close': [50100, 50200, 50300],
-        'volume': [1000, 1100, 1200]
-    }, index=pd.date_range('2024-01-01', periods=3, freq='1h'))
-    
-    mock_provider.get_live_data.return_value = pd.DataFrame({
-        'open': [50300],
-        'high': [50400],
-        'low': [50200],
-        'close': [50350],
-        'volume': [1150]
-    }, index=[datetime.now()])
-    
+    mock_provider.get_historical_data.return_value = pd.DataFrame(
+        {
+            "open": [50000, 50100, 50200],
+            "high": [50200, 50300, 50400],
+            "low": [49800, 49900, 50000],
+            "close": [50100, 50200, 50300],
+            "volume": [1000, 1100, 1200],
+        },
+        index=pd.date_range("2024-01-01", periods=3, freq="1h"),
+    )
+
+    mock_provider.get_live_data.return_value = pd.DataFrame(
+        {"open": [50300], "high": [50400], "low": [50200], "close": [50350], "volume": [1150]},
+        index=[datetime.now()],
+    )
+
     return mock_provider
 
 
@@ -180,10 +194,12 @@ def btcusdt_1h_2023_2024():
     fixture will be skipped automatically.
     """
     from pathlib import Path
+
     path = Path(__file__).parent / "data" / "BTCUSDT_1h_2023-01-01_2024-12-31.feather"
     if not path.exists():
         pytest.skip("Cached Binance data file not found")
     import pandas as pd
+
     df = pd.read_feather(path)
     df.set_index("timestamp", inplace=True)
     return df
@@ -197,7 +213,7 @@ def risk_parameters():
         max_risk_per_trade=0.03,
         max_position_size=0.25,
         max_daily_risk=0.06,
-        max_drawdown=0.20
+        max_drawdown=0.20,
     )
 
 
@@ -207,21 +223,18 @@ def mock_strategy():
     mock_strategy = Mock(spec=BaseStrategy)
     mock_strategy.name = "TestStrategy"
     mock_strategy.trading_pair = "BTCUSDT"
-    
+
     # Setup default behaviors
-    mock_strategy.calculate_indicators.return_value = pd.DataFrame({
-        'open': [50000, 50100],
-        'close': [50100, 50200],
-        'rsi': [45, 55],
-        'atr': [500, 510]
-    })
-    
+    mock_strategy.calculate_indicators.return_value = pd.DataFrame(
+        {"open": [50000, 50100], "close": [50100, 50200], "rsi": [45, 55], "atr": [500, 510]}
+    )
+
     mock_strategy.check_entry_conditions.return_value = True
     mock_strategy.check_exit_conditions.return_value = False
     mock_strategy.calculate_position_size.return_value = 0.1
     mock_strategy.calculate_stop_loss.return_value = 49500
     mock_strategy.get_parameters.return_value = {"test": "params"}
-    
+
     return mock_strategy
 
 
@@ -236,11 +249,11 @@ def temp_directory():
 def mock_model_file(temp_directory):
     """Create a mock ONNX model file for testing"""
     model_path = temp_directory / "test_model.onnx"
-    
+
     # Create a dummy file (in real tests, you might want to create a valid ONNX model)
-    with open(model_path, 'wb') as f:
+    with open(model_path, "wb") as f:
         f.write(b"mock_onnx_model_data")
-    
+
     return model_path
 
 
@@ -248,14 +261,14 @@ def mock_model_file(temp_directory):
 def sample_trade_data():
     """Sample trade data for testing"""
     return {
-        'symbol': 'BTCUSDT',
-        'side': 'long',
-        'entry_price': 50000,
-        'exit_price': 51000,
-        'size': 0.1,
-        'entry_time': datetime(2024, 1, 1, 10, 0),
-        'exit_time': datetime(2024, 1, 1, 11, 0),
-        'pnl': 100.0
+        "symbol": "BTCUSDT",
+        "side": "long",
+        "entry_price": 50000,
+        "exit_price": 51000,
+        "size": 0.1,
+        "entry_time": datetime(2024, 1, 1, 10, 0),
+        "exit_time": datetime(2024, 1, 1, 11, 0),
+        "pnl": 100.0,
     }
 
 
@@ -264,23 +277,23 @@ def sample_positions():
     """Sample position data for testing"""
     return [
         {
-            'symbol': 'BTCUSDT',
-            'side': 'long',
-            'size': 0.1,
-            'entry_price': 50000,
-            'entry_time': datetime.now() - timedelta(hours=1),
-            'stop_loss': 49000,
-            'take_profit': 52000
+            "symbol": "BTCUSDT",
+            "side": "long",
+            "size": 0.1,
+            "entry_price": 50000,
+            "entry_time": datetime.now() - timedelta(hours=1),
+            "stop_loss": 49000,
+            "take_profit": 52000,
         },
         {
-            'symbol': 'ETHUSDT',
-            'side': 'long',
-            'size': 0.15,
-            'entry_price': 3000,
-            'entry_time': datetime.now() - timedelta(hours=2),
-            'stop_loss': 2900,
-            'take_profit': 3200
-        }
+            "symbol": "ETHUSDT",
+            "side": "long",
+            "size": 0.15,
+            "entry_price": 3000,
+            "entry_time": datetime.now() - timedelta(hours=2),
+            "stop_loss": 2900,
+            "take_profit": 3200,
+        },
     ]
 
 
@@ -288,30 +301,15 @@ def sample_positions():
 def market_conditions():
     """Different market condition scenarios for testing"""
     return {
-        'bull_market': {
-            'trend': 'up',
-            'volatility': 'low',
-            'volume': 'high'
-        },
-        'bear_market': {
-            'trend': 'down',
-            'volatility': 'high',
-            'volume': 'low'
-        },
-        'sideways_market': {
-            'trend': 'flat',
-            'volatility': 'medium',
-            'volume': 'medium'
-        },
-        'volatile_market': {
-            'trend': 'mixed',
-            'volatility': 'very_high',
-            'volume': 'high'
-        }
+        "bull_market": {"trend": "up", "volatility": "low", "volume": "high"},
+        "bear_market": {"trend": "down", "volatility": "high", "volume": "low"},
+        "sideways_market": {"trend": "flat", "volatility": "medium", "volume": "medium"},
+        "volatile_market": {"trend": "mixed", "volatility": "very_high", "volume": "high"},
     }
 
 
 # ---------- Account Synchronization Fixtures ----------
+
 
 @pytest.fixture(scope="session")
 def test_data_dir():
@@ -323,11 +321,7 @@ def test_data_dir():
 def sample_account_balance():
     """Create a sample account balance for testing."""
     return AccountBalance(
-        asset='USDT',
-        free=10000.0,
-        locked=100.0,
-        total=10100.0,
-        last_updated=datetime.utcnow()
+        asset="USDT", free=10000.0, locked=100.0, total=10100.0, last_updated=datetime.utcnow()
     )
 
 
@@ -335,17 +329,17 @@ def sample_account_balance():
 def sample_position():
     """Create a sample position for testing."""
     return Position(
-        symbol='BTCUSDT',
-        side='long',
+        symbol="BTCUSDT",
+        side="long",
         size=0.1,
         entry_price=50000.0,
         current_price=51000.0,
         unrealized_pnl=100.0,
-        margin_type='isolated',
+        margin_type="isolated",
         leverage=10.0,
-        order_id='test_order_123',
+        order_id="test_order_123",
         open_time=datetime.utcnow(),
-        last_update_time=datetime.utcnow()
+        last_update_time=datetime.utcnow(),
     )
 
 
@@ -353,8 +347,8 @@ def sample_position():
 def sample_order():
     """Create a sample order for testing."""
     return Order(
-        order_id='test_order_123',
-        symbol='BTCUSDT',
+        order_id="test_order_123",
+        symbol="BTCUSDT",
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
         quantity=0.1,
@@ -363,9 +357,9 @@ def sample_order():
         filled_quantity=0.0,
         average_price=None,
         commission=0.0,
-        commission_asset='USDT',
+        commission_asset="USDT",
         create_time=datetime.utcnow(),
-        update_time=datetime.utcnow()
+        update_time=datetime.utcnow(),
     )
 
 
@@ -373,15 +367,15 @@ def sample_order():
 def sample_trade():
     """Create a sample trade for testing."""
     return Trade(
-        trade_id='trade_123',
-        order_id='order_123',
-        symbol='BTCUSDT',
+        trade_id="trade_123",
+        order_id="order_123",
+        symbol="BTCUSDT",
         side=OrderSide.BUY,
         quantity=0.1,
         price=50000.0,
         commission=0.0,
-        commission_asset='USDT',
-        time=datetime.utcnow()
+        commission_asset="USDT",
+        time=datetime.utcnow(),
     )
 
 
@@ -389,20 +383,20 @@ def sample_trade():
 def mock_exchange():
     """Create a mock exchange interface for testing."""
     exchange = Mock()
-    
+
     # Setup default return values
     exchange.sync_account_data.return_value = {
-        'sync_successful': True,
-        'balances': [],
-        'positions': [],
-        'open_orders': []
+        "sync_successful": True,
+        "balances": [],
+        "positions": [],
+        "open_orders": [],
     }
-    
+
     exchange.get_recent_trades.return_value = []
     exchange.get_balances.return_value = []
     exchange.get_positions.return_value = []
     exchange.get_open_orders.return_value = []
-    
+
     return exchange
 
 
@@ -410,13 +404,13 @@ def mock_exchange():
 def mock_db_manager():
     """Create a mock database manager for testing."""
     db_manager = Mock()
-    
+
     # Setup default return values
     db_manager.get_current_balance.return_value = 10000.0
     db_manager.get_active_positions.return_value = []
     db_manager.get_open_orders.return_value = []
     db_manager.get_trades_by_symbol_and_date.return_value = []
-    
+
     # Setup method return values
     db_manager.log_position.return_value = 1
     db_manager.log_trade.return_value = 1
@@ -424,7 +418,7 @@ def mock_db_manager():
     db_manager.update_position.return_value = True
     db_manager.update_order_status.return_value = True
     db_manager.close_position.return_value = True
-    
+
     return db_manager
 
 
@@ -443,6 +437,7 @@ def mock_logger():
 def mock_database_manager():
     """Create a mock database manager for unit tests"""
     from tests.mocks import MockDatabaseManager
+
     return MockDatabaseManager()
 
 
@@ -450,40 +445,42 @@ def mock_database_manager():
 def fast_db():
     """Alias for mock_database_manager - use this in unit tests"""
     from tests.mocks import MockDatabaseManager
+
     return MockDatabaseManager()
+
 
 @pytest.fixture
 def mock_sentiment_provider():
     """Mock sentiment provider for testing"""
     mock_provider = Mock()
     mock_provider.get_live_sentiment.return_value = {
-        'sentiment_primary': 0.1,
-        'sentiment_momentum': 0.05,
-        'sentiment_volatility': 0.3,
-        'sentiment_extreme_positive': 0,
-        'sentiment_extreme_negative': 0,
-        'sentiment_ma_3': 0.08,
-        'sentiment_ma_7': 0.12,
-        'sentiment_ma_14': 0.15,
-        'sentiment_confidence': 0.8,
-        'sentiment_freshness': 1
+        "sentiment_primary": 0.1,
+        "sentiment_momentum": 0.05,
+        "sentiment_volatility": 0.3,
+        "sentiment_extreme_positive": 0,
+        "sentiment_extreme_negative": 0,
+        "sentiment_ma_3": 0.08,
+        "sentiment_ma_7": 0.12,
+        "sentiment_ma_14": 0.15,
+        "sentiment_confidence": 0.8,
+        "sentiment_freshness": 1,
     }
     # Create a proper DataFrame with datetime index for sentiment data
-    sentiment_df = pd.DataFrame({
-        'sentiment_primary': [0.1, 0.2, -0.1, 0.0, 0.3],
-        'sentiment_momentum': [0.05, 0.1, -0.05, 0.0, 0.15],
-        'sentiment_volatility': [0.3, 0.25, 0.4, 0.35, 0.2]
-    })
-    sentiment_df.index = pd.date_range('2024-01-01', periods=5, freq='D')
+    sentiment_df = pd.DataFrame(
+        {
+            "sentiment_primary": [0.1, 0.2, -0.1, 0.0, 0.3],
+            "sentiment_momentum": [0.05, 0.1, -0.05, 0.0, 0.15],
+            "sentiment_volatility": [0.3, 0.25, 0.4, 0.35, 0.2],
+        }
+    )
+    sentiment_df.index = pd.date_range("2024-01-01", periods=5, freq="D")
     mock_provider.get_historical_sentiment.return_value = sentiment_df
-    
+
     # Mock the aggregate_sentiment method
-    aggregated_sentiment = pd.DataFrame({
-        'sentiment_score': [0.1, 0.2, -0.1, 0.0, 0.3]
-    })
-    aggregated_sentiment.index = pd.date_range('2024-01-01', periods=5, freq='D')
+    aggregated_sentiment = pd.DataFrame({"sentiment_score": [0.1, 0.2, -0.1, 0.0, 0.3]})
+    aggregated_sentiment.index = pd.date_range("2024-01-01", periods=5, freq="D")
     mock_provider.aggregate_sentiment.return_value = aggregated_sentiment
-    
+
     return mock_provider
 
 
@@ -497,42 +494,38 @@ def test_session_id():
 def sample_sync_data():
     """Create sample synchronization data for testing."""
     return {
-        'sync_successful': True,
-        'balances': [
+        "sync_successful": True,
+        "balances": [
             AccountBalance(
-                asset='USDT',
+                asset="USDT",
                 free=10000.0,
                 locked=100.0,
                 total=10100.0,
-                last_updated=datetime.utcnow()
+                last_updated=datetime.utcnow(),
             ),
             AccountBalance(
-                asset='BTC',
-                free=0.5,
-                locked=0.0,
-                total=0.5,
-                last_updated=datetime.utcnow()
-            )
+                asset="BTC", free=0.5, locked=0.0, total=0.5, last_updated=datetime.utcnow()
+            ),
         ],
-        'positions': [
+        "positions": [
             Position(
-                symbol='BTCUSDT',
-                side='long',
+                symbol="BTCUSDT",
+                side="long",
                 size=0.1,
                 entry_price=50000.0,
                 current_price=51000.0,
                 unrealized_pnl=100.0,
-                margin_type='isolated',
+                margin_type="isolated",
                 leverage=10.0,
-                order_id='order_123',
+                order_id="order_123",
                 open_time=datetime.utcnow(),
-                last_update_time=datetime.utcnow()
+                last_update_time=datetime.utcnow(),
             )
         ],
-        'open_orders': [
+        "open_orders": [
             Order(
-                order_id='order_456',
-                symbol='ETHUSDT',
+                order_id="order_456",
+                symbol="ETHUSDT",
                 side=OrderSide.SELL,
                 order_type=OrderType.LIMIT,
                 quantity=1.0,
@@ -541,11 +534,11 @@ def sample_sync_data():
                 filled_quantity=0.0,
                 average_price=None,
                 commission=0.0,
-                commission_asset='USDT',
+                commission_asset="USDT",
                 create_time=datetime.utcnow(),
-                update_time=datetime.utcnow()
+                update_time=datetime.utcnow(),
             )
-        ]
+        ],
     }
 
 
@@ -553,6 +546,7 @@ def sample_sync_data():
 def setup_logging():
     """Setup logging for tests"""
     import logging
+
     logging.getLogger().setLevel(logging.CRITICAL)  # Suppress logs during tests
 
 
@@ -562,5 +556,6 @@ def pytest_configure(config):
     # Marker registration is now handled declaratively in pytest.ini to avoid duplication.
     # Add any runtime configuration changes here if needed.
     pass
+
 
 # Test categories for easy selection

@@ -1,10 +1,7 @@
-import pytest
-from unittest.mock import patch
-
-# Patch the DatabaseManager before importing the dashboard to avoid real DB connections
-
-import builtins
+import importlib
 from types import SimpleNamespace
+
+import pytest
 
 
 class _MockDBManager:
@@ -13,21 +10,16 @@ class _MockDBManager:
 
 
 # Apply patch via import machinery before the dashboard module creates an instance
-import importlib
 
-dashboard_module = importlib.import_module("src.monitoring.dashboard")
-setattr(dashboard_module, "DatabaseManager", _MockDBManager)
+# Import the new dashboards module path
+_dashboard_module = importlib.import_module("src.dashboards.monitoring.dashboard")
+_dashboard_module.DatabaseManager = _MockDBManager
 
 # Patch external providers used during dashboard initialization
-setattr(dashboard_module, "BinanceProvider", lambda *args, **kwargs: SimpleNamespace())
-setattr(
-    dashboard_module,
-    "CachedDataProvider",
-    lambda provider, cache_ttl_hours=0: provider,
-)
+_dashboard_module.BinanceProvider = lambda *args, **kwargs: SimpleNamespace()
+_dashboard_module.CachedDataProvider = lambda provider, cache_ttl_hours=0: provider
 
-# Ensure src/ directory is on path (handled by sitecustomize), then import
-from src.monitoring.dashboard import MonitoringDashboard
+from src.dashboards.monitoring import MonitoringDashboard  # noqa: E402
 
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration

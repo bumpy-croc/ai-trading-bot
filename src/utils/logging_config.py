@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import logging.config
 import os
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 def build_logging_config(level_name: str | None = None, json: bool = False) -> Dict[str, Any]:

@@ -285,7 +285,7 @@ tests/
 
 ```python
 # Check sync status in dashboard
-from src.monitoring.dashboard import MonitoringDashboard
+from src.dashboards.monitoring import MonitoringDashboard
 
 dashboard = MonitoringDashboard()
 sync_status = dashboard.get_sync_status()

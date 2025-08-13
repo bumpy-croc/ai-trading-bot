@@ -1,8 +1,15 @@
-import pytest
-import pandas as pd
 import numpy as np
-
-from performance.metrics import Side, pnl_percent, cash_pnl, total_return, cagr, sharpe, max_drawdown
+import pandas as pd
+import pytest
+from performance.metrics import (
+    Side,
+    cagr,
+    cash_pnl,
+    max_drawdown,
+    pnl_percent,
+    sharpe,
+    total_return,
+)
 
 pytestmark = pytest.mark.unit
 

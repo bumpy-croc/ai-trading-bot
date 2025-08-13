@@ -1,15 +1,12 @@
 """Initial schema
 
 Revision ID: 0001_initial
-Revises: 
+Revises:
 Create Date: 2025-07-06
 """
 
-from alembic import op  # type: ignore
-import sqlalchemy as sa  # type: ignore
-
 # revision identifiers, used by Alembic.
-revision = '0001_initial'
+revision = "0001_initial"
 down_revision = None
 branch_labels = None
 depends_on = None
