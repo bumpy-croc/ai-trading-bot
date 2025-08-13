@@ -855,10 +855,6 @@ class LiveTradingEngine:
                 )
             else:
                 logger.warning("⚠️ Cannot log error to database - no trading session ID available")
-<<<<<<< HEAD
-            
-    def _execute_order(self, symbol: str, side: PositionSide, value: float, price: float) -> Optional[str]:
-=======
 
     def _close_position(self, position: Position, reason: str):
         """Close an existing position"""
@@ -1008,7 +1004,6 @@ class LiveTradingEngine:
     def _execute_order(
         self, symbol: str, side: PositionSide, value: float, price: float
     ) -> Optional[str]:
->>>>>>> origin/develop
         """Execute a real market order (implement based on your exchange)"""
         # This is a placeholder - implement actual order execution
         logger.warning("Real order execution not implemented - using paper trading")
