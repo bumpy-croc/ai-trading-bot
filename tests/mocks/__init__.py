@@ -2,4 +2,4 @@
 
 from .mock_database import MockDatabaseManager, MockSession
 
-__all__ = ['MockDatabaseManager', 'MockSession']
+__all__ = ["MockDatabaseManager", "MockSession"]

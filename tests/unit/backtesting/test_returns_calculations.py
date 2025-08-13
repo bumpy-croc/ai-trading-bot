@@ -1,12 +1,13 @@
-import pandas as pd
-import numpy as np
 from datetime import datetime
+from typing import Optional
+
+import numpy as np
+import pandas as pd
 import pytest
 
+from src.backtesting.engine import Backtester
 from src.data_providers.data_provider import DataProvider
 from src.strategies.base import BaseStrategy
-from src.backtesting.engine import Backtester
-from typing import Optional
 
 pytestmark = pytest.mark.unit
 
@@ -15,14 +16,20 @@ class DummyDataProvider(DataProvider):
     def __init__(self, df):
         super().__init__()
         self._df = df
-    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None):
+
+    def get_historical_data(
+        self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
+    ):
         return self._df.copy()
+
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100):
         raise NotImplementedError
+
     def update_live_data(self, symbol: str, timeframe: str):
         raise NotImplementedError
+
     def get_current_price(self, symbol: str) -> float:
-        return float(self._df['close'].iloc[-1])
+        return float(self._df["close"].iloc[-1])
 
 
 class BuyEveryYearStrategy(BaseStrategy):
@@ -30,14 +37,17 @@ class BuyEveryYearStrategy(BaseStrategy):
         super().__init__("BuyEveryYearStrategy")
         self.in_position = False
         self.current_year = None
+
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         return df
+
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
         ts_year = df.index[index].year
         if (not self.in_position) and (self.current_year is None or ts_year != self.current_year):
             self.current_year = ts_year
             return True
         return False
+
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         ts_year = df.index[index].year
         last_index = len(df) - 1
@@ -46,13 +56,16 @@ class BuyEveryYearStrategy(BaseStrategy):
             self.in_position = False
             return True
         return False
+
     def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
         if balance <= 0:
             return 0.0
         self.in_position = True
         return balance
-    def calculate_stop_loss(self, df, index, price, side: str = 'long') -> float:
+
+    def calculate_stop_loss(self, df, index, price, side: str = "long") -> float:
         return price * 0.5
+
     def get_parameters(self) -> dict:
         return {}
 
@@ -65,13 +78,16 @@ def generate_test_dataframe():
         datetime(2021, 12, 31, 23),
     ]
     closes = [100.0, 200.0, 200.0, 100.0]
-    df = pd.DataFrame({
-        'open': closes,
-        'high': closes,
-        'low': closes,
-        'close': closes,
-        'volume': np.ones(len(closes)),
-    }, index=pd.DatetimeIndex(timestamps))
+    df = pd.DataFrame(
+        {
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": np.ones(len(closes)),
+        },
+        index=pd.DatetimeIndex(timestamps),
+    )
     return df
 
 
@@ -79,12 +95,19 @@ def test_yearly_returns_positive_and_negative():
     df = generate_test_dataframe()
     provider = DummyDataProvider(df)
     strategy = BuyEveryYearStrategy()
-    backtester = Backtester(strategy=strategy, data_provider=provider, sentiment_provider=None, risk_parameters=None, initial_balance=1000, log_to_database=False)
+    backtester = Backtester(
+        strategy=strategy,
+        data_provider=provider,
+        sentiment_provider=None,
+        risk_parameters=None,
+        initial_balance=1000,
+        log_to_database=False,
+    )
     result = backtester.run(symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1])
-    yr = result['yearly_returns']
-    assert '2020' in yr and '2021' in yr
-    assert yr['2020'] > 0
-    assert yr['2021'] < 0
-    total_return_factor = (1 + yr['2020']/100) * (1 + yr['2021']/100)
+    yr = result["yearly_returns"]
+    assert "2020" in yr and "2021" in yr
+    assert yr["2020"] > 0
+    assert yr["2021"] < 0
+    total_return_factor = (1 + yr["2020"] / 100) * (1 + yr["2021"] / 100)
     expected_total = (total_return_factor - 1) * 100
-    assert abs(expected_total - result['total_return']) < 1e-6
+    assert abs(expected_total - result["total_return"]) < 1e-6

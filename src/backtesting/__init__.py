@@ -1,5 +1,10 @@
-from importlib import import_module
-from .engine import Backtester
-from .models import Trade  # Completed trade record for backtests
-# Expose BacktestDashboard at package level for easy import
-BacktestDashboard = import_module('backtesting.dashboard.dashboard').BacktestDashboard  # type: ignore
+from .engine import Backtester as Backtester
+from .engine import Trade as Trade
+
+# Optional import of dashboard for discoverability; safe if missing at runtime
+try:  # noqa: SIM105 - limited scope, logs not critical in library init
+    from dashboards.backtesting import BacktestDashboard  # type: ignore F401
+except Exception:  # pragma: no cover - dashboard optional
+    BacktestDashboard = None  # type: ignore
+
+__all__ = ["Backtester", "Trade", "BacktestDashboard"]

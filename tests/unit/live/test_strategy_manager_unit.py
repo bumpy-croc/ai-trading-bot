@@ -1,9 +1,9 @@
-import pytest
 import threading
 import time
-from unittest.mock import Mock, patch
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+import pytest
 
 from live.strategy_manager import StrategyManager, StrategyVersion
 
@@ -16,7 +16,7 @@ class TestStrategyManager:
         manager = StrategyManager(
             strategies_dir=str(temp_directory / "strategies"),
             models_dir=str(temp_directory / "models"),
-            staging_dir=temp_staging
+            staging_dir=temp_staging,
         )
         assert manager.strategies_dir == temp_directory / "strategies"
         assert manager.models_dir == temp_directory / "models"
@@ -74,12 +74,14 @@ class TestStrategyManagerThreadSafety:
     def test_concurrent_strategy_loading(self, temp_directory):
         manager = StrategyManager(staging_dir=str(temp_directory))
         results, errors = [], []
+
         def load_strategy(strategy_name, version):
             try:
                 s = manager.load_strategy(strategy_name, version=version)
                 results.append((strategy_name, version, s))
             except Exception as e:
                 errors.append(e)
+
         threads = []
         for i in range(3):
             t = threading.Thread(target=load_strategy, args=("ml_basic", f"v{i}"))
@@ -93,11 +95,13 @@ class TestStrategyManagerThreadSafety:
         manager = StrategyManager(staging_dir=str(temp_directory))
         manager.load_strategy("ml_basic", version="initial")
         swap_results = []
+
         def attempt_hot_swap(variant):
             try:
                 swap_results.append(manager.hot_swap_strategy("ml_basic", new_config={"sequence_length": variant}))
             except Exception:
                 swap_results.append(False)
+
         threads = []
         for i in range(3):
             t = threading.Thread(target=attempt_hot_swap, args=(120 + i,))
@@ -110,14 +114,18 @@ class TestStrategyManagerThreadSafety:
         manager = StrategyManager(staging_dir=str(temp_directory))
         manager.load_strategy("ml_basic")
         lock_acquired_count = 0
+
         def acquire():
             nonlocal lock_acquired_count
             with manager.update_lock:
                 lock_acquired_count += 1
                 time.sleep(0.05)
+
         threads = []
         for _ in range(5):
-            t = threading.Thread(target=acquire); threads.append(t); t.start()
+            t = threading.Thread(target=acquire)
+            threads.append(t)
+            t.start()
         for t in threads:
             t.join()
         assert lock_acquired_count == 5

@@ -13,6 +13,7 @@ Environment Variables (or CLI flags override):
 • BACKUP_DIR               – Local backup directory (default: ./backups)
 • BACKUP_RETENTION_DAYS    – How long to keep backups (default 7)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,11 +21,8 @@ import datetime as _dt
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
-
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -33,8 +31,15 @@ from urllib.parse import urlparse
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PostgreSQL → Local backup")
-    parser.add_argument("--backup-dir", default=os.getenv("BACKUP_DIR", "./backups"), help="Local backup directory")
-    parser.add_argument("--retention", type=int, default=int(os.getenv("BACKUP_RETENTION_DAYS", 7)), help="Retention in days")
+    parser.add_argument(
+        "--backup-dir", default=os.getenv("BACKUP_DIR", "./backups"), help="Local backup directory"
+    )
+    parser.add_argument(
+        "--retention",
+        type=int,
+        default=int(os.getenv("BACKUP_RETENTION_DAYS", 7)),
+        help="Retention in days",
+    )
     return parser.parse_args()
 
 
@@ -64,7 +69,7 @@ def perform_backup(backup_dir: str, retention_days: int) -> None:
     dbname, user, host, port, password = _get_db_params(db_url)
 
     timestamp = _dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    backup_path = Path(backup_dir) / dbname / _dt.datetime.utcnow().strftime('%Y/%m/%d')
+    backup_path = Path(backup_dir) / dbname / _dt.datetime.utcnow().strftime("%Y/%m/%d")
     dump_filename = f"backup-{timestamp}.dump"
     dump_path = backup_path / dump_filename
 
@@ -86,7 +91,7 @@ def perform_backup(backup_dir: str, retention_days: int) -> None:
         str(dump_path),
     ]
     try:
-        subprocess.run(cmd, check=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(cmd, check=True, env=env, capture_output=True)
     except subprocess.CalledProcessError as exc:
         print(f"❌ pg_dump failed: {exc.stderr.decode()}", file=sys.stderr)
         sys.exit(1)
@@ -97,7 +102,7 @@ def perform_backup(backup_dir: str, retention_days: int) -> None:
     if retention_days > 0:
         cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=retention_days)
         print(f"🧹 Deleting backups older than {retention_days} days (before {cutoff.date()})")
-        
+
         db_backup_dir = Path(backup_dir) / dbname
         if db_backup_dir.exists():
             for backup_file in db_backup_dir.rglob("backup-*.dump"):

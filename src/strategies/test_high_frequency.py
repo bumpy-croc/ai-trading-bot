@@ -1,12 +1,14 @@
-from src.strategies.base import BaseStrategy
 import pandas as pd
+
+from strategies.base import BaseStrategy
+
 
 class TestHighFrequencyStrategy(BaseStrategy):
     def __init__(self, name: str = "test_high_frequency"):
         super().__init__(name)
-        self.trading_pair = 'BTCUSDT'
+        self.trading_pair = "BTCUSDT"
         self.position_size_pct = 0.01  # 1% of balance
-        self.stop_loss_pct = 0.01      # 1% stop loss
+        self.stop_loss_pct = 0.01  # 1% stop loss
         self._last_timestamp = None
         self._next_action_is_entry = True
 
@@ -32,18 +34,20 @@ class TestHighFrequencyStrategy(BaseStrategy):
         return False
 
     def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
-        price = df['close'].iloc[index]
+        price = df["close"].iloc[index]
         return (balance * self.position_size_pct) / price if price > 0 else 0.0
 
-    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = 'long') -> float:
-        if side == 'long':
+    def calculate_stop_loss(
+        self, df: pd.DataFrame, index: int, price: float, side: str = "long"
+    ) -> float:
+        if side == "long":
             return price * (1 - self.stop_loss_pct)
         else:
             return price * (1 + self.stop_loss_pct)
 
     def get_parameters(self) -> dict:
         return {
-            'name': self.name,
-            'position_size_pct': self.position_size_pct,
-            'stop_loss_pct': self.stop_loss_pct
-        } 
+            "name": self.name,
+            "position_size_pct": self.position_size_pct,
+            "stop_loss_pct": self.stop_loss_pct,
+        }
