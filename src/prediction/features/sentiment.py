@@ -35,7 +35,8 @@ class SentimentFeatureExtractor(FeatureExtractor):
         super().__init__("sentiment")
         self.enabled = enabled
         self._feature_names = SENTIMENT_FEATURES_SCHEMA.get_feature_names()
-        self._provider = FearGreedProvider()
+        # Lazily instantiate the provider only if/when needed
+        self._provider = None
     
     def extract(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -87,10 +88,25 @@ class SentimentFeatureExtractor(FeatureExtractor):
         Extract actual sentiment features using FearGreedProvider.
         Joins on timestamp index (expects df indexed by datetime or with a 'timestamp' column).
         """
+        # Ensure provider is created only when sentiment is enabled and needed
+        if self._provider is None:
+            try:
+                self._provider = FearGreedProvider()
+            except Exception:
+                # If provider init fails (e.g., no network), fallback to neutral
+                return self._add_neutral_sentiment_features(df)
         # Ensure datetime index
         work = df.copy()
         if 'timestamp' in work.columns and not isinstance(work.index, pd.DatetimeIndex):
             work = work.set_index('timestamp')
+        # Normalize price data index to timezone-naive (UTC without tzinfo)
+        if isinstance(work.index, pd.DatetimeIndex):
+            try:
+                # Convert everything to UTC then drop tz to avoid tz-aware/naive join errors
+                work.index = pd.to_datetime(work.index, utc=True).tz_convert('UTC').tz_localize(None)
+            except Exception:
+                # Best effort standardization; if it fails, fallback to neutral to be safe
+                return self._add_neutral_sentiment_features(df)
         if not isinstance(work.index, pd.DatetimeIndex):
             # Cannot merge robustly; fall back to neutral
             return self._add_neutral_sentiment_features(df)
@@ -118,6 +134,16 @@ class SentimentFeatureExtractor(FeatureExtractor):
             # Default to daily if cannot infer; forward fill will align
             inferred = '1D'
         sents_resampled = self._provider.aggregate_sentiment(sents, window=inferred)
+        # Normalize sentiment index to timezone-naive (UTC without tzinfo)
+        if isinstance(sents_resampled.index, pd.DatetimeIndex):
+            try:
+                sents_resampled.index = (
+                    pd.to_datetime(sents_resampled.index, utc=True)
+                    .tz_convert('UTC')
+                    .tz_localize(None)
+                )
+            except Exception:
+                return self._add_neutral_sentiment_features(df)
         
         # Join and forward-fill sentiment features; do not backfill into the future
         merged = work.join(sents_resampled, how='left')
