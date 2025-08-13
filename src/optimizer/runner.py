@@ -44,6 +44,7 @@ class _RandomWalkProvider(DataProvider):
 
     def __init__(self, start: datetime, end: datetime, timeframe: str = "1h", start_price: float = 30000.0, vol: float = 0.01):
         super().__init__()
+        self.timeframe = timeframe
         self.df = self._generate(start, end, timeframe, start_price, vol)
 
     def _freq(self, timeframe: str) -> str:
@@ -75,6 +76,18 @@ class _RandomWalkProvider(DataProvider):
     def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None) -> pd.DataFrame:  # type: ignore[override]
         end = end or pd.Timestamp.now()
         return self.df.loc[(self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))].copy()
+
+    def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:  # type: ignore[override]
+        tail = self.df.tail(limit).copy()
+        return tail
+
+    def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:  # type: ignore[override]
+        return self.get_live_data(symbol, timeframe, limit=1)
+
+    def get_current_price(self, symbol: str) -> float:  # type: ignore[override]
+        if self.df.empty:
+            return 0.0
+        return float(self.df["close"].iloc[-1])
 
 
 class ExperimentRunner:
