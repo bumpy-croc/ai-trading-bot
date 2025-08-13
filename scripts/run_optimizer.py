@@ -17,6 +17,7 @@ from src.optimizer.schemas import ExperimentConfig, ParameterSet
 from src.optimizer.analyzer import PerformanceAnalyzer
 from src.optimizer.validator import StatisticalValidator, ValidationConfig
 from src.config.constants import DEFAULT_INITIAL_BALANCE
+from src.database.manager import DatabaseManager
 
 
 def parse_args():
@@ -31,6 +32,7 @@ def parse_args():
     p.add_argument("--output", default="artifacts/optimizer_report.json")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-validate", action="store_true")
+    p.add_argument("--persist", action="store_true", help="Persist cycle to database when available")
     return p.parse_args()
 
 
@@ -91,6 +93,8 @@ def main():
     }
 
     validation_section = None
+    candidate_params = None
+    candidate_metrics = None
     if suggestions and not args.no_validate:
         # Build a simple candidate config from first suggestion (strategy-level only for MVP)
         s0 = suggestions[0]
@@ -113,6 +117,16 @@ def main():
             random_seed=args.seed,
         )
         candidate_result = runner.run(candidate_cfg)
+        candidate_params = param_values
+        candidate_metrics = {
+            "total_trades": candidate_result.total_trades,
+            "win_rate": candidate_result.win_rate,
+            "total_return": candidate_result.total_return,
+            "annualized_return": candidate_result.annualized_return,
+            "max_drawdown": candidate_result.max_drawdown,
+            "sharpe_ratio": candidate_result.sharpe_ratio,
+            "final_balance": candidate_result.final_balance,
+        }
 
         validator = StatisticalValidator(ValidationConfig())
         val_report = validator.validate([baseline_result], [candidate_result])
@@ -124,6 +138,28 @@ def main():
             "candidate_metrics": val_report.candidate_metrics,
         }
         report["validation"] = validation_section
+
+    if args.persist:
+        try:
+            db = DatabaseManager()
+            base_metrics = report["results"]
+            decision = "propose"
+            if validation_section:
+                decision = "apply" if validation_section.get("passed") else "reject"
+            db.record_optimization_cycle(
+                strategy_name=args.strategy,
+                symbol=args.symbol,
+                timeframe=args.timeframe,
+                baseline_metrics=base_metrics,
+                candidate_params=candidate_params or {},
+                candidate_metrics=candidate_metrics or {},
+                validator_report=validation_section or {},
+                decision=decision,
+                session_id=None,
+            )
+        except Exception as e:
+            # Do not fail the run if persistence is unavailable
+            report.setdefault("persistence", {})["error"] = str(e)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
