@@ -174,6 +174,19 @@ class Backtester:
 
                     self.db_manager = DummyDBManager()
 
+        # Optional regime detection (disabled by default)
+        self.regime_detector: Optional[RegimeDetector] = None
+        if is_enabled("enable_regime_detection", default=False):
+            try:
+                cfg = RegimeConfig(
+                    hysteresis_k=DEFAULT_REGIME_HYSTERESIS_K,
+                    min_dwell=DEFAULT_REGIME_MIN_DWELL,
+                )
+                self.regime_detector = RegimeDetector(cfg)
+                logger.info("RegimeDetector initialized (backtester)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RegimeDetector: {e}")
+
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
     ) -> Dict:
@@ -243,6 +256,14 @@ class Backtester:
 
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
+
+            # Annotate regimes if enabled
+            if self.regime_detector is not None:
+                try:
+                    df = self.regime_detector.annotate(df)
+                except Exception as e:
+                    logger.debug(f"Regime annotation failed: {e}")
+
             # Remove warmup period - only drop rows where essential price data is missing
             # Don't drop rows just because ML predictions or sentiment data is missing
             essential_columns = ["open", "high", "low", "close", "volume"]
