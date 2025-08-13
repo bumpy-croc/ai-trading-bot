@@ -127,6 +127,7 @@ class MlBasic(BaseStrategy):
             self.EXTREME_ATR_THRESHOLD = float(cfg.get('MLBASIC_EXTREME_ATR_THRESHOLD', default=self.EXTREME_ATR_THRESHOLD))
         except Exception:
             pass
+        # (No additional override hooks)
 
         # Initialize feature pipeline with a technical extractor matching our normalization window
         technical_extractor = TechnicalFeatureExtractor(
