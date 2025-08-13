@@ -361,23 +361,15 @@ def run_quick_smoke_test():
 
     # Test basic imports
     try:
-<<<<<<< HEAD
-=======
         from strategies.ml_basic import MlBasic
->>>>>>> origin/develop
         from risk.risk_manager import RiskManager
         from strategies.ml_adaptive import MlAdaptive
 
         print_success("All core modules import successfully")
 
         # Test basic functionality
-<<<<<<< HEAD
-        _strategy = MlAdaptive()
-        _risk_manager = RiskManager()
-=======
         strategy = MlBasic()
         risk_manager = RiskManager()
->>>>>>> origin/develop
         print_success("Core objects can be instantiated")
 
         return True
@@ -502,24 +494,11 @@ def run_grouped_tests():
     # Group 3: Computation-heavy tests (limited parallelization)
     print(f"{Colors.OKBLUE}Group 3: Computation-Heavy Tests{Colors.ENDC}")
     compute_cmd = [
-<<<<<<< HEAD
-        sys.executable,
-        "-m",
-        "pytest",
-        "tests/test_backtesting.py",
-        "tests/test_ml_adaptive.py",
-        "tests/test_monitoring.py",
-        "-v",
-        "--tb=short",
-        "-n",
-        "2",  # Limited parallelization for heavy tests
-=======
-        sys.executable, '-m', 'pytest',
+sys.executable, '-m', 'pytest',
         'tests/test_backtesting.py',
         'tests/test_monitoring.py',
         '-v', '--tb=short',
         '-n', '2'  # Limited parallelization for heavy tests
->>>>>>> origin/develop
     ]
 
     compute_success = run_command(compute_cmd, "Computation-Heavy Tests Group")
