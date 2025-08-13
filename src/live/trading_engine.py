@@ -814,6 +814,18 @@ class LiveTradingEngine:
 
             self.positions[order_id] = position
 
+            # Update risk manager tracking
+            if self.risk_manager:
+                try:
+                    self.risk_manager.update_position(
+                        symbol=position.symbol,
+                        side=position.side.value if hasattr(position.side, "value") else str(position.side),
+                        size=position.size,
+                        entry_price=position.entry_price,
+                    )
+                except Exception as e:
+                    logger.debug(f"Risk manager update_position failed: {e}")
+            
             # Log position to database
             if self.trading_session_id is not None:
                 position_db_id = self.db_manager.log_position(
@@ -964,6 +976,13 @@ class LiveTradingEngine:
             # Remove from active positions
             if position.order_id in self.positions:
                 del self.positions[position.order_id]
+
+            # Update risk manager tracking
+            if self.risk_manager:
+                try:
+                    self.risk_manager.close_position(position.symbol)
+                except Exception as e:
+                    logger.debug(f"Risk manager close_position failed: {e}")
 
             # Log trade
             pnl_str = f"+${pnl_dollar:.2f}" if pnl_dollar > 0 else f"${pnl_dollar:.2f}"
