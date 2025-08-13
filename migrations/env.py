@@ -6,16 +6,16 @@ import os
 import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool  # type: ignore
 from alembic import context  # type: ignore
+from sqlalchemy import engine_from_config, pool  # type: ignore
 
 # Ensure project root is on PYTHONPATH
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 sys.path.insert(0, BASE_DIR)
 
 # Import metadata
-from src.database.models import Base  # noqa: E402
 from config.config_manager import get_config  # noqa: E402
+from database.models import Base  # noqa: E402
 
 # --------------------------------------------------
 # Alembic Config
@@ -39,13 +39,16 @@ def get_url() -> str:
     cfg = get_config()
     url: str | None = cfg.get("DATABASE_URL") or os.getenv("DATABASE_URL")
     if not url:
-        raise RuntimeError("DATABASE_URL must be set in environment or configuration for Alembic migrations.")
+        raise RuntimeError(
+            "DATABASE_URL must be set in environment or configuration for Alembic migrations."
+        )
     return url
 
 
 # --------------------------------------------------
 # Migration helpers
 # --------------------------------------------------
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""

@@ -1,21 +1,27 @@
-import os
-import sys
-from pathlib import Path
 import logging
-from typing import List, Dict, Any, Optional
+import os
+from typing import Dict, List, Optional
 
-# Ensure project src directory is on the path when executed directly (`python src/.../app.py`)
-# TODO: Proper packaging or entry point is preferred over sys.path manipulation for production use.
-_SRC_ROOT = Path(__file__).resolve().parent.parent
-if str(_SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SRC_ROOT))
-
-from flask import Flask, jsonify, Response, request, redirect, url_for, render_template_string, session  # type: ignore
+import sqlalchemy.exc
+from flask import (  # type: ignore
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    url_for,
+)
 from flask_admin import Admin  # type: ignore
 from flask_admin.contrib.sqla import ModelView  # type: ignore
+from flask_login import (  # type: ignore
+    LoginManager,
+    UserMixin,
+    login_required,
+    login_user,
+    logout_user,
+)
 from sqlalchemy.orm import scoped_session  # type: ignore
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user  # type: ignore
-import sqlalchemy.exc
 
 # Re-use existing database layer
 from database.manager import DatabaseManager  # type: ignore
@@ -67,15 +73,20 @@ def create_app() -> Flask:
     secret_key = os.environ.get("DB_MANAGER_SECRET_KEY")
     if not secret_key:
         logger.error("❌ Environment variable 'DB_MANAGER_SECRET_KEY' is not set. Exiting.")
-        sys.exit(1)
+        raise SystemExit(1)
 
     # Initialise database manager (re-uses existing connection settings)
     try:
         db_manager = DatabaseManager()
-    except sqlalchemy.exc.OperationalError as exc:  # pragma: no cover – we want to surface the error in logs
-        logger.exception("❌ Failed to initialise DatabaseManager due to a database connection error: %s", exc)
+    except (
+        sqlalchemy.exc.OperationalError
+    ) as exc:  # pragma: no cover – we want to surface the error in logs
+        logger.exception(
+            "❌ Failed to initialise DatabaseManager due to a database connection error: %s", exc
+        )
         app = Flask(__name__)
         from utils.secrets import get_secret_key
+
         app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
 
         @app.route("/db_error")
@@ -95,6 +106,7 @@ def create_app() -> Flask:
     # Create Flask app
     app = Flask(__name__)
     from utils.secrets import get_secret_key
+
     app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
 
     # --- Flask-Login setup for admin authentication ---
@@ -120,7 +132,8 @@ def create_app() -> Flask:
                 user = AdminUser(username)
                 login_user(user)
                 return redirect(request.args.get("next") or url_for("admin.index"))
-            return render_template_string("""
+            return render_template_string(
+                """
                 <h3>Login Failed</h3>
                 <form method='post'>
                     <input name='username' placeholder='Username'><br>
@@ -128,14 +141,17 @@ def create_app() -> Flask:
                     <input type='submit' value='Login'>
                 </form>
                 <p>Invalid credentials.</p>
-            """)
-        return render_template_string("""
+            """
+            )
+        return render_template_string(
+            """
             <form method='post'>
                 <input name='username' placeholder='Username'><br>
                 <input name='password' type='password' placeholder='Password'><br>
                 <input type='submit' value='Login'>
             </form>
-        """)
+        """
+        )
 
     @app.route("/logout")
     @login_required
@@ -149,7 +165,7 @@ def create_app() -> Flask:
     # Dynamically register all models declared in Base metadata
     for mapper in Base.registry.mappers:
         model_class = mapper.class_
-        admin.add_view(AuthModelView(model_class, db_session))
+        admin.add_view(CustomModelView(model_class, db_session))
 
     # Basic health route
     @app.route("/health")
@@ -176,7 +192,9 @@ def create_app() -> Flask:
 
     # Clean up DB sessions after each request
     @app.teardown_appcontext
-    def shutdown_session(exception: Optional[Exception] = None) -> None:  # noqa: D401, pylint: disable=unused-argument
+    def shutdown_session(
+        exception: Optional[Exception] = None,
+    ) -> None:  # noqa: D401, pylint: disable=unused-argument
         """Remove the scoped SQLAlchemy session to avoid connection leaks."""
         db_session.remove()
 
@@ -186,4 +204,4 @@ def create_app() -> Flask:
 if __name__ == "__main__":
     application = create_app()
     port = int(os.environ.get("PORT", 8000))
-    application.run(host="0.0.0.0", port=port)
+    application.run(host="0.0.0.0", port=port)  # nosec B104: intended for containerized deployment

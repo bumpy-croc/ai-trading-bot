@@ -1,7 +1,8 @@
-import pytest
-import pandas as pd
 from datetime import datetime
 from unittest.mock import Mock, patch
+
+import pandas as pd
+import pytest
 
 from data_providers.coinbase_provider import CoinbaseProvider
 
@@ -21,7 +22,9 @@ class TestCoinbaseProvider:
             [1640998800, 49000, 51000, 49500, 50000, 12.3],
             [1640995200, 48000, 50000, 48500, 49500, 10.0],
         ]
-        mock_response = Mock(); mock_response.status_code = 200; mock_response.json.return_value = sample_candles
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = sample_candles
         mock_get.return_value = mock_response
         provider = CoinbaseProvider()
         start_date = datetime.utcfromtimestamp(1640995200)
@@ -37,7 +40,9 @@ class TestCoinbaseProvider:
     @pytest.mark.data_provider
     @patch("data_providers.coinbase_provider.requests.Session.get")
     def test_current_price(self, mock_get):
-        mock_response = Mock(); mock_response.status_code = 200; mock_response.json.return_value = {"price": "12345.67"}
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"price": "12345.67"}
         mock_get.return_value = mock_response
         provider = CoinbaseProvider()
         price = provider.get_current_price("BTC-USD")

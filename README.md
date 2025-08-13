@@ -114,7 +114,7 @@ src/
 - Live engine: `live.trading_engine.LiveTradingEngine` (CLI: `scripts/run_live_trading.py`)
 - Risk: `risk.risk_manager.RiskManager`
 - Database: `database.manager.DatabaseManager` (PostgreSQL)
-- Monitoring: `scripts/start_dashboard.py` → `monitoring.dashboard.MonitoringDashboard`
+- Monitoring: `scripts/start_dashboard.py` → `dashboards.monitoring.MonitoringDashboard`
 - Admin UI: `database_manager.app` (Flask-Admin), run `python src/database_manager/app.py`
 
 ---
@@ -182,3 +182,4 @@ Sentiment data (SentiCrypt) and ML training are supported. Pretrained models liv
 ## Disclaimer
 
 This project is for educational purposes only. Trading cryptocurrencies involves significant risk. Use paper trading, test thoroughly, and never risk funds you cannot afford to lose. 
+<!-- chore: trigger CI test -->
