@@ -151,6 +151,8 @@ def main():
         
         # Run backtest; treat zero-trade/zero-return outcomes as valid results (no CSV fallback)
         results = {}
+        used_csv_fallback = False
+        effective_timeframe = args.timeframe
         try:
             results = backtester.run(
                 symbol=trading_symbol,
@@ -161,14 +163,13 @@ def main():
         except Exception as e:
             logger.error(f"Primary backtest attempt failed: {e}")
             results = {}
-        
         # Print results
         print("\nBacktest Results:")
         print("=" * 50)
         print(f"Strategy: {strategy.name}")
         print(f"Symbol: {trading_symbol}")
         print(f"Period: {start_date.date()} to {end_date.date()}")
-        print(f"Timeframe: {args.timeframe}")
+        print(f"Timeframe: {effective_timeframe}")
         print(f"Using Sentiment: {args.use_sentiment}")
         print(f"Using Cache: {not args.no_cache}")
         print(f"Database Logging: {not args.no_db}")
@@ -236,7 +237,7 @@ def main():
                 'timestamp': datetime.now().isoformat(timespec='seconds'),
                 'strategy': strategy.name,
                 'symbol': trading_symbol,
-                'timeframe': args.timeframe,
+                'timeframe': effective_timeframe,
                 'start_date': start_date.isoformat(),
                 'end_date': end_date.isoformat(),
                 'duration_years': duration_years,

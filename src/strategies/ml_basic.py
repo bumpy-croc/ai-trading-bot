@@ -391,7 +391,17 @@ class MlBasic(BaseStrategy):
             return False
         current_price = df['close'].iloc[index]
         returns = (current_price - entry_price) / entry_price
-        hit_stop_loss = returns <= -self.stop_loss_pct
+
+        # Determine regime before computing stop-loss
+        ma_col = f'ma_{self.LONG_TREND_FILTER_PERIOD}'
+        in_bull_regime = True
+        if ma_col in df.columns and not pd.isna(df[ma_col].iloc[index]):
+            in_bull_regime = current_price >= float(df[ma_col].iloc[index])
+
+        # Adaptive stop-loss percent based on regime
+        sl_pct = self.stop_loss_pct if in_bull_regime else self.STOP_LOSS_PCT_BEAR
+
+        hit_stop_loss = returns <= -sl_pct
         hit_take_profit = returns >= self.take_profit_pct
         
         # * Basic exit conditions (stop loss and take profit)
@@ -399,12 +409,7 @@ class MlBasic(BaseStrategy):
         
         # * ML-based exit signal for unfavorable predictions
         pred = df['onnx_pred'].iloc[index]
-        # Determine regime
-        ma_col = f'ma_{self.LONG_TREND_FILTER_PERIOD}'
-        in_bull_regime = True
-        if ma_col in df.columns and not pd.isna(df[ma_col].iloc[index]):
-            in_bull_regime = current_price >= float(df[ma_col].iloc[index])
-
+        
         if not pd.isna(pred):
             # For long positions: exit earlier in bear regime on unfavorable prediction
             predicted_return_next = (pred - current_price) / current_price if current_price > 0 else 0
