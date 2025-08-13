@@ -5,12 +5,14 @@ This module extracts sentiment-based features from market sentiment data.
 For MVP, this extractor is disabled and returns neutral sentiment values.
 """
 
+from typing import List
+
 import pandas as pd
-import numpy as np
-from typing import List, Dict
+
+from src.config.constants import DEFAULT_ENABLE_SENTIMENT
+
 from .base import FeatureExtractor
 from .schemas import SENTIMENT_FEATURES_SCHEMA
-from src.config.constants import DEFAULT_ENABLE_SENTIMENT
 from src.data_providers.feargreed_provider import FearGreedProvider
 from datetime import datetime, timezone
 
@@ -18,15 +20,15 @@ from datetime import datetime, timezone
 class SentimentFeatureExtractor(FeatureExtractor):
     """
     Extracts sentiment features from market sentiment data.
-    
+
     For MVP, this extractor is disabled and provides neutral sentiment values
     to maintain model compatibility.
     """
-    
+
     def __init__(self, enabled: bool = DEFAULT_ENABLE_SENTIMENT):
         """
         Initialize the sentiment feature extractor.
-        
+
         Args:
             enabled: Whether sentiment extraction is enabled (False for MVP)
         """
@@ -38,27 +40,27 @@ class SentimentFeatureExtractor(FeatureExtractor):
     def extract(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Extract sentiment features from data.
-        
+
         For MVP, this returns neutral sentiment values.
-        
+
         Args:
             data: DataFrame with market data
-            
+
         Returns:
             DataFrame with original data plus sentiment features
         """
         if not self.validate_input(data):
             raise ValueError("Invalid input data: missing required OHLCV columns")
-        
+
         df = data.copy()
-        
+
         if not self.enabled:
             # MVP: Return neutral sentiment values
             return self._add_neutral_sentiment_features(df)
         else:
             # Implement actual sentiment extraction (Fear & Greed)
             return self._extract_sentiment_features(df)
-    
+
     def _add_neutral_sentiment_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add neutral sentiment feature values for MVP compatibility."""
         # Add neutral sentiment values as defined in schema
@@ -67,19 +69,19 @@ class SentimentFeatureExtractor(FeatureExtractor):
                 df[feature_def.name] = feature_def.default_value
             else:
                 # Default neutral values
-                if 'primary' in feature_def.name:
+                if "primary" in feature_def.name:
                     df[feature_def.name] = 0.5  # Neutral sentiment
-                elif 'momentum' in feature_def.name:
+                elif "momentum" in feature_def.name:
                     df[feature_def.name] = 0.0  # No momentum
-                elif 'volatility' in feature_def.name:
+                elif "volatility" in feature_def.name:
                     df[feature_def.name] = 0.3  # Low-moderate volatility
-                elif 'confidence' in feature_def.name:
+                elif "confidence" in feature_def.name:
                     df[feature_def.name] = 0.7  # Moderate confidence
                 else:
                     df[feature_def.name] = 0.0  # Default neutral
-        
+
         return df
-    
+
     def _extract_sentiment_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Extract actual sentiment features using FearGreedProvider.
@@ -144,16 +146,13 @@ class SentimentFeatureExtractor(FeatureExtractor):
             # If original had timestamp column as data, keep original shape
             result = merged.reset_index().rename(columns={'index': 'timestamp'})
         return result
-    
+
     def get_feature_names(self) -> List[str]:
         """Return list of feature names this extractor produces."""
         return self._feature_names.copy()
-    
+
     def get_config(self) -> dict:
         """Get configuration parameters for this extractor."""
         config = super().get_config()
-        config.update({
-            'enabled': self.enabled,
-            'mvp_mode': not self.enabled
-        })
+        config.update({"enabled": self.enabled, "mvp_mode": not self.enabled})
         return config

@@ -1,9 +1,10 @@
-import os
 import json
+import os
 from contextlib import contextmanager
+
 import pytest
 
-from src.config.feature_flags import is_enabled, get_flag, resolve_all
+from src.config.feature_flags import get_flag, is_enabled, resolve_all
 
 pytestmark = pytest.mark.unit
 
@@ -23,10 +24,12 @@ def patched_env(env: dict):
 
 
 def test_precedence_emergency_overrides_json_and_repo_defaults():
-    with patched_env({
-        "FEATURE_FLAGS_OVERRIDES": json.dumps({"use_prediction_engine": False}),
-        "FEATURE_USE_PREDICTION_ENGINE": "true",
-    }):
+    with patched_env(
+        {
+            "FEATURE_FLAGS_OVERRIDES": json.dumps({"use_prediction_engine": False}),
+            "FEATURE_USE_PREDICTION_ENGINE": "true",
+        }
+    ):
         assert is_enabled("use_prediction_engine", default=False) is True
 
 

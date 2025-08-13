@@ -7,4 +7,4 @@ This module contains machine learning models and utilities for trading strategie
 # Model registry has been moved to src.prediction.models.registry
 # Use PredictionModelRegistry for new implementations
 
-__all__ = [] 
+__all__ = []

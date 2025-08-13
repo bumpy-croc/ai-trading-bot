@@ -1,6 +1,7 @@
-import pytest
 from datetime import datetime, timedelta
+
 import pandas as pd
+import pytest
 from requests.exceptions import Timeout
 
 pytestmark = pytest.mark.unit

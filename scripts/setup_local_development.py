@@ -4,10 +4,9 @@ Local Development Setup Script
 Helps developers set up their local development environment with PostgreSQL (default)
 """
 
-import os
-import sys
-import subprocess
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -28,17 +27,17 @@ def check_requirements():
     print("🔍 Checking System Requirements...")
 
     requirements = {
-        'python3': {
-            'description': 'Python 3.9+ required',
-            'required': True,
+        "python3": {
+            "description": "Python 3.9+ required",
+            "required": True,
         },
-        'docker': {
-            'description': 'Docker recommended for containerised PostgreSQL',
-            'required': False,
+        "docker": {
+            "description": "Docker recommended for containerised PostgreSQL",
+            "required": False,
         },
-        'docker-compose': {
-            'description': 'Docker Compose recommended for containerised PostgreSQL',
-            'required': False,
+        "docker-compose": {
+            "description": "Docker Compose recommended for containerised PostgreSQL",
+            "required": False,
         },
     }
 
@@ -46,16 +45,18 @@ def check_requirements():
     missing_optional = []
 
     for tool, meta in requirements.items():
-        description = meta['description']
+        description = meta["description"]
         try:
-            result = subprocess.run([tool, '--version'], capture_output=True, text=True)
+            result = subprocess.run([tool, "--version"], capture_output=True, text=True)
             if result.returncode == 0:
-                version = result.stdout.split('\n')[0]
+                version = result.stdout.split("\n")[0]
                 print(f"✅ {tool}: {version}")
             else:
-                (missing_required if meta['required'] else missing_optional).append((tool, description))
+                (missing_required if meta["required"] else missing_optional).append(
+                    (tool, description)
+                )
         except FileNotFoundError:
-            (missing_required if meta['required'] else missing_optional).append((tool, description))
+            (missing_required if meta["required"] else missing_optional).append((tool, description))
 
     if missing_required or missing_optional:
         print("\n⚠️  Missing Requirements:")
@@ -75,48 +76,50 @@ def choose_database_option():
     to indicate PostgreSQL without any interactive prompt.
     """
     print("🗄️  Database Configuration: Defaulting to PostgreSQL (🐘)")
-    return '1'
+    return "1"
 
 
 def setup_environment_file(database_choice):
     """Set up the .env file based on user choices"""
     print("\n📝 Setting up Environment Configuration...")
-    
+
     # Copy example file if .env doesn't exist
-    env_file = Path('.env')
-    example_file = Path('.env.example')
-    
+    env_file = Path(".env")
+    example_file = Path(".env.example")
+
     if not env_file.exists():
         if example_file.exists():
             shutil.copy(example_file, env_file)
-            print(f"✅ Created .env file from .env.example")
+            print("✅ Created .env file from .env.example")
         else:
             # Create minimal .env file
-            with open(env_file, 'w') as f:
+            with open(env_file, "w") as f:
                 f.write("# AI Trading Bot Environment Configuration\n")
                 f.write("TRADING_MODE=paper\n")
                 f.write("INITIAL_BALANCE=10000\n")
                 f.write("LOG_LEVEL=INFO\n")
-            print(f"✅ Created basic .env file")
-    
-    # Update .env file based on database choice
-    with open(env_file, 'r') as f:
-        content = f.read()
-    
-    if database_choice == '1':  # PostgreSQL
-        postgres_url_line = 'DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot'
+            print("✅ Created basic .env file")
 
-        lines = [ln for ln in content.split('\n') if ln.strip()]
+    # Update .env file based on database choice
+    with open(env_file) as f:
+        content = f.read()
+
+    if database_choice == "1":  # PostgreSQL
+        postgres_url_line = (
+            "DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot"
+        )
+
+        lines = [ln for ln in content.split("\n") if ln.strip()]
         # Remove any existing DATABASE_URL lines (commented or malformed)
-        lines = [ln for ln in lines if not ln.strip().startswith('DATABASE_URL')]
+        lines = [ln for ln in lines if not ln.strip().startswith("DATABASE_URL")]
         # Add the correct line
         lines.append(postgres_url_line)
-        content = '\n'.join(lines) + '\n'
+        content = "\n".join(lines) + "\n"
         print("✅ Configured for PostgreSQL")
     # PostgreSQL is the only option
     print("✅ Configured for PostgreSQL")
-    
-    with open(env_file, 'w') as f:
+
+    with open(env_file, "w") as f:
         f.write(content)
 
 
@@ -132,19 +135,21 @@ def setup_postgresql():
     print("\n🐘 Setting up PostgreSQL...")
 
     # Quick check for docker-compose
-    docker_compose_available = shutil.which('docker-compose') is not None
+    docker_compose_available = shutil.which("docker-compose") is not None
 
     if not docker_compose_available:
         print("⚠️  docker-compose not found – Skipping container startup.")
-        print("   Ensure your local PostgreSQL instance is running and matches the credentials in the .env file.")
+        print(
+            "   Ensure your local PostgreSQL instance is running and matches the credentials in the .env file."
+        )
         return True  # Considered success; user handles DB themselves
 
     # Start container via docker-compose
     try:
         print("Starting PostgreSQL container via docker-compose...")
-        result = subprocess.run([
-            'docker-compose', 'up', '-d', 'postgres'
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker-compose", "up", "-d", "postgres"], capture_output=True, text=True
+        )
 
         if result.returncode != 0:
             print(f"❌ Failed to start PostgreSQL container: {result.stderr}")
@@ -154,10 +159,21 @@ def setup_postgresql():
 
         # Wait for readiness (basic check)
         print("Waiting for PostgreSQL to be ready...")
-        result = subprocess.run([
-            'docker-compose', 'exec', '-T', 'postgres',
-            'pg_isready', '-U', 'trading_bot', '-d', 'ai_trading_bot'
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            [
+                "docker-compose",
+                "exec",
+                "-T",
+                "postgres",
+                "pg_isready",
+                "-U",
+                "trading_bot",
+                "-d",
+                "ai_trading_bot",
+            ],
+            capture_output=True,
+            text=True,
+        )
 
         if result.returncode == 0:
             print("✅ PostgreSQL is ready for connections")
@@ -175,12 +191,14 @@ def setup_postgresql():
 def install_python_dependencies():
     """Install Python dependencies"""
     print("\n📦 Installing Python Dependencies...")
-    
+
     try:
-        result = subprocess.run([
-            sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt'
-        ], capture_output=True, text=True)
-        
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+            capture_output=True,
+            text=True,
+        )
+
         if result.returncode == 0:
             print("✅ Python dependencies installed successfully")
             return True
@@ -191,7 +209,7 @@ def install_python_dependencies():
             print("   source venv/bin/activate  # On Windows: venv\\Scripts\\activate")
             print("   pip install -r requirements.txt")
             return False
-            
+
     except Exception as e:
         print(f"❌ Error installing dependencies: {e}")
         return False
@@ -200,22 +218,24 @@ def install_python_dependencies():
 def test_setup(database_choice):
     """Test the setup by running database verification"""
     print("\n🧪 Testing Setup...")
-    
+
     try:
         # Test configuration
-        result = subprocess.run([
-            sys.executable, 'scripts/verify_database_connection.py'
-        ], capture_output=True, text=True)
-        
+        result = subprocess.run(
+            [sys.executable, "scripts/verify_database_connection.py"],
+            capture_output=True,
+            text=True,
+        )
+
         if result.returncode == 0:
             print("✅ Database connection test passed")
             return True
         else:
-            print(f"❌ Database connection test failed:")
+            print("❌ Database connection test failed:")
             print(result.stdout)
             print(result.stderr)
             return False
-            
+
     except Exception as e:
         print(f"❌ Error testing setup: {e}")
         return False
@@ -225,8 +245,8 @@ def print_next_steps(database_choice):
     """Print next steps for the user"""
     print("\n🎉 Setup Complete!")
     print("=" * 40)
-    
-    if database_choice == '1':  # PostgreSQL
+
+    if database_choice == "1":  # PostgreSQL
         print("\n🐘 PostgreSQL Development Environment Ready")
         print("\n📋 Useful Commands:")
         print("   # Start PostgreSQL")
@@ -256,7 +276,7 @@ def print_next_steps(database_choice):
     print("   # Connect to PostgreSQL")
     print("   docker-compose exec postgres psql -U trading_bot -d ai_trading_bot")
     print()
-    
+
     print("🚀 Run Your First Backtest:")
     print("   python scripts/run_backtest.py ml_basic --days 30 --no-db")
     print()
@@ -274,31 +294,31 @@ def print_next_steps(database_choice):
 def main():
     """Main setup function"""
     print_header()
-    
+
     # Check system requirements
     if not check_requirements():
         print("Please install missing requirements and run setup again.")
         sys.exit(1)
-    
+
     # Let user choose database option
     database_choice = choose_database_option()
-    
+
     # Set up environment file
     setup_environment_file(database_choice)
-    
+
     # Install Python dependencies
     if not install_python_dependencies():
         print("\n⚠️  Python dependencies installation failed.")
         print("Please install dependencies manually and re-run setup.")
         # Continue with setup even if pip install fails
-    
+
     # Set up PostgreSQL if chosen
-    if database_choice == '1':
+    if database_choice == "1":
         if not setup_postgresql():
             print("\n❌ PostgreSQL setup failed.")
             print("You can still use PostgreSQL by editing your .env file.")
             sys.exit(1)
-    
+
     # Test the setup
     print("\n⏳ Please wait while we test the setup...")
     if test_setup(database_choice):
