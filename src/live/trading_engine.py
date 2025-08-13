@@ -16,7 +16,6 @@ from performance.metrics import (
     cash_pnl,
     pnl_percent,
 )
-
 from config.constants import DEFAULT_INITIAL_BALANCE
 from data_providers.binance_provider import BinanceProvider
 from data_providers.coinbase_provider import CoinbaseProvider
@@ -27,8 +26,16 @@ from database.models import TradeSource
 from live.strategy_manager import StrategyManager
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
-
 from .account_sync import AccountSynchronizer
+from src.utils.symbol_factory import SymbolFactory
+from src.config.feature_flags import is_enabled
+from src.regime import RegimeDetector, RegimeConfig
+from src.config.constants import (
+    DEFAULT_REGIME_ADJUST_POSITION_SIZE,
+    DEFAULT_REGIME_HYSTERESIS_K,
+    DEFAULT_REGIME_MIN_DWELL,
+    DEFAULT_REGIME_MIN_CONFIDENCE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -257,11 +264,23 @@ class LiveTradingEngine:
         # Setup graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Optional regime detection (disabled by default)
+        self.regime_detector: Optional[RegimeDetector] = None
+        if is_enabled("enable_regime_detection", default=False):
+            try:
+                cfg = RegimeConfig(
+                    hysteresis_k=DEFAULT_REGIME_HYSTERESIS_K,
+                    min_dwell=DEFAULT_REGIME_MIN_DWELL
+                )
+                self.regime_detector = RegimeDetector(cfg)
+                logger.info("RegimeDetector initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RegimeDetector: {e}")
 
         logger.info(
             f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}"
         )
-
     def start(self, symbol: str, timeframe: str = "1h", max_steps: int = None):
         """Start the live trading engine"""
         if self.is_running:
@@ -461,6 +480,12 @@ class LiveTradingEngine:
                         logger.error("❌ Failed to apply strategy/model update")
                 # Calculate indicators
                 df = self.strategy.calculate_indicators(df)
+                # Annotate regimes if enabled
+                if self.regime_detector is not None:
+                    try:
+                        df = self.regime_detector.annotate(df)
+                    except Exception as e:
+                        logger.debug(f"Regime annotation failed: {e}")
                 # Remove warmup period and ensure we have enough data
                 df = df.dropna()
                 if len(df) < 2:
@@ -729,6 +754,7 @@ class LiveTradingEngine:
                 volume=indicators.get("volume"),
                 volatility=indicators.get("volatility"),
                 session_id=self.trading_session_id,
+
             )
 
         # Only proceed if we have a valid entry signal and position size
@@ -788,6 +814,18 @@ class LiveTradingEngine:
 
             self.positions[order_id] = position
 
+            # Update risk manager tracking
+            if self.risk_manager:
+                try:
+                    self.risk_manager.update_position(
+                        symbol=position.symbol,
+                        side=position.side.value if hasattr(position.side, "value") else str(position.side),
+                        size=position.size,
+                        entry_price=position.entry_price,
+                    )
+                except Exception as e:
+                    logger.debug(f"Risk manager update_position failed: {e}")
+            
             # Log position to database
             if self.trading_session_id is not None:
                 position_db_id = self.db_manager.log_position(
@@ -938,6 +976,13 @@ class LiveTradingEngine:
             # Remove from active positions
             if position.order_id in self.positions:
                 del self.positions[position.order_id]
+
+            # Update risk manager tracking
+            if self.risk_manager:
+                try:
+                    self.risk_manager.close_position(position.symbol)
+                except Exception as e:
+                    logger.debug(f"Risk manager close_position failed: {e}")
 
             # Log trade
             pnl_str = f"+${pnl_dollar:.2f}" if pnl_dollar > 0 else f"${pnl_dollar:.2f}"

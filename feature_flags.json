@@ -1,4 +1,5 @@
 {
-  "use_prediction_engine": true
+  "use_prediction_engine": true,
+  "enable_regime_detection": false
 }
 

@@ -2,10 +2,39 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
 from performance.metrics import (
     cagr as perf_cagr,
+)
+from performance.metrics import (
+    cash_pnl,
+)
+from performance.metrics import (
+    max_drawdown as perf_max_drawdown,
+)
+from performance.metrics import (
+    sharpe as perf_sharpe,
+)
+from performance.metrics import (
+    total_return as perf_total_return,
+)
+from sqlalchemy.exc import SQLAlchemyError
+
+from config.constants import DEFAULT_INITIAL_BALANCE
+from data_providers.data_provider import DataProvider
+from data_providers.sentiment_provider import SentimentDataProvider
+from database.manager import DatabaseManager
+from database.models import TradeSource
+from strategies.base import BaseStrategy
+from src.config.feature_flags import is_enabled
+from src.regime import RegimeDetector, RegimeConfig
+from src.config.constants import (
+    DEFAULT_REGIME_ADJUST_POSITION_SIZE,
+    DEFAULT_REGIME_HYSTERESIS_K,
+    DEFAULT_REGIME_MIN_DWELL,
+    DEFAULT_REGIME_MIN_CONFIDENCE,
 )
 
 # Shared performance metrics
@@ -214,7 +243,6 @@ class Backtester:
 
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
-
             # Remove warmup period - only drop rows where essential price data is missing
             # Don't drop rows just because ML predictions or sentiment data is missing
             essential_columns = ["open", "high", "low", "close", "volume"]
@@ -372,7 +400,6 @@ class Backtester:
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
                         sentiment_data = self._extract_sentiment_data(df, i)
-
                         self.db_manager.log_strategy_execution(
                             strategy_name=self.strategy.__class__.__name__,
                             symbol=symbol,
