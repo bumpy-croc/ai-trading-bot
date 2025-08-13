@@ -28,6 +28,7 @@ class ExperimentConfig:
     parameters: ParameterSet | None = None
     use_cache: bool = True
     provider: str = "binance"
+    random_seed: Optional[int] = None
 
 
 @dataclass
