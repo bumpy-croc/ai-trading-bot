@@ -12,6 +12,7 @@ Add more exchanges as needed.
 
 import re
 
+
 class SymbolFactory:
     @staticmethod
     def to_exchange_symbol(symbol: str, exchange: str) -> str:
@@ -24,38 +25,37 @@ class SymbolFactory:
             str: Symbol formatted for the target exchange
         """
         symbol = symbol.upper()
-        if exchange == 'binance':
+        if exchange == "binance":
             # Convert 'BTC-USD' or 'BTC/USD' to 'BTCUSDT'
-            if '-' in symbol:
-                base, quote = symbol.split('-')
-                if quote == 'USD':
-                    quote = 'USDT'  # Binance uses USDT
+            if "-" in symbol:
+                base, quote = symbol.split("-")
+                if quote == "USD":
+                    quote = "USDT"  # Binance uses USDT
                 return f"{base}{quote}"
-            if '/' in symbol:
-                base, quote = symbol.split('/')
-                if quote == 'USD':
-                    quote = 'USDT'
+            if "/" in symbol:
+                base, quote = symbol.split("/")
+                if quote == "USD":
+                    quote = "USDT"
                 return f"{base}{quote}"
             # Already Binance style
             return symbol
-        elif exchange == 'coinbase':
-            # If already Coinbase style with '-', return as-is
-            if '-' in symbol:
-                return symbol
-            # Convert Binance-style to Coinbase-style
-            if symbol.endswith('USDT'):
+        elif exchange == "coinbase":
+            # Convert 'BTCUSDT' or 'BTC/USDT' to 'BTC-USD'
+            if symbol.endswith("USDT"):
                 base = symbol[:-4]
                 return f"{base}-USD"
-            if symbol.endswith('USD'):
+            if symbol.endswith("USD"):
                 base = symbol[:-3]
                 return f"{base}-USD"
-            if '/' in symbol:
-                base, quote = symbol.split('/')
+            if "/" in symbol:
+                base, quote = symbol.split("/")
                 return f"{base}-{quote}"
-            # Fallback: try regex for 3-5 letter base/quote
+            if "-" in symbol:
+                return symbol
+            # Fallback: try regex for 3-4 letter base/quote
             m = re.match(r"([A-Z]{3,5})([A-Z]{3,5})", symbol)
             if m:
                 return f"{m.group(1)}-{m.group(2)}"
             raise ValueError(f"Could not parse symbol '{symbol}' for Coinbase format.")
         else:
-            raise ValueError(f"Exchange '{exchange}' not supported in SymbolFactory.") 
+            raise ValueError(f"Exchange '{exchange}' not supported in SymbolFactory.")

@@ -5,12 +5,12 @@ Revises: 0001_initial
 Create Date: 2025-07-06
 """
 
-from alembic import op  # type: ignore
 import sqlalchemy as sa  # type: ignore
+from alembic import op  # type: ignore
 from sqlalchemy.dialects import postgresql  # type: ignore
 
-revision = '0002_numeric_jsonb'
-down_revision = '0001_initial'
+revision = "0002_numeric_jsonb"
+down_revision = "0001_initial"
 branch_labels = None
 depends_on = None
 
@@ -20,6 +20,7 @@ _JSONB = postgresql.JSONB()
 
 
 # Helper to alter multiple columns in a table ----------------------------
+
 
 def _alter_numeric_columns(table_name: str, columns: list[str]):
     for col in columns:
@@ -146,7 +147,6 @@ def upgrade() -> None:
 
     # System events
     _alter_json_columns("system_events", ["details"])
-
 
 
 def downgrade() -> None:

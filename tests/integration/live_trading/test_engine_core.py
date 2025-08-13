@@ -1,18 +1,28 @@
-import pytest
-import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import Mock
+
+import pandas as pd
+import pytest
 
 pytestmark = pytest.mark.integration
 
 # Conditional imports to allow running without full live trading implementation
 try:
     from live.trading_engine import LiveTradingEngine, Position, PositionSide
+
     LIVE_TRADING_AVAILABLE = True
 except ImportError:
     LIVE_TRADING_AVAILABLE = False
+
     class LiveTradingEngine:  # minimal mock
-        def __init__(self, strategy=None, data_provider=None, initial_balance=10000, enable_live_trading=False, **kwargs):
+        def __init__(
+            self,
+            strategy=None,
+            data_provider=None,
+            initial_balance=10000,
+            enable_live_trading=False,
+            **kwargs,
+        ):
             self.strategy = strategy
             self.data_provider = data_provider
             self.initial_balance = initial_balance
@@ -21,8 +31,19 @@ except ImportError:
             self.is_running = False
             self.positions = {}
             self.completed_trades = []
+
     class Position:
-        def __init__(self, symbol=None, side=None, size=None, entry_price=None, entry_time=None, stop_loss=None, order_id=None, **kwargs):
+        def __init__(
+            self,
+            symbol=None,
+            side=None,
+            size=None,
+            entry_price=None,
+            entry_time=None,
+            stop_loss=None,
+            order_id=None,
+            **kwargs,
+        ):
             self.symbol = symbol
             self.side = side
             self.size = size
@@ -30,6 +51,7 @@ except ImportError:
             self.entry_time = entry_time
             self.stop_loss = stop_loss
             self.order_id = order_id
+
     PositionSide = Mock()
 
 
@@ -52,17 +74,23 @@ class TestLiveTradingEngine:
         assert len(engine.positions) == 0
         assert len(engine.completed_trades) == 0
 
-    def test_engine_initialization_with_live_trading_enabled(self, mock_strategy, mock_data_provider):
-        engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=True)
+    def test_engine_initialization_with_live_trading_enabled(
+        self, mock_strategy, mock_data_provider
+    ):
+        engine = LiveTradingEngine(
+            strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=True
+        )
         assert engine.enable_live_trading is True
 
     @pytest.mark.live_trading
     def test_position_opening_paper_trading(self, mock_strategy, mock_data_provider):
-        engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=False)
-        if hasattr(engine, '_open_position'):
+        engine = LiveTradingEngine(
+            strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=False
+        )
+        if hasattr(engine, "_open_position"):
             engine._open_position(
                 symbol="BTCUSDT",
-                side=PositionSide.LONG if hasattr(PositionSide, 'LONG') else "LONG",
+                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
                 size=0.1,
                 price=50000,
                 stop_loss=49000,
@@ -77,11 +105,16 @@ class TestLiveTradingEngine:
 
     @pytest.mark.live_trading
     def test_position_closing(self, mock_strategy, mock_data_provider):
-        engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=False, initial_balance=10000)
-        if hasattr(Position, '__init__'):
+        engine = LiveTradingEngine(
+            strategy=mock_strategy,
+            data_provider=mock_data_provider,
+            enable_live_trading=False,
+            initial_balance=10000,
+        )
+        if hasattr(Position, "__init__"):
             position = Position(
                 symbol="BTCUSDT",
-                side=PositionSide.LONG if hasattr(PositionSide, 'LONG') else "LONG",
+                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
                 size=0.1,
                 entry_price=50000,
                 entry_time=datetime.now(),
@@ -89,8 +122,10 @@ class TestLiveTradingEngine:
                 order_id="test_001",
             )
             engine.positions["test_001"] = position
-            mock_data_provider.get_live_data.return_value = pd.DataFrame({'close': [51000]}, index=[datetime.now()])
-            if hasattr(engine, '_close_position'):
+            mock_data_provider.get_live_data.return_value = pd.DataFrame(
+                {"close": [51000]}, index=[datetime.now()]
+            )
+            if hasattr(engine, "_close_position"):
                 engine._close_position(position, "Test closure")
                 assert len(engine.positions) == 0
                 assert len(engine.completed_trades) == 1
@@ -100,14 +135,14 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, 'LONG') else "LONG",
+            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
             stop_loss=49000,
             order_id="test_001",
         )
-        if hasattr(engine, '_check_stop_loss'):
+        if hasattr(engine, "_check_stop_loss"):
             assert engine._check_stop_loss(position, 48500) is True
             assert engine._check_stop_loss(position, 49500) is False
 
@@ -116,18 +151,18 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, 'LONG') else "LONG",
+            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
             take_profit=52000,
             order_id="test_001",
         )
-        if hasattr(engine, '_check_take_profit'):
+        if hasattr(engine, "_check_take_profit"):
             assert engine._check_take_profit(position, 52500) is True
             assert engine._check_take_profit(position, 51500) is False
             # Short case
-            if hasattr(PositionSide, 'SHORT'):
+            if hasattr(PositionSide, "SHORT"):
                 position.side = PositionSide.SHORT
                 position.take_profit = 48000
                 assert engine._check_take_profit(position, 47500) is True
@@ -138,38 +173,52 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         long_position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, 'LONG') else "LONG",
+            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
             order_id="long_001",
         )
         engine.positions["long_001"] = long_position
-        if hasattr(engine, '_update_position_pnl'):
+        if hasattr(engine, "_update_position_pnl"):
             engine._update_position_pnl(51000)
             expected_long_pnl = (51000 - 50000) / 50000 * 0.1
             assert long_position.unrealized_pnl == expected_long_pnl
 
     @pytest.mark.live_trading
     def test_maximum_position_limits(self, mock_strategy, mock_data_provider):
-        engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider, max_position_size=0.1)
-        if hasattr(engine, '_open_position'):
-            engine._open_position(symbol="BTCUSDT", side=PositionSide.LONG if hasattr(PositionSide, 'LONG') else "LONG", size=0.5, price=50000)
+        engine = LiveTradingEngine(
+            strategy=mock_strategy, data_provider=mock_data_provider, max_position_size=0.1
+        )
+        if hasattr(engine, "_open_position"):
+            engine._open_position(
+                symbol="BTCUSDT",
+                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+                size=0.5,
+                price=50000,
+            )
             position = list(engine.positions.values())[0]
             assert position.size <= 0.1
 
     def test_performance_metrics_calculation(self, mock_strategy, mock_data_provider):
-        engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider, initial_balance=10000, resume_from_last_balance=False)
+        engine = LiveTradingEngine(
+            strategy=mock_strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+            resume_from_last_balance=False,
+        )
         engine.total_trades = 10
         engine.winning_trades = 6
         engine.total_pnl = 500
         engine.current_balance = 10500
         engine.peak_balance = 10800
-        if hasattr(engine, '_update_performance_metrics') and hasattr(engine, 'get_performance_summary'):
+        if hasattr(engine, "_update_performance_metrics") and hasattr(
+            engine, "get_performance_summary"
+        ):
             engine._update_performance_metrics()
             performance = engine.get_performance_summary()
-            assert performance['total_trades'] == 10
-            assert performance['win_rate'] == 60.0
-            assert performance['total_return'] == 5.0
-            assert performance['current_drawdown'] == pytest.approx(2.78, rel=1e-2)
-            assert performance['max_drawdown_pct'] == pytest.approx(2.78, rel=1e-2)
+            assert performance["total_trades"] == 10
+            assert performance["win_rate"] == 60.0
+            assert performance["total_return"] == 5.0
+            assert performance["current_drawdown"] == pytest.approx(2.78, rel=1e-2)
+            assert performance["max_drawdown_pct"] == pytest.approx(2.78, rel=1e-2)
