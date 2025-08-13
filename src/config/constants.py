@@ -16,6 +16,11 @@ DEFAULT_MODEL_CACHE_TTL = 600  # seconds
 DEFAULT_CONFIDENCE_SCALE_FACTOR = 10.0  # Scale factor for confidence calculation
 DEFAULT_DIRECTION_THRESHOLD = 0.01  # 1% threshold for direction determination
 
+# Ensemble/Regime-aware prediction enhancements
+DEFAULT_ENABLE_ENSEMBLE = False
+DEFAULT_ENSEMBLE_METHOD = "mean"
+DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE = False
+
 # Feature Engineering Constants
 DEFAULT_SEQUENCE_LENGTH = 120  # LSTM sequence length for technical features
 DEFAULT_NORMALIZATION_WINDOW = 120  # Window for price normalization
