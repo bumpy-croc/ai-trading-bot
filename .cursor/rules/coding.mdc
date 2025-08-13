@@ -106,7 +106,6 @@
 - Don't create excess documentation. When you do, it should live in the `docs` folder.
 
 ### 4.11. Git
-- Do not commit/push without explicit user approval.
 - Verify correct branch before committing; fetch `origin/develop` before merge/rebase.
 
 # 5. Pull Request (PR) Reviews
