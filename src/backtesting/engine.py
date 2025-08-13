@@ -300,6 +300,7 @@ class Backtester:
                         trade_pnl: float = cash_pnl(trade_pnl_percent, self.balance)
 
                         self.balance += trade_pnl
+                        yearly_balance[yr]["end"] = self.balance
 
                         # Update metrics
                         total_trades += 1
@@ -343,9 +344,19 @@ class Backtester:
                         )
                         self.current_trade = None
 
-                        # Check if maximum drawdown exceeded (use risk params if present)
-                        # Keep develop behavior: use running drawdown check here
-                        # (engine-level early stop logic remains as-is)
+                        # Check for maximum drawdown early stop
+                        if self.risk_parameters is not None and hasattr(self.risk_parameters, "max_drawdown") and self.peak_balance > 0:
+                            current_drawdown_post = (self.peak_balance - self.balance) / self.peak_balance
+                            if current_drawdown_post > max_drawdown_running:
+                                max_drawdown_running = current_drawdown_post
+                            if current_drawdown_post >= float(self.risk_parameters.max_drawdown):
+                                self.early_stop_reason = "max_drawdown_exceeded"
+                                self.early_stop_date = candle.name
+                                self.early_stop_candle_index = i
+                                logger.warning(
+                                    f"Early stop triggered at {candle.name}: drawdown {current_drawdown_post:.2%} exceeded threshold {self.risk_parameters.max_drawdown:.2%}"
+                                )
+                                break
 
                 # Check for entry if not in position
                 elif self.strategy.check_entry_conditions(df, i):
