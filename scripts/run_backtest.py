@@ -68,6 +68,7 @@ def parse_args():
     parser.add_argument('--cache-ttl', type=int, default=24, help='Cache TTL in hours (default: 24)')
     parser.add_argument('--no-db', action='store_true', help='Disable database logging for this backtest')
     parser.add_argument('--provider', choices=['coinbase', 'binance'], default='binance', help='Exchange provider to use (default: binance)')
+    parser.add_argument('--max-drawdown', type=float, default=None, help='Max drawdown threshold (0-1). If provided, overrides default (legacy 0.5 when no risk params).')
     return parser.parse_args()
 
 def get_date_range(args):
@@ -122,10 +123,14 @@ def main():
             logger.info("Using sentiment analysis in backtest")
         
         # Set up risk parameters
-        risk_params = RiskParameters(
+        # Respect optional max drawdown override; otherwise use RiskParameters default (0.20)
+        rp_kwargs = dict(
             base_risk_per_trade=args.risk_per_trade,
-            max_risk_per_trade=args.max_risk_per_trade
+            max_risk_per_trade=args.max_risk_per_trade,
         )
+        if args.max_drawdown is not None:
+            rp_kwargs['max_drawdown'] = float(args.max_drawdown)
+        risk_params = RiskParameters(**rp_kwargs)
         
         # Create and run backtester
         backtester = Backtester(
@@ -144,7 +149,7 @@ def main():
         else:  # Use strategy's default trading pair
             trading_symbol = strategy.get_trading_pair()
         
-        # Run backtest; if provider returns empty, fallback to local CSV for BTCUSDT 1d
+        # Run backtest; treat zero-trade/zero-return outcomes as valid results (no CSV fallback)
         results = {}
         try:
             results = backtester.run(
@@ -156,48 +161,6 @@ def main():
         except Exception as e:
             logger.error(f"Primary backtest attempt failed: {e}")
             results = {}
-
-        if (not results) or (results.get('total_trades', 0) == 0 and results.get('total_return', 0.0) == 0.0):
-            # Attempt CSV fallback only for BTC daily
-            csv_path = Path(__file__).parent.parent / 'src' / 'data' / 'BTCUSDT_1d.csv'
-            if csv_path.exists() and args.symbol.upper() in ['BTCUSDT', 'BTC-USD'] and args.timeframe == '1d':
-                logger.info(f"Falling back to local CSV: {csv_path}")
-                df = pd.read_csv(csv_path)
-                # Parse timestamp
-                if 'timestamp' in df.columns:
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    df = df.set_index('timestamp')
-                # Clip date range
-                mask = (df.index >= pd.to_datetime(start_date)) & (df.index <= pd.to_datetime(end_date))
-                df = df.loc[mask].copy()
-                from data_providers.data_provider import DataProvider
-                class _CsvProvider(DataProvider):
-                    def __init__(self, data: pd.DataFrame):
-                        super().__init__()
-                        self._data = data
-                    def get_historical_data(self, symbol, timeframe, start, end=None):
-                        return self._data.copy()
-                    def get_live_data(self, symbol, timeframe, limit=100):
-                        return self._data.tail(limit).copy()
-                    def update_live_data(self, symbol, timeframe):
-                        return self._data.copy()
-                    def get_current_price(self, symbol: str) -> float:
-                        return float(self._data.iloc[-1]['close']) if not self._data.empty else 0.0
-                csv_provider = _CsvProvider(df)
-                backtester_csv = Backtester(
-                    strategy=strategy,
-                    data_provider=csv_provider,
-                    sentiment_provider=None,
-                    risk_parameters=risk_params,
-                    initial_balance=args.initial_balance,
-                    log_to_database=False
-                )
-                results = backtester_csv.run(
-                    symbol=trading_symbol,
-                    timeframe='1d',
-                    start=start_date,
-                    end=end_date
-                )
         
         # Print results
         print("\nBacktest Results:")

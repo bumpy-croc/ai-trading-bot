@@ -55,6 +55,8 @@ class MlBasic(BaseStrategy):
     BEAR_DEFENSIVE_EXIT_DD = -0.01       # Exit if open loss worse than -1% in bear
     # Adaptive stops
     STOP_LOSS_PCT_BEAR = 0.015  # 1.5% stop in bear regime
+    # Volatility cutoff
+    EXTREME_ATR_THRESHOLD = 0.08  # Avoid entries when ATR% exceeds this
     
     def __init__(self, name="MlBasic", model_path="src/ml/btcusdt_price.onnx", sequence_length=120, use_prediction_engine: Optional[bool] = None, model_name: Optional[str] = None):
         super().__init__(name)
@@ -90,20 +92,56 @@ class MlBasic(BaseStrategy):
         # Optional batch inference flag (default off to preserve exact behavior)
         self.use_engine_batch = get_config().get_bool('ENGINE_BATCH_INFERENCE', default=False)
 
+        # Allow configuration overrides for key tunables
+        try:
+            self.LONG_TREND_FILTER_PERIOD = int(cfg.get('MLBASIC_LONG_TREND_FILTER_PERIOD', default=self.LONG_TREND_FILTER_PERIOD))
+        except Exception:
+            pass
+        try:
+            self.MIN_CONFIDENCE_TO_TRADE = float(cfg.get('MLBASIC_MIN_CONFIDENCE_TO_TRADE', default=self.MIN_CONFIDENCE_TO_TRADE))
+        except Exception:
+            pass
+        try:
+            self.BEAR_SIZE_MULTIPLIER = float(cfg.get('MLBASIC_BEAR_SIZE_MULTIPLIER', default=self.BEAR_SIZE_MULTIPLIER))
+        except Exception:
+            pass
+        try:
+            self.UNFAVORABLE_PRED_EXIT_BULL = float(cfg.get('MLBASIC_UNFAV_PRED_EXIT_BULL', default=self.UNFAVORABLE_PRED_EXIT_BULL))
+            self.UNFAVORABLE_PRED_EXIT_BEAR = float(cfg.get('MLBASIC_UNFAV_PRED_EXIT_BEAR', default=self.UNFAVORABLE_PRED_EXIT_BEAR))
+        except Exception:
+            pass
+        try:
+            self.BEAR_DEFENSIVE_EXIT_DD = float(cfg.get('MLBASIC_BEAR_DEFENSIVE_EXIT_DD', default=self.BEAR_DEFENSIVE_EXIT_DD))
+        except Exception:
+            pass
+        try:
+            self.STOP_LOSS_PCT_BEAR = float(cfg.get('MLBASIC_STOP_LOSS_PCT_BEAR', default=self.STOP_LOSS_PCT_BEAR))
+        except Exception:
+            pass
+        try:
+            self.VOL_FULL_SIZE_ATR_PCT = float(cfg.get('MLBASIC_VOL_FULL_SIZE_ATR_PCT', default=self.VOL_FULL_SIZE_ATR_PCT))
+            self.VOL_SIZE_DECAY = float(cfg.get('MLBASIC_VOL_SIZE_DECAY', default=self.VOL_SIZE_DECAY))
+        except Exception:
+            pass
+        try:
+            self.EXTREME_ATR_THRESHOLD = float(cfg.get('MLBASIC_EXTREME_ATR_THRESHOLD', default=self.EXTREME_ATR_THRESHOLD))
+        except Exception:
+            pass
+
         # Initialize feature pipeline with a technical extractor matching our normalization window
         technical_extractor = TechnicalFeatureExtractor(
             sequence_length=self.sequence_length,
             normalization_window=self.sequence_length
         )
-        # Disable default technical extractor to avoid duplicate; use our custom one
+        # Disable default technical extractor to avoid duplicate; use our custom ones
         if self.use_prediction_engine:
-            # When engine is enabled, use a price-only extractor to guarantee 5 features in expected order
+            # When engine is enabled, include price-only extractor for model input and technical extractor for regime/risk
             price_only = PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
             self.feature_pipeline = FeaturePipeline(
                 enable_technical=False,
                 enable_sentiment=False,
                 enable_market_microstructure=False,
-                custom_extractors=[price_only]
+                custom_extractors=[price_only, technical_extractor]
             )
         else:
             self.feature_pipeline = FeaturePipeline(
@@ -177,47 +215,85 @@ class MlBasic(BaseStrategy):
             except Exception:
                 self.prediction_engine = None
 
-        # Generate predictions for each row that has enough history
-        for i in range(self.sequence_length, len(df)):
-            # Prepare input features
-            feature_columns = [f'{feature}_normalized' for feature in price_features]
-            input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
-
-            # Reshape for ONNX model: (batch_size, sequence_length, features)
-            input_data = input_data.astype(np.float32)
-            input_data = np.expand_dims(input_data, axis=0)
-
+        # Prefer batched, denormalized predictions when using the engine to ensure price-scale outputs
+        used_engine_series = False
+        if use_engine_flag and self.prediction_engine is not None and self.model_name:
             try:
-                if use_engine_flag and self.prediction_engine is not None and self.model_name:
-                    window_df = df[['open', 'high', 'low', 'close', 'volume']].iloc[i-self.sequence_length:i]
-                    result = self.prediction_engine.predict(window_df, model_name=self.model_name)
-                    pred_denormalized = float(result.price)  # engine returns price in original scale
-                else:
-                    output = self.ort_session.run(None, {self.input_name: input_data})
-                    pred = float(output[0][0][0])
-                    recent_close = df['close'].iloc[i-self.sequence_length:i].values
-                    min_close = np.min(recent_close)
-                    max_close = np.max(recent_close)
-                    if max_close != min_close:
-                        pred_denormalized = pred * (max_close - min_close) + min_close
+                series = self.prediction_engine.predict_series(
+                    df[['open', 'high', 'low', 'close', 'volume']],
+                    model_name=self.model_name,
+                    batch_size=1024,
+                    return_denormalized=True,
+                    sequence_length_override=self.sequence_length
+                )
+                indices = series.get('indices')
+                preds = series.get('preds')
+                if indices is not None and preds is not None and len(indices) == len(preds):
+                    for idx, pred_denormalized in zip(indices, preds):
+                        df.at[df.index[int(idx)], 'onnx_pred'] = float(pred_denormalized)
+                        df.at[df.index[int(idx)], 'ml_prediction'] = float(pred_denormalized)
+                        close_i = float(df['close'].iloc[int(idx)])
+                        if close_i > 0:
+                            predicted_return = abs(float(pred_denormalized) - close_i) / close_i
+                            confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
+                            df.at[df.index[int(idx)], 'prediction_confidence'] = confidence
+                    used_engine_series = True
+            except Exception as _e:
+                used_engine_series = False
+
+        # Fallback: per-row prediction (engine single-step or local ONNX)
+        if not used_engine_series:
+            for i in range(self.sequence_length, len(df)):
+                # Prepare input features
+                feature_columns = [f'{feature}_normalized' for feature in price_features]
+                input_data = df[feature_columns].iloc[i-self.sequence_length:i].values
+
+                # Reshape for ONNX model: (batch_size, sequence_length, features)
+                input_data = input_data.astype(np.float32)
+                input_data = np.expand_dims(input_data, axis=0)
+
+                try:
+                    if use_engine_flag and self.prediction_engine is not None and self.model_name:
+                        # Engine single-step returns normalized scalar; denormalize using prior window close range
+                        result = self.prediction_engine.predict(
+                            df[['open', 'high', 'low', 'close', 'volume']].iloc[i-self.sequence_length:i],
+                            model_name=self.model_name
+                        )
+                        # Denormalize using previous window on close
+                        recent_close = df['close'].iloc[i-self.sequence_length:i].values
+                        min_close = np.min(recent_close)
+                        max_close = np.max(recent_close)
+                        raw_pred = float(result.price)
+                        if max_close != min_close:
+                            pred_denormalized = raw_pred * (max_close - min_close) + min_close
+                        else:
+                            pred_denormalized = df['close'].iloc[i-1]
                     else:
-                        pred_denormalized = df['close'].iloc[i-1]
+                        output = self.ort_session.run(None, {self.input_name: input_data})
+                        pred = float(output[0][0][0])
+                        recent_close = df['close'].iloc[i-self.sequence_length:i].values
+                        min_close = np.min(recent_close)
+                        max_close = np.max(recent_close)
+                        if max_close != min_close:
+                            pred_denormalized = pred * (max_close - min_close) + min_close
+                        else:
+                            pred_denormalized = df['close'].iloc[i-1]
 
-                df.at[df.index[i], 'onnx_pred'] = pred_denormalized
-                df.at[df.index[i], 'ml_prediction'] = pred_denormalized
+                    df.at[df.index[i], 'onnx_pred'] = pred_denormalized
+                    df.at[df.index[i], 'ml_prediction'] = pred_denormalized
 
-                close_i = df['close'].iloc[i]
-                if close_i > 0:
-                    predicted_return = abs(pred_denormalized - close_i) / close_i
-                    confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
-                    df.at[df.index[i], 'prediction_confidence'] = confidence
+                    close_i = df['close'].iloc[i]
+                    if close_i > 0:
+                        predicted_return = abs(pred_denormalized - close_i) / close_i
+                        confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
+                        df.at[df.index[i], 'prediction_confidence'] = confidence
 
-            except Exception as e:
-                print(f"Prediction error at index {i}: {e}")
-                fallback_price = df['close'].iloc[i-1]
-                df.at[df.index[i], 'onnx_pred'] = fallback_price
-                df.at[df.index[i], 'ml_prediction'] = fallback_price
-                df.at[df.index[i], 'prediction_confidence'] = np.nan
+                except Exception as e:
+                    print(f"Prediction error at index {i}: {e}")
+                    fallback_price = df['close'].iloc[i-1]
+                    df.at[df.index[i], 'onnx_pred'] = fallback_price
+                    df.at[df.index[i], 'ml_prediction'] = fallback_price
+                    df.at[df.index[i], 'prediction_confidence'] = np.nan
  
         return df
 
@@ -260,7 +336,7 @@ class MlBasic(BaseStrategy):
         if not pd.isna(conf_val) and conf_val < self.MIN_CONFIDENCE_TO_TRADE:
             entry_signal = False
         # Avoid entries during extreme volatility
-        if atr_pct is not None and atr_pct > 0.08:  # >8% ATR on close is extreme
+        if atr_pct is not None and atr_pct > self.EXTREME_ATR_THRESHOLD:
             entry_signal = False
         
         # Log the decision process
