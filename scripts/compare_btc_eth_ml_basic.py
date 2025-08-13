@@ -14,6 +14,7 @@ from data_providers.binance_provider import BinanceProvider
 from data_providers.cached_data_provider import CachedDataProvider
 from data_providers.coinbase_provider import CoinbaseProvider
 from strategies.ml_basic import MlBasic
+from utils.symbol_factory import SymbolFactory
 
 
 def parse_args():
@@ -85,8 +86,8 @@ def run_backtest_for_symbol(
             log_to_database=False,
         )
         try:
-            # Convert symbol to Coinbase product id format if needed (e.g., ETH-USD)
-            sym = symbol.replace("USDT", "USD") if symbol.endswith("USDT") else symbol
+            # Convert symbol to Coinbase product id format using SymbolFactory (e.g., ETH-USD)
+            sym = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
             return backtester_cb.run(symbol=sym, timeframe=timeframe, start=start, end=end)
         except Exception:
             return results
