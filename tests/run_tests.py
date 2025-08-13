@@ -494,7 +494,7 @@ def run_grouped_tests():
     # Group 3: Computation-heavy tests (limited parallelization)
     print(f"{Colors.OKBLUE}Group 3: Computation-Heavy Tests{Colors.ENDC}")
     compute_cmd = [
-sys.executable, '-m', 'pytest',
+        sys.executable, '-m', 'pytest',
         'tests/test_backtesting.py',
         'tests/test_monitoring.py',
         '-v', '--tb=short',

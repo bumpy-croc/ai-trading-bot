@@ -2,30 +2,54 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
 from performance.metrics import (
     cagr as perf_cagr,
+)
+from performance.metrics import (
+    cash_pnl,
+)
+from performance.metrics import (
+    max_drawdown as perf_max_drawdown,
+)
+from performance.metrics import (
+    sharpe as perf_sharpe,
+)
+from performance.metrics import (
+    total_return as perf_total_return,
+)
+from sqlalchemy.exc import SQLAlchemyError
+
+from config.constants import DEFAULT_INITIAL_BALANCE
+from data_providers.data_provider import DataProvider
+from data_providers.sentiment_provider import SentimentDataProvider
+from database.manager import DatabaseManager
+from database.models import TradeSource
+from strategies.base import BaseStrategy
+from src.config.feature_flags import is_enabled
+from src.regime import RegimeDetector, RegimeConfig
+from src.config.constants import (
+    DEFAULT_REGIME_ADJUST_POSITION_SIZE,
+    DEFAULT_REGIME_HYSTERESIS_K,
+    DEFAULT_REGIME_MIN_DWELL,
+    DEFAULT_REGIME_MIN_CONFIDENCE,
 )
 
 # Shared performance metrics
 from performance.metrics import (
     cash_pnl,
 )
-
-# New modular utilities and models
-from backtesting.utils import (
-    compute_performance_metrics,
+from performance.metrics import (
+    max_drawdown as perf_max_drawdown,
 )
-from src.trading.shared.indicators import (
-    extract_indicators as util_extract_indicators,
-    extract_sentiment_data as util_extract_sentiment,
-    extract_ml_predictions as util_extract_ml,
+from performance.metrics import (
+    sharpe as perf_sharpe,
 )
-from src.trading.shared.sentiment import merge_historical_sentiment
-from src.trading.shared.sizing import normalize_position_size
-from src.config.feature_flags import is_enabled
-from backtesting.models import Trade as CompletedTrade
+from performance.metrics import (
+    total_return as perf_total_return,
+)
 from sqlalchemy.exc import SQLAlchemyError
 
 from config.constants import DEFAULT_INITIAL_BALANCE
@@ -204,13 +228,23 @@ class Backtester:
 
             # Fetch sentiment data if provider is available
             if self.sentiment_provider:
-                # parity: shared merge behavior
-                df = merge_historical_sentiment(df, self.sentiment_provider, symbol, timeframe, start, end)
+                sentiment_df = self.sentiment_provider.get_historical_sentiment(symbol, start, end)
+                if not sentiment_df.empty:
+                    # Aggregate sentiment data to match price timeframe
+                    sentiment_df = self.sentiment_provider.aggregate_sentiment(
+                        sentiment_df, window=timeframe
+                    )
+                    # Merge sentiment data with price data
+                    df = df.join(sentiment_df, how="left")
+                    # Forward fill sentiment scores
+                    df["sentiment_score"] = df["sentiment_score"].ffill()
+                    # Fill any remaining NaN values with 0
+                    df["sentiment_score"] = df["sentiment_score"].fillna(0)
 
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
-
-            # Parity warmup: only ensure essential price columns are present
+            # Remove warmup period - only drop rows where essential price data is missing
+            # Don't drop rows just because ML predictions or sentiment data is missing
             essential_columns = ["open", "high", "low", "close", "volume"]
             df = df.dropna(subset=essential_columns)
 
@@ -300,25 +334,40 @@ class Backtester:
                         trade_pnl: float = cash_pnl(trade_pnl_percent, self.balance)
 
                         self.balance += trade_pnl
-                        yearly_balance[yr]["end"] = self.balance
 
                         # Update metrics
                         total_trades += 1
                         if trade_pnl > 0:
                             winning_trades += 1
 
-                        # Log trade to database if enabled
-                        if self.log_to_database and self.db_manager:
+                        # Log trade
+                        logger.info(
+                            f"Exited position at {candle['close']}, Balance: {self.balance:.2f}"
+                        )
+
+                        # After updating self.balance, update yearly_balance for the exit year
+                        exit_year = candle.name.year
+                        if exit_year in yearly_balance:
+                            yearly_balance[exit_year]["end"] = self.balance
+
+                        # Log to database if enabled
+                        if (
+                            self.log_to_database
+                            and self.db_manager
+                            and self.current_trade.exit_price is not None
+                            and self.current_trade.exit_time is not None
+                            and self.current_trade.exit_reason is not None
+                        ):
                             self.db_manager.log_trade(
                                 symbol=symbol,
-                                side=self.current_trade.side,
+                                side="long",  # Backtester only does long trades currently
                                 entry_price=self.current_trade.entry_price,
-                                exit_price=candle["close"],
+                                exit_price=self.current_trade.exit_price,
                                 size=self.current_trade.size,
                                 entry_time=self.current_trade.entry_time,
-                                exit_time=candle.name,
+                                exit_time=self.current_trade.exit_time,
                                 pnl=trade_pnl,
-                                exit_reason="Strategy exit",
+                                exit_reason=self.current_trade.exit_reason,
                                 strategy_name=self.strategy.__class__.__name__,
                                 source=TradeSource.BACKTEST,
                                 stop_loss=self.current_trade.stop_loss,
@@ -326,65 +375,46 @@ class Backtester:
                                 session_id=self.trading_session_id,
                             )
 
-                        # Store completed trade
-                        self.trades.append(
-                            CompletedTrade(
-                                symbol=symbol,
-                                side=self.current_trade.side,
-                                entry_price=self.current_trade.entry_price,
-                                exit_price=candle["close"],
-                                entry_time=self.current_trade.entry_time,
-                                exit_time=candle.name,
-                                size=self.current_trade.size,
-                                pnl=trade_pnl,
-                                exit_reason="Strategy exit",
-                                stop_loss=self.current_trade.stop_loss,
-                                take_profit=self.current_trade.take_profit,
-                            )
-                        )
+                        # Store trade
+                        self.trades.append(self.current_trade)
                         self.current_trade = None
 
-                        # Check for maximum drawdown early stop
-                        if self.risk_parameters is not None and hasattr(self.risk_parameters, "max_drawdown") and self.peak_balance > 0:
-                            current_drawdown_post = (self.peak_balance - self.balance) / self.peak_balance
-                            if current_drawdown_post > max_drawdown_running:
-                                max_drawdown_running = current_drawdown_post
-                            if current_drawdown_post >= float(self.risk_parameters.max_drawdown):
-                                self.early_stop_reason = "max_drawdown_exceeded"
-                                self.early_stop_date = candle.name
-                                self.early_stop_candle_index = i
-                                logger.warning(
-                                    f"Early stop triggered at {candle.name}: drawdown {current_drawdown_post:.2%} exceeded threshold {self.risk_parameters.max_drawdown:.2%}"
-                                )
-                                break
+                        # Check if maximum drawdown exceeded
+                        if current_drawdown > 0.5:  # 50% max drawdown
+                            self.early_stop_reason = (
+                                f"Maximum drawdown exceeded ({current_drawdown:.1%})"
+                            )
+                            self.early_stop_date = candle.name
+                            self.early_stop_candle_index = i
+                            logger.warning(
+                                f"Maximum drawdown exceeded ({current_drawdown:.1%}). Stopping backtest."
+                            )
+                            break
 
                 # Check for entry if not in position
                 elif self.strategy.check_entry_conditions(df, i):
-                    # Calculate position size (normalize to fraction by default, legacy via flag)
-                    raw_size = self.strategy.calculate_position_size(df, i, self.balance)
-                    legacy = is_enabled('legacy_engine_behavior', default=False)
-                    mode = 'notional' if legacy else 'fraction'
-                    size_fraction = normalize_position_size(raw_size, self.balance, mode=mode)
+                    # Calculate position size
+                    size = self.strategy.calculate_position_size(df, i, self.balance)
 
+                    # Log entry decision
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
                         sentiment_data = self._extract_sentiment_data(df, i)
-
                         self.db_manager.log_strategy_execution(
                             strategy_name=self.strategy.__class__.__name__,
                             symbol=symbol,
                             signal_type="entry",
-                            action_taken="opened_long" if size_fraction > 0 else "no_action",
+                            action_taken="opened_long" if size > 0 else "no_action",
                             price=candle["close"],
                             timeframe=timeframe,
-                            signal_strength=1.0 if size_fraction > 0 else 0.0,
+                            signal_strength=1.0 if size > 0 else 0.0,
                             confidence_score=indicators.get("prediction_confidence", 0.5),
                             indicators=indicators,
                             sentiment_data=sentiment_data if sentiment_data else None,
-                            position_size=size_fraction if size_fraction > 0 else None,
+                            position_size=size if size > 0 else None,
                             reasons=[
                                 "entry_conditions_met",
-                                f"position_size_{size_fraction:.4f}" if size_fraction > 0 else "no_position_size",
+                                f"position_size_{size:.4f}" if size > 0 else "no_position_size",
                                 f"balance_{self.balance:.2f}",
                             ],
                             volume=indicators.get("volume"),
@@ -392,24 +422,25 @@ class Backtester:
                             session_id=self.trading_session_id,
                         )
 
-                    if size_fraction > 0:
+                    if size > 0:
                         # Enter new trade
-                        stop_loss = self.strategy.calculate_stop_loss(df, i, candle["close"], "long")
-                        tp_pct = getattr(self.strategy, 'take_profit_pct', 0.04)
-                        take_profit = candle["close"] * (1 + tp_pct)
+                        # Assuming df and index are available in this context
+                        stop_loss = self.strategy.calculate_stop_loss(
+                            df, len(df) - 1, candle["close"], "long"
+                        )
                         self.current_trade = Trade(
                             symbol=symbol,
                             side="long",
                             entry_price=candle["close"],
                             entry_time=candle.name,
-                            size=size_fraction,
+                            size=size,
                             stop_loss=stop_loss,
-                            take_profit=take_profit,
                         )
                         logger.info(f"Entered long position at {candle['close']}")
 
                 # Log no-action cases (when no position and no entry signal)
                 else:
+                    # Only log every 10th candle to avoid spam, but capture key decision points
                     if i % 10 == 0 and self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
                         sentiment_data = self._extract_sentiment_data(df, i)
@@ -437,19 +468,36 @@ class Backtester:
 
             # Calculate final metrics
             win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+            total_return = perf_total_return(self.initial_balance, self.balance)
 
-            # Build balance history DataFrame for metrics
-            bh_df = pd.DataFrame(balance_history, columns=["timestamp", "balance"]).set_index("timestamp") if balance_history else pd.DataFrame()
-            total_return, max_drawdown_pct, sharpe_ratio, annualized_return = compute_performance_metrics(
-                self.initial_balance,
-                self.balance,
-                pd.Timestamp(start),
-                pd.Timestamp(end) if end else None,
-                bh_df,
-            )
+            # ----------------------------------------------
+            # Sharpe ratio ‑ use *daily* returns of balance
+            # ----------------------------------------------
+            if balance_history:
+                bh_df = pd.DataFrame(balance_history, columns=["timestamp", "balance"]).set_index(
+                    "timestamp"
+                )
+                # Resample to 1-day frequency for stability
+                daily_balance = bh_df["balance"].resample("1D").last().ffill()
+                daily_returns = daily_balance.pct_change().dropna()
+                if not daily_returns.empty and daily_returns.std() != 0:
+                    sharpe_ratio = perf_sharpe(daily_balance)
+                else:
+                    sharpe_ratio = 0
+                # Re-calculate max drawdown from full equity curve
+                max_drawdown_pct = perf_max_drawdown(daily_balance)
+            else:
+                sharpe_ratio = 0
+                max_drawdown_pct = 0
 
+            # Calculate annualized return
+            days = (end - start).days if end else (datetime.now() - start).days
+            annualized_return = perf_cagr(self.initial_balance, self.balance, days)
+
+            # ---------------------------------------------
             # Yearly returns based on account balance
-            yearly_returns: Dict[str, float] = {}
+            # ---------------------------------------------
+            yearly_returns = {}
             for yr, bal in yearly_balance.items():
                 start_bal = bal["start"]
                 end_bal = bal["end"]
@@ -476,18 +524,79 @@ class Backtester:
                 "early_stop_date": self.early_stop_date,
                 "early_stop_candle_index": self.early_stop_candle_index,
             }
+
         except Exception as e:
             logger.error(f"Error running backtest: {str(e)}")
             raise
 
-    # --------------------
-    # Modularized helpers
-    # --------------------
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> Dict:
-        return util_extract_indicators(df, index)
+        """Extract indicator values from dataframe for logging"""
+        if index >= len(df):
+            return {}
+
+        indicators = {}
+        current_row = df.iloc[index]
+
+        # Common indicators to extract
+        indicator_columns = [
+            "rsi",
+            "macd",
+            "macd_signal",
+            "macd_hist",
+            "atr",
+            "volatility",
+            "trend_ma",
+            "short_ma",
+            "long_ma",
+            "volume_ma",
+            "trend_strength",
+            "regime",
+            "body_size",
+            "upper_wick",
+            "lower_wick",
+            "onnx_pred",
+            "ml_prediction",
+            "prediction_confidence",
+        ]
+
+        for col in indicator_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                # Only convert to float if the value is numeric (int or float)
+                if col == "regime":
+                    indicators[col] = current_row[col]  # Keep as string
+                else:
+                    try:
+                        indicators[col] = float(current_row[col])
+                    except (ValueError, TypeError):
+                        # Skip non-numeric values
+                        continue
+
+        # Add basic OHLCV data
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col in df.columns:
+                indicators[col] = float(current_row[col])
+
+        return indicators
 
     def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> Dict:
-        return util_extract_sentiment(df, index)
+        """Extract sentiment data from dataframe for logging"""
+        if index >= len(df):
+            return {}
 
-    def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> Dict:
-        return util_extract_ml(df, index)
+        sentiment_data = {}
+        current_row = df.iloc[index]
+
+        # Sentiment columns to extract
+        sentiment_columns = [
+            "sentiment_score",
+            "sentiment_primary",
+            "sentiment_momentum",
+            "sentiment_volatility",
+            "sentiment_confidence",
+        ]
+
+        for col in sentiment_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                sentiment_data[col] = float(current_row[col])
+
+        return sentiment_data

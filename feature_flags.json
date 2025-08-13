@@ -1,5 +1,5 @@
 {
   "use_prediction_engine": true,
-  "legacy_engine_behavior": false
+  "enable_regime_detection": false
 }
 

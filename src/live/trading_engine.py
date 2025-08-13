@@ -16,16 +16,6 @@ from performance.metrics import (
     cash_pnl,
     pnl_percent,
 )
-from src.utils.symbol_factory import SymbolFactory
-from src.trading.shared.indicators import (
-    extract_indicators as shared_extract_indicators,
-    extract_sentiment_data as shared_extract_sentiment,
-    extract_ml_predictions as shared_extract_ml,
-)
-from src.trading.shared.sentiment import apply_live_sentiment
-from src.trading.shared.sizing import normalize_position_size
-from src.config.feature_flags import is_enabled
-
 from config.constants import DEFAULT_INITIAL_BALANCE
 from data_providers.binance_provider import BinanceProvider
 from data_providers.coinbase_provider import CoinbaseProvider
@@ -36,8 +26,16 @@ from database.models import TradeSource
 from live.strategy_manager import StrategyManager
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
-
 from .account_sync import AccountSynchronizer
+from src.utils.symbol_factory import SymbolFactory
+from src.config.feature_flags import is_enabled
+from src.regime import RegimeDetector, RegimeConfig
+from src.config.constants import (
+    DEFAULT_REGIME_ADJUST_POSITION_SIZE,
+    DEFAULT_REGIME_HYSTERESIS_K,
+    DEFAULT_REGIME_MIN_DWELL,
+    DEFAULT_REGIME_MIN_CONFIDENCE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +191,7 @@ class LiveTradingEngine:
         self.account_synchronizer = None
         if enable_live_trading:
             try:
-                from src.config import get_config
+                from config import get_config
 
                 config = get_config()
                 self.exchange_interface, provider_name = _create_exchange_provider(provider, config)
@@ -201,9 +199,13 @@ class LiveTradingEngine:
                     self.account_synchronizer = AccountSynchronizer(
                         self.exchange_interface, self.db_manager, self.trading_session_id
                     )
-                    logger.info(f"{provider_name} exchange interface and account synchronizer initialized")
+                    logger.info(
+                        f"{provider_name} exchange interface and account synchronizer initialized"
+                    )
                 else:
-                    logger.warning(f"{provider_name} API credentials not found - account sync disabled")
+                    logger.warning(
+                        f"{provider_name} API credentials not found - account sync disabled"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to initialize exchange interface: {e}")
 
@@ -262,11 +264,23 @@ class LiveTradingEngine:
         # Setup graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Optional regime detection (disabled by default)
+        self.regime_detector: Optional[RegimeDetector] = None
+        if is_enabled("enable_regime_detection", default=False):
+            try:
+                cfg = RegimeConfig(
+                    hysteresis_k=DEFAULT_REGIME_HYSTERESIS_K,
+                    min_dwell=DEFAULT_REGIME_MIN_DWELL
+                )
+                self.regime_detector = RegimeDetector(cfg)
+                logger.info("RegimeDetector initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RegimeDetector: {e}")
 
         logger.info(
             f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}"
         )
-
     def start(self, symbol: str, timeframe: str = "1h", max_steps: int = None):
         """Start the live trading engine"""
         if self.is_running:
@@ -287,7 +301,9 @@ class LiveTradingEngine:
             recovered_balance = self._recover_existing_session()
             if recovered_balance is not None:
                 self.current_balance = recovered_balance
-                logger.info(f"💾 Recovered balance from previous session: ${recovered_balance:,.2f}")
+                logger.info(
+                    f"💾 Recovered balance from previous session: ${recovered_balance:,.2f}"
+                )
                 # Also recover active positions
                 self._recover_active_positions()
             else:
@@ -302,19 +318,16 @@ class LiveTradingEngine:
                 timeframe=timeframe,
                 mode=mode,
                 initial_balance=self.current_balance,  # Use current balance (might be recovered)
-                strategy_config=getattr(self.strategy, 'config', {})
+                strategy_config=getattr(self.strategy, "config", {}),
             )
 
             # Initialize balance tracking
             self.db_manager.update_balance(
-                self.current_balance,
-                'session_start',
-                'system',
-                self.trading_session_id
+                self.current_balance, "session_start", "system", self.trading_session_id
             )
 
             # Set session ID on strategy for logging
-            if hasattr(self.strategy, 'session_id'):
+            if hasattr(self.strategy, "session_id"):
                 self.strategy.session_id = self.trading_session_id
 
         # Perform account synchronization if available
@@ -330,11 +343,13 @@ class LiveTradingEngine:
                     if self.trading_session_id:
                         self.account_synchronizer.session_id = self.trading_session_id
                     # Check if balance was corrected
-                    balance_sync = sync_result.data.get('balance_sync', {})
-                    if balance_sync.get('corrected', False):
-                        corrected_balance = balance_sync.get('new_balance', self.current_balance)
+                    balance_sync = sync_result.data.get("balance_sync", {})
+                    if balance_sync.get("corrected", False):
+                        corrected_balance = balance_sync.get("new_balance", self.current_balance)
                         self.current_balance = corrected_balance
-                        logger.info(f"💰 Balance corrected from exchange: ${corrected_balance:,.2f}")
+                        logger.info(
+                            f"💰 Balance corrected from exchange: ${corrected_balance:,.2f}"
+                        )
                         # Defer DB update until session is created
                         self._pending_balance_correction = True
                         self._pending_corrected_balance = corrected_balance
@@ -344,29 +359,33 @@ class LiveTradingEngine:
                 logger.error(f"❌ Account synchronization error: {e}", exc_info=True)
 
         # If a balance correction was pending, log it now (outside session creation conditional)
-        if getattr(self, '_pending_balance_correction', False) and self.trading_session_id is not None:
+        if (
+            getattr(self, "_pending_balance_correction", False)
+            and self.trading_session_id is not None
+        ):
             corrected_balance = self._pending_corrected_balance
             self.db_manager.update_balance(
-                corrected_balance,
-                'account_sync',
-                'system',
-                self.trading_session_id
+                corrected_balance, "account_sync", "system", self.trading_session_id
             )
             self._pending_balance_correction = False
             self._pending_corrected_balance = None
             logger.info(f"💰 Balance corrected in database: ${corrected_balance:,.2f}")
-        elif getattr(self, '_pending_balance_correction', False):
+        elif getattr(self, "_pending_balance_correction", False):
             # Balance correction was pending but no session ID available
-            logger.warning("⚠️ Balance correction pending but no trading session ID available - skipping database update")
+            logger.warning(
+                "⚠️ Balance correction pending but no trading session ID available - skipping database update"
+            )
             self._pending_balance_correction = False
             self._pending_corrected_balance = None
 
         # Set session ID on strategy for logging
-        if hasattr(self.strategy, 'session_id'):
+        if hasattr(self.strategy, "session_id"):
             self.strategy.session_id = self.trading_session_id
 
         # Start main trading loop in separate thread
-        self.main_thread = threading.Thread(target=self._trading_loop, args=(symbol, timeframe, max_steps))
+        self.main_thread = threading.Thread(
+            target=self._trading_loop, args=(symbol, timeframe, max_steps)
+        )
         self.main_thread.daemon = True
         self.main_thread.start()
 
@@ -395,7 +414,9 @@ class LiveTradingEngine:
                 try:
                     self._close_position(position, "Engine shutdown")
                 except Exception as e:
-                    logger.error(f"Failed to close position {position.order_id}: {e}", exc_info=True)
+                    logger.error(
+                        f"Failed to close position {position.order_id}: {e}", exc_info=True
+                    )
                     # Force remove from positions dict if close fails
                     if position.order_id in self.positions:
                         del self.positions[position.order_id]
@@ -446,8 +467,7 @@ class LiveTradingEngine:
                     continue
                 # Add sentiment data if available
                 if self.sentiment_provider:
-                    # parity: apply shared live sentiment behavior
-                    df = apply_live_sentiment(df, self.sentiment_provider, recent_hours=4)
+                    df = self._add_sentiment_data(df, symbol)
                 # Check for pending strategy/model updates
                 if self.strategy_manager and self.strategy_manager.has_pending_update():
                     logger.info("🔄 Applying pending strategy/model update...")
@@ -460,8 +480,14 @@ class LiveTradingEngine:
                         logger.error("❌ Failed to apply strategy/model update")
                 # Calculate indicators
                 df = self.strategy.calculate_indicators(df)
-                # Parity warmup: only ensure essential OHLCV present
-                df = df.dropna(subset=["open", "high", "low", "close", "volume"])
+                # Annotate regimes if enabled
+                if self.regime_detector is not None:
+                    try:
+                        df = self.regime_detector.annotate(df)
+                    except Exception as e:
+                        logger.debug(f"Regime annotation failed: {e}")
+                # Remove warmup period and ensure we have enough data
+                df = df.dropna()
                 if len(df) < 2:
                     logger.warning("Insufficient data for analysis")
                     self._sleep_with_interrupt(self.check_interval)
@@ -475,31 +501,28 @@ class LiveTradingEngine:
                 # Update position PnL
                 self._update_position_pnl(current_price)
                 # Check exit conditions for existing positions
-                self._check_exit_conditions(df, current_index, current_price, timeframe)
+                self._check_exit_conditions(df, current_index, current_price)
                 # Check entry conditions if not at maximum positions
                 if len(self.positions) < self.risk_manager.get_max_concurrent_positions():
-                    self._check_entry_conditions(df, current_index, symbol, current_price, timeframe)
+                    self._check_entry_conditions(df, current_index, symbol, current_price)
                     # Check for short entry if strategy supports it
                     if hasattr(self.strategy, "check_short_entry_conditions"):
                         short_entry_signal = self.strategy.check_short_entry_conditions(
                             df, current_index
                         )
                         if short_entry_signal:
-                            raw_short_size = self.strategy.calculate_position_size(
+                            short_position_size = self.strategy.calculate_position_size(
                                 df, current_index, self.current_balance
-                            )
-                            legacy = is_enabled('legacy_engine_behavior', default=False)
-                            mode = 'notional' if legacy else 'fraction'
-                            short_position_size = normalize_position_size(
-                                raw_short_size, self.current_balance, mode=mode
                             )
                             short_position_size = min(short_position_size, self.max_position_size)
                             if short_position_size > 0:
                                 short_stop_loss = self.strategy.calculate_stop_loss(
                                     df, current_index, current_price, PositionSide.SHORT
                                 )
-                                tp_pct = getattr(self.strategy, 'take_profit_pct', 0.04)
-                                short_take_profit = current_price * (1 - tp_pct)
+                                # Use strategy's take profit percentage for consistency
+                                short_take_profit = current_price * (
+                                    1 - self.strategy.take_profit_pct
+                                )
                                 self._open_position(
                                     symbol,
                                     PositionSide.SHORT,
@@ -538,7 +561,9 @@ class LiveTradingEngine:
                 self.consecutive_errors = 0
             except Exception as e:
                 self.consecutive_errors += 1
-                logger.error(f"Error in trading loop (#{self.consecutive_errors}): {e}", exc_info=True)
+                logger.error(
+                    f"Error in trading loop (#{self.consecutive_errors}): {e}", exc_info=True
+                )
                 if self.consecutive_errors >= self.max_consecutive_errors:
                     logger.critical(
                         f"Too many consecutive errors ({self.consecutive_errors}). Stopping engine.",
@@ -566,6 +591,34 @@ class LiveTradingEngine:
             logger.error(f"Failed to fetch market data: {e}", exc_info=True)
             return None
 
+    def _add_sentiment_data(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """Add sentiment data to price data"""
+        try:
+            if hasattr(self.sentiment_provider, "get_live_sentiment"):
+                # Get live sentiment for recent data
+                live_sentiment = self.sentiment_provider.get_live_sentiment()
+
+                # Apply to recent candles (last 4 hours)
+                recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
+                for feature, value in live_sentiment.items():
+                    if feature not in df.columns:
+                        df[feature] = 0.0
+                    df.loc[recent_mask, feature] = value
+
+                # Mark sentiment freshness
+                df["sentiment_freshness"] = 0
+                df.loc[recent_mask, "sentiment_freshness"] = 1
+
+                logger.debug(f"Applied live sentiment to {recent_mask.sum()} recent candles")
+            else:
+                # Fallback to historical sentiment
+                logger.debug("Using historical sentiment data")
+
+        except Exception as e:
+            logger.error(f"Failed to add sentiment data: {e}", exc_info=True)
+
+        return df
+
     def _update_position_pnl(self, current_price: float):
         """Update unrealized PnL for all positions"""
         for position in self.positions.values():
@@ -578,7 +631,7 @@ class LiveTradingEngine:
                     position.entry_price, current_price, Side.SHORT, position.size
                 )
 
-    def _check_exit_conditions(self, df: pd.DataFrame, current_index: int, current_price: float, timeframe: str):
+    def _check_exit_conditions(self, df: pd.DataFrame, current_index: int, current_price: float):
         """Check if any positions should be closed"""
         positions_to_close = []
 
@@ -615,13 +668,13 @@ class LiveTradingEngine:
             if self.db_manager:
                 # Calculate current P&L for context
                 if position.side == PositionSide.LONG:
-                    current_pnl = (
-                        float(current_price) - float(position.entry_price)
-                    ) / float(position.entry_price)
+                    current_pnl = (float(current_price) - float(position.entry_price)) / float(
+                        position.entry_price
+                    )
                 else:
-                    current_pnl = (
-                        float(position.entry_price) - float(current_price)
-                    ) / float(position.entry_price)
+                    current_pnl = (float(position.entry_price) - float(current_price)) / float(
+                        position.entry_price
+                    )
 
                 self.db_manager.log_strategy_execution(
                     strategy_name=self.strategy.__class__.__name__,
@@ -629,7 +682,7 @@ class LiveTradingEngine:
                     signal_type="exit",
                     action_taken="closed_position" if should_exit else "hold_position",
                     price=current_price,
-                    timeframe=timeframe,
+                    timeframe="1m",
                     signal_strength=1.0 if should_exit else 0.0,
                     confidence_score=indicators.get("prediction_confidence", 0.5),
                     indicators=indicators,
@@ -654,7 +707,9 @@ class LiveTradingEngine:
         for position, reason in positions_to_close:
             self._close_position(position, reason)
 
-    def _check_entry_conditions(self, df: pd.DataFrame, current_index: int, symbol: str, current_price: float, timeframe: str):
+    def _check_entry_conditions(
+        self, df: pd.DataFrame, current_index: int, symbol: str, current_price: float
+    ):
         """Check if new positions should be opened"""
         # Check strategy entry conditions
         entry_signal = self.strategy.check_entry_conditions(df, current_index)
@@ -667,13 +722,8 @@ class LiveTradingEngine:
         # Calculate position size if entry signal is present
         position_size = 0.0
         if entry_signal:
-            raw_size = self.strategy.calculate_position_size(
+            position_size = self.strategy.calculate_position_size(
                 df, current_index, self.current_balance
-            )
-            legacy = is_enabled('legacy_engine_behavior', default=False)
-            mode = 'notional' if legacy else 'fraction'
-            position_size = normalize_position_size(
-                raw_size, self.current_balance, mode=mode
             )
             position_size = min(position_size, self.max_position_size)  # Cap at max position size
 
@@ -685,7 +735,7 @@ class LiveTradingEngine:
                 signal_type="entry",
                 action_taken="opened_long" if entry_signal and position_size > 0 else "no_action",
                 price=current_price,
-                timeframe=timeframe,
+                timeframe="1m",  # Could be made configurable
                 signal_strength=1.0 if entry_signal else 0.0,
                 confidence_score=indicators.get("prediction_confidence", 0.5),
                 indicators=indicators,
@@ -694,12 +744,17 @@ class LiveTradingEngine:
                 position_size=position_size if position_size > 0 else None,
                 reasons=[
                     "entry_conditions_met" if entry_signal else "entry_conditions_not_met",
-                    f"position_size_{position_size:.4f}" if position_size > 0 else "no_position_size",
+                    (
+                        f"position_size_{position_size:.4f}"
+                        if position_size > 0
+                        else "no_position_size"
+                    ),
                     f"max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}",
                 ],
                 volume=indicators.get("volume"),
                 volatility=indicators.get("volatility"),
                 session_id=self.trading_session_id,
+
             )
 
         # Only proceed if we have a valid entry signal and position size
@@ -708,8 +763,7 @@ class LiveTradingEngine:
 
         # Calculate risk management levels
         stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, "long")
-        tp_pct = getattr(self.strategy, 'take_profit_pct', 0.04)
-        take_profit = current_price * (1 + tp_pct)
+        take_profit = current_price * 1.04  # 4% take profit target
 
         # Open new position
         self._open_position(
@@ -760,6 +814,18 @@ class LiveTradingEngine:
 
             self.positions[order_id] = position
 
+            # Update risk manager tracking
+            if self.risk_manager:
+                try:
+                    self.risk_manager.update_position(
+                        symbol=position.symbol,
+                        side=position.side.value if hasattr(position.side, "value") else str(position.side),
+                        size=position.size,
+                        entry_price=position.entry_price,
+                    )
+                except Exception as e:
+                    logger.debug(f"Risk manager update_position failed: {e}")
+            
             # Log position to database
             if self.trading_session_id is not None:
                 position_db_id = self.db_manager.log_position(
@@ -800,9 +866,7 @@ class LiveTradingEngine:
                     session_id=self.trading_session_id,
                 )
             else:
-                logger.warning(
-                    "⚠️ Cannot log error to database - no trading session ID available"
-                )
+                logger.warning("⚠️ Cannot log error to database - no trading session ID available")
 
     def _close_position(self, position: Position, reason: str):
         """Close an existing position"""
@@ -819,9 +883,7 @@ class LiveTradingEngine:
             # Fallback to entry price if we can't get current price (e.g., during shutdown)
             if exit_price is None:
                 exit_price = position.entry_price
-                logger.warning(
-                    f"Using entry price as exit price for position {position.order_id}"
-                )
+                logger.warning(f"Using entry price as exit price for position {position.order_id}")
 
             if self.enable_live_trading:
                 # Execute real closing order
@@ -830,9 +892,7 @@ class LiveTradingEngine:
                     logger.error("Failed to close order")
                     return
             else:
-                logger.info(
-                    f"📄 PAPER TRADE - Would close {position.side.value} position"
-                )
+                logger.info(f"📄 PAPER TRADE - Would close {position.side.value} position")
 
             # Calculate PnL
             pnl_pct = pnl_percent(position.entry_price, exit_price, Side(position.side.value))
@@ -897,9 +957,7 @@ class LiveTradingEngine:
                 except Exception as e:
                     logger.warning(f"Failed to log trade to database: {e}")
             else:
-                logger.warning(
-                    "⚠️ Cannot log trade to database - no trading session ID available"
-                )
+                logger.warning("⚠️ Cannot log trade to database - no trading session ID available")
 
             # Update position status in database
             if position.order_id in self.position_db_ids:
@@ -919,6 +977,13 @@ class LiveTradingEngine:
             if position.order_id in self.positions:
                 del self.positions[position.order_id]
 
+            # Update risk manager tracking
+            if self.risk_manager:
+                try:
+                    self.risk_manager.close_position(position.symbol)
+                except Exception as e:
+                    logger.debug(f"Risk manager close_position failed: {e}")
+
             # Log trade
             pnl_str = f"+${pnl_dollar:.2f}" if pnl_dollar > 0 else f"${pnl_dollar:.2f}"
             logger.info(
@@ -934,9 +999,7 @@ class LiveTradingEngine:
 
             # Send alert
             try:
-                self._send_alert(
-                    f"Position Closed: {position.symbol} {reason} - PnL: {pnl_str}"
-                )
+                self._send_alert(f"Position Closed: {position.symbol} {reason} - PnL: {pnl_str}")
             except Exception as e:
                 logger.warning(f"Failed to send alert: {e}")
 
@@ -953,15 +1016,13 @@ class LiveTradingEngine:
                         session_id=self.trading_session_id,
                     )
                 except Exception as db_e:
-                    logger.error(
-                        f"Failed to log error to database: {db_e}", exc_info=True
-                    )
+                    logger.error(f"Failed to log error to database: {db_e}", exc_info=True)
             else:
-                logger.warning(
-                    "⚠️ Cannot log error to database - no trading session ID available"
-                )
+                logger.warning("⚠️ Cannot log error to database - no trading session ID available")
 
-    def _execute_order(self, symbol: str, side: PositionSide, value: float, price: float) -> Optional[str]:
+    def _execute_order(
+        self, symbol: str, side: PositionSide, value: float, price: float
+    ) -> Optional[str]:
         """Execute a real market order (implement based on your exchange)"""
         # This is a placeholder - implement actual order execution
         logger.warning("Real order execution not implemented - using paper trading")
@@ -993,21 +1054,6 @@ class LiveTradingEngine:
         else:
             return current_price <= position.take_profit
 
-    def _extract_indicators(self, df: pd.DataFrame, index: int) -> Dict:
-        if index >= len(df):
-            return {}
-        return shared_extract_indicators(df, index)
-
-    def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> Dict:
-        if index >= len(df):
-            return {}
-        return shared_extract_sentiment(df, index)
-
-    def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> Dict:
-        if index >= len(df):
-            return {}
-        return shared_extract_ml(df, index)
-
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
         if self.current_balance > self.peak_balance:
@@ -1016,18 +1062,97 @@ class LiveTradingEngine:
         current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
         self.max_drawdown = max(self.max_drawdown, current_drawdown)
 
+    def _extract_indicators(self, df: pd.DataFrame, index: int) -> Dict:
+        """Extract indicator values from dataframe for logging"""
+        if index >= len(df):
+            return {}
+
+        indicators = {}
+        current_row = df.iloc[index]
+
+        # Common indicators to extract
+        indicator_columns = [
+            "rsi",
+            "macd",
+            "macd_signal",
+            "macd_hist",
+            "atr",
+            "volatility",
+            "trend_ma",
+            "short_ma",
+            "long_ma",
+            "volume_ma",
+            "trend_strength",
+            "regime",
+            "body_size",
+            "upper_wick",
+            "lower_wick",
+        ]
+
+        for col in indicator_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                indicators[col] = float(current_row[col])
+
+        # Add basic OHLCV data
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col in df.columns:
+                indicators[col] = float(current_row[col])
+
+        return indicators
+
+    def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> Dict:
+        """Extract sentiment data from dataframe for logging"""
+        if index >= len(df):
+            return {}
+
+        sentiment_data = {}
+        current_row = df.iloc[index]
+
+        # Sentiment columns to extract
+        sentiment_columns = [
+            "sentiment_primary",
+            "sentiment_momentum",
+            "sentiment_volatility",
+            "sentiment_extreme_positive",
+            "sentiment_extreme_negative",
+            "sentiment_ma_3",
+            "sentiment_ma_7",
+            "sentiment_ma_14",
+            "sentiment_confidence",
+            "sentiment_freshness",
+        ]
+
+        for col in sentiment_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                sentiment_data[col] = float(current_row[col])
+
+        return sentiment_data
+
+    def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> Dict:
+        """Extract ML prediction data from dataframe for logging"""
+        if index >= len(df):
+            return {}
+
+        ml_data = {}
+        current_row = df.iloc[index]
+
+        # ML prediction columns to extract
+        ml_columns = ["ml_prediction", "prediction_confidence", "onnx_pred"]
+
+        for col in ml_columns:
+            if col in df.columns and not pd.isna(current_row[col]):
+                ml_data[col] = float(current_row[col])
+
+        return ml_data
+
     def _log_account_snapshot(self):
         """Log current account state to database"""
         try:
             # Calculate total exposure
-            total_exposure = sum(
-                pos.size * self.current_balance for pos in self.positions.values()
-            )
+            total_exposure = sum(pos.size * self.current_balance for pos in self.positions.values())
 
-            # Calculate equity (balance + unrealized PnL)
-            unrealized_pnl = sum(
-                pos.unrealized_pnl for pos in self.positions.values()
-            )
+            # Calculate equity (balance + unrealized P&L)
+            unrealized_pnl = sum(pos.unrealized_pnl for pos in self.positions.values())
             equity = self.current_balance + unrealized_pnl
 
             # Calculate current drawdown percentage
@@ -1065,9 +1190,7 @@ class LiveTradingEngine:
         total_unrealized = sum(
             pos.unrealized_pnl * self.current_balance for pos in self.positions.values()
         )
-        win_rate = (
-            self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
-        )
+        win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
 
         logger.info(
             f"📊 Status: {symbol} @ ${current_price:.2f} | "
@@ -1129,17 +1252,8 @@ class LiveTradingEngine:
 
     def _print_final_stats(self):
         """Print final trading statistics"""
-        total_return = (
-            (self.current_balance - self.initial_balance) / self.initial_balance
-        ) * 100
-        win_rate = (
-            self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
-        )
-        current_drawdown = (
-            (self.peak_balance - self.current_balance) / self.peak_balance * 100
-            if self.peak_balance > 0
-            else 0
-        )
+        total_return = ((self.current_balance - self.initial_balance) / self.initial_balance) * 100
+        win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
 
         print("\n" + "=" * 60)
         print("🏁 FINAL TRADING STATISTICS")
@@ -1149,7 +1263,6 @@ class LiveTradingEngine:
         print(f"Total Return: {total_return:+.2f}%")
         print(f"Total PnL: ${self.total_pnl:+,.2f}")
         print(f"Max Drawdown: {self.max_drawdown*100:.2f}%")
-        print(f"Current Drawdown: {current_drawdown:.2f}%")
         print(f"Total Trades: {self.total_trades}")
         print(f"Winning Trades: {self.winning_trades}")
         print(f"Win Rate: {win_rate:.1f}%")
@@ -1165,12 +1278,8 @@ class LiveTradingEngine:
 
     def get_performance_summary(self) -> Dict[str, Any]:
         """Get current performance summary"""
-        total_return = (
-            (self.current_balance - self.initial_balance) / self.initial_balance
-        ) * 100
-        win_rate = (
-            self.winning_trades / self.total_trades * 100 if self.total_trades > 0 else 0
-        )
+        total_return = ((self.current_balance - self.initial_balance) / self.initial_balance) * 100
+        win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
         current_drawdown = (
             (self.peak_balance - self.current_balance) / self.peak_balance * 100
             if self.peak_balance > 0
@@ -1190,9 +1299,7 @@ class LiveTradingEngine:
             "win_rate": win_rate,  # Keep both for backward compatibility
             "win_rate_pct": win_rate,
             "active_positions": len(self.positions),
-            "last_update": self.last_data_update.isoformat()
-            if self.last_data_update
-            else None,
+            "last_update": self.last_data_update.isoformat() if self.last_data_update else None,
             "is_running": self.is_running,
         }
 
@@ -1260,10 +1367,10 @@ class LiveTradingEngine:
                     f"✅ Recovered position: {pos_data['symbol']} {pos_data['side']} @ ${pos_data['entry_price']:.2f}"
                 )
 
-            logger.info("🎯 Successfully recovered {len(db_positions)} positions")
+            logger.info(f"🎯 Successfully recovered {len(db_positions)} positions")
 
         except Exception as e:
-            logger.error(f"❌ Error recovering positions: {e}")
+            logger.error(f"❌ Error recovering positions: {e}", exc_info=True)
 
     def _handle_strategy_change(self, swap_data: Dict[str, Any]):
         """Handle strategy change callback"""
@@ -1283,7 +1390,10 @@ class LiveTradingEngine:
         # Model update logic is handled in strategy_manager.apply_pending_update()
 
     def hot_swap_strategy(
-        self, new_strategy_name: str, close_positions: bool = False, new_config: Optional[Dict] = None
+        self,
+        new_strategy_name: str,
+        close_positions: bool = False,
+        new_config: Optional[Dict] = None,
     ) -> bool:
         """
         Hot-swap to a new strategy during live trading
