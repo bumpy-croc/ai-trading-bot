@@ -1,0 +1,87 @@
+name: Nightly Code Quality Maintenance
+
+on:
+  schedule:
+    - cron: "0 2 * * *"  # 02:00 UTC nightly
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-code-quality
+  cancel-in-progress: false
+
+jobs:
+  launch-code-quality-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+
+    steps:
+      - name: Checkout code
+      
+        uses: actions/checkout@v4
+
+      - name: Determine default branch
+        id: vars
+        shell: bash
+        run: |
+          DEFAULT_BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            DEFAULT_BRANCH="${GITHUB_REF_NAME}"
+          fi
+          echo "default_branch=$DEFAULT_BRANCH" >> $GITHUB_OUTPUT
+
+      - name: Build agent prompt
+        id: prompt
+        shell: bash
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          cat > prompt.txt << 'EOF'
+          You are a background code-quality maintenance agent for this repository.
+
+          Tasks to perform on the target branch:
+          1. Install and use Python tooling:
+             - ruff==0.5.0 for linting and import sorting. Run: ruff check . --fix
+             - black==24.4.2 for formatting. Run: black .
+             - mypy==1.10.0 for type checking. Config: mypy.ini, run: mypy --config-file mypy.ini src
+             - bandit==1.7.9 for security static analysis. Config: pyproject.toml, run: bandit -c pyproject.toml -r src
+             - pip-audit for dependency vulnerabilities. Run: pip-audit -r requirements.txt -f json -o artifacts/security/pip-audit.json; also produce a short markdown summary at artifacts/security/pip-audit.md.
+          2. Apply auto-fixable changes (ruff/black/imports). Do not make behavioral changes.
+          3. If mypy or bandit findings are trivially fixable without behavior change, fix them; otherwise, summarize them in the PR body with links/paths.
+          4. If present, run tests with: pytest -q. If they fail due to your changes, revert risky edits and keep formatting-only fixes.
+          5. Create or update a branch named chore/nightly-code-quality. Commit changes with a clear conventional message.
+          6. Open or update a pull request titled "chore: nightly code quality fixes (YYYY-MM-DD)" with:
+             - Summary of what changed (counts of files formatted, ruff fixes)
+             - Mypy, Bandit, and pip-audit summaries (and paths to detailed artifacts)
+             - Labels: maintenance, automated
+             - No reviewers assigned.
+
+          Constraints:
+          - Follow project configs in pyproject.toml, mypy.ini, pytest.ini.
+          - Only commit code/formatting changes and documentation for audit results. Do not upgrade dependency versions.
+          EOF
+          echo "title=chore: nightly code quality fixes ($DATE)" >> $GITHUB_OUTPUT
+
+      - name: Launch Cursor Background Agent
+        shell: bash
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "CURSOR_API_KEY is not set. Please add it to repository secrets to enable the background agent." >&2
+            exit 1
+          fi
+          echo "Launching maintenance agent on branch: ${{ steps.vars.outputs.default_branch }}"
+          curl -sS -X POST "https://api.cursor.com/v0/agents" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $CURSOR_API_KEY" \
+            -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ steps.vars.outputs.default_branch }}\" } }" | jq -r '.id // "ok"'
+          rm -f prompt.txt
+
+      - name: Log next steps
+        shell: bash
+        run: |
+          echo "A background agent was launched to run code quality maintenance."
+          echo "It should push to branch chore/nightly-code-quality and open/update a PR titled: ${{ steps.prompt.outputs.title }}"
