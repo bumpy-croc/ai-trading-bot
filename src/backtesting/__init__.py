@@ -1,5 +1,5 @@
 from .engine import Backtester as Backtester
-from .engine import Trade as Trade
+from .models import Trade as Trade
 
 # Optional import of dashboard for discoverability; safe if missing at runtime
 try:  # noqa: SIM105 - limited scope, logs not critical in library init
