@@ -25,6 +25,8 @@ from backtesting import Backtester
 
 from strategies import MlBasic  # Direct import after removing deprecated strategies
 from src.utils.symbol_factory import SymbolFactory
+import pandas as pd
+from pathlib import Path
 
 from utils.logging_config import configure_logging
 configure_logging()
@@ -142,32 +144,92 @@ def main():
         else:  # Use strategy's default trading pair
             trading_symbol = strategy.get_trading_pair()
         
-        # Run backtest
-        results = backtester.run(
-            symbol=trading_symbol,
-            timeframe=args.timeframe,
-            start=start_date,
-            end=end_date
-        )
-        
+        # Run backtest; if provider returns empty, fallback to local CSV for BTCUSDT 1d
+        results = {}
+        used_csv_fallback = False
+        effective_timeframe = args.timeframe
+        try:
+            results = backtester.run(
+                symbol=trading_symbol,
+                timeframe=args.timeframe,
+                start=start_date,
+                end=end_date
+            )
+        except Exception as e:
+            logger.error(f"Primary backtest attempt failed: {e}")
+            results = {}
+ 
+        # Only attempt CSV fallback when the primary attempt produced no results at all
+        if not results:
+            # Attempt CSV fallback only for BTC daily
+            csv_path = Path(__file__).parent.parent / 'src' / 'data' / 'BTCUSDT_1d.csv'
+            if csv_path.exists() and args.symbol.upper() in ['BTCUSDT', 'BTC-USD'] and args.timeframe == '1d':
+                logger.info(f"Falling back to local CSV: {csv_path}")
+                df = pd.read_csv(csv_path)
+                # Parse timestamp
+                if 'timestamp' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    df = df.set_index('timestamp')
+                # Clip date range
+                mask = (df.index >= pd.to_datetime(start_date)) & (df.index <= pd.to_datetime(end_date))
+                df = df.loc[mask].copy()
+                # If filtered CSV is empty, skip fallback to avoid errors
+                if df.empty:
+                    logger.warning("CSV fallback data is empty after filtering by date range. Skipping fallback.")
+                else:
+                    from data_providers.data_provider import DataProvider
+                    class _CsvProvider(DataProvider):
+                        def __init__(self, data: pd.DataFrame):
+                            super().__init__()
+                            self._data = data
+                        def get_historical_data(self, symbol, timeframe, start, end=None):
+                            return self._data.copy()
+                        def get_live_data(self, symbol, timeframe, limit=100):
+                            return self._data.tail(limit).copy()
+                        def update_live_data(self, symbol, timeframe):
+                            return self._data.copy()
+                        def get_current_price(self, symbol: str) -> float:
+                            return float(self._data.iloc[-1]['close']) if not self._data.empty else 0.0
+                    csv_provider = _CsvProvider(df)
+                    backtester_csv = Backtester(
+                        strategy=strategy,
+                        data_provider=csv_provider,
+                        sentiment_provider=None,
+                        risk_parameters=risk_params,
+                        initial_balance=args.initial_balance,
+                        log_to_database=False
+                    )
+                    results = backtester_csv.run(
+                        symbol=trading_symbol,
+                        timeframe='1d',
+                        start=start_date,
+                        end=end_date
+                    )
+                    used_csv_fallback = True
+                    effective_timeframe = '1d'
+
         # Print results
         print("\nBacktest Results:")
         print("=" * 50)
         print(f"Strategy: {strategy.name}")
         print(f"Symbol: {trading_symbol}")
         print(f"Period: {start_date.date()} to {end_date.date()}")
-        print(f"Timeframe: {args.timeframe}")
+        print(f"Timeframe: {effective_timeframe}")
         print(f"Using Sentiment: {args.use_sentiment}")
         print(f"Using Cache: {not args.no_cache}")
         print(f"Database Logging: {not args.no_db}")
         print("-" * 50)
-        print(f"Total Trades: {results['total_trades']}")
-        print(f"Win Rate: {results['win_rate']:.2f}%")
-        print(f"Total Return: {results['total_return']:.2f}%")
-        print(f"Annualized Return: {results['annualized_return']:.2f}%")
-        print(f"Max Drawdown: {results['max_drawdown']:.2f}%")
-        print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
-        print(f"Final Balance: ${results['final_balance']:.2f}")
+        if results:
+            print(f"Total Trades: {results.get('total_trades', 0)}")
+            print(f"Win Rate: {results.get('win_rate', 0.0):.2f}%")
+            print(f"Total Return: {results.get('total_return', 0.0):.2f}%")
+            if 'annualized_return' in results:
+                print(f"Annualized Return: {results['annualized_return']:.2f}%")
+            print(f"Max Drawdown: {results.get('max_drawdown', 0.0):.2f}%")
+            print(f"Sharpe Ratio: {results.get('sharpe_ratio', 0.0):.2f}")
+            print(f"Final Balance: ${results.get('final_balance', 0.0):.2f}")
+        else:
+            print("No results produced.")
         print("=" * 50)
 
         # Print session ID if database logging was enabled
@@ -202,7 +264,6 @@ def main():
         try:
             import json
             import subprocess
-            from pathlib import Path
             # Calculate duration in years (float with 2 decimals)
             duration_years = round((end_date - start_date).days / 365.25, 2)
 
@@ -221,7 +282,7 @@ def main():
                 'timestamp': datetime.now().isoformat(timespec='seconds'),
                 'strategy': strategy.name,
                 'symbol': trading_symbol,
-                'timeframe': args.timeframe,
+                'timeframe': effective_timeframe,
                 'start_date': start_date.isoformat(),
                 'end_date': end_date.isoformat(),
                 'duration_years': duration_years,
