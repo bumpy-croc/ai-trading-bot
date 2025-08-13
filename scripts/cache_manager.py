@@ -7,7 +7,7 @@ import argparse
 import os
 import pickle
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add parent directory to path to import modules
@@ -15,8 +15,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config.paths import get_cache_dir
-from data_providers.binance_provider import BinanceProvider
+from data_providers.binance_provider import BinanceProvider, BINANCE_AVAILABLE
 from data_providers.cached_data_provider import CachedDataProvider
+from utils.symbol_factory import SymbolFactory
 
 
 def format_file_size(size_bytes):
@@ -183,6 +184,58 @@ def clear_old_cache(cache_dir=None, hours=24):
         print(f"No cache files older than {hours} hours found.")
 
 
+def warm_cache(symbols=None, timeframes=None, years=8, cache_dir=None, cache_ttl_hours=87600, end_date=None):
+    """Prefetch and cache data for the last N years for given symbols and timeframes.
+
+    Args:
+        symbols: List of symbols (e.g., ['BTCUSDT', 'ETHUSDT'] or ['BTC-USD']).
+        timeframes: List of timeframes (e.g., ['1h', '1d']).
+        years: Number of years to backfill (default: 8).
+        cache_dir: Cache directory (defaults to project cache dir).
+        cache_ttl_hours: TTL used during warming (default: ~10 years).
+        end_date: Optional end date string 'YYYY-MM-DD' (defaults to now).
+    """
+    if not BINANCE_AVAILABLE:
+        print("Warning: python-binance is not available. Warm cache will run offline and fetch no data.")
+
+    symbols = symbols or ["BTCUSDT"]
+    timeframes = timeframes or ["1h"]
+    cache_dir = cache_dir or str(get_cache_dir())
+
+    provider = CachedDataProvider(BinanceProvider(), cache_dir=cache_dir, cache_ttl_hours=cache_ttl_hours)
+
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            print(f"Invalid end date format: {end_date}. Use YYYY-MM-DD.")
+            return
+    else:
+        end = datetime.now()
+
+    start = end - timedelta(days=int(365.25 * years))
+
+    print("Starting cache warm-up:")
+    print(f"Cache dir: {cache_dir}")
+    print(f"Period: {start.date()} -> {end.date()} ({years} years)")
+
+    for sym in symbols:
+        binance_symbol = SymbolFactory.to_exchange_symbol(sym, "binance")
+        for tf in timeframes:
+            print(f"- Fetching {binance_symbol} {tf} ...", flush=True)
+            try:
+                df = provider.get_historical_data(binance_symbol, tf, start, end)
+                candles = len(df) if df is not None else 0
+                if candles > 0:
+                    first = df.index.min().strftime("%Y-%m-%d")
+                    last = df.index.max().strftime("%Y-%m-%d")
+                    print(f"  Cached {candles} candles [{first} .. {last}]")
+                else:
+                    print("  No data returned.")
+            except Exception as e:
+                print(f"  Error: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Manage data cache")
     parser.add_argument("--cache-dir", default=None, help="Cache directory path")
@@ -206,6 +259,34 @@ def main():
         "--hours", type=int, default=24, help="Clear files older than N hours"
     )
 
+    # Warm command
+    warm_parser = subparsers.add_parser("warm", help="Prefetch and cache data for backtests")
+    warm_parser.add_argument(
+        "--symbols",
+        nargs="+",
+        default=["BTCUSDT"],
+        help="Symbols to cache (e.g., BTCUSDT ETHUSDT or BTC-USD)",
+    )
+    warm_parser.add_argument(
+        "--timeframes",
+        nargs="+",
+        default=["1h"],
+        help="Timeframes to cache (e.g., 1h 1d)",
+    )
+    warm_parser.add_argument(
+        "--years", type=int, default=8, help="Number of years of history to cache (default: 8)"
+    )
+    warm_parser.add_argument(
+        "--end", dest="end_date", default=None, help="Optional end date YYYY-MM-DD (default: now)"
+    )
+    warm_parser.add_argument(
+        "--cache-ttl",
+        dest="cache_ttl",
+        type=int,
+        default=87600,
+        help="Cache TTL hours used during warming (default: 10 years)",
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -223,6 +304,16 @@ def main():
 
     elif args.command == "clear-old":
         clear_old_cache(args.cache_dir, args.hours)
+
+    elif args.command == "warm":
+        warm_cache(
+            symbols=args.symbols,
+            timeframes=args.timeframes,
+            years=args.years,
+            cache_dir=args.cache_dir,
+            cache_ttl_hours=args.cache_ttl,
+            end_date=args.end_date,
+        )
 
 
 if __name__ == "__main__":

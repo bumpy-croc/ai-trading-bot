@@ -172,7 +172,8 @@ class CachedDataProvider(DataProvider):
         cache_path = self._get_cache_path(cache_key)
 
         # Try to load from cache first
-        if self._is_cache_valid(cache_path):
+        # For historical years (before current year), treat cache as always valid if file exists
+        if os.path.exists(cache_path) and (year < current_year or self._is_cache_valid(cache_path)):
             cached_data = self._load_from_cache(cache_path)
             if cached_data is not None:
                 logger.debug(f"Loaded {year} data from cache for {symbol} {timeframe}")
@@ -274,7 +275,8 @@ class CachedDataProvider(DataProvider):
             cache_key = self._generate_year_cache_key(symbol, timeframe, year)
             cache_path = self._get_cache_path(cache_key)
 
-            if self._is_cache_valid(cache_path):
+            # Historical years (before current year) are considered valid if the file exists
+            if os.path.exists(cache_path) and (year < datetime.now().year or self._is_cache_valid(cache_path)):
                 cached_years.append(year)
             else:
                 missing_years.append(year)
