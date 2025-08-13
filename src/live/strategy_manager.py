@@ -69,6 +69,12 @@ class StrategyManager:
             "ml_adaptive": MlAdaptive,
             "ml_with_sentiment": MlWithSentiment,
         }
+        try:
+            from strategies.bear import BearStrategy
+
+            self.strategy_registry["bear"] = BearStrategy
+        except Exception:
+            pass
 
         # Version history
         self.version_history: Dict[str, StrategyVersion] = {}

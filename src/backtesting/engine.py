@@ -110,6 +110,7 @@ class Backtester:
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[Any] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
+        enable_short_trading: bool = False,
         database_url: Optional[str] = None,
         log_to_database: Optional[bool] = None,
     ):
@@ -122,6 +123,7 @@ class Backtester:
         self.peak_balance = initial_balance
         self.trades: List[Trade] = []
         self.current_trade: Optional[Trade] = None
+        self.enable_short_trading = enable_short_trading
 
         # Early stop tracking
         self.early_stop_reason: Optional[str] = None
@@ -360,7 +362,7 @@ class Backtester:
                         ):
                             self.db_manager.log_trade(
                                 symbol=symbol,
-                                side="long",  # Backtester only does long trades currently
+                                side=self.current_trade.side,
                                 entry_price=self.current_trade.entry_price,
                                 exit_price=self.current_trade.exit_price,
                                 size=self.current_trade.size,
@@ -424,7 +426,6 @@ class Backtester:
 
                     if size > 0:
                         # Enter new trade
-                        # Assuming df and index are available in this context
                         stop_loss = self.strategy.calculate_stop_loss(
                             df, len(df) - 1, candle["close"], "long"
                         )
@@ -437,6 +438,49 @@ class Backtester:
                             stop_loss=stop_loss,
                         )
                         logger.info(f"Entered long position at {candle['close']}")
+                # Optional short entry support
+                elif self.enable_short_trading and hasattr(self.strategy, "check_short_entry_conditions"):
+                    try:
+                        short_signal = self.strategy.check_short_entry_conditions(df, i)
+                    except Exception:
+                        short_signal = False
+                    if short_signal:
+                        short_size = self.strategy.calculate_position_size(df, i, self.balance)
+                        if self.log_to_database and self.db_manager:
+                            indicators = self._extract_indicators(df, i)
+                            sentiment_data = self._extract_sentiment_data(df, i)
+                            self.db_manager.log_strategy_execution(
+                                strategy_name=self.strategy.__class__.__name__,
+                                symbol=symbol,
+                                signal_type="entry",
+                                action_taken="opened_short" if short_size > 0 else "no_action",
+                                price=candle["close"],
+                                timeframe=timeframe,
+                                signal_strength=1.0 if short_size > 0 else 0.0,
+                                confidence_score=indicators.get("prediction_confidence", 0.5),
+                                indicators=indicators,
+                                sentiment_data=sentiment_data if sentiment_data else None,
+                                position_size=short_size if short_size > 0 else None,
+                                reasons=[
+                                    "short_entry_conditions_met",
+                                    f"position_size_{short_size:.4f}" if short_size > 0 else "no_position_size",
+                                    f"balance_{self.balance:.2f}",
+                                ],
+                                volume=indicators.get("volume"),
+                                volatility=indicators.get("volatility"),
+                                session_id=self.trading_session_id,
+                            )
+                        if short_size > 0:
+                            stop_loss = self.strategy.calculate_stop_loss(df, i, candle["close"], "short")
+                            self.current_trade = Trade(
+                                symbol=symbol,
+                                side="short",
+                                entry_price=candle["close"],
+                                entry_time=candle.name,
+                                size=short_size,
+                                stop_loss=stop_loss,
+                            )
+                            logger.info(f"Entered short position at {candle['close']}")
 
                 # Log no-action cases (when no position and no entry signal)
                 else:
