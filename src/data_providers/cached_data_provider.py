@@ -63,18 +63,28 @@ class CachedDataProvider(DataProvider):
         """Get the full path for a cache file."""
         return os.path.join(self.cache_dir, f"{cache_key}.pkl")
 
-    def _is_cache_valid(self, cache_path: str) -> bool:
+    def _is_cache_valid(self, cache_path: str, year: Optional[int] = None) -> bool:
         """
         Check if the cache file exists and is not expired.
 
         Args:
             cache_path: Path to the cache file
+            year: Optional year context for the cache entry. If provided and the
+                year is strictly in the past (i.e., less than the current
+                calendar year), the cache is considered valid regardless of TTL,
+                since historical data is immutable.
 
         Returns:
             True if cache is valid, False otherwise
         """
         if not os.path.exists(cache_path):
             return False
+
+        # For fully historical years, treat cache as permanently valid
+        if year is not None:
+            current_year = datetime.now().year
+            if year < current_year:
+                return True
 
         # Check if cache is expired
         file_time = datetime.fromtimestamp(os.path.getmtime(cache_path))
@@ -172,7 +182,7 @@ class CachedDataProvider(DataProvider):
         cache_path = self._get_cache_path(cache_key)
 
         # Try to load from cache first
-        if self._is_cache_valid(cache_path):
+        if self._is_cache_valid(cache_path, year):
             cached_data = self._load_from_cache(cache_path)
             if cached_data is not None:
                 logger.debug(f"Loaded {year} data from cache for {symbol} {timeframe}")
@@ -274,7 +284,7 @@ class CachedDataProvider(DataProvider):
             cache_key = self._generate_year_cache_key(symbol, timeframe, year)
             cache_path = self._get_cache_path(cache_key)
 
-            if self._is_cache_valid(cache_path):
+            if self._is_cache_valid(cache_path, year):
                 cached_years.append(year)
             else:
                 missing_years.append(year)
