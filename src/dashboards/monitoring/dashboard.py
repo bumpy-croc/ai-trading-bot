@@ -20,17 +20,15 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 # --- Ensure greenlet/eventlet is configured before importing network libs.
-# Disable eventlet during pytest to avoid patching issues in test environment.
-if os.environ.get("PYTEST_CURRENT_TEST"):
-    _ASYNC_MODE = "threading"
+# Default to threading to avoid monkey-patching during imports/tests.
+_USE_EVENTLET = os.environ.get("USE_EVENTLET", "0") == "1"
+if _USE_EVENTLET:
+	import eventlet
+	
+	eventlet.monkey_patch()
+	_ASYNC_MODE = "eventlet"
 else:
-    if platform.system() == "Darwin":
-        _ASYNC_MODE = "threading"
-    else:
-        import eventlet
-
-        eventlet.monkey_patch()
-        _ASYNC_MODE = "eventlet"
+	_ASYNC_MODE = "threading"
 
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
@@ -305,6 +303,17 @@ class MonitoringDashboard:
 
             except (ValueError, TypeError):
                 return jsonify({"success": False, "error": "Invalid balance value"})
+
+        @self.app.route("/api/optimizer/cycles")
+        def get_optimizer_cycles():
+            """List recent optimizer cycles."""
+            limit = request.args.get("limit", 50, type=int)
+            offset = request.args.get("offset", 0, type=int)
+            try:
+                rows = self.db_manager.fetch_optimization_cycles(limit=limit, offset=offset)
+                return jsonify({"items": rows, "count": len(rows)})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
 
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""

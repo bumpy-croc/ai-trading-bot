@@ -38,10 +38,10 @@ from strategies.base import BaseStrategy
 class MlBasic(BaseStrategy):
     # * Strategy configuration constants
     SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
-    CONFIDENCE_MULTIPLIER = 10  # Multiplier for confidence calculation
-    BASE_POSITION_SIZE = 0.12  # Base position size (12% of balance)
+    CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
+    BASE_POSITION_SIZE = 0.2  # Base position size (20% of balance)
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
-    MAX_POSITION_SIZE_RATIO = 0.2  # Maximum position size (20% of balance)
+    MAX_POSITION_SIZE_RATIO = 0.25  # Maximum position size (25% of balance)
 
     def __init__(
         self,
@@ -138,8 +138,8 @@ class MlBasic(BaseStrategy):
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
 
-        # * Gate ML predictions via feature flag (use_prediction_engine)
-        use_prediction_engine = is_enabled("use_prediction_engine", default=False)
+        # * Gate ML predictions using the instance configuration (stable across tests)
+        use_prediction_engine = bool(self.use_prediction_engine)
 
         # Use the prediction feature pipeline to generate normalized price features identically
         df = self.feature_pipeline.transform(df)
@@ -153,76 +153,73 @@ class MlBasic(BaseStrategy):
 
         price_features = ["close", "volume", "high", "low", "open"]
 
-        # Generate predictions for each row that has enough history
-        if use_prediction_engine:
-            # Lazy engine init
-            if self.prediction_engine is None:
-                try:
-                    config = PredictionConfig.from_config_manager()
-                    config.enable_sentiment = False
-                    config.enable_market_microstructure = False
-                    engine = PredictionEngine(config)
-                    engine.feature_pipeline = FeaturePipeline(
-                        enable_technical=False,
-                        enable_sentiment=False,
-                        enable_market_microstructure=False,
-                        custom_extractors=[
-                            PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
-                        ],
+        # Generate predictions for each row that has enough history.
+        # Always compute predictions; choose engine or local ONNX per configuration.
+        # Lazy engine init if needed
+        if use_prediction_engine and self.prediction_engine is None:
+            try:
+                config = PredictionConfig.from_config_manager()
+                config.enable_sentiment = False
+                config.enable_market_microstructure = False
+                engine = PredictionEngine(config)
+                engine.feature_pipeline = FeaturePipeline(
+                    enable_technical=False,
+                    enable_sentiment=False,
+                    enable_market_microstructure=False,
+                    custom_extractors=[
+                        PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
+                    ],
+                )
+                self.prediction_engine = engine
+            except Exception:
+                self.prediction_engine = None
+
+        for i in range(self.sequence_length, len(df)):
+            # Prepare input features
+            feature_columns = [f"{feature}_normalized" for feature in price_features]
+            input_data = df[feature_columns].iloc[i - self.sequence_length : i].values
+
+            # Reshape for ONNX model: (batch_size, sequence_length, features)
+            input_data = input_data.astype(np.float32)
+            input_data = np.expand_dims(input_data, axis=0)
+
+            try:
+                if use_prediction_engine and self.prediction_engine is not None and self.model_name:
+                    window_df = df[["open", "high", "low", "close", "volume"]].iloc[
+                        i - self.sequence_length : i
+                    ]
+                    result = self.prediction_engine.predict(
+                        window_df, model_name=self.model_name
                     )
-                    self.prediction_engine = engine
-                except Exception:
-                    self.prediction_engine = None
+                    pred = float(result.price)
+                else:
+                    output = self.ort_session.run(None, {self.input_name: input_data})
+                    pred = output[0][0][0]
 
-            for i in range(self.sequence_length, len(df)):
-                # Prepare input features
-                feature_columns = [f"{feature}_normalized" for feature in price_features]
-                input_data = df[feature_columns].iloc[i - self.sequence_length : i].values
+                recent_close = df["close"].iloc[i - self.sequence_length : i].values
+                min_close = np.min(recent_close)
+                max_close = np.max(recent_close)
 
-                # Reshape for ONNX model: (batch_size, sequence_length, features)
-                input_data = input_data.astype(np.float32)
-                input_data = np.expand_dims(input_data, axis=0)
+                if max_close != min_close:
+                    pred_denormalized = pred * (max_close - min_close) + min_close
+                else:
+                    pred_denormalized = df["close"].iloc[i - 1]
 
-                try:
-                    if self.prediction_engine is not None and self.model_name:
-                        window_df = df[["open", "high", "low", "close", "volume"]].iloc[
-                            i - self.sequence_length : i
-                        ]
-                        result = self.prediction_engine.predict(
-                            window_df, model_name=self.model_name
-                        )
-                        pred = float(result.price)
-                    else:
-                        output = self.ort_session.run(None, {self.input_name: input_data})
-                        pred = output[0][0][0]
+                df.at[df.index[i], "onnx_pred"] = pred_denormalized
+                df.at[df.index[i], "ml_prediction"] = pred_denormalized
 
-                    recent_close = df["close"].iloc[i - self.sequence_length : i].values
-                    min_close = np.min(recent_close)
-                    max_close = np.max(recent_close)
+                close_i = df["close"].iloc[i]
+                if close_i > 0:
+                    predicted_return = abs(pred_denormalized - close_i) / close_i
+                    confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
+                    df.at[df.index[i], "prediction_confidence"] = confidence
 
-                    if max_close != min_close:
-                        pred_denormalized = pred * (max_close - min_close) + min_close
-                    else:
-                        pred_denormalized = df["close"].iloc[i - 1]
-
-                    df.at[df.index[i], "onnx_pred"] = pred_denormalized
-                    df.at[df.index[i], "ml_prediction"] = pred_denormalized
-
-                    close_i = df["close"].iloc[i]
-                    if close_i > 0:
-                        predicted_return = abs(pred_denormalized - close_i) / close_i
-                        confidence = min(1.0, predicted_return * self.CONFIDENCE_MULTIPLIER)
-                        df.at[df.index[i], "prediction_confidence"] = confidence
-
-                except Exception as e:
-                    print(f"Prediction error at index {i}: {e}")
-                    fallback_price = df["close"].iloc[i - 1]
-                    df.at[df.index[i], "onnx_pred"] = fallback_price
-                    df.at[df.index[i], "ml_prediction"] = fallback_price
-                    df.at[df.index[i], "prediction_confidence"] = np.nan
-        else:
-            # Predictions disabled via feature flag
-            pass
+            except Exception as e:
+                print(f"Prediction error at index {i}: {e}")
+                fallback_price = df["close"].iloc[i - 1]
+                df.at[df.index[i], "onnx_pred"] = fallback_price
+                df.at[df.index[i], "ml_prediction"] = fallback_price
+                df.at[df.index[i], "prediction_confidence"] = np.nan
 
         return df
 
