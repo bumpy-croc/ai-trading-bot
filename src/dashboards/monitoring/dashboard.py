@@ -20,17 +20,15 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 # --- Ensure greenlet/eventlet is configured before importing network libs.
-# Disable eventlet during pytest to avoid patching issues in test environment.
-if os.environ.get("PYTEST_CURRENT_TEST"):
-    _ASYNC_MODE = "threading"
+# Default to threading to avoid monkey-patching during imports/tests.
+_USE_EVENTLET = os.environ.get("USE_EVENTLET", "0") == "1"
+if _USE_EVENTLET:
+	import eventlet
+	
+	eventlet.monkey_patch()
+	_ASYNC_MODE = "eventlet"
 else:
-    if platform.system() == "Darwin":
-        _ASYNC_MODE = "threading"
-    else:
-        import eventlet
-
-        eventlet.monkey_patch()
-        _ASYNC_MODE = "eventlet"
+	_ASYNC_MODE = "threading"
 
 import pandas as pd
 from flask import Flask, jsonify, render_template, request

@@ -28,6 +28,30 @@ class FearGreedProvider(SentimentDataProvider):
         self.data: pd.DataFrame = pd.DataFrame()
         self._load_data()
 
+    def calculate_sentiment_score(self, sentiment_data: list[dict]) -> float:
+        """
+        Compute a normalized score in [-1, 1] from fear/greed values.
+
+        If multiple points are provided, use the mean of available numeric values.
+        """
+        if not sentiment_data:
+            return 0.0
+        values: list[float] = []
+        for item in sentiment_data:
+            try:
+                v_raw = item.get("value")
+                if v_raw is None:
+                    continue
+                v = float(v_raw)
+                # Map 0..100 to 0..1 then to -1..1
+                n01 = max(0.0, min(100.0, v)) / 100.0
+                values.append(n01 * 2 - 1)
+            except Exception:
+                continue
+        if not values:
+            return 0.0
+        return float(np.mean(values))
+
     def _load_data(self) -> None:
         try:
             params = {"limit": 0, "format": "json"}
@@ -93,6 +117,9 @@ class FearGreedProvider(SentimentDataProvider):
         last = self.data.index.max()
         if last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
+        # Normalize now_ts to timezone-aware UTC for safe subtraction
+        if now_ts.tzinfo is None:
+            now_ts = now_ts.replace(tzinfo=timezone.utc)
         return (now_ts - last) <= timedelta(days=self.freshness_days)
 
     def get_historical_sentiment(
