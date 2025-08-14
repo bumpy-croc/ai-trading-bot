@@ -453,44 +453,44 @@ class Backtester:
                         )
                     
                     if size_fraction > 0:
-						# Enter new trade
-						# Optionally use legacy indexing behavior for stop-loss calculation to preserve parity
-						sl_index = (len(df) - 1) if self.legacy_stop_loss_indexing else i
-						try:
-							overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
-						except Exception:
-							overrides = None
-						if overrides and (("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)):
-							stop_loss, take_profit = self.risk_manager.compute_sl_tp(
-								df=df,
-								index=sl_index,
-								entry_price=current_price,
-								side='long',
-								strategy_overrides=overrides,
-							)
-							if take_profit is None:
-								tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
-								take_profit = current_price * (1 + tp_pct)
-						else:
-							stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'long')
-							tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
-							take_profit = current_price * (1 + tp_pct)
-						self.current_trade = ActiveTrade(
-							symbol=symbol,
-							side='long',
-							entry_price=current_price,
-							entry_time=current_time,
-							size=size_fraction,
-							stop_loss=stop_loss,
-							take_profit=take_profit
-						)
-						logger.info(f"Entered long position at {current_price}")
-						
-						# Update risk manager with opened position to track daily risk usage
-						try:
-							self.risk_manager.update_position(symbol=symbol, side='long', size=size_fraction, entry_price=current_price)
-						except Exception as e:
-							logger.warning(f"Failed to update risk manager for opened long on {symbol}: {e}")
+                        # Enter new trade
+                        # Optionally use legacy indexing behavior for stop-loss calculation to preserve parity
+                        sl_index = (len(df) - 1) if self.legacy_stop_loss_indexing else i
+                        try:
+                            overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
+                        except Exception:
+                            overrides = None
+                        if overrides and (("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)):
+                            stop_loss, take_profit = self.risk_manager.compute_sl_tp(
+                                df=df,
+                                index=sl_index,
+                                entry_price=current_price,
+                                side='long',
+                                strategy_overrides=overrides,
+                            )
+                            if take_profit is None:
+                                tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
+                                take_profit = current_price * (1 + tp_pct)
+                        else:
+                            stop_loss = self.strategy.calculate_stop_loss(df, sl_index, current_price, 'long')
+                            tp_pct = self.default_take_profit_pct if self.default_take_profit_pct is not None else getattr(self.strategy, 'take_profit_pct', 0.04)
+                            take_profit = current_price * (1 + tp_pct)
+                        self.current_trade = ActiveTrade(
+                            symbol=symbol,
+                            side='long',
+                            entry_price=current_price,
+                            entry_time=current_time,
+                            size=size_fraction,
+                            stop_loss=stop_loss,
+                            take_profit=take_profit
+                        )
+                        logger.info(f"Entered long position at {current_price}")
+                        
+                        # Update risk manager with opened position to track daily risk usage
+                        try:
+                            self.risk_manager.update_position(symbol=symbol, side='long', size=size_fraction, entry_price=current_price)
+                        except Exception as e:
+                            logger.warning(f"Failed to update risk manager for opened long on {symbol}: {e}")
 
                 # Optional short entry if supported by strategy
                 elif self.enable_short_trading and hasattr(self.strategy, 'check_short_entry_conditions') and self.strategy.check_short_entry_conditions(df, i):
