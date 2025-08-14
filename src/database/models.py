@@ -450,3 +450,68 @@ class AccountBalance(Base):
         db_session.add(balance_record)
         db_session.commit()
         return balance_record
+
+
+class OptimizationCycle(Base):
+    """Stores optimizer proposals, validations, and decisions per cycle."""
+
+    __tablename__ = "optimization_cycles"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True, default=datetime.utcnow)
+    strategy_name = Column(String(100), nullable=False)
+    symbol = Column(String(20), nullable=False)
+    timeframe = Column(String(10), nullable=False)
+
+    baseline_metrics = Column(JSONType)  # KPIs from baseline run
+    candidate_params = Column(JSONType)  # Proposed parameter changes
+    candidate_metrics = Column(JSONType)  # KPIs from candidate run
+
+    validator_report = Column(JSONType)  # p-value, effect size, pass/fail
+    decision = Column(String(20))  # 'propose', 'reject', 'apply'
+
+    # Relationships
+    session_id = Column(Integer, ForeignKey("trading_sessions.id"), nullable=True)
+
+    __table_args__ = (
+        Index("idx_opt_cycle_time", "timestamp"),
+        Index("idx_opt_cycle_strategy", "strategy_name", "symbol", "timeframe"),
+    )
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PredictionPerformance(Base):
+    """Aggregated prediction calibration and accuracy metrics."""
+
+    __tablename__ = "prediction_performance"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    model_name = Column(String(100), nullable=False)
+    horizon = Column(Integer, default=1)
+
+    # Calibration/accuracy
+    mae = Column(Numeric(18, 8))
+    rmse = Column(Numeric(18, 8))
+    mape = Column(Numeric(18, 8))
+    ic = Column(Numeric(18, 8))  # information coefficient (rank correlation)
+
+    # Distribution shift indicators
+    mean_pred = Column(Numeric(18, 8))
+    std_pred = Column(Numeric(18, 8))
+    mean_real = Column(Numeric(18, 8))
+    std_real = Column(Numeric(18, 8))
+
+    # Model context
+    strategy_name = Column(String(100), nullable=False)
+    symbol = Column(String(20), nullable=False)
+    timeframe = Column(String(10), nullable=False)
+
+    __table_args__ = (
+        Index("idx_pred_perf_time", "timestamp"),
+        Index("idx_pred_perf_model", "model_name", "horizon"),
+    )
+
+    created_at = Column(DateTime, default=datetime.utcnow)
