@@ -42,9 +42,10 @@ class _FixtureProvider(DataProvider):
 class _RandomWalkProvider(DataProvider):
     """Generates synthetic OHLCV series using a random walk for offline experiments."""
 
-    def __init__(self, start: datetime, end: datetime, timeframe: str = "1h", start_price: float = 30000.0, vol: float = 0.01):
+    def __init__(self, start: datetime, end: datetime, timeframe: str = "1h", start_price: float = 30000.0, vol: float = 0.01, seed: Optional[int] = None):
         super().__init__()
         self.timeframe = timeframe
+        self.seed = seed
         self.df = self._generate(start, end, timeframe, start_price, vol)
 
     def _freq(self, timeframe: str) -> str:
@@ -52,6 +53,8 @@ class _RandomWalkProvider(DataProvider):
         return mapping.get(timeframe, "1h")
 
     def _generate(self, start: datetime, end: datetime, timeframe: str, start_price: float, vol: float) -> pd.DataFrame:
+        if self.seed is not None:
+            np.random.seed(self.seed)
         idx = pd.date_range(start=pd.Timestamp(start), end=pd.Timestamp(end), freq=self._freq(timeframe))
         if len(idx) < 2:
             return pd.DataFrame(index=idx, columns=["open", "high", "low", "close", "volume"]).fillna(0.0)
@@ -93,11 +96,11 @@ class _RandomWalkProvider(DataProvider):
 class ExperimentRunner:
     """Runs backtests for given experiment configurations."""
 
-    def _load_provider(self, name: str, use_cache: bool, cache_ttl_hours: int = 24, *, start: Optional[datetime] = None, end: Optional[datetime] = None, timeframe: str = "1h"):
+    def _load_provider(self, name: str, use_cache: bool, cache_ttl_hours: int = 24, *, start: Optional[datetime] = None, end: Optional[datetime] = None, timeframe: str = "1h", seed: Optional[int] = None):
         name = (name or "binance").lower()
         if name == "mock":
             # Internal random-walk provider
-            return _RandomWalkProvider(start or (datetime.utcnow() - timedelta(days=30)), end or datetime.utcnow(), timeframe=timeframe)
+            return _RandomWalkProvider(start or (datetime.utcnow() - timedelta(days=30)), end or datetime.utcnow(), timeframe=timeframe, seed=seed)
         if name == "fixture":
             fixture_path = Path("tests/data/BTCUSDT_1h_2023-01-01_2024-12-31.feather")
             return _FixtureProvider(fixture_path)
@@ -115,9 +118,23 @@ class ExperimentRunner:
             return MlBasic()
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
+    def _apply_parameter_overrides(self, strategy: MlBasic, config: ExperimentConfig) -> None:
+        if config.parameters and config.parameters.values:
+            for key, value in config.parameters.values.items():
+                if key.startswith("MlBasic."):
+                    attr = key.split(".", 1)[1]
+                    if hasattr(strategy, attr):
+                        try:
+                            setattr(strategy, attr, value)
+                        except Exception:
+                            # Ignore invalid attribute assignments to keep runner robust
+                            pass
+
     def run(self, config: ExperimentConfig) -> ExperimentResult:
         strategy = self._load_strategy(config.strategy_name)
-        provider = self._load_provider(config.provider, config.use_cache, start=config.start, end=config.end, timeframe=config.timeframe)
+        # Apply any parameter overrides for strategy-level tuning
+        self._apply_parameter_overrides(strategy, config)
+        provider = self._load_provider(config.provider, config.use_cache, start=config.start, end=config.end, timeframe=config.timeframe, seed=config.random_seed)
 
         risk_params = RiskParameters(**config.risk_parameters) if config.risk_parameters else RiskParameters()
 
