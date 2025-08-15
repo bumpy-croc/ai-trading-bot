@@ -23,6 +23,8 @@ from .exceptions import (
 )
 from .features.pipeline import FeaturePipeline
 from .models.registry import PredictionModelRegistry
+from .ensemble import SimpleEnsembleAggregator
+from regime.detector import RegimeDetector, RegimeConfig
 
 
 @dataclass
@@ -62,6 +64,14 @@ class PredictionEngine:
         )
 
         self.model_registry = PredictionModelRegistry(self.config)
+
+        # Optional helpers
+        self._ensemble_aggregator = None
+        if getattr(self.config, "enable_ensemble", False):
+            self._ensemble_aggregator = SimpleEnsembleAggregator(getattr(self.config, "ensemble_method", "mean"))
+        self._regime_detector = None
+        if getattr(self.config, "enable_regime_aware_confidence", False):
+            self._regime_detector = RegimeDetector(RegimeConfig())
 
         # Performance tracking
         self._prediction_count = 0
@@ -104,8 +114,28 @@ class PredictionEngine:
             # Get model for prediction
             model = self._get_model(model_name)
 
-            # Make prediction
-            prediction = model.predict(features)
+            # Make prediction (with optional ensemble)
+            if self._ensemble_aggregator is None:
+                prediction = model.predict(features)
+                final_price = prediction.price
+                final_conf = prediction.confidence
+                final_dir = prediction.direction
+                final_model_name = prediction.model_name
+                member_preds = None
+            else:
+                # Run all available models for ensemble
+                preds = []
+                for mname in self.model_registry.list_models():
+                    m = self.model_registry.get_model(mname)
+                    if m is None:
+                        continue
+                    preds.append(m.predict(features))
+                ens = self._ensemble_aggregator.aggregate(preds)
+                final_price = ens.price
+                final_conf = ens.confidence
+                final_dir = ens.direction
+                final_model_name = f"ensemble:{self.config.ensemble_method}"
+                member_preds = ens.member_predictions
 
             # Calculate total inference time
             inference_time = time.time() - start_time
@@ -121,7 +151,7 @@ class PredictionEngine:
                     price=0.0,
                     confidence=0.0,
                     direction=0,
-                    model_name=prediction.model_name,
+                    model_name=final_model_name,
                     timestamp=datetime.now(timezone.utc),
                     inference_time=inference_time,
                     features_used=features.shape[1] if hasattr(features, "shape") else 0,
@@ -130,7 +160,7 @@ class PredictionEngine:
                         "error_type": "PredictionTimeoutError",
                         "data_length": len(data),
                         "feature_extraction_time": feature_time,
-                        "model_inference_time": prediction.inference_time,
+                        "model_inference_time": None,
                         "config_version": self._get_config_version(),
                     },
                 )
@@ -138,12 +168,23 @@ class PredictionEngine:
             # Check if cache was hit (from feature pipeline)
             cache_hit = self._was_cache_hit()
 
+            # Optional regime-aware confidence adjustment
+            adjusted_conf = final_conf
+            if self._regime_detector is not None:
+                annotated = self._regime_detector.annotate(data)
+                _, vol_label, regime_conf = self._regime_detector.current_labels(annotated)
+                if vol_label == "high_vol":
+                    adjusted_conf *= 0.85
+                if regime_conf < 0.5:
+                    adjusted_conf *= 0.9
+                adjusted_conf = float(max(0.0, min(1.0, adjusted_conf)))
+
             # Create unified result
             result = PredictionResult(
-                price=prediction.price,
-                confidence=prediction.confidence,
-                direction=prediction.direction,
-                model_name=prediction.model_name,
+                price=final_price,
+                confidence=adjusted_conf,
+                direction=final_dir,
+                model_name=final_model_name,
                 timestamp=datetime.now(timezone.utc),
                 inference_time=inference_time,
                 features_used=features.shape[1] if hasattr(features, "shape") else 0,
@@ -151,7 +192,8 @@ class PredictionEngine:
                 metadata={
                     "data_length": len(data),
                     "feature_extraction_time": feature_time,
-                    "model_inference_time": prediction.inference_time,
+                    "model_inference_time": None,
+                    "member_models": [p.model_name for p in (member_preds or [])],
                     "config_version": self._get_config_version(),
                 },
             )
