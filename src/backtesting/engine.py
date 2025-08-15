@@ -145,7 +145,7 @@ class Backtester:
                             return _noop
 
                     self.db_manager = DummyDBManager()
-        
+
     def run(
         self,
         symbol: str,
@@ -208,7 +208,7 @@ class Backtester:
             
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
-            
+
             # Remove warmup period - only drop rows where essential price data is missing
             # Don't drop rows just because ML predictions or sentiment data is missing
             essential_columns = ['open', 'high', 'low', 'close', 'volume']
