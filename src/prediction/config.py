@@ -20,6 +20,9 @@ from config.constants import (
     DEFAULT_MODEL_CACHE_TTL,
     DEFAULT_MODEL_REGISTRY_PATH,
     DEFAULT_PREDICTION_HORIZONS,
+    DEFAULT_ENABLE_ENSEMBLE,
+    DEFAULT_ENSEMBLE_METHOD,
+    DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE,
 )
 
 
@@ -44,6 +47,10 @@ class PredictionConfig:
     model_cache_ttl: int = DEFAULT_MODEL_CACHE_TTL
     confidence_scale_factor: float = DEFAULT_CONFIDENCE_SCALE_FACTOR
     direction_threshold: float = DEFAULT_DIRECTION_THRESHOLD
+    # New ensemble/regime-aware options
+    enable_ensemble: bool = DEFAULT_ENABLE_ENSEMBLE
+    ensemble_method: str = DEFAULT_ENSEMBLE_METHOD
+    enable_regime_aware_confidence: bool = DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE
 
     @classmethod
     def from_config_manager(cls) -> "PredictionConfig":
@@ -86,6 +93,11 @@ class PredictionConfig:
             direction_threshold=config.get_float(
                 "DIRECTION_THRESHOLD", default=DEFAULT_DIRECTION_THRESHOLD
             ),
+            enable_ensemble=config.get_bool("ENABLE_ENSEMBLE", default=DEFAULT_ENABLE_ENSEMBLE),
+            ensemble_method=config.get("ENSEMBLE_METHOD", default=DEFAULT_ENSEMBLE_METHOD),
+            enable_regime_aware_confidence=config.get_bool(
+                "ENABLE_REGIME_AWARE_CONFIDENCE", default=DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE
+            ),
         )
 
     def validate(self) -> None:
@@ -113,6 +125,10 @@ class PredictionConfig:
         if self.model_cache_ttl <= 0:
             raise ValueError("Model cache TTL must be positive")
 
+        # Basic sanity for ensemble
+        if self.ensemble_method not in ("mean", "median", "weighted"):
+            raise ValueError("Invalid ensemble method; choose 'mean', 'median', or 'weighted'")
+
     def __str__(self) -> str:
         """String representation of the configuration."""
         return (
@@ -121,5 +137,7 @@ class PredictionConfig:
             f"confidence_threshold={self.min_confidence_threshold}, "
             f"max_latency={self.max_prediction_latency}s, "
             f"sentiment={self.enable_sentiment}, "
-            f"microstructure={self.enable_market_microstructure})"
+            f"microstructure={self.enable_market_microstructure}, "
+            f"ensemble={self.enable_ensemble}/{self.ensemble_method}, "
+            f"regime_conf={self.enable_regime_aware_confidence})"
         )
