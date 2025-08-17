@@ -51,12 +51,18 @@ def load_strategy(strategy_name: str):
         "ml_basic": MlBasic,
         "ml_with_sentiment": lambda: MlWithSentiment(use_sentiment=True),
         "test_high_frequency": TestHighFrequencyStrategy,
+        "bear": None,
     }
-    #
 
-    if strategy_name not in strategies:
+    # Lazy import for optional strategies to keep startup fast
+    if strategy_name == "bear":
+        from strategies.bear import BearStrategy
+
+        strategies["bear"] = BearStrategy
+
+    if strategy_name not in strategies or strategies[strategy_name] is None:
         logger.error(f"Unknown strategy: {strategy_name}")
-        logger.info(f"Available strategies: {list(strategies.keys())}")
+        logger.info(f"Available strategies: {list(k for k, v in strategies.items() if v is not None)}")
         sys.exit(1)
 
     try:

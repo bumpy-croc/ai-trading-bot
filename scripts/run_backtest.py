@@ -36,13 +36,17 @@ def load_strategy(strategy_name: str):
             from strategies.ml_adaptive import MlAdaptive
 
             strategy = MlAdaptive()
+        elif strategy_name == "bear":
+            from strategies.bear import BearStrategy
+
+            strategy = BearStrategy()
         elif strategy_name == "bull":
             from strategies.bull import Bull
 
             strategy = Bull()
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ["ml_basic", "ml_with_sentiment", "ml_adaptive", "bull"]
+            available_strategies = ["ml_basic", "ml_with_sentiment", "ml_adaptive", "bear", "bull"]
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
 
@@ -86,6 +90,11 @@ def parse_args():
         choices=["coinbase", "binance"],
         default="binance",
         help="Exchange provider to use (default: binance)",
+    )
+    parser.add_argument(
+        "--enable-short-trading",
+        action="store_true",
+        help="Enable short entries (recommended for bear strategy)",
     )
     return parser.parse_args()
 
@@ -160,6 +169,7 @@ def main() -> int:
             sentiment_provider=sentiment_provider,
             risk_parameters=risk_params,
             initial_balance=args.initial_balance,
+            enable_short_trading=args.enable_short_trading,
             log_to_database=not args.no_db,  # Disable DB logging if --no-db is passed
         )
 

@@ -68,9 +68,9 @@ class Backtester:
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[Any] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
+        enable_short_trading: bool = False,
         database_url: Optional[str] = None,
         log_to_database: Optional[bool] = None,
-        enable_short_trading: bool = False,
         enable_time_limit_exit: bool = False,
         default_take_profit_pct: Optional[float] = None,
         legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
@@ -461,7 +461,7 @@ class Backtester:
                             overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
                         except Exception:
                             overrides = None
-                        if overrides and (('stop_loss_pct' in overrides) or ('take_profit_pct' in overrides)):
+                        if overrides and (("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)):
                             stop_loss, take_profit = self.risk_manager.compute_sl_tp(
                                 df=df,
                                 index=sl_index,
