@@ -1,5 +1,5 @@
 # Background Agent Dockerfile - Self-contained with PostgreSQL
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Set environment variables to avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -21,6 +21,7 @@ RUN apt-get update && apt-get clean && \
         libpq-dev \
         xvfb \
         xauth \
+        tmux \
         postgresql \
         postgresql-contrib \
         supervisor \
