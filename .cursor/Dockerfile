@@ -1,17 +1,30 @@
 # Background Agent Dockerfile - Self-contained with PostgreSQL
 FROM python:3.11-slim
 
-# Install system dependencies including PostgreSQL
+# Set environment variables to prevent interactive prompts and time issues
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+ENV TERM=xterm
+
+# Install system dependencies including PostgreSQL with proper time handling
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
+        wget \
         git \
         build-essential \
         libpq-dev \
         postgresql \
         postgresql-contrib \
         supervisor \
-        && \
+        ca-certificates \
+        gnupg \
+        lsb-release \
+        xvfb \
+        xauth \
+        x11-utils && \
+    # Fix potential time-related issues with package verification
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Set working directory
