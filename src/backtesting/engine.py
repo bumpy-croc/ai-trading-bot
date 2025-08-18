@@ -3,6 +3,7 @@ from pandas import DataFrame  # type: ignore
 import pandas as pd  # type: ignore
 import logging
 from datetime import datetime
+
 from sqlalchemy.exc import SQLAlchemyError
 from data_providers.data_provider import DataProvider
 from strategies.base import BaseStrategy
@@ -67,9 +68,9 @@ class Backtester:
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[Any] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
+        enable_short_trading: bool = False,
         database_url: Optional[str] = None,
         log_to_database: Optional[bool] = None,
-        enable_short_trading: bool = False,
         enable_time_limit_exit: bool = False,
         default_take_profit_pct: Optional[float] = None,
         legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
@@ -145,7 +146,7 @@ class Backtester:
                             return _noop
 
                     self.db_manager = DummyDBManager()
-        
+
     def run(
         self,
         symbol: str,
@@ -208,7 +209,7 @@ class Backtester:
             
             # Calculate indicators
             df = self.strategy.calculate_indicators(df)
-            
+
             # Remove warmup period - only drop rows where essential price data is missing
             # Don't drop rows just because ML predictions or sentiment data is missing
             essential_columns = ['open', 'high', 'low', 'close', 'volume']
@@ -460,7 +461,7 @@ class Backtester:
                             overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, 'get_risk_overrides') else None
                         except Exception:
                             overrides = None
-                        if overrides and (('stop_loss_pct' in overrides) or ('take_profit_pct' in overrides)):
+                        if overrides and (("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)):
                             stop_loss, take_profit = self.risk_manager.compute_sl_tp(
                                 df=df,
                                 index=sl_index,
@@ -603,6 +604,36 @@ class Backtester:
             
             # Calculate final metrics
             win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+            # ----------------------------------------------
+            # Prediction accuracy metrics (if predictions present)
+            # ----------------------------------------------
+            pred_acc = 0.0
+            mae = 0.0
+            mape = 0.0
+            brier = 0.0
+            try:
+                if "onnx_pred" in df.columns:
+                    # Align predicted price at t with actual close at t
+                    pred_series = df["onnx_pred"].dropna()
+                    actual_series = df["close"].reindex(pred_series.index)
+                    from performance.metrics import (
+                        directional_accuracy,
+                        mean_absolute_error,
+                        mean_absolute_percentage_error,
+                        brier_score_direction,
+                    )
+                    mae = mean_absolute_error(pred_series, actual_series)
+                    mape = mean_absolute_percentage_error(pred_series, actual_series)
+                    pred_acc = directional_accuracy(pred_series, actual_series)
+                    # Proxy prob_up from confidence if available
+                    if "prediction_confidence" in df.columns:
+                        p_up = (pred_series.shift(1) < pred_series).astype(float) * df["prediction_confidence"].reindex(pred_series.index).fillna(0.5) + \
+                            (pred_series.shift(1) >= pred_series).astype(float) * (1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(0.5))
+                        actual_up = (actual_series.diff() > 0).astype(float)
+                        brier = brier_score_direction(p_up.fillna(0.5), actual_up.fillna(0.0))
+            except Exception:
+                # Keep zeros if any issue
+                pass
 
             # Build balance history DataFrame for metrics
             bh_df = pd.DataFrame(balance_history, columns=['timestamp', 'balance']).set_index('timestamp') if balance_history else pd.DataFrame()
@@ -643,7 +674,13 @@ class Backtester:
                 'session_id': self.trading_session_id if self.log_to_database else None,
                 'early_stop_reason': self.early_stop_reason,
                 'early_stop_date': self.early_stop_date,
-                'early_stop_candle_index': self.early_stop_candle_index
+                'early_stop_candle_index': self.early_stop_candle_index,
+                'prediction_metrics': {
+                    'directional_accuracy_pct': pred_acc,
+                    'mae': mae,
+                    'mape_pct': mape,
+                    'brier_score_direction': brier,
+                }
             }
             
         except Exception as e:

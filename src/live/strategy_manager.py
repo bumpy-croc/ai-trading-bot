@@ -13,6 +13,7 @@ from strategies.base import BaseStrategy
 from strategies.ml_adaptive import MlAdaptive
 from strategies.ml_basic import MlBasic
 from strategies.ml_with_sentiment import MlWithSentiment
+from strategies.bull import Bull
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,14 @@ class StrategyManager:
             "ml_basic": MlBasic,
             "ml_adaptive": MlAdaptive,
             "ml_with_sentiment": MlWithSentiment,
+            "bull": Bull,
         }
+        try:
+            from strategies.bear import BearStrategy
+
+            self.strategy_registry["bear"] = BearStrategy
+        except Exception:
+            pass
 
         # Version history
         self.version_history: Dict[str, StrategyVersion] = {}

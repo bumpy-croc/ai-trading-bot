@@ -38,8 +38,7 @@ def test_backtester_regime_annotation(monkeypatch):
         data_provider=provider,
         initial_balance=1000,
         database_url='sqlite:///:memory:',
-        log_to_database=False,
-        enable_short_trading=False
+        log_to_database=False
     )
     result = backtester.run(symbol='BTCUSDT', timeframe='1h', start=start, end=end)
     # Detector should be initialized and run without error
