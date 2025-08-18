@@ -6,13 +6,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 # Install system dependencies including PostgreSQL
+# Mitigate occasional apt repo timestamp skew inside ephemeral environments
+RUN printf 'Acquire::Check-Valid-Until "false";\nAcquire::Check-Date "false";\n' > /etc/apt/apt.conf.d/99no-check-valid-until
+
 RUN apt-get update && apt-get clean && \
     apt-get install -y --no-install-recommends \
         debian-archive-keyring \
+        ca-certificates \
+        gnupg \
         curl \
+        wget \
         git \
         build-essential \
         libpq-dev \
+        xvfb \
+        xauth \
         postgresql \
         postgresql-contrib \
         supervisor \
