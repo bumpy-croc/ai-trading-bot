@@ -1,6 +1,10 @@
 # Background Agent Dockerfile - Self-contained with PostgreSQL
 FROM python:3.11-slim
 
+# Set environment variables to avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
 # Install system dependencies including PostgreSQL
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -20,8 +24,11 @@ WORKDIR /workspace
 # Create necessary directories
 RUN mkdir -p logs ml data /var/lib/postgresql/data /var/run/postgresql
 
+# Copy supervisord configuration
+COPY .cursor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
 # Set environment variables
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/workspace/src
 ENV PYTHONUNBUFFERED=1
 ENV DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
 ENV RAILWAY_STAGING_DATABASE_URL=postgresql://postgres:password@localhost:5432/trading_bot
