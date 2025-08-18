@@ -1,6 +1,7 @@
 async function fetchPredictions() {
+  const symbol = document.getElementById('symbolSelect')?.value || 'BTCUSDT';
   try {
-    const resp = await fetch('/api/predictions');
+    const resp = await fetch(`/api/predictions?symbol=${symbol}`);
     const data = await resp.json();
     if (data.error) {
       console.error(data.error);
@@ -47,3 +48,9 @@ function populateSentiment(sent) {
 // Initial fetch and periodic refresh every minute
 fetchPredictions();
 setInterval(fetchPredictions, 60 * 1000);
+
+// Refresh immediately when symbol changes
+const sel = document.getElementById('symbolSelect');
+if (sel) {
+  sel.addEventListener('change', fetchPredictions);
+}

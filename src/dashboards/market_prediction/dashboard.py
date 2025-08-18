@@ -52,7 +52,13 @@ class MarketPredictionDashboard:
 
         @self.app.route("/api/predictions")
         def api_predictions():  # noqa: D401
-            data = self._generate_prediction_payload()
+            from flask import request
+
+            symbol = request.args.get("symbol", self.symbol).upper()
+            # Basic validation – ensure ends with 'USDT'
+            if not symbol.endswith("USDT"):
+                return jsonify({"error": "Symbol must end with USDT"}), 400
+            data = self._generate_prediction_payload(symbol)
             return jsonify(data)
 
     # ------------------------------------------------------------------
@@ -72,7 +78,7 @@ class MarketPredictionDashboard:
             self._price_provider = None
         return self._price_provider
 
-    def _load_price_history(self) -> pd.DataFrame:
+    def _load_price_history(self, symbol: str) -> pd.DataFrame:
         """Load historical daily OHLCV for the symbol (lookback_days)."""
         end_dt = datetime.now(timezone.utc)
         start_dt = end_dt - timedelta(days=self.lookback_days)
@@ -82,16 +88,15 @@ class MarketPredictionDashboard:
         if provider is not None:
             try:
                 df = provider.get_historical_data(
-                    self.symbol, "1d", start=start_dt, end=end_dt
+                    symbol, "1d", start=start_dt, end=end_dt
                 )
             except Exception as exc:  # pragma: no cover
                 logger.warning("Failed fetching Binance data: %s", exc)
                 df = None
         if df is None or df.empty:
             # Fallback to bundled CSV (offline mode)
-            csv_path = (
-                Path(__file__).resolve().parents[3] / "src" / "data" / "BTCUSDT_1d.csv"
-            )
+            symbol_csv = "BTCUSDT_1d.csv" if symbol == "BTCUSDT" else "ETHUSDT_1d.csv"
+            csv_path = Path(__file__).resolve().parents[3] / "src" / "data" / symbol_csv
             if not csv_path.exists():
                 logger.error("Offline price CSV not found at %s", csv_path)
                 return pd.DataFrame()
@@ -137,8 +142,8 @@ class MarketPredictionDashboard:
             conf = max(0.0, conf - 0.05)
         return conf
 
-    def _generate_prediction_payload(self) -> Dict[str, Any]:
-        df = self._load_price_history()
+    def _generate_prediction_payload(self, symbol: str) -> Dict[str, Any]:
+        df = self._load_price_history(symbol)
         if df.empty or "close" not in df.columns:
             return {"error": "No price data available"}
         close = df["close"].astype(float)
@@ -186,7 +191,7 @@ class MarketPredictionDashboard:
             }
 
         payload = {
-            "symbol": self.symbol,
+            "symbol": symbol,
             "current_price": round(current_price, 2),
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "predictions": predictions,
