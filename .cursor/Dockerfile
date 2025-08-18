@@ -6,8 +6,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 # Install system dependencies including PostgreSQL
-RUN apt-get update && \
+RUN apt-get update && apt-get clean && \
     apt-get install -y --no-install-recommends \
+        debian-archive-keyring \
         curl \
         git \
         build-essential \
@@ -15,8 +16,7 @@ RUN apt-get update && \
         postgresql \
         postgresql-contrib \
         supervisor \
-        && \
-    rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /workspace
@@ -25,7 +25,7 @@ WORKDIR /workspace
 RUN mkdir -p logs ml data /var/lib/postgresql/data /var/run/postgresql
 
 # Create supervisord configuration
-RUN cat > /etc/supervisor/conf.d/supervisord.conf << 'EOF'
+COPY <<EOF /etc/supervisor/conf.d/supervisord.conf
 [supervisord]
 nodaemon=true
 user=root
