@@ -38,8 +38,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
     """
     Extracts technical indicators and normalized price features from OHLCV data.
 
-    This extractor consolidates all technical analysis functionality from existing
-    strategies (MlAdaptive, MlBasic, MlWithSentiment) into a single, reusable component.
+    This extractor consolidates technical analysis functionality into a single, reusable component.
     """
 
     def __init__(

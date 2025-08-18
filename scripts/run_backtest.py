@@ -28,14 +28,6 @@ def load_strategy(strategy_name: str):
             from strategies.ml_basic import MlBasic
 
             strategy = MlBasic()
-        elif strategy_name == "ml_with_sentiment":
-            from strategies.ml_with_sentiment import MlWithSentiment
-
-            strategy = MlWithSentiment(use_sentiment=True)
-        elif strategy_name == "ml_adaptive":
-            from strategies.ml_adaptive import MlAdaptive
-
-            strategy = MlAdaptive()
         elif strategy_name == "bear":
             from strategies.bear import BearStrategy
 
@@ -46,7 +38,7 @@ def load_strategy(strategy_name: str):
             strategy = Bull()
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ["ml_basic", "ml_with_sentiment", "ml_adaptive", "bear", "bull"]
+            available_strategies = ["ml_basic", "bear", "bull"]
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
 
@@ -60,7 +52,7 @@ def load_strategy(strategy_name: str):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run strategy backtest")
-    parser.add_argument("strategy", help="Strategy name (e.g., ml_basic, ml_with_sentiment)")
+    parser.add_argument("strategy", help="Strategy name (e.g., ml_basic)")
     parser.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol")
     parser.add_argument("--timeframe", default="1h", help="Candle timeframe")
     parser.add_argument("--days", type=int, default=30, help="Number of days to backtest")
