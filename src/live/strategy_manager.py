@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from strategies.base import BaseStrategy
-from strategies.ml_adaptive import MlAdaptive
 from strategies.ml_basic import MlBasic
-from strategies.ml_with_sentiment import MlWithSentiment
 from strategies.bull import Bull
 
 logger = logging.getLogger(__name__)
@@ -67,8 +65,6 @@ class StrategyManager:
         # Strategy registry
         self.strategy_registry = {
             "ml_basic": MlBasic,
-            "ml_adaptive": MlAdaptive,
-            "ml_with_sentiment": MlWithSentiment,
             "bull": Bull,
         }
         try:

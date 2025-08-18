@@ -88,7 +88,7 @@ class LiveTradingController:
         # Create deployment package
         deployment_package = {
             "staging_path": model_path,
-            "strategy_name": "ml_with_sentiment" if "sentiment" in model_path else "ml_basic",
+            "strategy_name": "ml_basic",
             "ready_for_deployment": True,
         }
 

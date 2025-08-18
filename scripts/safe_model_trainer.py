@@ -187,7 +187,8 @@ class SafeModelTrainer:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         if with_sentiment:
-            strategy_name = "ml_with_sentiment"
+            # Sentiment variant is no longer a separate strategy; we still allow training a sentiment model
+            strategy_name = "ml_basic"
             model_type = "sentiment"
         else:
             strategy_name = "ml_basic"
@@ -470,7 +471,7 @@ def main():
         # Create deployment package from model path
         deployment_package = {
             "staging_path": args.model_path,
-            "strategy_name": "ml_with_sentiment" if "sentiment" in args.model_path else "ml_basic",
+            "strategy_name": "ml_basic",
             "ready_for_deployment": True,
         }
 
