@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bitcoin Market Prediction Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/market_prediction_dashboard.css') }}" />
+</head>
+<body>
+    <h1>Bitcoin Price Forecast</h1>
+    <p id="lastUpdated"></p>
+
+    <table id="predictionTable">
+        <thead>
+            <tr>
+                <th>Horizon (days)</th>
+                <th>Predicted Price (USD)</th>
+                <th>% Change</th>
+                <th>Confidence</th>
+                <th>Recommendation</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <h2>Market Sentiment (Fear &amp; Greed)</h2>
+    <div id="sentimentContainer"></div>
+
+    <script src="{{ url_for('static', filename='js/market_prediction_dashboard.js') }}"></script>
+</body>
+</html>
