@@ -1,10 +1,12 @@
 """
-Model registry for prediction models - replacement for existing ModelRegistry.
+Model registry for managing ONNX models.
+
+This module provides a registry for managing and accessing ONNX models.
 """
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -26,7 +28,7 @@ class PredictionModelRegistry:
             config: Prediction engine configuration
         """
         self.config = config
-        self.models: Dict[str, OnnxRunner] = {}
+        self.models: dict[str, OnnxRunner] = {}
         self._load_models()
 
     def _load_models(self) -> None:
@@ -48,7 +50,7 @@ class PredictionModelRegistry:
         """Get model by name"""
         return self.models.get(model_name)
 
-    def list_models(self) -> List[str]:
+    def list_models(self) -> list[str]:
         """List all available models"""
         return list(self.models.keys())
 
@@ -75,7 +77,7 @@ class PredictionModelRegistry:
 
         return None
 
-    def get_model_metadata(self, model_name: str) -> Optional[Dict]:
+    def get_model_metadata(self, model_name: str) -> Optional[dict]:
         """Get metadata for a specific model"""
         model = self.get_model(model_name)
         if model:

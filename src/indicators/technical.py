@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import numpy as np
 import pandas as pd
 
@@ -98,7 +96,7 @@ def detect_market_regime(
 
 def calculate_support_resistance(
     df: pd.DataFrame, period: int = 20, num_points: int = 5
-) -> Tuple[pd.Series, pd.Series]:
+) -> tuple[pd.Series, pd.Series]:
     """Calculate dynamic support and resistance levels"""
     df = df.copy()
 

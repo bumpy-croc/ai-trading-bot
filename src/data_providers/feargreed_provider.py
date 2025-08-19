@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -179,7 +179,7 @@ class FearGreedProvider(SentimentDataProvider):
         )
         return agg
 
-    def get_sentiment_for_date(self, date: datetime) -> Dict[str, float]:
+    def get_sentiment_for_date(self, date: datetime) -> dict[str, float]:
         if self.data.empty:
             return self._neutral()
         if date.tzinfo is None:
@@ -190,7 +190,7 @@ class FearGreedProvider(SentimentDataProvider):
         row = self.data.iloc[idx[0]]
         return {c: float(row[c]) for c in self.data.columns if c.startswith("sentiment_")}
 
-    def _neutral(self) -> Dict[str, float]:
+    def _neutral(self) -> dict[str, float]:
         return {
             "sentiment_primary": 0.5,
             "sentiment_momentum": 0.0,

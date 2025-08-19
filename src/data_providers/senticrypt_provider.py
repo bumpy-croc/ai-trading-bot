@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -193,7 +193,7 @@ class SentiCryptProvider(SentimentDataProvider):
         logger.info(f"Retrieved {len(result)} sentiment records for {symbol} from {start} to {end}")
         return result
 
-    def calculate_sentiment_score(self, sentiment_data: List[Dict]) -> float:
+    def calculate_sentiment_score(self, sentiment_data: list[dict]) -> float:
         """
         Calculate a single normalized sentiment score from raw sentiment data.
 
@@ -223,7 +223,7 @@ class SentiCryptProvider(SentimentDataProvider):
         avg_score = np.mean(scores)
         return np.tanh(avg_score)  # Normalize to [-1, 1]
 
-    def get_live_sentiment(self, force_refresh: bool = False) -> Dict[str, float]:
+    def get_live_sentiment(self, force_refresh: bool = False) -> dict[str, float]:
         """
         Get the most recent sentiment data for live trading.
 
@@ -280,8 +280,8 @@ class SentiCryptProvider(SentimentDataProvider):
             return self._get_neutral_sentiment()
 
     def _calculate_live_sentiment_features(
-        self, latest_entry: Dict, recent_entries: List[Dict]
-    ) -> Dict[str, float]:
+        self, latest_entry: dict, recent_entries: list[dict]
+    ) -> dict[str, float]:
         """
         Calculate sentiment features from fresh API data.
 
@@ -366,7 +366,7 @@ class SentiCryptProvider(SentimentDataProvider):
 
         return features
 
-    def _get_neutral_sentiment(self) -> Dict[str, float]:
+    def _get_neutral_sentiment(self) -> dict[str, float]:
         """Return neutral sentiment values as fallback"""
         return {
             "sentiment_primary": 0.0,
@@ -379,7 +379,7 @@ class SentiCryptProvider(SentimentDataProvider):
             "sentiment_ma_14": 0.0,
         }
 
-    def get_sentiment_for_date(self, date: datetime, use_live: bool = False) -> Dict[str, float]:
+    def get_sentiment_for_date(self, date: datetime, use_live: bool = False) -> dict[str, float]:
         """
         Get sentiment features for a specific date.
 

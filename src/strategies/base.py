@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -40,14 +40,14 @@ class BaseStrategy(ABC):
         timeframe: Optional[str] = None,
         signal_strength: Optional[float] = None,
         confidence_score: Optional[float] = None,
-        indicators: Optional[Dict] = None,
-        sentiment_data: Optional[Dict] = None,
-        ml_predictions: Optional[Dict] = None,
+        indicators: Optional[dict] = None,
+        sentiment_data: Optional[dict] = None,
+        ml_predictions: Optional[dict] = None,
         position_size: Optional[float] = None,
-        reasons: Optional[List[str]] = None,
+        reasons: Optional[list[str]] = None,
         volume: Optional[float] = None,
         volatility: Optional[float] = None,
-        additional_context: Optional[Dict] = None,
+        additional_context: Optional[dict] = None,
     ):
         """
         Log strategy execution details to database.
@@ -141,7 +141,7 @@ class BaseStrategy(ABC):
         """Prepare data for strategy execution"""
         return self.calculate_indicators(df.copy())
 
-    def get_risk_overrides(self) -> Optional[Dict[str, Any]]:
+    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
         """
         Optional hook: strategies can provide risk/position management overrides.
         Expected keys may include:

@@ -3,7 +3,7 @@ import logging
 import os
 import pickle  # nosec B403: used for trusted local cache serialization
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import Optional
 
 import pandas as pd
 
@@ -130,7 +130,7 @@ class CachedDataProvider(DataProvider):
 
     def _get_year_ranges(
         self, start: datetime, end: datetime
-    ) -> List[Tuple[int, datetime, datetime]]:
+    ) -> list[tuple[int, datetime, datetime]]:
         """
         Split a date range into year-based chunks.
 

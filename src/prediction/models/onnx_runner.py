@@ -1,12 +1,14 @@
 """
-ONNX Model Runner for inference operations.
+ONNX model runner for inference.
+
+This module provides functionality to run ONNX models for prediction.
 """
 
 import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import onnxruntime as ort
@@ -57,7 +59,7 @@ class OnnxRunner:
         except Exception as e:
             raise RuntimeError(f"Failed to load model {self.model_path}: {e}") from e
 
-    def _load_metadata(self) -> Dict[str, Any]:
+    def _load_metadata(self) -> dict[str, Any]:
         """Load model metadata from JSON file"""
         metadata_path = self.model_path.replace(".onnx", "_metadata.json")
         try:
@@ -139,7 +141,7 @@ class OnnxRunner:
 
         return features
 
-    def _process_output(self, output: np.ndarray) -> Dict[str, Any]:
+    def _process_output(self, output: np.ndarray) -> dict[str, Any]:
         """Process model output into prediction"""
         # Extract scalar prediction
         if output.shape == (1, 1, 1):

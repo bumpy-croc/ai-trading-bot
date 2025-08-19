@@ -6,7 +6,6 @@ existing ConfigManager system to load prediction engine settings.
 """
 
 from dataclasses import dataclass, field
-from typing import List
 
 from config.config_manager import get_config
 from config.constants import (
@@ -35,7 +34,7 @@ class PredictionConfig:
     settings loaded from the ConfigManager system.
     """
 
-    prediction_horizons: List[int] = field(
+    prediction_horizons: list[int] = field(
         default_factory=lambda: DEFAULT_PREDICTION_HORIZONS.copy()
     )
     min_confidence_threshold: float = DEFAULT_MIN_CONFIDENCE_THRESHOLD

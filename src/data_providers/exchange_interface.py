@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -136,12 +136,12 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
-    def get_account_info(self) -> Dict[str, Any]:
+    def get_account_info(self) -> dict[str, Any]:
         """Get general account information"""
         pass
 
     @abstractmethod
-    def get_balances(self) -> List[AccountBalance]:
+    def get_balances(self) -> list[AccountBalance]:
         """Get all account balances"""
         pass
 
@@ -151,12 +151,12 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
-    def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
+    def get_positions(self, symbol: Optional[str] = None) -> list[Position]:
         """Get open positions (for futures/margin trading)"""
         pass
 
     @abstractmethod
-    def get_open_orders(self, symbol: Optional[str] = None) -> List[Order]:
+    def get_open_orders(self, symbol: Optional[str] = None) -> list[Order]:
         """Get all open orders"""
         pass
 
@@ -166,7 +166,7 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
-    def get_recent_trades(self, symbol: str, limit: int = 100) -> List[Trade]:
+    def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:
         """Get recent trades for a symbol"""
         pass
 
@@ -195,11 +195,11 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
-    def get_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
         """Get trading symbol information (min qty, price precision, etc.)"""
         pass
 
-    def sync_account_data(self) -> Dict[str, Any]:
+    def sync_account_data(self) -> dict[str, Any]:
         """
         Synchronize all account data from the exchange.
 
@@ -248,7 +248,7 @@ class ExchangeInterface(ABC):
         order_type: OrderType,
         quantity: float,
         price: Optional[float] = None,
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Validate order parameters before placing.
 

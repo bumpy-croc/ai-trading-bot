@@ -91,17 +91,25 @@ class MlBasic(BaseStrategy):
         if self.use_prediction_engine:
             # When engine is enabled, use a price-only extractor to guarantee 5 features in expected order
             price_only = PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
+            config = {
+                "technical_features": {"enabled": False},
+                "sentiment_features": {"enabled": False},
+                "market_features": {"enabled": False},
+                "price_only_features": {"enabled": False},
+            }
             self.feature_pipeline = FeaturePipeline(
-                enable_technical=False,
-                enable_sentiment=False,
-                enable_market_microstructure=False,
+                config=config,
                 custom_extractors=[price_only],
             )
         else:
+            config = {
+                "technical_features": {"enabled": False},
+                "sentiment_features": {"enabled": False},
+                "market_features": {"enabled": False},
+                "price_only_features": {"enabled": False},
+            }
             self.feature_pipeline = FeaturePipeline(
-                enable_technical=False,
-                enable_sentiment=False,
-                enable_market_microstructure=False,
+                config=config,
                 custom_extractors=[technical_extractor],
             )
 
@@ -113,10 +121,14 @@ class MlBasic(BaseStrategy):
                 config.enable_market_microstructure = False
                 engine = PredictionEngine(config)
                 # Ensure price-only extractor
+                config = {
+                    "technical_features": {"enabled": False},
+                    "sentiment_features": {"enabled": False},
+                    "market_features": {"enabled": False},
+                    "price_only_features": {"enabled": False},
+                }
                 engine.feature_pipeline = FeaturePipeline(
-                    enable_technical=False,
-                    enable_sentiment=False,
-                    enable_market_microstructure=False,
+                    config=config,
                     custom_extractors=[
                         PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
                     ],

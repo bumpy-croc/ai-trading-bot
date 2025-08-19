@@ -1,32 +1,17 @@
 """
-Bear Market Strategy
+Bear market strategy.
 
-This strategy is optimized for bearish market conditions. It focuses on taking
-short positions when a strong downtrend is detected and uses robust risk
-management to protect capital.
-
-Entry Logic (short):
-- Price below long-term moving average and short MA below long MA
-- MACD negative and momentum unfavorable
-- RSI below neutral (50), favoring downside momentum
-
-Exit Logic:
-- Reversal signals (RSI recovery above threshold, MACD improvement)
-- Stop loss and take profit are handled by the engine using percentages
-
-Sizing:
-- Dynamic position sizing based on trend strength/confidence
-- Capped by engine-level maximum position size
+This strategy is designed for bear market conditions.
 """
 
 import numpy as np
 import pandas as pd
+
 from indicators.technical import (
     calculate_atr,
     calculate_macd,
     calculate_rsi,
 )
-
 from strategies.base import BaseStrategy
 
 

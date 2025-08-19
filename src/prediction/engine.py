@@ -10,10 +10,11 @@ import hashlib
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+
 from regime.detector import RegimeConfig, RegimeDetector
 
 from .config import PredictionConfig
@@ -40,7 +41,7 @@ class PredictionResult:
     features_used: int
     cache_hit: bool = False
     error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class PredictionEngine:
@@ -58,8 +59,12 @@ class PredictionEngine:
 
         # Initialize components
         self.feature_pipeline = FeaturePipeline(
-            enable_sentiment=self.config.enable_sentiment,
-            enable_market_microstructure=self.config.enable_market_microstructure,
+            config={
+                "technical_features": {"enabled": True},
+                "sentiment_features": {"enabled": self.config.enable_sentiment},
+                "market_features": {"enabled": self.config.enable_market_microstructure},
+            },
+            use_cache=True,
             cache_ttl=self.config.feature_cache_ttl,
         )
 
@@ -82,7 +87,7 @@ class PredictionEngine:
         self._cache_misses = 0
         self._feature_extraction_time = 0.0
         # Track per-model inference times
-        self._model_inference_times: Dict[str, List[float]] = {}
+        self._model_inference_times: dict[str, list[float]] = {}
         # Track feature extraction times for averaging
         self._total_feature_extraction_time = 0.0
         self._feature_extraction_count = 0
@@ -245,7 +250,7 @@ class PredictionEngine:
         batch_size: int = 1024,
         return_denormalized: bool = False,
         sequence_length_override: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Predict over a long OHLCV series efficiently.
         Returns a dict with keys: 'indices' (np.ndarray), 'preds' (np.ndarray), 'normalized' (bool)
@@ -317,8 +322,8 @@ class PredictionEngine:
         return {"indices": indices, "preds": preds_denorm, "normalized": False}
 
     def predict_batch(
-        self, data_batches: List[pd.DataFrame], model_name: Optional[str] = None
-    ) -> List[PredictionResult]:
+        self, data_batches: list[pd.DataFrame], model_name: Optional[str] = None
+    ) -> list[PredictionResult]:
         """
         Batch prediction for multiple data sets
 
@@ -424,11 +429,11 @@ class PredictionEngine:
 
         return results
 
-    def get_available_models(self) -> List[str]:
+    def get_available_models(self) -> list[str]:
         """Get list of available models"""
         return self.model_registry.list_models()
 
-    def get_model_info(self, model_name: str) -> Dict[str, Any]:
+    def get_model_info(self, model_name: str) -> dict[str, Any]:
         """
         Get information about a specific model
 
@@ -450,7 +455,7 @@ class PredictionEngine:
             "inference_time_avg": self._get_model_avg_inference_time(model_name),
         }
 
-    def get_performance_stats(self) -> Dict[str, Any]:
+    def get_performance_stats(self) -> dict[str, Any]:
         """Get engine performance statistics"""
         return {
             "total_predictions": self._prediction_count,
@@ -491,7 +496,7 @@ class PredictionEngine:
         """Reload all models"""
         self.model_registry.reload_models()
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self) -> dict[str, Any]:
         """
         Perform health check of all components
 

@@ -9,7 +9,7 @@ trading data is available.
 import random
 import time
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Optional
 
 from config.constants import DEFAULT_INITIAL_BALANCE
 from database.manager import DatabaseManager
@@ -201,7 +201,7 @@ class DemoDataGenerator:
 
         return session_id
 
-    def generate_trade(self, entry_time: datetime, session_id: int) -> Dict:
+    def generate_trade(self, entry_time: datetime, session_id: int) -> dict:
         """Generate a single realistic trade"""
         cursor = self.connection.cursor()
 

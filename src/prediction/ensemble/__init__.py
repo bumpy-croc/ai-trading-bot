@@ -1,12 +1,11 @@
 """
-Model Ensemble Package
+Ensemble prediction module.
 
-This package provides model ensemble and aggregation capabilities
-for the prediction engine (Post-MVP feature).
+This module provides ensemble methods for combining multiple model predictions.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, List
 
 import numpy as np
 
@@ -18,7 +17,7 @@ class EnsembleResult:
     price: float
     confidence: float
     direction: int
-    member_predictions: List[ModelPrediction]
+    member_predictions: list[ModelPrediction]
 
 
 class SimpleEnsembleAggregator:

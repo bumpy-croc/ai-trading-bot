@@ -1,7 +1,13 @@
+"""
+Augmento sentiment data provider.
+
+This module provides sentiment data from Augmento API.
+"""
+
 import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Optional
 
 import pandas as pd
 import requests
@@ -44,7 +50,7 @@ class AugmentoProvider(SentimentDataProvider):
         self.last_request_time = 0
         self.min_request_interval = 1.0  # 1 second between requests (300/5min = conservative)
 
-    def _make_request(self, endpoint: str, params: Dict = None) -> requests.Response:
+    def _make_request(self, endpoint: str, params: dict = None) -> requests.Response:
         """Make rate-limited API request"""
         # Rate limiting
         current_time = time.time()
@@ -66,14 +72,14 @@ class AugmentoProvider(SentimentDataProvider):
         else:
             response.raise_for_status()
 
-    def get_topics(self) -> Dict[str, str]:
+    def get_topics(self) -> dict[str, str]:
         """Get mapping of topic IDs to descriptions"""
         if self._topics_cache is None:
             response = self._make_request("topics")
             self._topics_cache = response.json()
         return self._topics_cache
 
-    def get_available_coins(self) -> List[str]:
+    def get_available_coins(self) -> list[str]:
         """Get list of available coins"""
         if self._coins_cache is None:
             response = self._make_request("coins")
@@ -154,7 +160,7 @@ class AugmentoProvider(SentimentDataProvider):
             return pd.DataFrame()
 
     def _process_sentiment_data(
-        self, raw_data: List[Dict], symbol: str, source: str
+        self, raw_data: list[dict], symbol: str, source: str
     ) -> pd.DataFrame:
         """Process raw API response into structured DataFrame"""
         if not raw_data:
@@ -212,7 +218,7 @@ class AugmentoProvider(SentimentDataProvider):
 
         return df
 
-    def _get_sentiment_topic_indices(self, topics: Dict[str, str]) -> Dict[str, List[int]]:
+    def _get_sentiment_topic_indices(self, topics: dict[str, str]) -> dict[str, list[int]]:
         """Categorize topic indices by sentiment type"""
         positive_keywords = ["optimistic", "positive", "bullish", "good", "great", "moon"]
         negative_keywords = [
@@ -241,7 +247,7 @@ class AugmentoProvider(SentimentDataProvider):
         return sentiment_indices
 
     def get_multi_source_sentiment(
-        self, symbol: str, start: datetime, end: datetime, sources: List[str] = None
+        self, symbol: str, start: datetime, end: datetime, sources: list[str] = None
     ) -> pd.DataFrame:
         """
         Get sentiment data from multiple sources and combine
