@@ -4,7 +4,7 @@
       "builder": "dockerfile"
     },
     "deploy": {
-      "startCommand": "python scripts/start_dashboard.py",
+      "startCommand": "make dashboard-monitoring",
       "healthcheckPath": "/health",
       "healthcheckTimeout": 30,
       "restartPolicyType": "ON_FAILURE",

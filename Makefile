@@ -14,7 +14,7 @@ TIMEFRAME ?= 1h
 DAYS ?= 30
 
 .PHONY: help venv install deps deps-server atb dashboards dashboard-monitoring \
-        dashboard-backtesting live backtest optimizer test lint fmt clean
+        dashboard-backtesting live live-health backtest optimizer test lint fmt clean
 
 help:
 	@echo "Common targets:"
@@ -24,6 +24,7 @@ help:
 	@echo "  make dashboards           # list dashboards"
 	@echo "  make dashboard-monitoring # run monitoring dashboard on PORT=$(PORT)"
 	@echo "  make live                 # run live trading (paper by default)"
+	@echo "  make live-health          # run live trading with health server on PORT=$(PORT)"
 	@echo "  make backtest             # run backtest for STRATEGY=$(STRATEGY)"
 	@echo "  make optimizer            # run optimizer"
 	@echo "  make test                 # run pytest with 4 workers"
@@ -57,7 +58,10 @@ dashboard-backtesting: install
 	$(ATB) dashboards run backtesting --port 8001
 
 live: install
-	$(ATB) live $(STRATEGY) --paper-trading
+	$(ATB) live $(STRATEGY)
+
+live-health: install
+	$(ATB) live-health $(STRATEGY)
 
 backtest: install
 	$(ATB) backtest $(STRATEGY) --symbol $(SYMBOL) --timeframe $(TIMEFRAME) --days $(DAYS)

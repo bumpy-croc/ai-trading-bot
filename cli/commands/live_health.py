@@ -89,28 +89,47 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
 
 
 def _run_health_server(port: int) -> None:
-    httpd = HTTPServer(("", port), _HealthCheckHandler)
-    print(f"Health check server running on port {port}\nEndpoints: /health (basic), /status (detailed)")
-    httpd.serve_forever()
+    try:
+        httpd = HTTPServer(("", port), _HealthCheckHandler)
+        print(f"Health check server running on port {port}\nEndpoints: /health (basic), /status (detailed)")
+        httpd.serve_forever()
+    except OSError as e:
+        if e.errno == 48:  # Address already in use
+            print(f"⚠️  Port {port} is already in use. Health server will not start.")
+            print(f"   You can set a different port with: PORT=<port> make live-health")
+        else:
+            raise
 
 
 def _handle(ns: argparse.Namespace) -> int:
-    # start health server
-    port = int(os.getenv("PORT", os.getenv("HEALTH_CHECK_PORT", str(ns.port))))
+    # start health server with same port logic as original script
+    port = int(os.getenv("PORT", os.getenv("HEALTH_CHECK_PORT", "8000")))
     t = threading.Thread(target=_run_health_server, args=(port,), daemon=True)
     t.start()
     # forward to live runner with paper-trading default safety
+    # Filter out --port and --help arguments that shouldn't be passed to the live trading script
     tail = ns.args or []
-    return forward_to_module_main("scripts.run_live_trading", tail)
+    filtered_args = []
+    i = 0
+    while i < len(tail):
+        if tail[i] in ['--port', '--help'] and i + 1 < len(tail) and not tail[i + 1].startswith('-'):
+            # Skip --port and its value
+            i += 2
+        elif tail[i] in ['--port', '--help']:
+            # Skip --port without value
+            i += 1
+        else:
+            filtered_args.append(tail[i])
+            i += 1
+    return forward_to_module_main("scripts.run_live_trading", filtered_args)
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "live-health",
-        help="Run live trading with embedded health server",
+        help="Run live trading with embedded health server (uses PORT env var, defaults to 8000)",
     )
     p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed through to runner")
-    p.add_argument("--port", type=int, default=8000)
     p.set_defaults(func=_handle)
 
 
