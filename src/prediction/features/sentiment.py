@@ -10,11 +10,10 @@ from typing import List
 import pandas as pd
 
 from src.config.constants import DEFAULT_ENABLE_SENTIMENT
+from src.data_providers.feargreed_provider import FearGreedProvider
 
 from .base import FeatureExtractor
 from .schemas import SENTIMENT_FEATURES_SCHEMA
-from src.data_providers.feargreed_provider import FearGreedProvider
-from datetime import datetime, timezone
 
 
 class SentimentFeatureExtractor(FeatureExtractor):
@@ -37,7 +36,7 @@ class SentimentFeatureExtractor(FeatureExtractor):
         self._feature_names = SENTIMENT_FEATURES_SCHEMA.get_feature_names()
         # Lazily instantiate the provider only if/when needed
         self._provider = None
-    
+
     def extract(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Extract sentiment features from data.
@@ -97,13 +96,15 @@ class SentimentFeatureExtractor(FeatureExtractor):
                 return self._add_neutral_sentiment_features(df)
         # Ensure datetime index
         work = df.copy()
-        if 'timestamp' in work.columns and not isinstance(work.index, pd.DatetimeIndex):
-            work = work.set_index('timestamp')
+        if "timestamp" in work.columns and not isinstance(work.index, pd.DatetimeIndex):
+            work = work.set_index("timestamp")
         # Normalize price data index to timezone-naive (UTC without tzinfo)
         if isinstance(work.index, pd.DatetimeIndex):
             try:
                 # Convert everything to UTC then drop tz to avoid tz-aware/naive join errors
-                work.index = pd.to_datetime(work.index, utc=True).tz_convert('UTC').tz_localize(None)
+                work.index = (
+                    pd.to_datetime(work.index, utc=True).tz_convert("UTC").tz_localize(None)
+                )
             except Exception:
                 # Best effort standardization; if it fails, fallback to neutral to be safe
                 return self._add_neutral_sentiment_features(df)
@@ -121,10 +122,10 @@ class SentimentFeatureExtractor(FeatureExtractor):
             sents = self._provider.get_historical_sentiment(symbol="BTCUSDT", start=start, end=end)
         except Exception:
             sents = pd.DataFrame()
-        
+
         if sents.empty:
             return self._add_neutral_sentiment_features(df)
-        
+
         # Resample sentiment to the data's frequency (infer)
         try:
             inferred = pd.infer_freq(work.index)
@@ -132,45 +133,47 @@ class SentimentFeatureExtractor(FeatureExtractor):
             inferred = None
         if inferred is None:
             # Default to daily if cannot infer; forward fill will align
-            inferred = '1D'
+            inferred = "1D"
         sents_resampled = self._provider.aggregate_sentiment(sents, window=inferred)
         # Normalize sentiment index to timezone-naive (UTC without tzinfo)
         if isinstance(sents_resampled.index, pd.DatetimeIndex):
             try:
                 sents_resampled.index = (
                     pd.to_datetime(sents_resampled.index, utc=True)
-                    .tz_convert('UTC')
+                    .tz_convert("UTC")
                     .tz_localize(None)
                 )
             except Exception:
                 return self._add_neutral_sentiment_features(df)
-        
+
         # Join and forward-fill sentiment features; do not backfill into the future
-        merged = work.join(sents_resampled, how='left')
+        merged = work.join(sents_resampled, how="left")
         merged = merged.ffill()
-        
+
         # If still missing (all NaN), fill with neutral defaults from schema
         for feature_def in SENTIMENT_FEATURES_SCHEMA.features:
             if feature_def.name not in merged.columns or merged[feature_def.name].isna().all():
                 default_val = feature_def.default_value
                 if default_val is None:
-                    if 'primary' in feature_def.name:
+                    if "primary" in feature_def.name:
                         default_val = 0.5
-                    elif 'momentum' in feature_def.name:
+                    elif "momentum" in feature_def.name:
                         default_val = 0.0
-                    elif 'volatility' in feature_def.name:
+                    elif "volatility" in feature_def.name:
                         default_val = 0.3
-                    elif 'confidence' in feature_def.name:
+                    elif "confidence" in feature_def.name:
                         default_val = 0.7
                     else:
                         default_val = 0.0
-                merged[feature_def.name] = merged.get(feature_def.name, pd.Series(index=merged.index, dtype=float)).fillna(default_val)
-        
+                merged[feature_def.name] = merged.get(
+                    feature_def.name, pd.Series(index=merged.index, dtype=float)
+                ).fillna(default_val)
+
         # Return on original index/columns order plus new features
         result = merged
-        if 'timestamp' in df.columns and not isinstance(df.index, pd.DatetimeIndex):
+        if "timestamp" in df.columns and not isinstance(df.index, pd.DatetimeIndex):
             # If original had timestamp column as data, keep original shape
-            result = merged.reset_index().rename(columns={'index': 'timestamp'})
+            result = merged.reset_index().rename(columns={"index": "timestamp"})
         return result
 
     def get_feature_names(self) -> List[str]:

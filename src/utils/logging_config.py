@@ -1,11 +1,12 @@
 from __future__ import annotations
+
 import logging
 import logging.config
 import os
-from typing import Any, Dict
+from typing import Any
 
 
-def build_logging_config(level_name: str | None = None, json: bool = False) -> Dict[str, Any]:
+def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
     level = (level_name or os.getenv("LOG_LEVEL", "INFO")).upper()
     if json:
         formatter = {

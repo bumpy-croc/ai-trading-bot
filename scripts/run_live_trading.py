@@ -60,7 +60,9 @@ def load_strategy(strategy_name: str):
 
     if strategy_name not in strategies or strategies[strategy_name] is None:
         logger.error(f"Unknown strategy: {strategy_name}")
-        logger.info(f"Available strategies: {list(k for k, v in strategies.items() if v is not None)}")
+        logger.info(
+            f"Available strategies: {list(k for k, v in strategies.items() if v is not None)}"
+        )
         sys.exit(1)
 
     try:

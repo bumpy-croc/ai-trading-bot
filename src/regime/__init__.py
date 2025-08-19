@@ -1,1 +1,1 @@
-from .detector import RegimeDetector, RegimeConfig, TrendLabel, VolLabel
+from .detector import RegimeConfig, RegimeDetector, TrendLabel, VolLabel

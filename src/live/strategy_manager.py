@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from strategies.base import BaseStrategy
-from strategies.ml_basic import MlBasic
 from strategies.bull import Bull
+from strategies.ml_basic import MlBasic
 
 logger = logging.getLogger(__name__)
 

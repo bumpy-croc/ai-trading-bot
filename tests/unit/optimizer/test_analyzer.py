@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
+from src.optimizer.analyzer import AnalyzerConfig, PerformanceAnalyzer
 from src.optimizer.schemas import ExperimentConfig, ExperimentResult
-from src.optimizer.analyzer import PerformanceAnalyzer, AnalyzerConfig
 
 
 def _make_result(**overrides) -> ExperimentResult:
@@ -38,8 +38,7 @@ def test_analyzer_suggests_reducing_risk_on_high_drawdown():
     suggestions = analyzer.analyze([result])
 
     assert any(
-        s.target == "risk" and s.change.get("risk.max_position_size", 0) < 0
-        for s in suggestions
+        s.target == "risk" and s.change.get("risk.max_position_size", 0) < 0 for s in suggestions
     ), "Expected risk reduction suggestion when drawdown exceeds threshold"
 
 
@@ -50,8 +49,7 @@ def test_analyzer_suggests_small_risk_increase_on_low_sharpe_with_ok_drawdown():
     suggestions = analyzer.analyze([result])
 
     assert any(
-        s.target == "risk" and s.change.get("risk.max_position_size", 0) > 0
-        for s in suggestions
+        s.target == "risk" and s.change.get("risk.max_position_size", 0) > 0 for s in suggestions
     ), "Expected small risk increase suggestion when Sharpe is low but drawdown ok"
 
 

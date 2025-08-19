@@ -8,7 +8,7 @@ Any percentage outputs are marked in the docstrings.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Union, Tuple
+from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -103,56 +103,56 @@ def max_drawdown(balance_series: pd.Series) -> float:
 
 
 def directional_accuracy(pred_prices: pd.Series, actual_next_close: pd.Series) -> float:
-	"""Directional accuracy (% correct up/down vs next close)."""
-	if pred_prices is None or actual_next_close is None:
-		return 0.0
-	if len(pred_prices) == 0 or len(actual_next_close) == 0:
-		return 0.0
-	common = pred_prices.index.intersection(actual_next_close.index)
-	if len(common) == 0:
-		return 0.0
-	p = pred_prices.loc[common]
-	a = actual_next_close.loc[common]
-	# Compare sign(pred - current) vs sign(next - current). We need current close at t.
-	# Assume a is aligned to t+1 close; for approximation, compare pred vs a directly.
-	pred_dir = np.sign(p.diff())  # fallback if current not available
-	true_dir = np.sign(a.diff())
-	mask = (~np.isnan(pred_dir)) & (~np.isnan(true_dir))
-	if mask.sum() == 0:
-		return 0.0
-	acc = (pred_dir[mask] == true_dir[mask]).mean()
-	return float(acc * 100.0)
+    """Directional accuracy (% correct up/down vs next close)."""
+    if pred_prices is None or actual_next_close is None:
+        return 0.0
+    if len(pred_prices) == 0 or len(actual_next_close) == 0:
+        return 0.0
+    common = pred_prices.index.intersection(actual_next_close.index)
+    if len(common) == 0:
+        return 0.0
+    p = pred_prices.loc[common]
+    a = actual_next_close.loc[common]
+    # Compare sign(pred - current) vs sign(next - current). We need current close at t.
+    # Assume a is aligned to t+1 close; for approximation, compare pred vs a directly.
+    pred_dir = np.sign(p.diff())  # fallback if current not available
+    true_dir = np.sign(a.diff())
+    mask = (~np.isnan(pred_dir)) & (~np.isnan(true_dir))
+    if mask.sum() == 0:
+        return 0.0
+    acc = (pred_dir[mask] == true_dir[mask]).mean()
+    return float(acc * 100.0)
 
 
 def mean_absolute_error(pred: pd.Series, actual: pd.Series) -> float:
-	"""MAE between prediction and actual."""
-	common = pred.index.intersection(actual.index)
-	if len(common) == 0:
-		return 0.0
-	return float((pred.loc[common] - actual.loc[common]).abs().mean())
+    """MAE between prediction and actual."""
+    common = pred.index.intersection(actual.index)
+    if len(common) == 0:
+        return 0.0
+    return float((pred.loc[common] - actual.loc[common]).abs().mean())
 
 
 def mean_absolute_percentage_error(pred: pd.Series, actual: pd.Series) -> float:
-	"""MAPE (%) between prediction and actual."""
-	common = pred.index.intersection(actual.index)
-	if len(common) == 0:
-		return 0.0
-	a = actual.loc[common]
-	p = pred.loc[common]
-	den = a.replace(0, np.nan).abs()
-	mape = ((p - a).abs() / den).dropna().mean()
-	return float((mape if not np.isnan(mape) else 0.0) * 100.0)
+    """MAPE (%) between prediction and actual."""
+    common = pred.index.intersection(actual.index)
+    if len(common) == 0:
+        return 0.0
+    a = actual.loc[common]
+    p = pred.loc[common]
+    den = a.replace(0, np.nan).abs()
+    mape = ((p - a).abs() / den).dropna().mean()
+    return float((mape if not np.isnan(mape) else 0.0) * 100.0)
 
 
 def brier_score_direction(prob_up: pd.Series, actual_up: pd.Series) -> float:
-	"""Brier score for binary direction (lower is better).
+    """Brier score for binary direction (lower is better).
 
-	prob_up: probability of up direction in [0,1]
-	actual_up: 1 if next close up, else 0
-	"""
-	common = prob_up.index.intersection(actual_up.index)
-	if len(common) == 0:
-		return 0.0
-	p = prob_up.loc[common].clip(0.0, 1.0)
-	y = actual_up.loc[common].clip(0.0, 1.0)
-	return float(((p - y) ** 2).mean())
+    prob_up: probability of up direction in [0,1]
+    actual_up: 1 if next close up, else 0
+    """
+    common = prob_up.index.intersection(actual_up.index)
+    if len(common) == 0:
+        return 0.0
+    p = prob_up.loc[common].clip(0.0, 1.0)
+    y = actual_up.loc[common].clip(0.0, 1.0)
+    return float(((p - y) ** 2).mean())

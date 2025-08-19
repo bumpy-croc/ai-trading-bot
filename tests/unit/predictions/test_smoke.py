@@ -1,6 +1,6 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from src.prediction import create_minimal_engine
 from src.prediction.engine import PredictionEngine, PredictionResult
@@ -15,9 +15,9 @@ def _make_small_ohlcv(n: int = 130) -> pd.DataFrame:
     high = np.maximum(open_, close) + rng.random(size=n)
     low = np.minimum(open_, close) - rng.random(size=n)
     volume = rng.uniform(100, 500, size=n)
-    return pd.DataFrame({
-        "open": open_, "high": high, "low": low, "close": close, "volume": volume
-    }, index=idx)
+    return pd.DataFrame(
+        {"open": open_, "high": high, "low": low, "close": close, "volume": volume}, index=idx
+    )
 
 
 @pytest.mark.fast

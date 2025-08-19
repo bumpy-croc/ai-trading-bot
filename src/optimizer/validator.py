@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Dict, Any
+
 import numpy as np
 
 from src.optimizer.schemas import ExperimentResult
@@ -19,8 +19,8 @@ class ValidationReport:
     passed: bool
     p_value: float
     effect_size: float
-    baseline_metrics: Dict[str, float]
-    candidate_metrics: Dict[str, float]
+    baseline_metrics: dict[str, float]
+    candidate_metrics: dict[str, float]
 
 
 class StatisticalValidator:
@@ -60,7 +60,9 @@ class StatisticalValidator:
         # One-sided p-value
         return count / self.cfg.bootstrap_samples
 
-    def validate(self, baseline: List[ExperimentResult], candidate: List[ExperimentResult]) -> ValidationReport:
+    def validate(
+        self, baseline: list[ExperimentResult], candidate: list[ExperimentResult]
+    ) -> ValidationReport:
         # For MVP, derive per-run metric as annualized_return - max_drawdown_penalty
         bx = np.array([r.annualized_return - 0.5 * r.max_drawdown for r in baseline], dtype=float)
         cx = np.array([r.annualized_return - 0.5 * r.max_drawdown for r in candidate], dtype=float)
@@ -68,18 +70,30 @@ class StatisticalValidator:
         p = self._bootstrap_pvalue(bx, cx)
         d = self._cohens_d(bx, cx)
 
-        passed_expr = (p <= self.cfg.p_value_threshold) and (abs(d) >= self.cfg.min_effect_size) and (float(np.mean(cx)) > float(np.mean(bx)))
+        passed_expr = (
+            (p <= self.cfg.p_value_threshold)
+            and (abs(d) >= self.cfg.min_effect_size)
+            and (float(np.mean(cx)) > float(np.mean(bx)))
+        )
 
         return ValidationReport(
             passed=bool(passed_expr),
             p_value=float(p),
             effect_size=float(d),
             baseline_metrics={
-                "annualized_return": float(np.mean([r.annualized_return for r in baseline]) if baseline else 0.0),
-                "max_drawdown": float(np.mean([r.max_drawdown for r in baseline]) if baseline else 0.0),
+                "annualized_return": float(
+                    np.mean([r.annualized_return for r in baseline]) if baseline else 0.0
+                ),
+                "max_drawdown": float(
+                    np.mean([r.max_drawdown for r in baseline]) if baseline else 0.0
+                ),
             },
             candidate_metrics={
-                "annualized_return": float(np.mean([r.annualized_return for r in candidate]) if candidate else 0.0),
-                "max_drawdown": float(np.mean([r.max_drawdown for r in candidate]) if candidate else 0.0),
+                "annualized_return": float(
+                    np.mean([r.annualized_return for r in candidate]) if candidate else 0.0
+                ),
+                "max_drawdown": float(
+                    np.mean([r.max_drawdown for r in candidate]) if candidate else 0.0
+                ),
             },
         )

@@ -18,8 +18,8 @@ import pytest
 
 from backtesting.engine import Backtester
 from live.trading_engine import Trade
-from strategies.ml_basic import MlBasic
 from risk.risk_manager import RiskParameters
+from strategies.ml_basic import MlBasic
 
 
 class TestBacktesterInitialization:
@@ -358,13 +358,8 @@ class TestBacktestingEdgeCases:
         """Test backtester with single data point"""
         strategy = MlBasic()
         single_data = pd.DataFrame(
-            {
-                'open': [100],
-                'high': [101],
-                'low': [99],
-                'close': [100.5],
-                'volume': [1000]
-            }, index=[datetime(2024, 1, 1, 10, 0)]
+            {"open": [100], "high": [101], "low": [99], "close": [100.5], "volume": [1000]},
+            index=[datetime(2024, 1, 1, 10, 0)],
         )
 
         mock_data_provider.get_historical_data.return_value = single_data
