@@ -14,7 +14,7 @@ import sys
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config.constants import DEFAULT_INITIAL_BALANCE
+from config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_PERFORMANCE_MONITOR_INTERVAL
 from data_providers.binance_provider import BinanceProvider
 from data_providers.senticrypt_provider import SentiCryptProvider
 from live.trading_engine import LiveTradingEngine
@@ -162,7 +162,7 @@ def monitor_performance(engine):
                 flush=True,
             )
 
-            time.sleep(10)  # Update every 10 seconds
+            time.sleep(DEFAULT_PERFORMANCE_MONITOR_INTERVAL)  # Configurable monitoring interval
 
     except KeyboardInterrupt:
         print("\n\n🛑 Monitoring stopped")
