@@ -1,4 +1,4 @@
-name: CI
+name: Python Quality Checks
 
 on:
   pull_request:
