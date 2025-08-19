@@ -150,12 +150,13 @@ class MonitoringDashboard:
             # Order Execution Metrics
             "fill_rate": {"enabled": True, "priority": "high", "format": "percentage"},
             "avg_slippage": {"enabled": True, "priority": "high", "format": "percentage"},
-            "failed_orders": {"enabled": True, "priority": "high", "format": "number"},
+            "failed_orders": {"enabled": True, "priority": "high", "format": "integer"},
             "order_latency": {"enabled": True, "priority": "medium", "format": "number"},
             "execution_quality": {"enabled": True, "priority": "medium", "format": "status"},
             # Balance & Positions
             "current_balance": {"enabled": True, "priority": "high", "format": "currency"},
-            "active_positions_count": {"enabled": True, "priority": "high", "format": "number"},
+            # Counts should display as integers (with 1 decimal place in UI per requirement)
+            "active_positions_count": {"enabled": True, "priority": "high", "format": "integer"},
             "total_position_value": {"enabled": True, "priority": "high", "format": "currency"},
             "margin_usage": {"enabled": True, "priority": "high", "format": "percentage"},
             "available_margin": {"enabled": True, "priority": "medium", "format": "currency"},
@@ -166,11 +167,12 @@ class MonitoringDashboard:
             "recent_trade_outcomes": {"enabled": True, "priority": "medium", "format": "text"},
             "profit_factor": {"enabled": True, "priority": "medium", "format": "number"},
             "avg_win_loss_ratio": {"enabled": True, "priority": "medium", "format": "number"},
-            "total_trades": {"enabled": True, "priority": "medium", "format": "number"},
+            "total_trades": {"enabled": True, "priority": "medium", "format": "integer"},
             # Additional Core Metrics
             "total_pnl": {"enabled": True, "priority": "high", "format": "currency"},
             "current_strategy": {"enabled": True, "priority": "high", "format": "text"},
-            "current_price": {"enabled": True, "priority": "medium", "format": "currency"},
+            # Disable BTC-only current price metric to avoid confusion across symbols
+            "current_price": {"enabled": False, "priority": "medium", "format": "currency"},
             "price_change_24h": {"enabled": True, "priority": "medium", "format": "percentage"},
             "rsi": {"enabled": True, "priority": "low", "format": "number"},
             "ema_trend": {"enabled": True, "priority": "low", "format": "text"},
@@ -246,6 +248,24 @@ class MonitoringDashboard:
             days = request.args.get("days", 7, type=int)
             chart_data = self._get_performance_chart_data(days)
             return jsonify(chart_data)
+
+        @self.app.route("/api/prices")
+        def get_prices():
+            """Get current prices for a list of symbols (comma-separated).
+
+            Query params:
+              symbols=BTCUSDT,ETHUSDT
+            Returns:
+              { "BTCUSDT": 68000.12, "ETHUSDT": 3200.34 }
+            """
+            symbols_param = request.args.get("symbols", "")
+            symbols = [s.strip().upper() for s in symbols_param.split(",") if s.strip()]
+            price_cache: dict[str, float] = {}
+            out: dict[str, float] = {}
+            for s in symbols:
+                price = self._get_price_for_symbol(s, price_cache)
+                out[s] = float(price) if price else 0.0
+            return jsonify(out)
 
         @self.app.route("/api/system/status")
         def system_status():
@@ -334,6 +354,26 @@ class MonitoringDashboard:
             metrics = self._collect_metrics()
             emit("metrics_update", metrics)
 
+    # -------- Price fetching (assume symbols are accurate) --------
+
+    def _get_price_for_symbol(self, symbol: str, cache: dict[str, float]) -> float:
+        """Fetch current price for an exact symbol, with simple caching.
+
+        If the fetch fails, returns 0.0. Symbols are assumed accurate.
+        """
+        s = str(symbol).upper()
+        if not s:
+            return 0.0
+        if s in cache:
+            return cache[s]
+        try:
+            price = self._safe_float(self.data_provider.get_current_price(s))
+        except Exception as e:
+            logger.error(f"Error fetching price for {s}: {e}")
+            price = 0.0
+        cache[s] = price
+        return price
+
     def _collect_metrics(self) -> dict[str, Any]:
         """Collect all monitoring metrics"""
         try:
@@ -419,8 +459,7 @@ class MonitoringDashboard:
                 metrics["total_pnl"] = self._get_total_pnl()
             if "current_strategy" in enabled_metrics:
                 metrics["current_strategy"] = self._get_current_strategy()
-            if "current_price" in enabled_metrics:
-                metrics["current_price"] = self._get_current_price()
+            # current_price disabled (BTC-specific) to avoid confusion
             if "price_change_24h" in enabled_metrics:
                 metrics["price_change_24h"] = self._get_price_change_24h()
             if "rsi" in enabled_metrics:
@@ -443,7 +482,7 @@ class MonitoringDashboard:
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
-            return result[0]["total_pnl"] if result else 0.0
+            return self._safe_float(result[0]["total_pnl"]) if result else 0.0
         except Exception as e:
             logger.error(f"Error getting total PnL: {e}")
             return 0.0
@@ -513,7 +552,8 @@ class MonitoringDashboard:
             df = pd.DataFrame(result)
             # Convert balance column to float to handle Decimal types
             df["balance"] = df["balance"].apply(self._safe_float)
-            daily_balance = df.set_index("date")["balance"]
+            # Aggregate to daily last to avoid duplicate dates
+            daily_balance = df.groupby("date")["balance"].last()
             return perf_max_drawdown(daily_balance)
         except Exception as e:
             logger.error(f"Error calculating max drawdown: {e}")
@@ -561,7 +601,8 @@ class MonitoringDashboard:
             df = pd.DataFrame(result)
             # Convert balance column to float to handle Decimal types
             df["balance"] = df["balance"].apply(self._safe_float)
-            daily_balance = df.set_index("date")["balance"]
+            # Aggregate to daily last to ensure daily frequency
+            daily_balance = df.groupby("date")["balance"].last()
             return perf_sharpe(daily_balance)
 
         except Exception as e:
@@ -859,7 +900,7 @@ class MonitoringDashboard:
             query = """
             SELECT balance, timestamp
             FROM account_history
-            ORDER BY timestamp DESC
+            ORDER BY timestamp ASC
             LIMIT 100
             """
             result = self.db_manager.execute_query(query)
@@ -869,18 +910,18 @@ class MonitoringDashboard:
 
             # Convert to DataFrame for easier calculation
             df = pd.DataFrame(result)
-            df["balance"] = pd.to_numeric(df["balance"])
+            df["balance"] = df["balance"].apply(self._safe_float)
 
-            # Calculate running maximum (peak)
-            df["peak"] = df["balance"].expanding().max()
+            # Calculate running maximum (peak) in chronological order
+            df["peak"] = df["balance"].cummax()
 
-            # Calculate drawdown
-            current_balance = df["balance"].iloc[0]  # Most recent (first in DESC order)
-            current_peak = df["peak"].iloc[0]
+            # Calculate drawdown at the latest point
+            current_balance = df["balance"].iloc[-1]
+            current_peak = df["peak"].iloc[-1]
 
             if current_peak > 0:
                 drawdown = ((current_peak - current_balance) / current_peak) * 100
-                return max(0, drawdown)
+                return max(0.0, float(drawdown))
             return 0.0
 
         except Exception as e:
@@ -897,7 +938,7 @@ class MonitoringDashboard:
             AND exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
-            return result[0]["daily_pnl"] if result else 0.0
+            return self._safe_float(result[0]["daily_pnl"]) if result else 0.0
         except Exception as e:
             logger.error(f"Error getting daily P&L: {e}")
             return 0.0
@@ -912,17 +953,24 @@ class MonitoringDashboard:
             AND exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
-            return result[0]["weekly_pnl"] if result else 0.0
+            return self._safe_float(result[0]["weekly_pnl"]) if result else 0.0
         except Exception as e:
             logger.error(f"Error getting weekly P&L: {e}")
             return 0.0
 
     def _get_total_position_sizes(self) -> float:
-        """Get total position size of all active positions"""
+        """Get total notional size (currency) of all active positions at entry prices.
+
+        Presented as currency in the UI per configuration.
+        """
         try:
             positions = self.db_manager.get_active_positions()
-            total_sizes = sum(self._safe_float(pos.get("quantity", 0)) for pos in positions)
-            return total_sizes
+            total_value = 0.0
+            for pos in positions:
+                quantity = self._safe_float(pos.get("quantity", 0))
+                entry_price = self._safe_float(pos.get("entry_price", 0))
+                total_value += quantity * entry_price
+            return total_value
         except Exception as e:
             logger.error(f"Error getting total position sizes: {e}")
             return 0.0
@@ -1037,16 +1085,24 @@ class MonitoringDashboard:
     # ========== BALANCE & POSITIONS ==========
 
     def _get_total_position_value(self) -> float:
-        """Get total value of all positions at current prices"""
+        """Get total value of all positions at current prices (per-symbol)."""
         try:
-            current_price = self._get_current_price()
-            if current_price <= 0:
-                return 0.0
-
             positions = self.db_manager.get_active_positions()
-            total_quantity = sum(self._safe_float(pos.get("quantity", 0)) for pos in positions)
-            return total_quantity * current_price
-
+            total_value = 0.0
+            price_cache: dict[str, float] = {}
+            for pos in positions:
+                symbol = str(pos.get("symbol", ""))
+                quantity = self._safe_float(pos.get("quantity", 0))
+                if not symbol or quantity == 0:
+                    continue
+                if symbol not in price_cache:
+                    try:
+                        price_cache[symbol] = self._safe_float(self.data_provider.get_current_price(symbol))
+                    except Exception:
+                        price_cache[symbol] = 0.0
+                current_price = price_cache.get(symbol, 0.0)
+                total_value += quantity * current_price
+            return total_value
         except Exception as e:
             logger.error(f"Error getting total position value: {e}")
             return 0.0
@@ -1071,37 +1127,36 @@ class MonitoringDashboard:
         try:
             current_balance = self._get_current_balance()
             used_margin = self._get_total_position_value()
-
-            return max(0, current_balance - used_margin)
-
+            return max(0.0, float(current_balance - used_margin))
         except Exception as e:
             logger.error(f"Error calculating available margin: {e}")
             return 0.0
 
     def _get_unrealized_pnl(self) -> float:
-        """Get total unrealized P&L from active positions"""
+        """Get total unrealized P&L from active positions (per-symbol)."""
         try:
-            current_price = self._get_current_price()
-            if current_price <= 0:
-                return 0.0
-
             positions = self.db_manager.get_active_positions()
-
             total_unrealized = 0.0
+            price_cache: dict[str, float] = {}
             for position in positions:
+                symbol = str(position.get("symbol", ""))
                 entry_price = self._safe_float(position.get("entry_price", 0))
                 quantity = self._safe_float(position.get("quantity", 0))
-                side = position.get("side", "").lower()
-
+                side = str(position.get("side", "")).lower()
+                if not symbol or quantity == 0:
+                    continue
+                if symbol not in price_cache:
+                    try:
+                        price_cache[symbol] = self._safe_float(self.data_provider.get_current_price(symbol))
+                    except Exception:
+                        price_cache[symbol] = 0.0
+                current_price = price_cache.get(symbol, 0.0)
                 if side == "long":
                     unrealized = (current_price - entry_price) * quantity
                 else:  # short
                     unrealized = (entry_price - current_price) * quantity
-
                 total_unrealized += unrealized
-
             return total_unrealized
-
         except Exception as e:
             logger.error(f"Error calculating unrealized P&L: {e}")
             return 0.0
@@ -1195,7 +1250,7 @@ class MonitoringDashboard:
             positions_data = self.db_manager.get_active_positions()
 
             positions: list[PositionDict] = []
-            current_price = self._get_current_price()
+            price_cache: dict[str, float] = {}
 
             for pos in positions_data:
                 # Ensure quantity is float
@@ -1204,6 +1259,9 @@ class MonitoringDashboard:
                 # Calculate unrealized PnL - convert entry_price to float
                 entry_price = self._safe_float(pos.get("entry_price", 0))
                 side = pos.get("side", "").lower()
+                symbol = str(pos.get("symbol", ""))
+                # Fetch per-symbol current price directly (assume symbol is accurate)
+                current_price = self._get_price_for_symbol(symbol, price_cache)
 
                 if side == "long":
                     unrealized_pnl = (current_price - entry_price) * quantity
@@ -1213,7 +1271,7 @@ class MonitoringDashboard:
                 positions.append(
                     PositionDict(
                         **{
-                            "symbol": pos.get("symbol", ""),
+                            "symbol": symbol,
                             "side": pos.get("side", ""),
                             "entry_price": entry_price,
                             "current_price": current_price,
@@ -1259,19 +1317,21 @@ class MonitoringDashboard:
             trades: list[TradeDict] = []
             for row in result or []:
                 try:
+                    # Handle None values more gracefully for numeric fields
+                    entry_price_raw = row.get("entry_price")
+                    exit_price_raw = row.get("exit_price")
+                    pnl_raw = row.get("pnl")
+                    quantity_raw = row.get("quantity")
+                    
                     trade: TradeDict = {
                         "symbol": str(row.get("symbol", "")),
                         "side": str(row.get("side", "")),
-                        "entry_price": float(row.get("entry_price", 0.0)),
-                        "exit_price": float(row.get("exit_price", 0.0)),
-                        "quantity": (
-                            float(row.get("quantity", 0.0))
-                            if row.get("quantity") is not None
-                            else 0.0
-                        ),
+                        "entry_price": float(entry_price_raw) if entry_price_raw is not None else 0.0,
+                        "exit_price": float(exit_price_raw) if exit_price_raw is not None else 0.0,
+                        "quantity": float(quantity_raw) if quantity_raw is not None else 0.0,
                         "entry_time": row.get("entry_time"),
                         "exit_time": row.get("exit_time"),
-                        "pnl": float(row.get("pnl", 0.0)),
+                        "pnl": float(pnl_raw) if pnl_raw is not None else 0.0,
                         "exit_reason": str(row.get("exit_reason", "")),
                     }
                     trades.append(trade)
@@ -1307,12 +1367,18 @@ class MonitoringDashboard:
             """  # nosec B608: days is validated and constrained to an integer range [1, 365]
             result = self.db_manager.execute_query(query)
 
-            timestamps = []
-            balances = []
+            timestamps: list[str] = []
+            balances: list[float] = []
 
             for row in result:
-                timestamps.append(row["timestamp"])
-                balances.append(row["balance"])
+                # Ensure ISO 8601 strings for JS Date parsing
+                ts = row["timestamp"]
+                if isinstance(ts, datetime):
+                    timestamps.append(ts.isoformat())
+                else:
+                    # Fallback to string conversion
+                    timestamps.append(str(ts))
+                balances.append(self._safe_float(row["balance"]))
 
             return {"timestamps": timestamps, "balances": balances}
 
