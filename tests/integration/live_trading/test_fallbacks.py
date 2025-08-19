@@ -46,26 +46,30 @@ class TestLiveTradingFallbacks:
         # Mock the database manager to avoid database connection issues
         with pytest.MonkeyPatch().context() as m:
             # Mock the DatabaseManager before creating the engine
-            m.setattr('src.database.manager.DatabaseManager', MagicMock())
-            
+            m.setattr("src.database.manager.DatabaseManager", MagicMock())
+
             # Create engine after mocking
             engine = LiveTradingEngine(
-                strategy=mock_strategy, 
-                data_provider=mock_data_provider, 
+                strategy=mock_strategy,
+                data_provider=mock_data_provider,
                 enable_live_trading=False,
-                max_position_size=0.1  # Explicitly set as float
+                max_position_size=0.1,  # Explicitly set as float
             )
-            
+
             # Ensure all mocked components are properly set
             engine.db_manager = MagicMock()
             engine.db_manager.log_strategy_execution = MagicMock()
             engine.risk_manager = MagicMock()
             engine.risk_manager.get_max_concurrent_positions.return_value = 1
-            engine.risk_manager.calculate_position_fraction.return_value = 0.05  # Return a float instead of MagicMock
-            
+            engine.risk_manager.calculate_position_fraction.return_value = (
+                0.05  # Return a float instead of MagicMock
+            )
+
             # Double-check max_position_size is a float
-            assert isinstance(engine.max_position_size, (int, float)), f"max_position_size should be numeric, got {type(engine.max_position_size)}"
-            
+            assert isinstance(
+                engine.max_position_size, (int, float)
+            ), f"max_position_size should be numeric, got {type(engine.max_position_size)}"
+
             # Mock the missing _close_position method
             engine._close_position = MagicMock()
             engine.positions = {}
