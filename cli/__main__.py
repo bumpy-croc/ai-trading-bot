@@ -10,13 +10,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # Import and register command groups
-    from cli.commands import dashboards, live, backtest, optimizer, scripts as scripts_cmd
+    from cli.commands import dashboards, live, live_health, backtest, optimizer, data, db, train, tests, scripts as scripts_cmd
 
     dashboards.register(subparsers)
     live.register(subparsers)
     backtest.register(subparsers)
     optimizer.register(subparsers)
     scripts_cmd.register(subparsers)
+    live_health.register(subparsers)
+    data.register(subparsers)
+    db.register(subparsers)
+    train.register(subparsers)
+    tests.register(subparsers)
 
     return parser
 

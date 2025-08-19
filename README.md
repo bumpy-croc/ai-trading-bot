@@ -41,44 +41,56 @@ alembic upgrade head
 3) Backtest
 
 ```bash
-python scripts/run_backtest.py ml_basic --symbol BTCUSDT --days 90  # --provider binance|coinbase
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90
 ```
 
 4) Monitoring dashboard
 
 ```bash
-# Uses DATABASE_URL; updates every 1 hour by default
-python scripts/start_dashboard.py
-# open http://localhost:8000
+atb dashboards list
+atb dashboards run monitoring --port 8000
 ```
 
 5) Live trading (paper by default)
 
 ```bash
 # Paper trading (safe)
-python scripts/run_live_trading.py ml_basic --symbol BTCUSDT --paper-trading
+atb live ml_basic --symbol BTCUSDT --paper-trading
 
 # Live trading (requires explicit confirmation)
-python scripts/run_live_trading.py ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
+atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
+
+# Live trading + health endpoint
+atb live-health --port 8000 -- ml_basic --paper-trading
 ```
 
 6) Utilities
 
 ```bash
 # Cache tools
-python scripts/cache_manager.py info
-python scripts/cache_manager.py list --detailed
-python scripts/cache_manager.py clear-old --hours 24
+atb data cache-manager info
+atb data cache-manager list --detailed
+atb data cache-manager clear-old --hours 24
+
+# Prefill cache for faster backtests
+atb data prefill-cache --symbols BTCUSDT ETHUSDT --timeframes 1h 4h --years 4
 
 # Control workflow (train, deploy, swap strategy)
-python scripts/live_trading_control.py --help
-python scripts/live_trading_control.py swap-strategy --strategy ml_basic
+atb live-control train --symbol BTCUSDT --days 365 --auto-deploy
+atb live-control swap-strategy --strategy ml_basic
+
+# Populate dummy data (for dashboards/testing)
+atb data populate-dummy --trades 100 --confirm
 ```
 
 7) Tests
 
 ```bash
 pytest -q
+
+# Diagnostics
+atb db verify
+atb tests heartbeat
 ```
 
 ---
@@ -110,11 +122,11 @@ src/
 - Data providers: `data_providers.BinanceProvider`, `CoinbaseProvider`, `SentiCryptProvider`, `CachedDataProvider`
 - ML prediction: `prediction.models.registry.PredictionModelRegistry` (ONNX), caching in `prediction.utils.caching`
 - Strategies: `strategies.ml_basic`
-- Backtesting: `backtesting.engine.Backtester` (CLI: `scripts/run_backtest.py`)
-- Live engine: `live.trading_engine.LiveTradingEngine` (CLI: `scripts/run_live_trading.py`)
+- Backtesting: `backtesting.engine.Backtester` (CLI: `atb backtest`)
+- Live engine: `live.trading_engine.LiveTradingEngine` (CLI: `atb live`, `atb live-health`)
 - Risk: `risk.risk_manager.RiskManager`
 - Database: `database.manager.DatabaseManager` (PostgreSQL)
-- Monitoring: `scripts/start_dashboard.py` → `dashboards.monitoring.MonitoringDashboard`
+- Monitoring: `dashboards.monitoring.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
 - Admin UI: `database_manager.app` (Flask-Admin), run `python src/database_manager/app.py`
 
 ---
@@ -166,7 +178,7 @@ Sentiment data (SentiCrypt) and ML training are supported. Pretrained models liv
 ## Getting help
 - Open issues for bugs or questions
 - Check `docs/README.md` for detailed guides
-- Use `scripts/verify_database_connection.py` to diagnose DB issues quickly
+- Use `atb db verify` to diagnose DB issues quickly
 
 ---
 

@@ -999,7 +999,7 @@ class MonitoringDashboard:
             query = """
             SELECT 
                 COUNT(*) as total_orders,
-                COUNT(CASE WHEN status = 'FILLED' THEN 1 END) as filled_orders
+                COUNT(CASE WHEN status::text = 'filled' THEN 1 END) as filled_orders
             FROM positions
             WHERE entry_time > NOW() - INTERVAL '24 hours'
             """

@@ -34,6 +34,7 @@ from database.manager import DatabaseManager
 from database.models import TradeSource
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
+from config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,16 @@ class Backtester:
         self.trading_session_id = None
         if log_to_database:
             try:
-                self.db_manager = DatabaseManager(database_url)
+                # Prefer production DB for backtest persistence by default
+                selected_db_url = database_url
+                if selected_db_url is None:
+                    try:
+                        cfg = get_config()
+                        selected_db_url = cfg.get("PRODUCTION_DATABASE_URL")
+                    except Exception:
+                        selected_db_url = None
+
+                self.db_manager = DatabaseManager(selected_db_url)
                 # Set up strategy logging
                 if self.db_manager:
                     self.strategy.set_database_manager(self.db_manager)

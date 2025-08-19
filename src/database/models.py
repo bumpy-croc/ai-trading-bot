@@ -55,11 +55,12 @@ class PositionSide(enum.Enum):
 class OrderStatus(enum.Enum):
     """Order status enumeration"""
 
-    PENDING = "PENDING"
-    OPEN = "OPEN"
-    FILLED = "FILLED"
-    CANCELLED = "CANCELLED"
-    FAILED = "FAILED"
+    # Values use lowercase to match existing PostgreSQL enum labels
+    PENDING = "pending"
+    OPEN = "open"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
 
 
 class TradeSource(enum.Enum):
