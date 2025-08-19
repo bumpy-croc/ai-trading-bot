@@ -10,7 +10,7 @@ import threading
 import time
 from datetime import datetime
 
-from scripts.health_check import run_health_server
+from health_check import run_health_server
 
 
 def signal_handler(signum, frame):
