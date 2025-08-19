@@ -125,7 +125,11 @@ class FeatureCache:
             ).hexdigest()
 
     def _generate_cache_key(
-        self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], use_quick_hash: bool = True
+        self,
+        data: pd.DataFrame,
+        extractor_name: str,
+        config: Dict[str, Any],
+        use_quick_hash: bool = True,
     ) -> str:
         """
         Generate a cache key for the given data, extractor, and configuration.
@@ -182,7 +186,9 @@ class FeatureCache:
         self._stats["quick_hash_matches"] += 1
         return quick_key, entry
 
-    def get(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], copy: bool = True) -> Optional[pd.DataFrame]:
+    def get(
+        self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], copy: bool = True
+    ) -> Optional[pd.DataFrame]:
         """
         Get cached feature extraction result using two-tier hashing.
 

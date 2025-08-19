@@ -104,8 +104,17 @@ def year_chunks(start: datetime, end: datetime) -> List[tuple[int, datetime, dat
     return chunks
 
 
-def prefill(symbols: List[str], timeframes: List[str], start: datetime, end: datetime, cache_ttl_hours: int, cache_dir: str) -> None:
-    provider = CachedDataProvider(BinanceProvider(), cache_dir=cache_dir, cache_ttl_hours=cache_ttl_hours)
+def prefill(
+    symbols: List[str],
+    timeframes: List[str],
+    start: datetime,
+    end: datetime,
+    cache_ttl_hours: int,
+    cache_dir: str,
+) -> None:
+    provider = CachedDataProvider(
+        BinanceProvider(), cache_dir=cache_dir, cache_ttl_hours=cache_ttl_hours
+    )
 
     for symbol in symbols:
         for tf in timeframes:
@@ -146,5 +155,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

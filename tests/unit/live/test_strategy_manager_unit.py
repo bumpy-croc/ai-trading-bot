@@ -29,6 +29,7 @@ class TestStrategyManager:
         manager = StrategyManager(staging_dir=str(temp_directory))
         strategy = manager.load_strategy("ml_basic", version="test_v1")
         from strategies.ml_basic import MlBasic
+
         assert isinstance(strategy, MlBasic)
         assert manager.current_strategy == strategy
         assert manager.current_version.strategy_name == "ml_basic"
@@ -66,8 +67,8 @@ class TestStrategyManager:
     def test_strategy_registry(self, temp_directory):
         manager = StrategyManager(staging_dir=str(temp_directory))
         available = manager.list_available_strategies()
-        assert 'available_strategies' in available
-        assert 'ml_basic' in available['available_strategies']
+        assert "available_strategies" in available
+        assert "ml_basic" in available["available_strategies"]
 
 
 class TestStrategyManagerThreadSafety:
@@ -85,7 +86,8 @@ class TestStrategyManagerThreadSafety:
         threads = []
         for i in range(3):
             t = threading.Thread(target=load_strategy, args=("ml_basic", f"v{i}"))
-            threads.append(t); t.start()
+            threads.append(t)
+            t.start()
         for t in threads:
             t.join()
         assert len(errors) == 0
@@ -98,14 +100,17 @@ class TestStrategyManagerThreadSafety:
 
         def attempt_hot_swap(variant):
             try:
-                swap_results.append(manager.hot_swap_strategy("ml_basic", new_config={"sequence_length": variant}))
+                swap_results.append(
+                    manager.hot_swap_strategy("ml_basic", new_config={"sequence_length": variant})
+                )
             except Exception:
                 swap_results.append(False)
 
         threads = []
         for i in range(3):
             t = threading.Thread(target=attempt_hot_swap, args=(120 + i,))
-            threads.append(t); t.start()
+            threads.append(t)
+            t.start()
         for t in threads:
             t.join()
         assert sum(swap_results) <= 1
@@ -133,7 +138,12 @@ class TestStrategyManagerThreadSafety:
 
 class TestStrategyVersioning:
     def test_strategy_version_creation(self, temp_directory):
-        version = StrategyVersion(strategy_name="ml_basic", version="v1.0", timestamp=datetime.now(), config={"sequence_length": 120})
+        version = StrategyVersion(
+            strategy_name="ml_basic",
+            version="v1.0",
+            timestamp=datetime.now(),
+            config={"sequence_length": 120},
+        )
         assert version.strategy_name == "ml_basic"
         assert version.version == "v1.0"
         assert version.config["sequence_length"] == 120

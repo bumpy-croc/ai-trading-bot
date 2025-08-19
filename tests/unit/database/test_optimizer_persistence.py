@@ -1,6 +1,3 @@
-import os
-import pytest
-
 from src.database.manager import DatabaseManager
 
 

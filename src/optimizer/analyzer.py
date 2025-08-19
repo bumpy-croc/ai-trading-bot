@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from typing import List, Dict, Any
 from dataclasses import dataclass
 
-from src.optimizer.schemas import ExperimentResult, Suggestion
 from src.config.constants import (
-    DEFAULT_MAX_PARAMETER_CHANGE,
-    DEFAULT_WIN_RATE_THRESHOLD,
-    DEFAULT_SHARPE_RATIO_THRESHOLD,
     DEFAULT_DRAWDOWN_THRESHOLD,
+    DEFAULT_MAX_PARAMETER_CHANGE,
+    DEFAULT_SHARPE_RATIO_THRESHOLD,
+    DEFAULT_WIN_RATE_THRESHOLD,
 )
+from src.optimizer.schemas import ExperimentResult, Suggestion
 
 
 @dataclass
@@ -26,8 +25,8 @@ class PerformanceAnalyzer:
     def __init__(self, config: AnalyzerConfig | None = None):
         self.cfg = config or AnalyzerConfig()
 
-    def analyze(self, results: List[ExperimentResult]) -> List[Suggestion]:
-        suggestions: List[Suggestion] = []
+    def analyze(self, results: list[ExperimentResult]) -> list[Suggestion]:
+        suggestions: list[Suggestion] = []
         if not results:
             return suggestions
 
@@ -54,7 +53,10 @@ class PerformanceAnalyzer:
             )
 
         # 2) If Sharpe low but drawdown acceptable, increase position size bounds slightly
-        if baseline.sharpe_ratio < self.cfg.sharpe_threshold and baseline.max_drawdown <= self.cfg.drawdown_threshold * 100.0:
+        if (
+            baseline.sharpe_ratio < self.cfg.sharpe_threshold
+            and baseline.max_drawdown <= self.cfg.drawdown_threshold * 100.0
+        ):
             change = {"risk.max_position_size": +(self.cfg.max_parameter_change / 4.0)}
             suggestions.append(
                 Suggestion(

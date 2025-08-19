@@ -4,17 +4,18 @@ Tests for Feature Extractors
 This module contains unit tests for all feature extractors in the prediction engine.
 """
 
+from datetime import datetime
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import patch, MagicMock
-from datetime import datetime
 
 from src.prediction.features.market import MarketFeatureExtractor
+from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.schemas import TECHNICAL_FEATURES_SCHEMA
 from src.prediction.features.sentiment import SentimentFeatureExtractor
 from src.prediction.features.technical import TechnicalFeatureExtractor
-from src.prediction.features.pipeline import FeaturePipeline
 
 
 class TestTechnicalFeatureExtractor:
@@ -253,18 +254,21 @@ class TestSentimentFeatureExtractor:
 
 
 def _make_price_df(n=10, start="2024-06-01"):
-    idx = pd.date_range(start=start, periods=n, freq='1D')
-    df = pd.DataFrame({
-        'open': range(1, n+1),
-        'high': range(2, n+2),
-        'low': range(0, n),
-        'close': range(1, n+1),
-        'volume': [100]*n,
-    }, index=idx)
+    idx = pd.date_range(start=start, periods=n, freq="1D")
+    df = pd.DataFrame(
+        {
+            "open": range(1, n + 1),
+            "high": range(2, n + 2),
+            "low": range(0, n),
+            "close": range(1, n + 1),
+            "volume": [100] * n,
+        },
+        index=idx,
+    )
     return df
 
 
-@patch('src.data_providers.feargreed_provider.requests.get')
+@patch("src.data_providers.feargreed_provider.requests.get")
 @pytest.mark.unit
 def test_pipeline_sentiment_enabled_adds_columns(mock_get):
     # Provide two days of fear/greed
@@ -273,32 +277,48 @@ def test_pipeline_sentiment_enabled_adds_columns(mock_get):
     mock_resp.json.return_value = {
         "data": [
             {"timestamp": str(base), "value": "40", "value_classification": "Fear"},
-            {"timestamp": str(base+86400), "value": "60", "value_classification": "Greed"},
+            {"timestamp": str(base + 86400), "value": "60", "value_classification": "Greed"},
         ]
     }
     mock_resp.raise_for_status.return_value = None
     mock_get.return_value = mock_resp
 
     df = _make_price_df(n=5)
-    pipe = FeaturePipeline(enable_technical=False, enable_sentiment=True, enable_market_microstructure=False, use_cache=False)
+    pipe = FeaturePipeline(
+        enable_technical=False,
+        enable_sentiment=True,
+        enable_market_microstructure=False,
+        use_cache=False,
+    )
     out = pipe.transform(df)
     # Ensure sentiment columns exist
     for c in [
-        'sentiment_primary','sentiment_momentum','sentiment_volatility',
-        'sentiment_extreme_positive','sentiment_extreme_negative',
-        'sentiment_ma_3','sentiment_ma_7','sentiment_ma_14']:
+        "sentiment_primary",
+        "sentiment_momentum",
+        "sentiment_volatility",
+        "sentiment_extreme_positive",
+        "sentiment_extreme_negative",
+        "sentiment_ma_3",
+        "sentiment_ma_7",
+        "sentiment_ma_14",
+    ]:
         assert c in out.columns
 
 
-@patch('src.data_providers.feargreed_provider.requests.get', side_effect=Exception("network"))
+@patch("src.data_providers.feargreed_provider.requests.get", side_effect=Exception("network"))
 @pytest.mark.unit
 def test_pipeline_sentiment_fallback_neutral(mock_get):
     df = _make_price_df(n=5)
-    pipe = FeaturePipeline(enable_technical=False, enable_sentiment=True, enable_market_microstructure=False, use_cache=False)
+    pipe = FeaturePipeline(
+        enable_technical=False,
+        enable_sentiment=True,
+        enable_market_microstructure=False,
+        use_cache=False,
+    )
     out = pipe.transform(df)
     # Should still have columns with neutral defaults
-    assert 'sentiment_primary' in out.columns
-    assert out['sentiment_primary'].notna().all()
+    assert "sentiment_primary" in out.columns
+    assert out["sentiment_primary"].notna().all()
 
 
 class TestMarketFeatureExtractor:

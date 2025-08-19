@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 
 from data_providers.data_provider import DataProvider
-
 
 _TIMEFRAME_TO_FREQ = {
     "1m": "T",
@@ -30,7 +28,7 @@ class MockDataProvider(DataProvider):
         self,
         interval_seconds: int = 3600,
         num_candles: int = 1000,
-        seed: Optional[int] = 42,
+        seed: int | None = 42,
         base_price: float = 30000.0,
     ):
         super().__init__()
@@ -38,9 +36,9 @@ class MockDataProvider(DataProvider):
         self.num_candles = num_candles
         self.seed = seed
         self.base_price = base_price
-        self.data: Optional[pd.DataFrame] = None
+        self.data: pd.DataFrame | None = None
 
-    def _ensure_data(self, start: datetime, end: Optional[datetime], timeframe: str) -> pd.DataFrame:
+    def _ensure_data(self, start: datetime, end: datetime | None, timeframe: str) -> pd.DataFrame:
         """Create synthetic data covering [start, end] if not already available."""
         freq = _TIMEFRAME_TO_FREQ.get(timeframe, "H")
         if end is None:
@@ -78,7 +76,7 @@ class MockDataProvider(DataProvider):
         return df
 
     def get_historical_data(
-        self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> pd.DataFrame:
         if self.data is None:
             self._ensure_data(start=start, end=end, timeframe=timeframe)
@@ -144,4 +142,3 @@ class MockDataProvider(DataProvider):
         if self.data is None or len(self.data) == 0:
             return float(self.base_price)
         return float(self.data["close"].iloc[-1])
-

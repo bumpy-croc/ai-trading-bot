@@ -1,8 +1,9 @@
-import numpy as np
-import pandas as pd
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 
 class TrendLabel(str, Enum):
@@ -51,6 +52,7 @@ class RegimeDetector:
         y = np.log(x.clip(lower=1e-8))
         idx = np.arange(len(y))
         df = pd.DataFrame({"y": y.values, "t": idx}, index=y.index)
+
         # Rolling OLS helper
         def _ols(block: pd.DataFrame):
             t = block["t"].values.astype(float)
@@ -59,12 +61,12 @@ class RegimeDetector:
             y_mean = yb.mean()
             tt = t - t_mean
             yy = yb - y_mean
-            denom = (tt ** 2).sum()
+            denom = (tt**2).sum()
             if denom == 0:
                 return pd.Series([np.nan, np.nan])
             slope = (tt * yy).sum() / denom
             y_hat = y_mean + slope * tt
-            ss_tot = (yy ** 2).sum()
+            ss_tot = (yy**2).sum()
             ss_res = ((yb - y_hat) ** 2).sum()
             r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
             return pd.Series([slope, r2])
@@ -89,11 +91,14 @@ class RegimeDetector:
         low = df["low"].astype(float)
         close = df["close"].astype(float)
         prev_close = close.shift(1)
-        tr = pd.concat([
-            (high - low).abs(),
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ], axis=1).max(axis=1)
+        tr = pd.concat(
+            [
+                (high - low).abs(),
+                (high - prev_close).abs(),
+                (low - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
         return tr.rolling(window=window, min_periods=window).mean()
 
     def _label_trend(self, trend_score: float) -> TrendLabel:
@@ -112,6 +117,7 @@ class RegimeDetector:
                 return np.nan
             last = window.iloc[-1]
             return (window <= last).mean()
+
         return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False)
 
     def annotate(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -128,7 +134,11 @@ class RegimeDetector:
         out["atr"] = atr
         atr_pct = self._percentile_rank(atr, cfg.atr_percentile_lookback)
         out["atr_percentile"] = atr_pct
-        vol_label = atr_pct.apply(lambda p: VolLabel.HIGH if (not pd.isna(p) and p >= cfg.atr_high_percentile) else VolLabel.LOW)
+        vol_label = atr_pct.apply(
+            lambda p: (
+                VolLabel.HIGH if (not pd.isna(p) and p >= cfg.atr_high_percentile) else VolLabel.LOW
+            )
+        )
         # Hysteresis on combined trend label only (vol used as overlay)
         labels = []
         dwell = self._dwell
@@ -178,9 +188,15 @@ class RegimeDetector:
         if df.empty or "regime_label" not in df.columns:
             return "unknown", "unknown", 0.0
         last = df.iloc[-1]
-        return str(last.get("trend_label", "unknown")), str(last.get("vol_label", "unknown")), float(last.get("regime_confidence", 0.0))
+        return (
+            str(last.get("trend_label", "unknown")),
+            str(last.get("vol_label", "unknown")),
+            float(last.get("regime_confidence", 0.0)),
+        )
 
-    def long_position_multiplier(self, trend_label: str, vol_label: str, confidence: float) -> float:
+    def long_position_multiplier(
+        self, trend_label: str, vol_label: str, confidence: float
+    ) -> float:
         # Conservative defaults
         mult = 1.0
         if vol_label == VolLabel.HIGH.value:

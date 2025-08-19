@@ -9,17 +9,17 @@ trading data is available.
 import random
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-from pathlib import Path
+from typing import Dict, Optional
+
 from config.constants import DEFAULT_INITIAL_BALANCE
 from database.manager import DatabaseManager
-from sqlalchemy import text  # For future raw queries if needed
+
 
 class DemoDataGenerator:
     """
     Generates realistic demo data for testing the monitoring dashboard
     """
-    
+
     def __init__(self, db_url: Optional[str] = None):
         """Create a demo-data generator backed by PostgreSQL.
 
@@ -40,7 +40,7 @@ class DemoDataGenerator:
         # Ensure custom demo tables exist (account_snapshots is not part of the
         # ORM schema but is useful for the dashboard demo).
         self.setup_database()
-    
+
     def setup_database(self):
         """Create (or verify) demo helper tables in PostgreSQL."""
 
@@ -104,76 +104,91 @@ class DemoDataGenerator:
                 component TEXT,
                 stack_trace TEXT,
                 session_id INTEGER
-            )"""
+            )""",
         ]
 
         for stmt in create_statements:
             cursor.execute(stmt)
 
         self.connection.commit()
-    
+
     def generate_demo_session(self, duration_hours: int = 24) -> int:
         """Generate a complete demo trading session"""
         cursor = self.connection.cursor()
-        
+
         # Create trading session
-        strategies = ['ml_basic']
+        strategies = ["ml_basic"]
         strategy = random.choice(strategies)
-        
-        cursor.execute("""
+
+        cursor.execute(
+            """
         INSERT INTO trading_sessions 
         (strategy_name, symbol, timeframe, mode, initial_balance, start_time)
         VALUES (%s, %s, %s, %s, %s, %s)
-        """, (strategy, 'BTCUSDT', '1h', 'PAPER', DEFAULT_INITIAL_BALANCE, 
-              datetime.now() - timedelta(hours=duration_hours)))
-        
+        """,
+            (
+                strategy,
+                "BTCUSDT",
+                "1h",
+                "PAPER",
+                DEFAULT_INITIAL_BALANCE,
+                datetime.now() - timedelta(hours=duration_hours),
+            ),
+        )
+
         session_id = cursor.lastrowid
-        
+
         # Generate trades and account snapshots
         current_balance = float(DEFAULT_INITIAL_BALANCE)
         current_time = datetime.now() - timedelta(hours=duration_hours)
         end_time = datetime.now()
-        
+
         trade_count = 0
         winning_trades = 0
-        
+
         # Generate hourly snapshots and random trades
         while current_time < end_time:
             # Maybe generate a trade (20% chance per hour)
             if random.random() < 0.2:
                 trade_data = self.generate_trade(current_time, session_id)
-                current_balance += trade_data['pnl']
+                current_balance += trade_data["pnl"]
                 trade_count += 1
-                if trade_data['pnl'] > 0:
+                if trade_data["pnl"] > 0:
                     winning_trades += 1
-            
+
             # Generate account snapshot
             # Add some volatility to balance
             balance_change = random.uniform(-50, 50)
             snapshot_balance = max(current_balance + balance_change, 100)  # Don't go below $100
-            
-            cursor.execute("""
+
+            cursor.execute(
+                """
             INSERT INTO account_snapshots (balance, timestamp, session_id)
             VALUES (%s, %s, %s)
-            """, (snapshot_balance, current_time, session_id))
-            
+            """,
+                (snapshot_balance, current_time, session_id),
+            )
+
             current_time += timedelta(hours=1)
-        
+
         # Generate some active positions
         self.generate_active_positions(session_id, 2)
-        
+
         # Generate system events
         self.generate_system_events(session_id, duration_hours)
-        
+
         # Update session with final balance
-        cursor.execute("""
+        cursor.execute(
+            """
         UPDATE trading_sessions 
         SET final_balance = %s, end_time = %s
         WHERE id = %s
-        """, (current_balance, datetime.now(), session_id))
-        
+        """,
+            (current_balance, datetime.now(), session_id),
+        )
+
         self.connection.commit()
-        
+
         print(f"✅ Generated demo session {session_id}")
         print(f"   Strategy: {strategy}")
         print(f"   Duration: {duration_hours} hours")
@@ -183,171 +198,202 @@ class DemoDataGenerator:
             win_rate = (winning_trades / trade_count) * 100
         print(f"   Trades: {trade_count} (Win rate: {win_rate:.1f}%)")
         print(f"   Final balance: ${current_balance:.2f}")
-        
+
         return session_id
-    
+
     def generate_trade(self, entry_time: datetime, session_id: int) -> Dict:
         """Generate a single realistic trade"""
         cursor = self.connection.cursor()
-        
+
         # Random trade parameters
-        side = random.choice(['long', 'short'])
+        side = random.choice(["long", "short"])
         entry_price = random.uniform(40000, 70000)  # BTC price range
         quantity = random.uniform(0.001, 0.01)  # Small BTC amounts
-        
+
         # Exit after 1-12 hours
         exit_time = entry_time + timedelta(hours=random.uniform(1, 12))
-        
+
         # Generate realistic price movement
         price_change_pct = random.uniform(-0.05, 0.05)  # ±5% price movement
         exit_price = entry_price * (1 + price_change_pct)
-        
+
         # Calculate P&L
-        if side == 'long':
+        if side == "long":
             pnl = (exit_price - entry_price) * quantity
         else:
             pnl = (entry_price - exit_price) * quantity
-        
+
         # Add some trading fees
         pnl -= abs(pnl) * 0.001  # 0.1% fee
-        
-        exit_reasons = ['Strategy signal', 'Stop loss', 'Take profit', 'Time limit']
+
+        exit_reasons = ["Strategy signal", "Stop loss", "Take profit", "Time limit"]
         exit_reason = random.choice(exit_reasons)
-        
+
         # Insert position
         order_id = f"demo_{int(time.time())}_{random.randint(1000, 9999)}"
-        cursor.execute("""
+        cursor.execute(
+            """
         INSERT INTO positions 
         (symbol, side, entry_price, exit_price, quantity, entry_time, exit_time, order_id, session_id)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, ('BTCUSDT', side, entry_price, exit_price, quantity, 
-              entry_time, exit_time, order_id, session_id))
-        
+        """,
+            (
+                "BTCUSDT",
+                side,
+                entry_price,
+                exit_price,
+                quantity,
+                entry_time,
+                exit_time,
+                order_id,
+                session_id,
+            ),
+        )
+
         # Insert trade
-        cursor.execute("""
+        cursor.execute(
+            """
         INSERT INTO trades 
         (symbol, side, entry_price, exit_price, quantity, entry_time, exit_time, pnl, exit_reason, session_id)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, ('BTCUSDT', side, entry_price, exit_price, quantity,
-              entry_time, exit_time, pnl, exit_reason, session_id))
-        
-        return {
-            'pnl': pnl,
-            'side': side,
-            'entry_price': entry_price,
-            'exit_price': exit_price
-        }
-    
+        """,
+            (
+                "BTCUSDT",
+                side,
+                entry_price,
+                exit_price,
+                quantity,
+                entry_time,
+                exit_time,
+                pnl,
+                exit_reason,
+                session_id,
+            ),
+        )
+
+        return {"pnl": pnl, "side": side, "entry_price": entry_price, "exit_price": exit_price}
+
     def generate_active_positions(self, session_id: int, count: int = 2):
         """Generate active positions (not yet closed)"""
         cursor = self.connection.cursor()
-        
+
         for _ in range(count):
-            side = random.choice(['long', 'short'])
+            side = random.choice(["long", "short"])
             entry_price = random.uniform(40000, 70000)
             quantity = random.uniform(0.001, 0.01)
             entry_time = datetime.now() - timedelta(hours=random.uniform(1, 6))
-            
+
             order_id = f"active_{int(time.time())}_{random.randint(1000, 9999)}"
-            
-            cursor.execute("""
+
+            cursor.execute(
+                """
             INSERT INTO positions 
             (symbol, side, entry_price, quantity, entry_time, order_id, session_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, ('BTCUSDT', side, entry_price, quantity, entry_time, order_id, session_id))
-    
+            """,
+                ("BTCUSDT", side, entry_price, quantity, entry_time, order_id, session_id),
+            )
+
     def generate_system_events(self, session_id: int, duration_hours: int):
         """Generate system events and errors"""
         cursor = self.connection.cursor()
-        
-        event_types = ['INFO', 'WARNING', 'ERROR']
-        components = ['TradingEngine', 'DataProvider', 'Strategy', 'RiskManager']
-        
+
+        event_types = ["INFO", "WARNING", "ERROR"]
+        components = ["TradingEngine", "DataProvider", "Strategy", "RiskManager"]
+
         # Generate some events
         for _ in range(random.randint(5, 15)):
             event_type = random.choice(event_types)
             component = random.choice(components)
-            
-            if event_type == 'ERROR':
+
+            if event_type == "ERROR":
                 messages = [
-                    'API rate limit exceeded',
-                    'Connection timeout to exchange',
-                    'Invalid order parameters',
-                    'Insufficient balance for trade'
+                    "API rate limit exceeded",
+                    "Connection timeout to exchange",
+                    "Invalid order parameters",
+                    "Insufficient balance for trade",
                 ]
-            elif event_type == 'WARNING':
+            elif event_type == "WARNING":
                 messages = [
-                    'High volatility detected',
-                    'Position approaching stop loss',
-                    'API latency increased',
-                    'Market sentiment changed'
+                    "High volatility detected",
+                    "Position approaching stop loss",
+                    "API latency increased",
+                    "Market sentiment changed",
                 ]
             else:
                 messages = [
-                    'Strategy signal generated',
-                    'Position opened successfully',
-                    'Risk check passed',
-                    'Data update completed'
+                    "Strategy signal generated",
+                    "Position opened successfully",
+                    "Risk check passed",
+                    "Data update completed",
                 ]
-            
+
             message = random.choice(messages)
             timestamp = datetime.now() - timedelta(hours=random.uniform(0, duration_hours))
-            
-            cursor.execute("""
+
+            cursor.execute(
+                """
             INSERT INTO system_events 
             (event_type, message, timestamp, component, session_id)
             VALUES (%s, %s, %s, %s, %s)
-            """, (event_type, message, timestamp, component, session_id))
-        
+            """,
+                (event_type, message, timestamp, component, session_id),
+            )
+
         self.connection.commit()
-    
+
     def update_realtime_data(self):
         """Update data in real-time for demo purposes"""
         cursor = self.connection.cursor()
-        
+
         # Update account balance with small random change
         cursor.execute("SELECT id, balance FROM account_snapshots ORDER BY timestamp DESC LIMIT 1")
         result = cursor.fetchone()
-        
+
         if result:
             latest_id, current_balance = result
             new_balance = current_balance + random.uniform(-10, 20)  # Small change
-            
-            cursor.execute("""
+
+            cursor.execute(
+                """
             INSERT INTO account_snapshots (balance, timestamp)
             VALUES (%s, %s)
-            """, (new_balance, datetime.now()))
-        
+            """,
+                (new_balance, datetime.now()),
+            )
+
         # Maybe generate a new trade (5% chance)
         if random.random() < 0.05:
             cursor.execute("SELECT id FROM trading_sessions ORDER BY start_time DESC LIMIT 1")
             session_result = cursor.fetchone()
             if session_result:
                 self.generate_trade(datetime.now(), session_result[0])
-        
+
         self.connection.commit()
-    
+
     def close(self):
         """Close database connection"""
         if self.connection:
             self.connection.close()
 
+
 def main():
     """Generate demo data"""
     print("🎭 Generating demo trading data...")
-    
+
     generator = DemoDataGenerator()
-    
+
     try:
         # Generate a 24-hour trading session
-        session_id = generator.generate_demo_session(duration_hours=24)
-        
-        print(f"\n✅ Demo data generated successfully!")
+        generator.generate_demo_session(duration_hours=24)
+
+        print("\n✅ Demo data generated successfully!")
         print(f"🔗 Demo data stored in database: {generator.db_manager.database_url}")
         print("ℹ️  To start the dashboard: python monitoring/dashboard.py")
-        
+
     finally:
         generator.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

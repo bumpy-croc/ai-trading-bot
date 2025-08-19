@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-import sys
 
 # Add project root and its 'src' directory to Python path
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
-src_path = project_root / 'src'
+src_path = project_root / "src"
 if src_path.exists():
     sys.path.append(str(src_path))
 
-from src.optimizer.runner import ExperimentRunner
-from src.optimizer.schemas import ExperimentConfig, ParameterSet
-from src.optimizer.analyzer import PerformanceAnalyzer
-from src.optimizer.validator import StatisticalValidator, ValidationConfig
 from src.config.constants import DEFAULT_INITIAL_BALANCE
 from src.database.manager import DatabaseManager
+from src.optimizer.analyzer import PerformanceAnalyzer
+from src.optimizer.runner import ExperimentRunner
+from src.optimizer.schemas import ExperimentConfig, ParameterSet
+from src.optimizer.validator import StatisticalValidator, ValidationConfig
 
 
 def parse_args():
@@ -32,7 +32,9 @@ def parse_args():
     p.add_argument("--output", default="artifacts/optimizer_report.json")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-validate", action="store_true")
-    p.add_argument("--persist", action="store_true", help="Persist cycle to database when available")
+    p.add_argument(
+        "--persist", action="store_true", help="Persist cycle to database when available"
+    )
     return p.parse_args()
 
 

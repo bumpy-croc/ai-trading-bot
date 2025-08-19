@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 PostgreSQL database manager for handling all database operations
 """
@@ -9,7 +10,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, create_engine, text  # type: ignore
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # type: ignore
@@ -23,6 +24,7 @@ from .models import (
     AccountHistory,
     Base,
     EventType,
+    OptimizationCycle,
     OrderStatus,
     PerformanceMetrics,
     Position,
@@ -32,8 +34,6 @@ from .models import (
     Trade,
     TradeSource,
     TradingSession,
-    OptimizationCycle,
-    PredictionPerformance,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class DatabaseManager:
     - Centralized database for shared access across services
     """
 
-    def __init__(self, database_url: Optional[str] = None):
+    def __init__(self, database_url: str | None = None):
         """
         Initialize PostgreSQL database manager.
 
@@ -69,7 +69,7 @@ class DatabaseManager:
         self.database_url = database_url
         self.engine: _Engine | None = None
         self.session_factory = None
-        self._current_session_id: Optional[int] = None
+        self._current_session_id: int | None = None
 
         # Initialize database connection
         self._init_database()
@@ -110,10 +110,10 @@ class DatabaseManager:
             )
 
         # Helper for creating a SQLite engine config
-        def _sqlite_engine_config(url: str) -> tuple[str, Dict[str, Any]]:
+        def _sqlite_engine_config(url: str) -> tuple[str, dict[str, Any]]:
             from sqlalchemy.pool import StaticPool  # type: ignore
 
-            engine_kwargs: Dict[str, Any] = {
+            engine_kwargs: dict[str, Any] = {
                 "pool_pre_ping": True,
                 "echo": False,
                 "connect_args": {"check_same_thread": False},
@@ -176,7 +176,7 @@ class DatabaseManager:
                 logger.error(f"Failed to initialize database: {e}")
                 raise
 
-    def _get_engine_config(self) -> Dict[str, Any]:
+    def _get_engine_config(self) -> dict[str, Any]:
         """Get PostgreSQL engine configuration"""
 
         return {
@@ -251,7 +251,7 @@ class DatabaseManager:
             logger.error(f"Database connection test failed: {e}")
             return False
 
-    def get_database_info(self) -> Dict[str, Any]:
+    def get_database_info(self) -> dict[str, Any]:
         """
         Get PostgreSQL database information.
 
@@ -306,12 +306,12 @@ class DatabaseManager:
         strategy_name: str,
         symbol: str,
         timeframe: str,
-        baseline_metrics: Dict[str, Any],
-        candidate_params: Dict[str, Any] | None,
-        candidate_metrics: Dict[str, Any] | None,
-        validator_report: Dict[str, Any] | None,
+        baseline_metrics: dict[str, Any],
+        candidate_params: dict[str, Any] | None,
+        candidate_metrics: dict[str, Any] | None,
+        validator_report: dict[str, Any] | None,
         decision: str,
-        session_id: Optional[int] = None,
+        session_id: int | None = None,
     ) -> int:
         """Insert a new optimization cycle row and return its id."""
         with self.get_session() as session:
@@ -330,7 +330,7 @@ class DatabaseManager:
             session.commit()
             return int(oc.id)
 
-    def fetch_optimization_cycles(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    def fetch_optimization_cycles(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """Fetch recent optimization cycles as plain dicts for API usage."""
         with self.get_session() as session:
             q = (
@@ -340,7 +340,7 @@ class DatabaseManager:
                 .limit(max(1, int(limit)))
             )
             rows = q.all()
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for r in rows:
                 out.append(
                     {
@@ -364,10 +364,10 @@ class DatabaseManager:
         strategy_name: str,
         symbol: str,
         timeframe: str,
-        mode: Union[str, TradeSource],
+        mode: str | TradeSource,
         initial_balance: float,
-        strategy_config: Optional[Dict] = None,
-        session_name: Optional[str] = None,
+        strategy_config: dict | None = None,
+        session_name: str | None = None,
     ) -> int:
         """
         Create a new trading session.
@@ -420,7 +420,7 @@ class DatabaseManager:
             return trading_session.id
 
     def end_trading_session(
-        self, session_id: Optional[int] = None, final_balance: Optional[float] = None
+        self, session_id: int | None = None, final_balance: float | None = None
     ):
         """End a trading session and calculate final metrics."""
         session_id = session_id or self._current_session_id
@@ -494,7 +494,7 @@ class DatabaseManager:
     def log_trade(
         self,
         symbol: str,
-        side: Union[str, PositionSide],
+        side: str | PositionSide,
         entry_price: float,
         exit_price: float,
         size: float,
@@ -503,13 +503,13 @@ class DatabaseManager:
         pnl: float,
         exit_reason: str,
         strategy_name: str,
-        source: Union[str, TradeSource] = TradeSource.LIVE,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        order_id: Optional[str] = None,
-        confidence_score: Optional[float] = None,
-        strategy_config: Optional[Dict] = None,
-        session_id: Optional[int] = None,
+        source: str | TradeSource = TradeSource.LIVE,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        order_id: str | None = None,
+        confidence_score: float | None = None,
+        strategy_config: dict | None = None,
+        session_id: int | None = None,
     ) -> int:
         """
         Log a completed trade to the database.
@@ -582,16 +582,16 @@ class DatabaseManager:
     def log_position(
         self,
         symbol: str,
-        side: Union[str, PositionSide],
+        side: str | PositionSide,
         entry_price: float,
         size: float,
         strategy_name: str,
         order_id: str,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        confidence_score: Optional[float] = None,
-        quantity: Optional[float] = None,
-        session_id: Optional[int] = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        confidence_score: float | None = None,
+        quantity: float | None = None,
+        session_id: int | None = None,
     ) -> int:
         """
         Log a new position to the database.
@@ -640,12 +640,12 @@ class DatabaseManager:
     def update_position(
         self,
         position_id: int,
-        current_price: Optional[float] = None,
-        unrealized_pnl: Optional[float] = None,
-        unrealized_pnl_percent: Optional[float] = None,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        size: Optional[float] = None,
+        current_price: float | None = None,
+        unrealized_pnl: float | None = None,
+        unrealized_pnl_percent: float | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        size: float | None = None,
     ):
         """Update an existing position with current market data."""
         with self.get_session() as session:
@@ -701,7 +701,7 @@ class DatabaseManager:
             logger.info(f"Closed position #{position_id}")
             return True
 
-    def get_open_orders(self, session_id: Optional[int] = None) -> List[Dict]:
+    def get_open_orders(self, session_id: int | None = None) -> list[dict]:
         """Get all open orders for a session."""
         session_id = session_id or self._current_session_id
         if not session_id:
@@ -757,8 +757,8 @@ class DatabaseManager:
                 return False
 
     def get_trades_by_symbol_and_date(
-        self, symbol: str, start_date: datetime, session_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, symbol: str, start_date: datetime, session_id: int | None = None
+    ) -> list[dict]:
         """Get trades for a symbol from a specific date onwards."""
         session_id = session_id or self._current_session_id
         if not session_id:
@@ -799,9 +799,9 @@ class DatabaseManager:
         open_positions: int,
         total_exposure: float,
         drawdown: float,
-        daily_pnl: Optional[float] = None,
-        margin_used: Optional[float] = None,
-        session_id: Optional[int] = None,
+        daily_pnl: float | None = None,
+        margin_used: float | None = None,
+        session_id: int | None = None,
     ):
         """Log a snapshot of account state."""
         with self.get_session() as session:
@@ -824,12 +824,12 @@ class DatabaseManager:
 
     def log_event(
         self,
-        event_type: Union[str, EventType],
+        event_type: str | EventType,
         message: str,
         severity: str = "info",
-        component: Optional[str] = None,
-        details: Optional[Dict] = None,
-        session_id: Optional[int] = None,
+        component: str | None = None,
+        details: dict | None = None,
+        session_id: int | None = None,
     ) -> int:
         """
         Log a system event.
@@ -880,18 +880,18 @@ class DatabaseManager:
         signal_type: str,
         action_taken: str,
         price: float,
-        timeframe: Optional[str] = None,
-        signal_strength: Optional[float] = None,
-        confidence_score: Optional[float] = None,
-        indicators: Optional[Dict] = None,
-        sentiment_data: Optional[Dict] = None,
-        ml_predictions: Optional[Dict] = None,
-        position_size: Optional[float] = None,
-        reasons: Optional[List[str]] = None,
-        volume: Optional[float] = None,
-        volatility: Optional[float] = None,
-        trade_id: Optional[int] = None,
-        session_id: Optional[int] = None,
+        timeframe: str | None = None,
+        signal_strength: float | None = None,
+        confidence_score: float | None = None,
+        indicators: dict | None = None,
+        sentiment_data: dict | None = None,
+        ml_predictions: dict | None = None,
+        position_size: float | None = None,
+        reasons: list[str] | None = None,
+        volume: float | None = None,
+        volatility: float | None = None,
+        trade_id: int | None = None,
+        session_id: int | None = None,
     ):
         # Sanitize all dict fields for JSON serialization (including numpy types)
         indicators = self._sanitize_for_json(indicators) if indicators else None
@@ -942,7 +942,7 @@ class DatabaseManager:
             session.add(execution)
             session.commit()
 
-    def get_active_positions(self, session_id: Optional[int] = None) -> List[Dict]:
+    def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions."""
         with self.get_session() as session:
             query = session.query(Position).filter(Position.status == OrderStatus.OPEN)
@@ -973,7 +973,7 @@ class DatabaseManager:
                 for p in positions
             ]
 
-    def get_recent_trades(self, limit: int = 50, session_id: Optional[int] = None) -> List[Dict]:
+    def get_recent_trades(self, limit: int = 50, session_id: int | None = None) -> list[dict]:
         """Get recent trades."""
         with self.get_session() as session:
             query = session.query(Trade).order_by(Trade.exit_time.desc())
@@ -1006,10 +1006,10 @@ class DatabaseManager:
     def get_performance_metrics(
         self,
         period: str = "all-time",
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        session_id: Optional[int] = None,
-    ) -> Dict:
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        session_id: int | None = None,
+    ) -> dict:
         """Get performance metrics for a specific period."""
         with self.get_session() as session:
             # Query trades within the period
@@ -1190,7 +1190,7 @@ class DatabaseManager:
 
             logger.info(f"Cleaned up {len(old_sessions)} old trading sessions")
 
-    def execute_query(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:  # type: ignore[override]
+    def execute_query(self, query: str, params: tuple | None = None) -> list[dict[str, Any]]:  # type: ignore[override]
         """Run a raw SQL query and return list of dict rows.
 
         Uses SQLAlchemy 2.x ``exec_driver_sql`` API so plain SQL strings work
@@ -1220,7 +1220,7 @@ class DatabaseManager:
 
                 # Map rows to plain dictionaries
                 try:
-                    rows: List[Dict[str, Any]] = [dict(row) for row in result.mappings()]  # type: ignore[attr-defined]
+                    rows: list[dict[str, Any]] = [dict(row) for row in result.mappings()]  # type: ignore[attr-defined]
                 except AttributeError:
                     rows = [dict(row.items()) for row in result]  # type: ignore[attr-defined]
                 return rows
@@ -1230,7 +1230,7 @@ class DatabaseManager:
 
     # ========== BALANCE MANAGEMENT ==========
 
-    def get_current_balance(self, session_id: Optional[int] = None) -> float:
+    def get_current_balance(self, session_id: int | None = None) -> float:
         """Get the current balance for a session"""
         session_id = session_id or self._current_session_id
         if not session_id:
@@ -1244,7 +1244,7 @@ class DatabaseManager:
         new_balance: float,
         update_reason: str,
         updated_by: str = "system",
-        session_id: Optional[int] = None,
+        session_id: int | None = None,
     ) -> bool:
         """Update the current balance"""
         session_id = session_id or self._current_session_id
@@ -1263,7 +1263,7 @@ class DatabaseManager:
             logger.error(f"Failed to update balance: {e}")
             return False
 
-    def get_balance_history(self, session_id: Optional[int] = None, limit: int = 100) -> List[Dict]:
+    def get_balance_history(self, session_id: int | None = None, limit: int = 100) -> list[dict]:
         """Get balance change history"""
         session_id = session_id or self._current_session_id
         if not session_id:
@@ -1292,7 +1292,7 @@ class DatabaseManager:
                 for b in balances
             ]
 
-    def recover_last_balance(self, session_id: Optional[int] = None) -> Optional[float]:
+    def recover_last_balance(self, session_id: int | None = None) -> float | None:
         """Recover the last known balance for a session"""
         session_id = session_id or self._current_session_id
         if not session_id:
@@ -1324,7 +1324,7 @@ class DatabaseManager:
 
             return current_balance
 
-    def get_active_session_id(self) -> Optional[int]:
+    def get_active_session_id(self) -> int | None:
         """Get the current active session ID"""
         with self.get_session() as session:
             active_session = (
@@ -1365,7 +1365,7 @@ class DatabaseManager:
 
     # ========== CONNECTION MANAGEMENT ==========
 
-    def get_connection_stats(self) -> Dict[str, Any]:
+    def get_connection_stats(self) -> dict[str, Any]:
         """Get PostgreSQL connection pool statistics"""
         if not self.engine or not hasattr(self.engine.pool, "status"):
             return {"status": "Connection pool statistics not available"}

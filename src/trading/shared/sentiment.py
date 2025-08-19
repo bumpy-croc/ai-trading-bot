@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
 import pandas as pd
-from datetime import timedelta
 
 
 def merge_historical_sentiment(
@@ -20,13 +18,18 @@ def merge_historical_sentiment(
         if s_df is None or s_df.empty:
             return df
         s_df = sentiment_provider.aggregate_sentiment(s_df, window=timeframe)
-        out = df.join(s_df, how='left')
+        out = df.join(s_df, how="left")
         # Forward fill and default
-        for col in ['sentiment_score', 'sentiment_primary', 'sentiment_momentum', 'sentiment_volatility']:
+        for col in [
+            "sentiment_score",
+            "sentiment_primary",
+            "sentiment_momentum",
+            "sentiment_volatility",
+        ]:
             if col in out.columns:
                 out[col] = out[col].ffill()
-        if 'sentiment_score' in out.columns:
-            out['sentiment_score'] = out['sentiment_score'].fillna(0)
+        if "sentiment_score" in out.columns:
+            out["sentiment_score"] = out["sentiment_score"].fillna(0)
         return out
     except Exception:
         return df
@@ -48,8 +51,8 @@ def apply_live_sentiment(
             if feature not in df.columns:
                 df[feature] = 0.0
             df.loc[recent_mask, feature] = value
-        df['sentiment_freshness'] = 0
-        df.loc[recent_mask, 'sentiment_freshness'] = 1
+        df["sentiment_freshness"] = 0
+        df.loc[recent_mask, "sentiment_freshness"] = 1
     except Exception:
         return df
     return df

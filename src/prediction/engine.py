@@ -14,8 +14,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from regime.detector import RegimeConfig, RegimeDetector
 
 from .config import PredictionConfig
+from .ensemble import SimpleEnsembleAggregator
 from .exceptions import (
     FeatureExtractionError,
     InvalidInputError,
@@ -23,8 +25,6 @@ from .exceptions import (
 )
 from .features.pipeline import FeaturePipeline
 from .models.registry import PredictionModelRegistry
-from .ensemble import SimpleEnsembleAggregator
-from regime.detector import RegimeDetector, RegimeConfig
 
 
 @dataclass
@@ -68,7 +68,9 @@ class PredictionEngine:
         # Optional helpers
         self._ensemble_aggregator = None
         if getattr(self.config, "enable_ensemble", False):
-            self._ensemble_aggregator = SimpleEnsembleAggregator(getattr(self.config, "ensemble_method", "mean"))
+            self._ensemble_aggregator = SimpleEnsembleAggregator(
+                getattr(self.config, "ensemble_method", "mean")
+            )
         self._regime_detector = None
         if getattr(self.config, "enable_regime_aware_confidence", False):
             self._regime_detector = RegimeDetector(RegimeConfig())

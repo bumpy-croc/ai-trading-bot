@@ -27,7 +27,6 @@ import pandas as pd
 
 from config import get_config
 from config.constants import DEFAULT_USE_PREDICTION_ENGINE
-from config.feature_flags import is_enabled
 from prediction import PredictionConfig, PredictionEngine
 from prediction.features.pipeline import FeaturePipeline
 from prediction.features.price_only import PriceOnlyFeatureExtractor
@@ -188,9 +187,7 @@ class MlBasic(BaseStrategy):
                     window_df = df[["open", "high", "low", "close", "volume"]].iloc[
                         i - self.sequence_length : i
                     ]
-                    result = self.prediction_engine.predict(
-                        window_df, model_name=self.model_name
-                    )
+                    result = self.prediction_engine.predict(window_df, model_name=self.model_name)
                     pred = float(result.price)
                 else:
                     output = self.ort_session.run(None, {self.input_name: input_data})
