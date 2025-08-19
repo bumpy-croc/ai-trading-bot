@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
-from src.optimizer.schemas import ExperimentConfig
 from src.optimizer.runner import ExperimentRunner
+from src.optimizer.schemas import ExperimentConfig
 
 
 def test_runner_with_mock_provider_executes():

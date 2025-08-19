@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import List, Optional
 from pathlib import Path
 
-from src.optimizer.schemas import ExperimentConfig, ExperimentResult
+import numpy as np
+import pandas as pd
+
 from src.backtesting.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
-from src.strategies.ml_basic import MlBasic
+from src.optimizer.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
-import pandas as pd
-import numpy as np
+from src.strategies.ml_basic import MlBasic
 
 
 class _FixtureProvider(DataProvider):
@@ -31,18 +31,28 @@ class _FixtureProvider(DataProvider):
         df.set_index("timestamp", inplace=True)
         return df
 
-    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None) -> pd.DataFrame:  # type: ignore[override]
+    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None) -> pd.DataFrame:  # type: ignore[override]
         if self.df.empty:
             return self.df
         end = end or pd.Timestamp.now()
-        df = self.df.loc[(self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))].copy()
+        df = self.df.loc[
+            (self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))
+        ].copy()
         return df
 
 
 class _RandomWalkProvider(DataProvider):
     """Generates synthetic OHLCV series using a random walk for offline experiments."""
 
-    def __init__(self, start: datetime, end: datetime, timeframe: str = "1h", start_price: float = 30000.0, vol: float = 0.01, seed: Optional[int] = None):
+    def __init__(
+        self,
+        start: datetime,
+        end: datetime,
+        timeframe: str = "1h",
+        start_price: float = 30000.0,
+        vol: float = 0.01,
+        seed: int | None = None,
+    ):
         super().__init__()
         self.timeframe = timeframe
         self.seed = seed
@@ -52,12 +62,18 @@ class _RandomWalkProvider(DataProvider):
         mapping = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1d"}
         return mapping.get(timeframe, "1h")
 
-    def _generate(self, start: datetime, end: datetime, timeframe: str, start_price: float, vol: float) -> pd.DataFrame:
+    def _generate(
+        self, start: datetime, end: datetime, timeframe: str, start_price: float, vol: float
+    ) -> pd.DataFrame:
         if self.seed is not None:
             np.random.seed(self.seed)
-        idx = pd.date_range(start=pd.Timestamp(start), end=pd.Timestamp(end), freq=self._freq(timeframe))
+        idx = pd.date_range(
+            start=pd.Timestamp(start), end=pd.Timestamp(end), freq=self._freq(timeframe)
+        )
         if len(idx) < 2:
-            return pd.DataFrame(index=idx, columns=["open", "high", "low", "close", "volume"]).fillna(0.0)
+            return pd.DataFrame(
+                index=idx, columns=["open", "high", "low", "close", "volume"]
+            ).fillna(0.0)
         prices = [start_price]
         for _ in range(1, len(idx)):
             shock = np.random.normal(0, vol)
@@ -67,18 +83,23 @@ class _RandomWalkProvider(DataProvider):
         lows = prices * (1.0 - np.abs(np.random.normal(0, vol / 2, size=len(prices))))
         opens = np.r_[prices[0], prices[:-1]]
         volume = np.random.uniform(1000.0, 10000.0, size=len(prices))
-        df = pd.DataFrame({
-            "open": opens,
-            "high": highs,
-            "low": lows,
-            "close": prices,
-            "volume": volume,
-        }, index=idx)
+        df = pd.DataFrame(
+            {
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": prices,
+                "volume": volume,
+            },
+            index=idx,
+        )
         return df
 
-    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None) -> pd.DataFrame:  # type: ignore[override]
+    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None) -> pd.DataFrame:  # type: ignore[override]
         end = end or pd.Timestamp.now()
-        return self.df.loc[(self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))].copy()
+        return self.df.loc[
+            (self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))
+        ].copy()
 
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:  # type: ignore[override]
         tail = self.df.tail(limit).copy()
@@ -96,11 +117,26 @@ class _RandomWalkProvider(DataProvider):
 class ExperimentRunner:
     """Runs backtests for given experiment configurations."""
 
-    def _load_provider(self, name: str, use_cache: bool, cache_ttl_hours: int = 24, *, start: Optional[datetime] = None, end: Optional[datetime] = None, timeframe: str = "1h", seed: Optional[int] = None):
+    def _load_provider(
+        self,
+        name: str,
+        use_cache: bool,
+        cache_ttl_hours: int = 24,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        timeframe: str = "1h",
+        seed: int | None = None,
+    ):
         name = (name or "binance").lower()
         if name == "mock":
             # Internal random-walk provider
-            return _RandomWalkProvider(start or (datetime.utcnow() - timedelta(days=30)), end or datetime.utcnow(), timeframe=timeframe, seed=seed)
+            return _RandomWalkProvider(
+                start or (datetime.utcnow() - timedelta(days=30)),
+                end or datetime.utcnow(),
+                timeframe=timeframe,
+                seed=seed,
+            )
         if name == "fixture":
             fixture_path = Path("tests/data/BTCUSDT_1h_2023-01-01_2024-12-31.feather")
             return _FixtureProvider(fixture_path)
@@ -134,9 +170,18 @@ class ExperimentRunner:
         strategy = self._load_strategy(config.strategy_name)
         # Apply any parameter overrides for strategy-level tuning
         self._apply_parameter_overrides(strategy, config)
-        provider = self._load_provider(config.provider, config.use_cache, start=config.start, end=config.end, timeframe=config.timeframe, seed=config.random_seed)
+        provider = self._load_provider(
+            config.provider,
+            config.use_cache,
+            start=config.start,
+            end=config.end,
+            timeframe=config.timeframe,
+            seed=config.random_seed,
+        )
 
-        risk_params = RiskParameters(**config.risk_parameters) if config.risk_parameters else RiskParameters()
+        risk_params = (
+            RiskParameters(**config.risk_parameters) if config.risk_parameters else RiskParameters()
+        )
 
         backtester = Backtester(
             strategy=strategy,
@@ -166,5 +211,5 @@ class ExperimentRunner:
             session_id=results.get("session_id"),
         )
 
-    def run_sweep(self, configs: List[ExperimentConfig]) -> List[ExperimentResult]:
+    def run_sweep(self, configs: list[ExperimentConfig]) -> list[ExperimentResult]:
         return [self.run(cfg) for cfg in configs]

@@ -11,11 +11,11 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
-from live.trading_engine import LiveTradingEngine
-from live.strategy_manager import StrategyManager
-from strategies.ml_basic import MlBasic
-from risk.risk_manager import RiskManager, RiskParameters
 from backtesting.engine import Backtester
+from live.strategy_manager import StrategyManager
+from live.trading_engine import LiveTradingEngine
+from risk.risk_manager import RiskManager, RiskParameters
+from strategies.ml_basic import MlBasic
 
 pytestmark = pytest.mark.integration
 
@@ -195,7 +195,7 @@ class TestEndToEndWorkflows:
         strategy = MlBasic()
         risk_manager = RiskManager(risk_params)
 
-        engine = LiveTradingEngine(
+        LiveTradingEngine(
             strategy=strategy,
             data_provider=mock_data_provider,
             risk_parameters=risk_params,

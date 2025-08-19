@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
-
 
 def log_strategy_execution(
     db_manager,
@@ -14,14 +12,14 @@ def log_strategy_execution(
     timeframe: str,
     signal_strength: float,
     confidence_score: float,
-    indicators: Optional[Dict] = None,
-    sentiment_data: Optional[Dict] = None,
-    ml_predictions: Optional[Dict] = None,
-    position_size: Optional[float] = None,
-    reasons: Optional[list] = None,
-    volume: Optional[float] = None,
-    volatility: Optional[float] = None,
-    session_id: Optional[int] = None,
+    indicators: dict | None = None,
+    sentiment_data: dict | None = None,
+    ml_predictions: dict | None = None,
+    position_size: float | None = None,
+    reasons: list | None = None,
+    volume: float | None = None,
+    volatility: float | None = None,
+    session_id: int | None = None,
 ) -> None:
     if db_manager is None:
         return

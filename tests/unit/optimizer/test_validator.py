@@ -30,7 +30,9 @@ def test_validator_reports_pass_when_candidate_better():
     baseline = [_mk_result(ann_ret=10.0, mdd=10.0) for _ in range(3)]
     candidate = [_mk_result(ann_ret=15.0, mdd=8.0) for _ in range(3)]
 
-    validator = StatisticalValidator(ValidationConfig(bootstrap_samples=200, p_value_threshold=0.5, min_effect_size=0.1))
+    validator = StatisticalValidator(
+        ValidationConfig(bootstrap_samples=200, p_value_threshold=0.5, min_effect_size=0.1)
+    )
     report = validator.validate(baseline, candidate)
 
     assert report.p_value >= 0.0 and report.p_value <= 1.0

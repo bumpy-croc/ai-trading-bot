@@ -1,8 +1,5 @@
-from typing import Optional
-
 import numpy as np
 import pandas as pd
-
 from indicators.technical import (
     calculate_atr,
     calculate_bollinger_bands,
@@ -10,6 +7,7 @@ from indicators.technical import (
     calculate_moving_averages,
     calculate_rsi,
 )
+
 from strategies.base import BaseStrategy
 
 
@@ -64,7 +62,9 @@ class Bull(BaseStrategy):
 
         # Basic regime classification for internal use
         df["bull_regime"] = (
-            (df["ma_50"] > df["ma_200"]) & (df["close"] > df["ma_50"]) & (df["ma_20"] > df["ma_50"])  # strong alignment
+            (df["ma_50"] > df["ma_200"])
+            & (df["close"] > df["ma_50"])
+            & (df["ma_20"] > df["ma_50"])  # strong alignment
         ).astype(int)
 
         # Minimal NaN handling: leave core OHLCV untouched; consumers will dropna on essentials
@@ -97,7 +97,11 @@ class Bull(BaseStrategy):
             signal_type="entry",
             action_taken="entry_signal" if entry_signal else "no_action",
             price=close,
-            signal_strength=float(df["trend_strength_50_200"].iloc[index]) if "trend_strength_50_200" in df.columns else None,
+            signal_strength=(
+                float(df["trend_strength_50_200"].iloc[index])
+                if "trend_strength_50_200" in df.columns
+                else None
+            ),
             indicators={
                 "ma20": float(ma20) if not np.isnan(ma20) else None,
                 "ma50": float(ma50) if not np.isnan(ma50) else None,
@@ -142,7 +146,11 @@ class Bull(BaseStrategy):
             reasons=[
                 "hit_stop" if hit_stop else "",
                 "hit_take_profit" if hit_take_profit else "",
-                "price_below_ma20_and_momentum_down" if (price_below_ma20 and momentum_turned) else "",
+                (
+                    "price_below_ma20_and_momentum_down"
+                    if (price_below_ma20 and momentum_turned)
+                    else ""
+                ),
             ],
         )
 
@@ -153,7 +161,11 @@ class Bull(BaseStrategy):
             return 0.0
 
         # Trend factor based on MA slope alignment and distance
-        trend = float(df["trend_strength_50_200"].iloc[index]) if "trend_strength_50_200" in df.columns else 0.0
+        trend = (
+            float(df["trend_strength_50_200"].iloc[index])
+            if "trend_strength_50_200" in df.columns
+            else 0.0
+        )
         trend_factor = max(0.5, min(1.5, 1.0 + 2.0 * max(0.0, trend)))  # amplify with strong trend
 
         # Volatility adjustment: scale down if ATR% is high, scale up if moderate
@@ -174,7 +186,9 @@ class Bull(BaseStrategy):
         # Follow existing convention: return ratio scaled by balance
         return position_ratio * balance
 
-    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = "long") -> float:
+    def calculate_stop_loss(
+        self, df: pd.DataFrame, index: int, price: float, side: str = "long"
+    ) -> float:
         side_str = side.value if hasattr(side, "value") else str(side)
 
         # ATR-based stop for longs: max(fixed_pct, k * ATR)

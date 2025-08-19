@@ -1,9 +1,10 @@
-import requests
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, List
 import logging
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional
+
+import numpy as np
+import pandas as pd
+import requests
 
 from .sentiment_provider import SentimentDataProvider
 
@@ -64,15 +65,19 @@ class FearGreedProvider(SentimentDataProvider):
                 self.data = pd.DataFrame()
                 return
 
-            df = pd.DataFrame([
-                {
-                    "timestamp": datetime.fromtimestamp(int(r.get("timestamp", 0)), tz=timezone.utc),
-                    "value": float(r.get("value", 0.0)),
-                    "classification": r.get("value_classification", "Unknown"),
-                }
-                for r in records
-                if r.get("timestamp") is not None
-            ])
+            df = pd.DataFrame(
+                [
+                    {
+                        "timestamp": datetime.fromtimestamp(
+                            int(r.get("timestamp", 0)), tz=timezone.utc
+                        ),
+                        "value": float(r.get("value", 0.0)),
+                        "classification": r.get("value_classification", "Unknown"),
+                    }
+                    for r in records
+                    if r.get("timestamp") is not None
+                ]
+            )
             if df.empty:
                 self.data = df
                 return
@@ -83,7 +88,9 @@ class FearGreedProvider(SentimentDataProvider):
             df["sentiment_primary"] = df["value"].clip(lower=0, upper=100) / 100.0
 
             # Momentum: rate of change
-            df["sentiment_momentum"] = df["sentiment_primary"].pct_change().replace([np.inf, -np.inf], np.nan).fillna(0.0)
+            df["sentiment_momentum"] = (
+                df["sentiment_primary"].pct_change().replace([np.inf, -np.inf], np.nan).fillna(0.0)
+            )
 
             # Volatility: rolling std (7-day window)
             df["sentiment_volatility"] = (
@@ -100,12 +107,16 @@ class FearGreedProvider(SentimentDataProvider):
             threshold = 0.8  # very greedy
             df["sentiment_extreme_positive"] = (df["sentiment_primary"] > threshold).astype(float)
             threshold_neg = 0.2  # very fearful
-            df["sentiment_extreme_negative"] = (df["sentiment_primary"] < threshold_neg).astype(float)
+            df["sentiment_extreme_negative"] = (df["sentiment_primary"] < threshold_neg).astype(
+                float
+            )
 
             self.data = df
             logger.info(
                 "FearGreedProvider: loaded %d records (%s to %s)",
-                len(df), df.index.min(), df.index.max()
+                len(df),
+                df.index.min(),
+                df.index.max(),
             )
         except Exception as e:
             logger.error("FearGreedProvider: failed to load data: %s", e)
@@ -123,10 +134,7 @@ class FearGreedProvider(SentimentDataProvider):
         return (now_ts - last) <= timedelta(days=self.freshness_days)
 
     def get_historical_sentiment(
-        self,
-        symbol: str,
-        start: datetime,
-        end: Optional[datetime] = None
+        self, symbol: str, start: datetime, end: Optional[datetime] = None
     ) -> pd.DataFrame:
         # Fear & Greed is market-level; symbol ignored except for logging
         if end is None:
@@ -150,19 +158,25 @@ class FearGreedProvider(SentimentDataProvider):
         cols = [c for c in df.columns if c.startswith("sentiment_")]
         return df[cols]
 
-    def aggregate_sentiment(self, df: pd.DataFrame, window: str = '1d') -> pd.DataFrame:
+    def aggregate_sentiment(self, df: pd.DataFrame, window: str = "1d") -> pd.DataFrame:
         if df.empty:
             return df
-        agg = df.resample(window).agg({
-            "sentiment_primary": "mean",
-            "sentiment_momentum": "mean",
-            "sentiment_volatility": "mean",
-            "sentiment_extreme_positive": "max",
-            "sentiment_extreme_negative": "max",
-            "sentiment_ma_3": "mean",
-            "sentiment_ma_7": "mean",
-            "sentiment_ma_14": "mean",
-        }).ffill()
+        agg = (
+            df.resample(window)
+            .agg(
+                {
+                    "sentiment_primary": "mean",
+                    "sentiment_momentum": "mean",
+                    "sentiment_volatility": "mean",
+                    "sentiment_extreme_positive": "max",
+                    "sentiment_extreme_negative": "max",
+                    "sentiment_ma_3": "mean",
+                    "sentiment_ma_7": "mean",
+                    "sentiment_ma_14": "mean",
+                }
+            )
+            .ffill()
+        )
         return agg
 
     def get_sentiment_for_date(self, date: datetime) -> Dict[str, float]:
@@ -170,7 +184,7 @@ class FearGreedProvider(SentimentDataProvider):
             return self._neutral()
         if date.tzinfo is None:
             date = date.replace(tzinfo=timezone.utc)
-        idx = self.data.index.get_indexer([date], method='ffill')
+        idx = self.data.index.get_indexer([date], method="ffill")
         if idx.size == 0 or idx[0] < 0:
             return self._neutral()
         row = self.data.iloc[idx[0]]

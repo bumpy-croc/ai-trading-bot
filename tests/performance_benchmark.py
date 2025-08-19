@@ -160,13 +160,22 @@ class TestPerformanceBenchmark:
         benchmarks.append(medium_result)
 
         # 3. Computation-heavy tests
-        compute_result = self.run_test_command([
-            sys.executable, "-m", "pytest", 
-            "tests/test_backtesting.py",
-            "-v", "--tb=short", "-q",
-            "-n", "2",
-            "-m", "not integration"
-        ], "Computation Tests")
+        compute_result = self.run_test_command(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/test_backtesting.py",
+                "-v",
+                "--tb=short",
+                "-q",
+                "-n",
+                "2",
+                "-m",
+                "not integration",
+            ],
+            "Computation Tests",
+        )
         benchmarks.append(compute_result)
 
         # 4. All unit tests (for comparison)

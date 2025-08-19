@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import platform
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -23,12 +22,12 @@ from typing import Any, TypedDict
 # Default to threading to avoid monkey-patching during imports/tests.
 _USE_EVENTLET = os.environ.get("USE_EVENTLET", "0") == "1"
 if _USE_EVENTLET:
-	import eventlet
-	
-	eventlet.monkey_patch()
-	_ASYNC_MODE = "eventlet"
+    import eventlet
+
+    eventlet.monkey_patch()
+    _ASYNC_MODE = "eventlet"
 else:
-	_ASYNC_MODE = "threading"
+    _ASYNC_MODE = "threading"
 
 import pandas as pd
 from flask import Flask, jsonify, render_template, request

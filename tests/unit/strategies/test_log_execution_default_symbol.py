@@ -4,37 +4,47 @@ from src.strategies.base import BaseStrategy
 class DummyDB:
     def __init__(self):
         self.last = None
+
     def log_strategy_execution(self, **kwargs):
         self.last = kwargs
 
 
 class S(BaseStrategy):
     def __init__(self):
-        super().__init__('S')
+        super().__init__("S")
+
     def calculate_indicators(self, df):
         return df
+
     def check_entry_conditions(self, df, index):
         return False
+
     def check_exit_conditions(self, df, index, entry_price):
         return False
+
     def calculate_position_size(self, df, index, balance):
         return 0.0
-    def calculate_stop_loss(self, df, index, price, side='long'):
+
+    def calculate_stop_loss(self, df, index, price, side="long"):
         return price
+
     def get_parameters(self):
         return {}
 
 
 def test_log_execution_defaults_to_strategy_pair_when_symbol_missing():
     s = S()
-    s.trading_pair = 'ETHUSDT'
+    s.trading_pair = "ETHUSDT"
     db = DummyDB()
     s.set_database_manager(db)
-    s.log_execution(signal_type='entry', action_taken='none', price=1000.0)
+    s.log_execution(signal_type="entry", action_taken="none", price=1000.0)
     assert db.last is not None
-    assert db.last['symbol'].upper() == 'ETHUSDT'
-import pytest
+    assert db.last["symbol"].upper() == "ETHUSDT"
+
+
 from unittest.mock import Mock
+
+import pytest
 
 from strategies.base import BaseStrategy
 
@@ -54,8 +64,8 @@ class _DummyStrategy(BaseStrategy):
     def calculate_position_size(self, df, index: int, balance: float) -> float:
         return 0.0
 
-    def calculate_stop_loss(self, df, index: int, price: float, side: str = 'long') -> float:
-        return price * (0.99 if side == 'long' else 1.01)
+    def calculate_stop_loss(self, df, index: int, price: float, side: str = "long") -> float:
+        return price * (0.99 if side == "long" else 1.01)
 
     def get_parameters(self) -> dict:
         return {}

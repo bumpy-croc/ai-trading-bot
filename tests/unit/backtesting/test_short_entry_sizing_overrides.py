@@ -1,5 +1,6 @@
-import pandas as pd
 from datetime import datetime, timedelta
+
+import pandas as pd
 
 from src.backtesting.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
@@ -14,7 +15,7 @@ class ShortStrategy(BaseStrategy):
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
-        out['prediction_confidence'] = 0.8
+        out["prediction_confidence"] = 0.8
         return out
 
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
@@ -30,7 +31,7 @@ class ShortStrategy(BaseStrategy):
     def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
         return 0.0
 
-    def calculate_stop_loss(self, df, index, price, side='long') -> float:
+    def calculate_stop_loss(self, df, index, price, side="long") -> float:
         return price * (1 + self.stop_loss_pct)
 
     def get_parameters(self) -> dict:
@@ -38,13 +39,13 @@ class ShortStrategy(BaseStrategy):
 
     def get_risk_overrides(self):
         return {
-            'position_sizer': 'confidence_weighted',
-            'base_fraction': 0.1,
-            'min_fraction': 0.0,
-            'max_fraction': 0.2,
-            'confidence_key': 'prediction_confidence',
-            'stop_loss_pct': 0.01,
-            'take_profit_pct': 0.02,
+            "position_sizer": "confidence_weighted",
+            "base_fraction": 0.1,
+            "min_fraction": 0.0,
+            "max_fraction": 0.2,
+            "confidence_key": "prediction_confidence",
+            "stop_loss_pct": 0.01,
+            "take_profit_pct": 0.02,
         }
 
 
@@ -55,42 +56,48 @@ def test_short_entry_uses_overrides_and_caps_fraction():
 
     start = datetime.now() - timedelta(hours=5)
     end = datetime.now()
-    result = bt.run(symbol='BTCUSDT', timeframe='1h', start=start, end=end)
+    result = bt.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)
 
     # We should have at least one trade attempted; if none, the test still
     # validates that the backtest runs with overrides without error.
-    assert 'total_trades' in result
-import pytest
-import pandas as pd
+    assert "total_trades" in result
+
+
 from unittest.mock import Mock
 
+import pandas as pd
+import pytest
+
 from backtesting.engine import Backtester
-from strategies.ml_basic import MlBasic
 from risk.risk_manager import RiskParameters
+from strategies.ml_basic import MlBasic
 
 pytestmark = pytest.mark.unit
 
 
 def test_short_entry_with_overrides_uses_risk_manager_sizer(mock_data_provider):
     # Prepare simple data that triggers short entry
-    df = pd.DataFrame({
-        'open': [100, 101, 102, 103],
-        'high': [101, 102, 103, 104],
-        'low': [99, 100, 101, 102],
-        'close': [100, 101, 102, 101],
-        'volume': [1000, 1100, 1200, 1300],
-        'onnx_pred': [100, 100, 101, 100],  # last bar lower than close -> negative return
-        'prediction_confidence': [0.9, 0.9, 0.9, 0.9],
-    }, index=pd.date_range('2024-01-01', periods=4, freq='1h'))
+    df = pd.DataFrame(
+        {
+            "open": [100, 101, 102, 103],
+            "high": [101, 102, 103, 104],
+            "low": [99, 100, 101, 102],
+            "close": [100, 101, 102, 101],
+            "volume": [1000, 1100, 1200, 1300],
+            "onnx_pred": [100, 100, 101, 100],  # last bar lower than close -> negative return
+            "prediction_confidence": [0.9, 0.9, 0.9, 0.9],
+        },
+        index=pd.date_range("2024-01-01", periods=4, freq="1h"),
+    )
 
     mock_data_provider.get_historical_data.return_value = df
 
     class StrategyWithOverrides(MlBasic):
         def get_risk_overrides(self):
             return {
-                'position_sizer': 'fixed_fraction',
-                'base_fraction': 0.04,
-                'max_fraction': 0.2,
+                "position_sizer": "fixed_fraction",
+                "base_fraction": 0.04,
+                "max_fraction": 0.2,
             }
 
     strategy = StrategyWithOverrides()
@@ -109,7 +116,7 @@ def test_short_entry_with_overrides_uses_risk_manager_sizer(mock_data_provider):
     bt.log_to_database = True
 
     # Run backtest on the dataset
-    results = bt.run(symbol='BTCUSDT', timeframe='1h', start=df.index[0], end=df.index[-1])
+    results = bt.run(symbol="BTCUSDT", timeframe="1h", start=df.index[0], end=df.index[-1])
 
     # Should not crash and should have at most one trade opened (entry logic depends on strategy)
     assert isinstance(results, dict)
