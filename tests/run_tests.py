@@ -363,7 +363,7 @@ def run_quick_smoke_test():
     try:
         from strategies.ml_basic import MlBasic
         from risk.risk_manager import RiskManager
-        from strategies.ml_adaptive import MlAdaptive
+        # Removed deprecated MlAdaptive strategy
 
         print_success("All core modules import successfully")
 
