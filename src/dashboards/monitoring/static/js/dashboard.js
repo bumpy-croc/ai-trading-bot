@@ -5,6 +5,19 @@ class TradingDashboard {
         this.updateInterval = 5000; // 5 seconds instead of 1 hour
         this.chart = null;
         this.lastMetrics = {};
+        this.currencyFormatter = new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: 'USD',
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        });
+        this.integerFormatter = new Intl.NumberFormat('en-US', {
+            maximumFractionDigits: 0,
+        });
+        this.percentFormatter = new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1,
+        });
         
         this.init();
     }
@@ -35,6 +48,8 @@ class TradingDashboard {
             // Load positions
             const positionsResponse = await fetch('/api/positions');
             const positions = await positionsResponse.json();
+            // Resolve per-symbol prices to avoid BTC defaulting
+            await this.hydratePositionsWithPrices(positions);
             this.updatePositions(positions);
             
             // Load trades
@@ -67,7 +82,8 @@ class TradingDashboard {
         });
 
         this.socket.on('positions_update', (data) => {
-            this.updatePositions(data);
+            // Hydrate with latest prices before rendering
+            this.hydratePositionsWithPrices(data).then(() => this.updatePositions(data));
         });
 
         this.socket.on('trades_update', (data) => {
@@ -77,6 +93,35 @@ class TradingDashboard {
         this.socket.on('performance_update', (data) => {
             this.updatePerformanceChart(data);
         });
+    }
+
+    async hydratePositionsWithPrices(positions) {
+        if (!Array.isArray(positions) || positions.length === 0) return;
+        // Collect unique symbols
+        const symbols = Array.from(new Set(positions.map(p => String(p.symbol || '').toUpperCase()).filter(Boolean)));
+        if (symbols.length === 0) return;
+        try {
+            const url = `/api/prices?symbols=${encodeURIComponent(symbols.join(','))}`;
+            const res = await fetch(url);
+            if (!res.ok) return;
+            const priceMap = await res.json();
+            positions.forEach(p => {
+                const s = String(p.symbol || '').toUpperCase();
+                const price = priceMap[s];
+                if (typeof price === 'number' && price > 0) {
+                    p.current_price = price;
+                    // Recompute Unrealized PnL client-side for visibility if backend had BTC price or 0
+                    const entry = typeof p.entry_price === 'number' ? p.entry_price : 0;
+                    const qty = typeof p.quantity === 'number' ? p.quantity : 0;
+                    const side = String(p.side || '').toLowerCase();
+                    if (entry > 0 && qty > 0) {
+                        p.unrealized_pnl = side === 'long' ? (price - entry) * qty : (entry - price) * qty;
+                    }
+                }
+            });
+        } catch (e) {
+            // Ignore fetch errors; UI will show existing values
+        }
     }
 
     setupEventListeners() {
@@ -208,7 +253,7 @@ class TradingDashboard {
                 col.innerHTML = `
                     <div class="metric-card" id="metric_${key}">
                         <div class="metric-title">${key.replace(/_/g, ' ').toUpperCase()}</div>
-                        <div class="metric-value">${this.formatMetricValue(value, metric.format)}</div>
+                        <div class="metric-value">${this.formatMetricValueOverride(key, value, metric.format)}</div>
                         <div class="metric-change"></div>
                     </div>
                 `;
@@ -227,7 +272,7 @@ class TradingDashboard {
 
         if (valueElement) {
             // Format value based on metric type
-            const formattedValue = this.formatMetricValue(value, metric.format);
+            const formattedValue = this.formatMetricValueOverride(key, value, metric.format);
             valueElement.textContent = formattedValue;
         }
 
@@ -240,6 +285,19 @@ class TradingDashboard {
         }
 
         this.lastMetrics[key] = value;
+    }
+
+    formatMetricValueOverride(key, value, format) {
+        // Force specific keys to expected formats regardless of config
+        const integerKeys = new Set(['active_positions_count', 'total_trades', 'failed_orders']);
+        const currencyKeys = new Set(['current_balance', 'daily_pnl', 'weekly_pnl', 'total_pnl', 'position_sizes', 'total_position_value', 'available_margin', 'unrealized_pnl']);
+        if (integerKeys.has(key)) {
+            return this.integerFormatter.format(Math.round(Number(value) || 0));
+        }
+        if (currencyKeys.has(key)) {
+            return this.formatCurrency(Number(value) || 0);
+        }
+        return this.formatMetricValue(value, format);
     }
 
     formatMetricValue(value, format) {
@@ -260,23 +318,37 @@ class TradingDashboard {
 
         switch (format) {
             case 'currency':
-                return new Intl.NumberFormat('en-US', {
-                    style: 'currency',
-                    currency: 'USD',
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
-                }).format(value);
+                return this.formatCurrency(value);
             case 'percentage':
-                return `${Math.round(value * 100)}%`;
+                // Backend returns percentages in [0, 100]
+                return `${this.percentFormatter.format(value)}%`;
             case 'integer':
-                return Math.round(value).toLocaleString();
+                return this.integerFormatter.format(Math.round(value));
             case 'number':
                 // falls through
             case 'decimal':
-                return value.toFixed(2);
+                return typeof value === 'number' ? value.toFixed(2) : '0.00';
             default:
                 return value.toString();
         }
+    }
+    
+    formatCurrency(value) {
+        if (typeof value !== 'number') return '$0.00';
+        return this.currencyFormatter.format(value);
+    }
+
+    formatQuantity(symbol, quantity) {
+        const q = typeof quantity === 'number' ? quantity : 0;
+        if (q === 0) return '0';
+        const absQ = Math.abs(q);
+        let digits = 2;
+        if (absQ >= 1000) digits = 0;
+        else if (absQ >= 1) digits = 2;
+        else if (absQ >= 0.01) digits = 4;
+        else if (absQ >= 0.0001) digits = 6;
+        else digits = 8;
+        return q.toFixed(digits).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
     }
 
     calculateChange(key, value) {
@@ -293,19 +365,21 @@ class TradingDashboard {
             tbody.innerHTML = '<tr><td colspan="6" class="text-center">No active positions</td></tr>';
             return;
         }
-
+        
         tbody.innerHTML = positions.map(position => {
             const unrealizedPnl = typeof position.unrealized_pnl === 'number' ? position.unrealized_pnl : 0.0;
             const quantity = typeof position.quantity === 'number' ? position.quantity : 0;
+            const entryPrice = typeof position.entry_price === 'number' ? position.entry_price : 0.0;
+            const currentPrice = typeof position.current_price === 'number' ? position.current_price : 0.0;
             return `
             <tr>
                 <td>${position.symbol}</td>
                 <td><span class="badge ${position.side === 'long' ? 'bg-success' : 'bg-danger'}">${position.side}</span></td>
-                <td>${quantity.toFixed(4)}</td>
-                <td>$${position.entry_price.toFixed(2)}</td>
-                <td>$${position.current_price.toFixed(2)}</td>
+                <td>${this.formatQuantity(position.symbol, quantity)}</td>
+                <td>${this.formatCurrency(entryPrice)}</td>
+                <td>${this.formatCurrency(currentPrice)}</td>
                 <td class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">
-                    $${unrealizedPnl.toFixed(2)}
+                    ${this.formatCurrency(unrealizedPnl)}
                 </td>
             </tr>
             `;
@@ -324,15 +398,17 @@ class TradingDashboard {
         tbody.innerHTML = trades.map(trade => {
             const pnl = typeof trade.pnl === 'number' ? trade.pnl : 0.0;
             const quantity = typeof trade.quantity === 'number' ? trade.quantity : 0;
+            const entryPrice = typeof trade.entry_price === 'number' ? trade.entry_price : 0.0;
+            const exitPrice = typeof trade.exit_price === 'number' ? trade.exit_price : 0.0;
             return `
             <tr>
                 <td>${trade.symbol}</td>
-                <td><span class="badge ${trade.side === 'buy' ? 'bg-success' : 'bg-danger'}">${trade.side}</span></td>
-                <td>${quantity.toFixed(4)}</td>
-                <td>$${trade.entry_price.toFixed(2)}</td>
-                <td>$${trade.exit_price.toFixed(2)}</td>
+                <td><span class="badge ${trade.side && trade.side.toLowerCase() === 'buy' ? 'bg-success' : 'bg-danger'}">${trade.side}</span></td>
+                <td>${this.formatQuantity(trade.symbol, quantity)}</td>
+                <td>${this.formatCurrency(entryPrice)}</td>
+                <td>${this.formatCurrency(exitPrice)}</td>
                 <td class="${pnl >= 0 ? 'text-success' : 'text-danger'}">
-                    $${pnl.toFixed(2)}
+                    ${this.formatCurrency(pnl)}
                 </td>
             </tr>
             `;
@@ -362,8 +438,9 @@ class TradingDashboard {
                     y: {
                         beginAtZero: false,
                         ticks: {
-                            callback: function(value) {
-                                return '$' + value.toFixed(2);
+                            callback: (value) => {
+                                const num = typeof value === 'number' ? value : Number(value);
+                                return this.formatCurrency(isNaN(num) ? 0 : num);
                             }
                         }
                     }
@@ -386,8 +463,11 @@ class TradingDashboard {
             return;
         }
 
-        this.chart.data.labels = data.timestamps.map(ts => new Date(ts).toLocaleDateString());
-        this.chart.data.datasets[0].data = data.balances;
+        this.chart.data.labels = data.timestamps.map(ts => {
+            const d = new Date(ts);
+            return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+        });
+        this.chart.data.datasets[0].data = data.balances.map(v => (typeof v === 'number' ? v : Number(v)) || 0);
         this.chart.update();
     }
 
