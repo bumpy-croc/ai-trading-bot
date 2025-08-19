@@ -3,6 +3,7 @@
 __pycache__
 .coverage
 .pytest_cache
+ai_trading_bot.egg-info/
 logs/
 .cursor/mcp.json
 
