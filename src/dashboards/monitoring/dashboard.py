@@ -1259,19 +1259,21 @@ class MonitoringDashboard:
             trades: list[TradeDict] = []
             for row in result or []:
                 try:
+                    # Handle None values more gracefully for numeric fields
+                    entry_price_raw = row.get("entry_price")
+                    exit_price_raw = row.get("exit_price")
+                    pnl_raw = row.get("pnl")
+                    quantity_raw = row.get("quantity")
+                    
                     trade: TradeDict = {
                         "symbol": str(row.get("symbol", "")),
                         "side": str(row.get("side", "")),
-                        "entry_price": float(row.get("entry_price", 0.0)),
-                        "exit_price": float(row.get("exit_price", 0.0)),
-                        "quantity": (
-                            float(row.get("quantity", 0.0))
-                            if row.get("quantity") is not None
-                            else 0.0
-                        ),
+                        "entry_price": float(entry_price_raw) if entry_price_raw is not None else 0.0,
+                        "exit_price": float(exit_price_raw) if exit_price_raw is not None else 0.0,
+                        "quantity": float(quantity_raw) if quantity_raw is not None else 0.0,
                         "entry_time": row.get("entry_time"),
                         "exit_time": row.get("exit_time"),
-                        "pnl": float(row.get("pnl", 0.0)),
+                        "pnl": float(pnl_raw) if pnl_raw is not None else 0.0,
                         "exit_reason": str(row.get("exit_reason", "")),
                     }
                     trades.append(trade)

@@ -273,7 +273,7 @@ class TradingDashboard {
             case 'number':
                 // falls through
             case 'decimal':
-                return value.toFixed(2);
+                return typeof value === 'number' ? value.toFixed(2) : '0.00';
             default:
                 return value.toString();
         }
@@ -297,13 +297,15 @@ class TradingDashboard {
         tbody.innerHTML = positions.map(position => {
             const unrealizedPnl = typeof position.unrealized_pnl === 'number' ? position.unrealized_pnl : 0.0;
             const quantity = typeof position.quantity === 'number' ? position.quantity : 0;
+            const entryPrice = typeof position.entry_price === 'number' ? position.entry_price : 0.0;
+            const currentPrice = typeof position.current_price === 'number' ? position.current_price : 0.0;
             return `
             <tr>
                 <td>${position.symbol}</td>
                 <td><span class="badge ${position.side === 'long' ? 'bg-success' : 'bg-danger'}">${position.side}</span></td>
                 <td>${quantity.toFixed(4)}</td>
-                <td>$${position.entry_price.toFixed(2)}</td>
-                <td>$${position.current_price.toFixed(2)}</td>
+                <td>$${entryPrice.toFixed(2)}</td>
+                <td>$${currentPrice.toFixed(2)}</td>
                 <td class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">
                     $${unrealizedPnl.toFixed(2)}
                 </td>
@@ -324,13 +326,15 @@ class TradingDashboard {
         tbody.innerHTML = trades.map(trade => {
             const pnl = typeof trade.pnl === 'number' ? trade.pnl : 0.0;
             const quantity = typeof trade.quantity === 'number' ? trade.quantity : 0;
+            const entryPrice = typeof trade.entry_price === 'number' ? trade.entry_price : 0.0;
+            const exitPrice = typeof trade.exit_price === 'number' ? trade.exit_price : 0.0;
             return `
             <tr>
                 <td>${trade.symbol}</td>
                 <td><span class="badge ${trade.side === 'buy' ? 'bg-success' : 'bg-danger'}">${trade.side}</span></td>
                 <td>${quantity.toFixed(4)}</td>
-                <td>$${trade.entry_price.toFixed(2)}</td>
-                <td>$${trade.exit_price.toFixed(2)}</td>
+                <td>$${entryPrice.toFixed(2)}</td>
+                <td>$${exitPrice.toFixed(2)}</td>
                 <td class="${pnl >= 0 ? 'text-success' : 'text-danger'}">
                     $${pnl.toFixed(2)}
                 </td>
@@ -363,7 +367,7 @@ class TradingDashboard {
                         beginAtZero: false,
                         ticks: {
                             callback: function(value) {
-                                return '$' + value.toFixed(2);
+                                return '$' + (typeof value === 'number' ? value.toFixed(2) : '0.00');
                             }
                         }
                     }
