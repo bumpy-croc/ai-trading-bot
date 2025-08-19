@@ -31,9 +31,6 @@ COPY . .
 RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Make scripts executable
-RUN chmod +x scripts/health_check.py scripts/run_live_trading_with_health.py scripts/start_dashboard.py
-
 # Expose port for health checks
 EXPOSE 8000
 
@@ -42,4 +39,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD /bin/sh -c 'curl -f http://localhost:${PORT:-8000}/health || exit 1'
 
 # Default command - use the combined runner
-CMD ["python", "scripts/run_live_trading_with_health.py", "ml_basic"]
+CMD ["make", "live-health", "ml_basic"]
