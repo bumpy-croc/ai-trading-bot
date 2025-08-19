@@ -16,8 +16,6 @@ from backtesting.models import Trade as CompletedTrade
 from backtesting.utils import (
     compute_performance_metrics,
 )
-
-# New modular utilities and models
 from backtesting.utils import (
     extract_indicators as util_extract_indicators,
 )
@@ -32,11 +30,7 @@ from data_providers.data_provider import DataProvider
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
-
-# Shared performance metrics
-from performance.metrics import (
-    cash_pnl,
-)
+from performance.metrics import cash_pnl
 from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
