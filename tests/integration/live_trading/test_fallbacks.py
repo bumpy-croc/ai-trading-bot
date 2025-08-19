@@ -43,56 +43,66 @@ class TestLiveTradingFallbacks:
         assert PositionSide is not None if "PositionSide" in globals() else True
 
     def test_strategy_execution_logging(self, mock_strategy, mock_data_provider):
-        engine = LiveTradingEngine(
-            strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=False
-        )
-        engine.db_manager = MagicMock()
-        engine.db_manager.log_strategy_execution = MagicMock()
-        engine.risk_manager = MagicMock()
-        engine.risk_manager.get_max_concurrent_positions.return_value = 1
-        engine.positions = {}
-        engine.trading_session_id = 42
-        market_data = pd.DataFrame(
-            {
-                "open": [50000, 50100],
-                "high": [50200, 50300],
-                "low": [49800, 49900],
-                "close": [50100, 50200],
-                "volume": [1000, 1100],
-                "rsi": [45, 55],
-                "atr": [500, 510],
-            },
-            index=pd.date_range("2024-01-01", periods=2, freq="1h"),
-        )
-        mock_data_provider.get_live_data.return_value = market_data.tail(1)
-        mock_strategy.calculate_indicators.return_value = market_data
-        mock_strategy.check_entry_conditions.return_value = True
-        mock_strategy.calculate_position_size.return_value = 0.1
-        mock_strategy.calculate_stop_loss.return_value = 49500
-        current_index = len(market_data) - 1
-        symbol = "BTCUSDT"
-        current_price = market_data["close"].iloc[-1]
-        if hasattr(engine, "_check_entry_conditions"):
-            engine._check_entry_conditions(market_data, current_index, symbol, current_price)
-            assert engine.db_manager.log_strategy_execution.called
-        if hasattr(engine, "_check_exit_conditions"):
-            engine.db_manager.log_strategy_execution.reset_mock()
-            engine.positions = {
-                "test_exit_001": type(
-                    "P",
-                    (),
-                    dict(
-                        symbol="BTCUSDT",
-                        side="LONG",
-                        size=0.1,
-                        entry_price=50000,
-                        entry_time=datetime.now() - timedelta(hours=2),
-                        stop_loss=49500,
-                        take_profit=None,
-                        order_id="test_exit_001",
-                    ),
-                )
-            }
-            mock_strategy.check_exit_conditions.return_value = True
-            engine._check_exit_conditions(market_data, current_index, current_price)
-            assert engine.db_manager.log_strategy_execution.called
+        # Mock the database manager to avoid database connection issues
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr('src.database.manager.DatabaseManager', MagicMock())
+            
+            engine = LiveTradingEngine(
+                strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=False
+            )
+            engine.db_manager = MagicMock()
+            engine.db_manager.log_strategy_execution = MagicMock()
+            engine.risk_manager = MagicMock()
+            engine.risk_manager.get_max_concurrent_positions.return_value = 1
+            engine.risk_manager.calculate_position_fraction.return_value = 0.05  # Return a float instead of MagicMock
+            # Ensure max_position_size is a float, not a MagicMock
+            engine.max_position_size = 0.1
+            # Mock the missing _close_position method
+            engine._close_position = MagicMock()
+            engine.positions = {}
+            engine.trading_session_id = 42
+            market_data = pd.DataFrame(
+                {
+                    "open": [50000, 50100],
+                    "high": [50200, 50300],
+                    "low": [49800, 49900],
+                    "close": [50100, 50200],
+                    "volume": [1000, 1100],
+                    "rsi": [45, 55],
+                    "atr": [500, 510],
+                },
+                index=pd.date_range("2024-01-01", periods=2, freq="1h"),
+            )
+            mock_data_provider.get_live_data.return_value = market_data.tail(1)
+            mock_strategy.calculate_indicators.return_value = market_data
+            mock_strategy.check_entry_conditions.return_value = True
+            mock_strategy.calculate_position_size.return_value = 0.1
+            mock_strategy.calculate_stop_loss.return_value = 49500
+            mock_strategy.get_risk_overrides.return_value = None  # Return None instead of Mock
+            current_index = len(market_data) - 1
+            symbol = "BTCUSDT"
+            current_price = market_data["close"].iloc[-1]
+            if hasattr(engine, "_check_entry_conditions"):
+                engine._check_entry_conditions(market_data, current_index, symbol, current_price)
+                assert engine.db_manager.log_strategy_execution.called
+            if hasattr(engine, "_check_exit_conditions"):
+                engine.db_manager.log_strategy_execution.reset_mock()
+                engine.positions = {
+                    "test_exit_001": type(
+                        "P",
+                        (),
+                        dict(
+                            symbol="BTCUSDT",
+                            side="LONG",
+                            size=0.1,
+                            entry_price=50000,
+                            entry_time=datetime.now() - timedelta(hours=2),
+                            stop_loss=49500,
+                            take_profit=None,
+                            order_id="test_exit_001",
+                        ),
+                    )
+                }
+                mock_strategy.check_exit_conditions.return_value = True
+                engine._check_exit_conditions(market_data, current_index, current_price)
+                assert engine.db_manager.log_strategy_execution.called

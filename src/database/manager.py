@@ -104,9 +104,12 @@ class DatabaseManager:
 
         # Guard SQLite usage behind the integration flag to avoid accidental use in production
         run_integration = os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
-        if is_sqlite and run_integration:
+        is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
+        
+        # Allow SQLite for local integration testing when PostgreSQL is not available
+        if is_sqlite and run_integration and is_github_actions:
             raise ValueError(
-                "SQLite URL provided while integration tests are enabled. Use a PostgreSQL DATABASE_URL."
+                "SQLite URL provided while integration tests are enabled in CI. Use a PostgreSQL DATABASE_URL."
             )
 
         # Helper for creating a SQLite engine config

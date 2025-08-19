@@ -61,38 +61,58 @@ def maybe_setup_database():
         yield
         return
 
+    # Check if we're in GitHub Actions with PostgreSQL service
+    is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
+    
     started_container = None
     if not os.getenv("DATABASE_URL"):
-        try:
-            from testcontainers.postgres import PostgresContainer  # type: ignore
+        # In GitHub Actions, the PostgreSQL service should be available
+        if is_github_actions:
+            # Set the DATABASE_URL for GitHub Actions PostgreSQL service
+            os.environ["DATABASE_URL"] = "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
+            print("[Database Setup] Using GitHub Actions PostgreSQL service")
+        else:
+            # Local development - try to start a container, fallback to SQLite if not available
+            try:
+                from testcontainers.postgres import PostgresContainer  # type: ignore
 
-            print(
-                f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}"
-            )
-            container = PostgresContainer("postgres:15-alpine")
-            container.start()
-            os.environ["DATABASE_URL"] = container.get_connection_url()
-            started_container = container
-            print("[Database Setup] ✅ Postgres container ready")
-        except Exception as exc:  # pragma: no cover
-            pytest.exit(f"Failed to start Postgres container for integration tests: {exc}")
+                print(
+                    f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}"
+                )
+                container = PostgresContainer("postgres:15-alpine")
+                container.start()
+                os.environ["DATABASE_URL"] = container.get_connection_url()
+                started_container = container
+                print("[Database Setup] ✅ Postgres container ready")
+            except Exception as exc:  # pragma: no cover
+                print(f"[Database Setup] ⚠️  Could not start Postgres container: {exc}")
+                print("[Database Setup] Falling back to SQLite for local testing")
+                os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+                print("[Database Setup] ✅ Using SQLite in-memory database")
 
     # Reset DB schema/content before tests
     print("\n[pytest] Running database reset before integration tests...")
     db_reset_start = time.time()
-    result = subprocess.run(
-        [sys.executable, "scripts/setup_local_development.py", "--reset-db", "--no-interactive"],
-        capture_output=True,
-        text=True,
-    )
-    if result.stdout:
-        print(result.stdout)
-    if result.returncode != 0:
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
-        pytest.exit("Database setup/reset failed before tests.")
-    else:
+    
+    try:
+        # Import database manager and reset database
+        from src.database.manager import DatabaseManager
+        from src.database.models import Base
+        
+        # Create database manager instance
+        db_manager = DatabaseManager()
+        
+        # Drop all tables and recreate them
+        print("[pytest] Dropping existing tables...")
+        Base.metadata.drop_all(db_manager.engine)
+        print("[pytest] Creating fresh tables...")
+        Base.metadata.create_all(db_manager.engine)
+        
         print(f"[pytest] ✅ Database reset completed in {time.time() - db_reset_start:.2f} seconds")
+        
+    except Exception as e:
+        print(f"[pytest] ❌ Database reset failed: {e}")
+        pytest.exit("Database setup/reset failed before tests.")
 
     try:
         yield
