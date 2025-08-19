@@ -7,7 +7,6 @@ extract method and provide feature names.
 """
 
 from abc import ABC, abstractmethod
-from typing import List
 
 import pandas as pd
 
@@ -48,12 +47,12 @@ class FeatureExtractor(ABC):
         pass
 
     @abstractmethod
-    def get_feature_names(self) -> List[str]:
+    def get_feature_names(self) -> list[str]:
         """
         Return list of feature names this extractor produces.
 
         Returns:
-            List of feature column names
+            List of feature names
         """
         pass
 

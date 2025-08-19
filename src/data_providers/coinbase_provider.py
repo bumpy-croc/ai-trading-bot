@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import pandas as pd
 import requests
@@ -98,8 +98,8 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         self,
         method: str,
         path: str,
-        params: Dict[str, Any] = None,
-        body: Dict[str, Any] = None,
+        params: dict[str, Any] = None,
+        body: dict[str, Any] = None,
         auth: bool = False,
     ):
         """Helper to perform HTTP request with optional Coinbase authentication."""
@@ -145,7 +145,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Coinbase connection test failed: {e}")
             return False
 
-    def get_account_info(self) -> Dict[str, Any]:
+    def get_account_info(self) -> dict[str, Any]:
         try:
             data = self._request("GET", "/accounts", auth=True)
             account_info = {
@@ -156,10 +156,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         except Exception:
             return {}
 
-    def get_balances(self) -> List[AccountBalance]:
+    def get_balances(self) -> list[AccountBalance]:
         try:
             accounts = self._request("GET", "/accounts", auth=True)
-            balances: List[AccountBalance] = []
+            balances: list[AccountBalance] = []
             for acct in accounts:
                 balance = float(acct.get("balance", "0"))
                 available = float(acct.get("available", "0"))
@@ -186,17 +186,17 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 return bal
         return None
 
-    def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
+    def get_positions(self, symbol: Optional[str] = None) -> list[Position]:
         logger.info("get_positions not implemented for Coinbase spot API (only holdings)")
         return []
 
-    def get_open_orders(self, symbol: Optional[str] = None) -> List[Order]:
+    def get_open_orders(self, symbol: Optional[str] = None) -> list[Order]:
         try:
             params = {"status": "open"}
             if symbol:
                 params["product_id"] = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
             data = self._request("GET", "/orders", params=params, auth=True)
-            orders: List[Order] = []
+            orders: list[Order] = []
             for od in data:
                 orders.append(
                     Order(
@@ -262,14 +262,14 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get order {order_id}: {e}")
             return None
 
-    def get_recent_trades(self, symbol: str, limit: int = 100) -> List[Trade]:
+    def get_recent_trades(self, symbol: str, limit: int = 100) -> list[Trade]:
         try:
             params = {
                 "product_id": SymbolFactory.to_exchange_symbol(symbol, "coinbase"),
                 "limit": limit,
             }
             fills = self._request("GET", "/fills", params=params, auth=True)
-            trades: List[Trade] = []
+            trades: list[Trade] = []
             for fl in fills:
                 trades.append(
                     Trade(
@@ -301,7 +301,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
     ) -> Optional[str]:
         try:
             cb_type = self._convert_to_cb_type(order_type)
-            body: Dict[str, Any] = {
+            body: dict[str, Any] = {
                 "product_id": SymbolFactory.to_exchange_symbol(symbol, "coinbase"),
                 "side": side.value.lower(),
                 "type": cb_type,
@@ -347,7 +347,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to cancel all orders: {e}")
             return False
 
-    def get_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
         try:
             product = self._request(
                 "GET", f"/products/{SymbolFactory.to_exchange_symbol(symbol, 'coinbase')}"
@@ -381,7 +381,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         start: datetime = None,
         end: datetime = None,
         limit: int = None,
-    ) -> List[List[Any]]:
+    ) -> list[list[Any]]:
         """Fetch candle data from Coinbase public API."""
         params = {"granularity": granularity}
         if start is not None:
@@ -402,11 +402,11 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     def _fetch_candles_range(
         self, product_id: str, granularity: int, start: datetime, end: datetime
-    ) -> List[List[Any]]:
+    ) -> list[list[Any]]:
         """Fetch candles over a range, respecting Coinbase 300-candle limit per request."""
         max_points = 300
         delta_sec = granularity * max_points
-        results: List[List[Any]] = []
+        results: list[list[Any]] = []
         chunk_start = start
         while chunk_start < end:
             chunk_end = min(end, chunk_start + timedelta(seconds=delta_sec))

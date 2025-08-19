@@ -1097,7 +1097,9 @@ class MonitoringDashboard:
                     continue
                 if symbol not in price_cache:
                     try:
-                        price_cache[symbol] = self._safe_float(self.data_provider.get_current_price(symbol))
+                        price_cache[symbol] = self._safe_float(
+                            self.data_provider.get_current_price(symbol)
+                        )
                     except Exception:
                         price_cache[symbol] = 0.0
                 current_price = price_cache.get(symbol, 0.0)
@@ -1147,7 +1149,9 @@ class MonitoringDashboard:
                     continue
                 if symbol not in price_cache:
                     try:
-                        price_cache[symbol] = self._safe_float(self.data_provider.get_current_price(symbol))
+                        price_cache[symbol] = self._safe_float(
+                            self.data_provider.get_current_price(symbol)
+                        )
                     except Exception:
                         price_cache[symbol] = 0.0
                 current_price = price_cache.get(symbol, 0.0)
@@ -1322,11 +1326,13 @@ class MonitoringDashboard:
                     exit_price_raw = row.get("exit_price")
                     pnl_raw = row.get("pnl")
                     quantity_raw = row.get("quantity")
-                    
+
                     trade: TradeDict = {
                         "symbol": str(row.get("symbol", "")),
                         "side": str(row.get("side", "")),
-                        "entry_price": float(entry_price_raw) if entry_price_raw is not None else 0.0,
+                        "entry_price": (
+                            float(entry_price_raw) if entry_price_raw is not None else 0.0
+                        ),
                         "exit_price": float(exit_price_raw) if exit_price_raw is not None else 0.0,
                         "quantity": float(quantity_raw) if quantity_raw is not None else 0.0,
                         "entry_time": row.get("entry_time"),

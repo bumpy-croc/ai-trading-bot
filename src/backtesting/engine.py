@@ -1,23 +1,21 @@
+"""
+Backtesting engine for strategy evaluation.
+
+This module provides a comprehensive backtesting framework.
+"""
+
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
-
-# Shared performance metrics
-from performance.metrics import (
-    cash_pnl,
-)
-from regime.detector import RegimeDetector
 from sqlalchemy.exc import SQLAlchemyError
 
 from backtesting.models import Trade as CompletedTrade
 from backtesting.utils import (
     compute_performance_metrics,
 )
-
-# New modular utilities and models
 from backtesting.utils import (
     extract_indicators as util_extract_indicators,
 )
@@ -32,6 +30,8 @@ from data_providers.data_provider import DataProvider
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
+from performance.metrics import cash_pnl
+from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
 
@@ -88,7 +88,7 @@ class Backtester:
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.peak_balance = initial_balance
-        self.trades: List[CompletedTrade] = []
+        self.trades: list[dict] = []
         self.current_trade: Optional[ActiveTrade] = None
 
         # Feature flags for parity tuning
@@ -163,7 +163,7 @@ class Backtester:
 
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
-    ) -> Dict:
+    ) -> dict:
         """Run backtest with sentiment data if available"""
         try:
             # Create trading session in database if enabled
@@ -241,10 +241,10 @@ class Backtester:
             max_drawdown_running = 0  # interim tracker (still used for intra-loop stopping)
 
             # Track balance over time to enable robust performance stats
-            balance_history: List[tuple] = []  # (timestamp, balance)
+            balance_history: list[tuple] = []  # (timestamp, balance)
 
             # Helper dict to track first/last balance of each calendar year
-            yearly_balance: Dict[int, Dict[str, float]] = {}
+            yearly_balance: dict[int, dict[str, float]] = {}
 
             # Iterate through candles
             for i in range(len(df)):
@@ -764,7 +764,7 @@ class Backtester:
             # ---------------------------------------------
             # Yearly returns based on account balance
             # ---------------------------------------------
-            yearly_returns: Dict[str, float] = {}
+            yearly_returns: dict[str, float] = {}
             for yr, bal in yearly_balance.items():
                 start_bal = bal["start"]
                 end_bal = bal["end"]
@@ -827,11 +827,11 @@ class Backtester:
                 df["sentiment_score"] = df["sentiment_score"].fillna(0)
         return df
 
-    def _extract_indicators(self, df: pd.DataFrame, index: int) -> Dict:
+    def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         return util_extract_indicators(df, index)
 
-    def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> Dict:
+    def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> dict:
         return util_extract_sentiment(df, index)
 
-    def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> Dict:
+    def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> dict:
         return util_extract_ml(df, index)

@@ -1,9 +1,12 @@
 """
-.env file configuration provider
+Dotenv configuration provider.
+
+This module provides configuration from .env files.
 """
 
+import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from .base import ConfigProvider
 
@@ -13,7 +16,7 @@ class DotEnvProvider(ConfigProvider):
 
     def __init__(self, env_file: str = ".env"):
         self.env_file = Path(env_file)
-        self._cache: Dict[str, str] = {}
+        self._cache: dict[str, str] = {}
         self._loaded = False
         self._load_env_file()
 
@@ -35,13 +38,13 @@ class DotEnvProvider(ConfigProvider):
         except Exception as e:
             print(f"Warning: Failed to load {self.env_file}: {e}")
 
-    def get(self, key: str) -> Optional[str]:
-        """Get a configuration value from .env file"""
-        return self._cache.get(key)
+    def get(self, key: str, default: Optional[Any] = None) -> Optional[str]:
+        """Get configuration value from .env file."""
+        return self._cache.get(key, default)
 
-    def get_all(self) -> Dict[str, Any]:
-        """Get all configuration values from .env file"""
-        return self._cache.copy()
+    def get_all(self) -> dict[str, Any]:
+        """Get all environment variables."""
+        return dict(os.environ)
 
     def is_available(self) -> bool:
         """Check if .env file exists and was loaded"""

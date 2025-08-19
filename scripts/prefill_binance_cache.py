@@ -17,9 +17,9 @@ Examples:
 
 import argparse
 import sys
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable, List
 
 # Ensure package imports work when executed as a script
 sys.path.append(str(Path(__file__).parent.parent))
@@ -78,8 +78,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def normalize_symbols(raw_symbols: Iterable[str]) -> List[str]:
-    normalized: List[str] = []
+def normalize_symbols(raw_symbols: Iterable[str]) -> list[str]:
+    normalized: list[str] = []
     for s in raw_symbols:
         s = s.strip().upper()
         if "-" in s or "/" in s:
@@ -88,8 +88,8 @@ def normalize_symbols(raw_symbols: Iterable[str]) -> List[str]:
     return normalized
 
 
-def year_chunks(start: datetime, end: datetime) -> List[tuple[int, datetime, datetime]]:
-    chunks: List[tuple[int, datetime, datetime]] = []
+def year_chunks(start: datetime, end: datetime) -> list[tuple[int, datetime, datetime]]:
+    chunks: list[tuple[int, datetime, datetime]] = []
     cur = start
     while cur <= end:
         y = cur.year
@@ -105,8 +105,8 @@ def year_chunks(start: datetime, end: datetime) -> List[tuple[int, datetime, dat
 
 
 def prefill(
-    symbols: List[str],
-    timeframes: List[str],
+    symbols: list[str],
+    timeframes: list[str],
     start: datetime,
     end: datetime,
     cache_ttl_hours: int,

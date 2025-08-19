@@ -18,7 +18,6 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
 
 from live.strategy_manager import StrategyManager
 from utils.logging_config import configure_logging
@@ -58,7 +57,7 @@ class SafeModelTrainer:
         days: int = 365,
         epochs: int = 50,
         validate_before_deploy: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict:
         """
         Train a new model safely without interfering with live trading
 
@@ -108,9 +107,7 @@ class SafeModelTrainer:
             logger.error(f"❌ Model training failed: {e}")
             return {"success": False, "error": str(e), "timestamp": datetime.now().isoformat()}
 
-    def deploy_model_to_live(
-        self, deployment_package: Dict[str, Any], close_positions: bool = False
-    ) -> bool:
+    def deploy_model_to_live(self, deployment_package: dict, close_positions: bool = False) -> bool:
         """
         Deploy a trained model to live trading
 
@@ -178,9 +175,7 @@ class SafeModelTrainer:
         except Exception as e:
             logger.warning(f"Backup failed (non-critical): {e}")
 
-    def _train_in_staging(
-        self, symbol: str, with_sentiment: bool, days: int, epochs: int
-    ) -> Dict[str, Any]:
+    def _train_in_staging(self, symbol: str, with_sentiment: bool, days: int, epochs: int) -> dict:
         """Train model in staging area using the new train_model.py script"""
 
         # Create staging timestamp
@@ -287,7 +282,7 @@ class SafeModelTrainer:
             logger.error(f"❌ Training failed: {e}")
             raise
 
-    def _validate_model(self, model_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate_model(self, model_info: dict) -> dict:
         """Validate trained model"""
 
         validation_results = {"valid": True, "errors": [], "warnings": [], "metrics": {}}
@@ -350,7 +345,7 @@ class SafeModelTrainer:
 
         return validation_results
 
-    def _prepare_deployment_package(self, model_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_deployment_package(self, model_info: dict) -> dict:
         """Prepare model for deployment"""
 
         return {
@@ -362,7 +357,7 @@ class SafeModelTrainer:
             "ready_for_deployment": True,
         }
 
-    def _log_deployment(self, deployment_package: Dict[str, Any]):
+    def _log_deployment(self, deployment_package: dict):
         """Log model deployment"""
 
         log_entry = {
@@ -389,7 +384,7 @@ class SafeModelTrainer:
 
         logger.info(f"Deployment logged: {log_file}")
 
-    def list_available_models(self) -> Dict[str, Any]:
+    def list_available_models(self) -> dict:
         """List available models in staging area"""
 
         staging_models = []

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -47,7 +47,7 @@ class RegimeDetector:
         self._dwell: int = 0
 
     @staticmethod
-    def _rolling_ols_slope_and_r2(x: pd.Series, window: int) -> Tuple[pd.Series, pd.Series]:
+    def _rolling_ols_slope_and_r2(x: pd.Series, window: int) -> tuple[pd.Series, pd.Series]:
         # Compute rolling OLS slope and R^2 for y = log(price) vs time index
         y = np.log(x.clip(lower=1e-8))
         idx = np.arange(len(y))
@@ -184,7 +184,7 @@ class RegimeDetector:
         out["regime_confidence"] = conf
         return out
 
-    def current_labels(self, df: pd.DataFrame) -> Tuple[str, str, float]:
+    def current_labels(self, df: pd.DataFrame) -> tuple[str, str, float]:
         if df.empty or "regime_label" not in df.columns:
             return "unknown", "unknown", 0.0
         last = df.iloc[-1]

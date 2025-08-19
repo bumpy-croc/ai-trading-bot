@@ -1,9 +1,11 @@
 """
-Environment variables configuration provider
+Environment variable configuration provider.
+
+This module provides configuration from environment variables.
 """
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from .base import ConfigProvider
 
@@ -14,19 +16,12 @@ class EnvVarProvider(ConfigProvider):
     def __init__(self):
         self._prefix = ""  # Optional prefix for env vars
 
-    def get(self, key: str) -> Optional[str]:
-        """Get a configuration value from environment variables"""
-        env_key = f"{self._prefix}{key}" if self._prefix else key
-        return os.environ.get(env_key)
+    def get(self, key: str, default: Optional[Any] = None) -> Optional[str]:
+        """Get configuration value from environment variables."""
+        return os.getenv(key, default)
 
-    def get_all(self) -> Dict[str, Any]:
-        """Get all environment variables (optionally filtered by prefix)"""
-        if self._prefix:
-            return {
-                k[len(self._prefix) :]: v
-                for k, v in os.environ.items()
-                if k.startswith(self._prefix)
-            }
+    def get_all(self) -> dict[str, Any]:
+        """Get all environment variables."""
         return dict(os.environ)
 
     def is_available(self) -> bool:

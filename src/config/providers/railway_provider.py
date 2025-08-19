@@ -1,9 +1,11 @@
 """
-Railway configuration provider that reads from Railway environment variables
+Railway configuration provider.
+
+This module provides configuration from Railway environment variables.
 """
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from .base import ConfigProvider
 
@@ -50,61 +52,41 @@ class RailwayProvider(ConfigProvider):
 
         return any(key in self._env_vars for key in railway_indicators)
 
-    def get(self, key: str) -> Optional[str]:
-        """
-        Get configuration value from Railway environment.
-
-        Args:
-            key: Configuration key to retrieve
-
-        Returns:
-            Configuration value or None if not found
-        """
-        if not self.is_available():
-            return None
-
-        # Try direct key first
-        value = self._env_vars.get(key)
+    def get(self, key: str, default: Optional[Any] = None) -> Optional[str]:
+        """Get configuration value from Railway environment variables."""
+        # Railway-specific environment variable
+        railway_key = f"RAILWAY_{key.upper()}"
+        value = os.getenv(railway_key)
         if value is not None:
             return value
 
-        # Try Railway-specific prefixes
-        railway_key = f"RAILWAY_{key}"
-        value = self._env_vars.get(railway_key)
-        if value is not None:
-            return value
+        # Fallback to regular environment variable
+        return os.getenv(key, default)
 
-        return None
-
-    def get_all(self) -> Dict[str, Any]:
-        """
-        Get all configuration values from Railway environment.
-
-        Returns:
-            Dictionary of all environment variables
-        """
-        if not self.is_available():
-            return {}
-
-        return self._env_vars.copy()
+    def get_all(self) -> dict[str, Any]:
+        """Get all Railway environment variables."""
+        railway_vars = {}
+        for key, value in os.environ.items():
+            if key.startswith("RAILWAY_"):
+                # Remove RAILWAY_ prefix for consistency
+                clean_key = key[8:].lower()
+                railway_vars[clean_key] = value
+        return railway_vars
 
     def refresh(self) -> None:
         """Refresh environment variables"""
         self._load_env_vars()
 
-    def get_railway_info(self) -> Dict[str, Optional[str]]:
+    def get_railway_info(self) -> dict[str, Optional[str]]:
         """
         Get Railway-specific deployment information.
 
         Returns:
-            Dictionary with Railway deployment details
+            Dictionary with Railway deployment info
         """
         return {
-            "project_id": self.get("RAILWAY_PROJECT_ID"),
-            "service_id": self.get("RAILWAY_SERVICE_ID"),
-            "environment_id": self.get("RAILWAY_ENVIRONMENT_ID"),
-            "deployment_id": self.get("RAILWAY_DEPLOYMENT_ID"),
-            "replica_id": self.get("RAILWAY_REPLICA_ID"),
-            "public_domain": self.get("RAILWAY_PUBLIC_DOMAIN"),
-            "private_domain": self.get("RAILWAY_PRIVATE_DOMAIN"),
+            "project_id": os.getenv("RAILWAY_PROJECT_ID"),
+            "service_id": os.getenv("RAILWAY_SERVICE_ID"),
+            "environment": os.getenv("RAILWAY_ENVIRONMENT"),
+            "domain": os.getenv("RAILWAY_DOMAIN"),
         }

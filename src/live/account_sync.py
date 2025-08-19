@@ -9,7 +9,7 @@ or trades due to shutdowns or errors.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from data_providers.exchange_interface import (
     AccountBalance,
@@ -30,7 +30,7 @@ class SyncResult:
 
     success: bool
     message: str
-    data: Dict[str, Any]
+    data: dict[str, Any]
     timestamp: datetime
 
 
@@ -135,7 +135,7 @@ class AccountSynchronizer:
                 timestamp=datetime.utcnow(),
             )
 
-    def _sync_balances(self, exchange_balances: List[AccountBalance]) -> Dict[str, Any]:
+    def _sync_balances(self, exchange_balances: list[AccountBalance]) -> dict[str, Any]:
         """Synchronize account balances"""
         try:
             logger.info(f"Syncing {len(exchange_balances)} balances from exchange")
@@ -190,7 +190,7 @@ class AccountSynchronizer:
             logger.error(f"Balance sync failed: {e}")
             return {"synced": False, "error": str(e)}
 
-    def _sync_positions(self, exchange_positions: List[Position]) -> Dict[str, Any]:
+    def _sync_positions(self, exchange_positions: list[Position]) -> dict[str, Any]:
         """Synchronize open positions"""
         try:
             logger.info(f"Syncing {len(exchange_positions)} positions from exchange")
@@ -302,7 +302,7 @@ class AccountSynchronizer:
             logger.error(f"Position sync failed: {e}")
             return {"synced": False, "error": str(e)}
 
-    def _sync_orders(self, exchange_orders: List[Order]) -> Dict[str, Any]:
+    def _sync_orders(self, exchange_orders: list[Order]) -> dict[str, Any]:
         """Synchronize open orders"""
         try:
             logger.info(f"Syncing {len(exchange_orders)} orders from exchange")
@@ -407,7 +407,7 @@ class AccountSynchronizer:
             logger.error(f"Order sync failed: {e}")
             return {"synced": False, "error": str(e)}
 
-    def recover_missing_trades(self, symbol: str, days_back: int = 7) -> Dict[str, Any]:
+    def recover_missing_trades(self, symbol: str, days_back: int = 7) -> dict[str, Any]:
         """
         Recover missing trades by comparing exchange trade history with database.
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -50,7 +50,7 @@ class RiskManager:
     ):
         self.params = parameters or RiskParameters()
         self.daily_risk_used = 0.0
-        self.positions: Dict[str, dict] = {}
+        self.positions: dict[str, dict] = {}
         self.max_concurrent_positions = max_concurrent_positions
 
     def reset_daily_risk(self):
@@ -125,8 +125,8 @@ class RiskManager:
         index: int,
         balance: float,
         price: Optional[float] = None,
-        indicators: Optional[Dict[str, Any]] = None,
-        strategy_overrides: Optional[Dict[str, Any]] = None,
+        indicators: Optional[dict[str, Any]] = None,
+        strategy_overrides: Optional[dict[str, Any]] = None,
         regime: str = "normal",
     ) -> float:
         """
@@ -206,8 +206,8 @@ class RiskManager:
         index: int,
         entry_price: float,
         side: str = "long",
-        strategy_overrides: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Optional[float], Optional[float]]:
+        strategy_overrides: Optional[dict[str, Any]] = None,
+    ) -> tuple[Optional[float], Optional[float]]:
         """
         Compute stop-loss and take-profit prices.
         Priority:

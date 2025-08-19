@@ -11,7 +11,7 @@ import pickle  # nosec B403: used for internal caching; no untrusted inputs
 import time
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -55,8 +55,8 @@ class FeatureCache:
             default_ttl: Default time-to-live for cache entries in seconds
         """
         self.default_ttl = default_ttl
-        self._cache: Dict[str, CacheEntry] = {}
-        self._quick_hash_cache: Dict[str, str] = {}  # Quick hash to full hash mapping
+        self._cache: dict[str, CacheEntry] = {}
+        self._quick_hash_cache: dict[str, str] = {}  # Quick hash to full hash mapping
         self._stats = {
             "hits": 0,
             "misses": 0,
@@ -73,7 +73,7 @@ class FeatureCache:
         construction and using raw bytes where possible.
         """
         try:
-            hasher = hashlib.md5()
+            hasher = hashlib.md5(usedforsecurity=False)
             # Shape
             shape_arr = np.asarray(data.shape, dtype=np.int64)
             hasher.update(shape_arr.tobytes())
@@ -93,7 +93,9 @@ class FeatureCache:
             return hasher.hexdigest()
         except Exception:
             # Fallback to simple shape/dtype string
-            return hashlib.md5(f"{data.shape}{tuple(data.dtypes.astype(str))}".encode()).hexdigest()
+            return hashlib.md5(
+                f"{data.shape}{tuple(data.dtypes.astype(str))}".encode(), usedforsecurity=False
+            ).hexdigest()
 
     def _generate_full_data_hash(self, data: pd.DataFrame) -> str:
         """
@@ -128,7 +130,7 @@ class FeatureCache:
         self,
         data: pd.DataFrame,
         extractor_name: str,
-        config: Dict[str, Any],
+        config: dict[str, Any],
         use_quick_hash: bool = True,
     ) -> str:
         """
@@ -154,8 +156,8 @@ class FeatureCache:
         return f"{extractor_name}_{data_hash}_{config_hash}"
 
     def _find_by_quick_hash(
-        self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any]
-    ) -> Optional[Tuple[str, CacheEntry]]:
+        self, data: pd.DataFrame, extractor_name: str, config: dict[str, Any]
+    ) -> Optional[tuple[str, CacheEntry]]:
         """
         Find cache entry using quick hash first, then verify with full hash.
 
@@ -187,7 +189,7 @@ class FeatureCache:
         return quick_key, entry
 
     def get(
-        self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any], copy: bool = True
+        self, data: pd.DataFrame, extractor_name: str, config: dict[str, Any], copy: bool = True
     ) -> Optional[pd.DataFrame]:
         """
         Get cached feature extraction result using two-tier hashing.
@@ -223,7 +225,7 @@ class FeatureCache:
         self,
         data: pd.DataFrame,
         extractor_name: str,
-        config: Dict[str, Any],
+        config: dict[str, Any],
         result: pd.DataFrame,
         ttl: Optional[int] = None,
     ) -> None:
@@ -253,7 +255,7 @@ class FeatureCache:
         self._cache[quick_key] = entry
         self._stats["sets"] += 1
 
-    def has(self, data: pd.DataFrame, extractor_name: str, config: Dict[str, Any]) -> bool:
+    def has(self, data: pd.DataFrame, extractor_name: str, config: dict[str, Any]) -> bool:
         """
         Check if cached result exists and is valid using two-tier hashing.
 
@@ -299,7 +301,7 @@ class FeatureCache:
 
         return len(expired_keys)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get cache statistics including two-tier hashing performance.
 
@@ -322,7 +324,7 @@ class FeatureCache:
             **self._stats,
         }
 
-    def get_size_info(self) -> Dict[str, Any]:
+    def get_size_info(self) -> dict[str, Any]:
         """
         Get information about cache size and memory usage.
 
@@ -381,7 +383,7 @@ class ModelCache:
         Args:
             ttl: Time-to-live in seconds
         """
-        self.cache: Dict[str, Tuple[Any, float]] = {}
+        self.cache: dict[str, tuple[Any, float]] = {}
         self.ttl = ttl
 
     def get(self, key: str) -> Optional[Any]:

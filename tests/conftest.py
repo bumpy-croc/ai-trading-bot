@@ -6,8 +6,6 @@ especially for setting up mock data, test environments, and common objects.
 """
 
 import os
-import subprocess
-import sys
 import tempfile
 import time
 from datetime import datetime, timedelta
@@ -63,13 +61,15 @@ def maybe_setup_database():
 
     # Check if we're in GitHub Actions with PostgreSQL service
     is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
-    
+
     started_container = None
     if not os.getenv("DATABASE_URL"):
         # In GitHub Actions, the PostgreSQL service should be available
         if is_github_actions:
             # Set the DATABASE_URL for GitHub Actions PostgreSQL service
-            os.environ["DATABASE_URL"] = "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
+            os.environ["DATABASE_URL"] = (
+                "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
+            )
             print("[Database Setup] Using GitHub Actions PostgreSQL service")
         else:
             # Local development - try to start a container, fallback to SQLite if not available
@@ -93,23 +93,23 @@ def maybe_setup_database():
     # Reset DB schema/content before tests
     print("\n[pytest] Running database reset before integration tests...")
     db_reset_start = time.time()
-    
+
     try:
         # Import database manager and reset database
         from src.database.manager import DatabaseManager
         from src.database.models import Base
-        
+
         # Create database manager instance
         db_manager = DatabaseManager()
-        
+
         # Drop all tables and recreate them
         print("[pytest] Dropping existing tables...")
         Base.metadata.drop_all(db_manager.engine)
         print("[pytest] Creating fresh tables...")
         Base.metadata.create_all(db_manager.engine)
-        
+
         print(f"[pytest] ✅ Database reset completed in {time.time() - db_reset_start:.2f} seconds")
-        
+
     except Exception as e:
         print(f"[pytest] ❌ Database reset failed: {e}")
         pytest.exit("Database setup/reset failed before tests.")

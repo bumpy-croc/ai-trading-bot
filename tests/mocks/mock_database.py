@@ -7,10 +7,10 @@ a real database connection. This significantly speeds up unit tests.
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from unittest.mock import Mock
 
-from database.models import EventType, OrderStatus, PositionSide, TradeSource
+from database.models import EventType, TradeSide
 
 
 class MockDatabaseManager:
@@ -48,7 +48,7 @@ class MockDatabaseManager:
         """Test database connection - always succeeds for mock"""
         return True
 
-    def get_database_info(self) -> Dict[str, Any]:
+    def get_database_info(self) -> dict[str, Any]:
         """Get mock database information"""
         return {
             "type": "Mock Database",
@@ -65,7 +65,7 @@ class MockDatabaseManager:
             },
         }
 
-    def get_connection_stats(self) -> Dict[str, Any]:
+    def get_connection_stats(self) -> dict[str, Any]:
         """Get mock connection pool statistics"""
         return self._connection_stats
 
@@ -79,7 +79,7 @@ class MockDatabaseManager:
         symbol: str,
         timeframe: str,
         initial_balance: float,
-        strategy_config: Optional[Dict] = None,
+        strategy_config: Optional[dict] = None,
         mode: str = "backtest",
     ) -> int:
         """Create a new trading session"""
@@ -127,7 +127,7 @@ class MockDatabaseManager:
     def log_trade(
         self,
         symbol: str,
-        side: PositionSide,
+        side: TradeSide,
         entry_price: float,
         exit_price: float,
         size: float,
@@ -136,7 +136,7 @@ class MockDatabaseManager:
         pnl: float,
         exit_reason: str,
         strategy_name: str,
-        source: TradeSource = TradeSource.BACKTEST,
+        source: Any = None,
         order_id: Optional[str] = None,
         fees: float = 0.0,
         slippage: float = 0.0,
@@ -169,7 +169,7 @@ class MockDatabaseManager:
     def log_position(
         self,
         symbol: str,
-        side: PositionSide,
+        side: TradeSide,
         entry_price: float,
         size: float,
         strategy_name: str,
@@ -195,7 +195,7 @@ class MockDatabaseManager:
             "stop_loss": stop_loss,
             "take_profit": take_profit,
             "confidence_score": confidence_score,
-            "status": OrderStatus.OPEN,
+            "status": Any,
             "entry_time": datetime.now(),
             "session_id": session_id or self._current_session_id,
         }
@@ -208,7 +208,7 @@ class MockDatabaseManager:
         current_price: Optional[float] = None,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
-        status: Optional[OrderStatus] = None,
+        status: Optional[Any] = None,
         notes: Optional[str] = None,
     ):
         """Update an existing position"""
@@ -236,7 +236,7 @@ class MockDatabaseManager:
         """Close a position"""
         if position_id in self._positions:
             position = self._positions[position_id]
-            position["status"] = OrderStatus.CLOSED
+            position["status"] = Any
             position["exit_time"] = datetime.now()
             if exit_price is not None:
                 position["exit_price"] = exit_price
@@ -251,7 +251,7 @@ class MockDatabaseManager:
         self,
         event_type: EventType,
         description: str,
-        metadata: Optional[Dict] = None,
+        metadata: Optional[dict] = None,
         severity: str = "info",
         session_id: Optional[int] = None,
     ) -> int:
@@ -299,9 +299,9 @@ class MockDatabaseManager:
         self,
         signal: str,
         confidence: float,
-        indicators: Dict[str, Any],
-        market_conditions: Dict[str, Any],
-        metadata: Optional[Dict] = None,
+        indicators: dict[str, Any],
+        market_conditions: dict[str, Any],
+        metadata: Optional[dict] = None,
         session_id: Optional[int] = None,
     ):
         """Log strategy execution details"""
@@ -316,16 +316,16 @@ class MockDatabaseManager:
         }
         self._strategy_executions.append(execution)
 
-    def get_active_positions(self, session_id: Optional[int] = None) -> List[Dict]:
+    def get_active_positions(self, session_id: Optional[int] = None) -> list[dict]:
         """Get all active positions"""
         positions = []
         for pos in self._positions.values():
-            if pos.get("status") == OrderStatus.OPEN:
+            if pos.get("status") == Any:
                 if session_id is None or pos.get("session_id") == session_id:
                     positions.append(pos)
         return positions
 
-    def get_recent_trades(self, limit: int = 100, session_id: Optional[int] = None) -> List[Dict]:
+    def get_recent_trades(self, limit: int = 100, session_id: Optional[int] = None) -> list[dict]:
         """Get recent trades"""
         trades = []
         for trade in self._trades.values():
@@ -336,7 +336,7 @@ class MockDatabaseManager:
         trades.sort(key=lambda t: t.get("exit_time", datetime.min), reverse=True)
         return trades[:limit]
 
-    def get_performance_metrics(self, session_id: Optional[int] = None) -> Dict[str, Any]:
+    def get_performance_metrics(self, session_id: Optional[int] = None) -> dict[str, Any]:
         """Get performance metrics"""
         if session_id is None:
             session_id = self._current_session_id
