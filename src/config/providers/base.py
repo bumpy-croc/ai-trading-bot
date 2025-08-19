@@ -1,23 +1,24 @@
 """
-Base configuration provider interface
+Base configuration provider.
+
+This module defines the base interface for configuration providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 class ConfigProvider(ABC):
     """Abstract base class for configuration providers"""
 
     @abstractmethod
-    def get(self, key: str) -> Optional[str]:
-        """Get a configuration value by key"""
+    def get(self, key: str, default: Optional[Any] = None) -> Optional[Any]:
+        """Get configuration value."""
         pass
 
-    @abstractmethod
-    def get_all(self) -> Dict[str, Any]:
-        """Get all configuration values"""
-        pass
+    def get_all(self) -> dict[str, Any]:
+        """Get all configuration values."""
+        return {}
 
     @abstractmethod
     def is_available(self) -> bool:

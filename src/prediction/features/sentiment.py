@@ -5,8 +5,6 @@ This module extracts sentiment-based features from market sentiment data.
 For MVP, this extractor is disabled and returns neutral sentiment values.
 """
 
-from typing import List
-
 import pandas as pd
 
 from src.config.constants import DEFAULT_ENABLE_SENTIMENT
@@ -176,7 +174,7 @@ class SentimentFeatureExtractor(FeatureExtractor):
             result = merged.reset_index().rename(columns={"index": "timestamp"})
         return result
 
-    def get_feature_names(self) -> List[str]:
+    def get_feature_names(self) -> list[str]:
         """Return list of feature names this extractor produces."""
         return self._feature_names.copy()
 

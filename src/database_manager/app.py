@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Optional
 
 import sqlalchemy.exc
 from flask import (  # type: ignore
@@ -41,7 +41,7 @@ class CustomModelView(ModelView):
 
     def __init__(self, model, session, **kwargs):
         # Dynamically determine searchable string columns
-        searchable: List[str] = []
+        searchable: list[str] = []
         for column in model.__table__.columns:  # type: ignore[attr-defined]
             # Some column types (e.g. JSON) do not expose python_type
             try:
@@ -90,7 +90,7 @@ def create_app() -> Flask:
         app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
 
         @app.route("/db_error")
-        def db_error() -> tuple[Dict[str, str], int]:
+        def db_error() -> tuple[dict[str, str], int]:
             """Endpoint returned when the database is unavailable."""
             return {"status": "error", "message": "Database connection failed."}, 500
 
@@ -169,7 +169,7 @@ def create_app() -> Flask:
 
     # Basic health route
     @app.route("/health")
-    def health_check() -> Dict[str, str]:
+    def health_check() -> dict[str, str]:
         """Simple health-check endpoint used by load-balancers and uptime monitors."""
         return {"status": "ok"}
 

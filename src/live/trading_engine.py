@@ -13,11 +13,6 @@ from enum import Enum
 from typing import Any
 
 import pandas as pd
-from performance.metrics import (
-    Side,
-    pnl_percent,
-)
-from regime.detector import RegimeDetector
 
 from config.constants import DEFAULT_INITIAL_BALANCE
 from data_providers.binance_provider import BinanceProvider
@@ -27,6 +22,8 @@ from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
 from live.strategy_manager import StrategyManager
+from performance.metrics import Side, pnl_percent
+from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
 
@@ -175,10 +172,10 @@ class LiveTradingEngine:
         try:
             self.db_manager = DatabaseManager(database_url)
         except Exception as e:
-            logger.critical(
-                f"❌ Could not connect to the PostgreSQL database: {e}\nThe trading engine cannot start without a database connection. Exiting."
+            print(
+                f"❌ Could not connect to the PostgreSQL database: {e}\nThe trading engine cannot start without a database connection. Exiting..."
             )
-            raise RuntimeError("Database connection required. Service stopped.")
+            raise RuntimeError("Database connection required. Service stopped.") from e
         self.trading_session_id: int | None = None
 
         # Initialize exchange interface and account synchronizer

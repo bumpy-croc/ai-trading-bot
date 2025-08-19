@@ -1,11 +1,15 @@
 """
-Configuration manager that provides a unified interface for accessing configuration
-from multiple sources with fallback support
+Configuration management system.
+
+This module provides centralized configuration management.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
-from .providers import ConfigProvider, DotEnvProvider, EnvVarProvider, RailwayProvider
+from .providers.base import ConfigProvider
+from .providers.dotenv_provider import DotEnvProvider
+from .providers.env_provider import EnvVarProvider
+from .providers.railway_provider import RailwayProvider
 
 
 class ConfigManager:
@@ -18,7 +22,7 @@ class ConfigManager:
     3. .env file
     """
 
-    def __init__(self, providers: Optional[List[ConfigProvider]] = None):
+    def __init__(self, providers: Optional[list[ConfigProvider]] = None):
         """
         Initialize ConfigManager with providers.
 
@@ -107,8 +111,8 @@ class ConfigManager:
         return value.lower() in ("true", "1", "yes", "on", "enabled")
 
     def get_list(
-        self, key: str, delimiter: str = ",", default: Optional[List[str]] = None
-    ) -> List[str]:
+        self, key: str, delimiter: str = ",", default: Optional[list[str]] = None
+    ) -> list[str]:
         """Get configuration value as list"""
         value = self.get(key)
         if value is None:
@@ -116,7 +120,7 @@ class ConfigManager:
 
         return [item.strip() for item in value.split(delimiter) if item.strip()]
 
-    def get_all(self) -> Dict[str, Any]:
+    def get_all(self) -> dict[str, Any]:
         """
         Get all configuration values from all providers.
         Later providers override earlier ones.
@@ -158,6 +162,33 @@ class ConfigManager:
                 self.providers.pop(i)
                 return True
         return False
+
+    def get_all_config(self) -> dict[str, Any]:
+        """Get all configuration values."""
+        config = {}
+        for key in self._get_all_keys():
+            config[key] = self.get(key)
+        return config
+
+    def _get_all_keys(self) -> list[str]:
+        """Get all configuration keys."""
+        keys = set()
+        for provider in self.providers:
+            if hasattr(provider, "get_all_keys"):
+                keys.update(provider.get_all_keys())
+        return list(keys)
+
+    def get_config_sources(self) -> list[str]:
+        """Get list of configuration sources."""
+        return [provider.__class__.__name__ for provider in self.providers]
+
+    def get_config_summary(self) -> dict[str, Any]:
+        """Get configuration summary."""
+        return {
+            "sources": self.get_config_sources(),
+            "total_keys": len(self._get_all_keys()),
+            "values": self.get_all_config(),
+        }
 
 
 # Global configuration instance

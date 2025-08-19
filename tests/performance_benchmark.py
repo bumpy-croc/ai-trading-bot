@@ -14,7 +14,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 
 class TestPerformanceBenchmark:
@@ -24,7 +24,7 @@ class TestPerformanceBenchmark:
         self.results_file = Path("tests/performance_baseline.json")
         self.baseline_data = self.load_baseline()
 
-    def load_baseline(self) -> Dict[str, Any]:
+    def load_baseline(self) -> dict[str, Any]:
         """Load existing baseline data"""
         if self.results_file.exists():
             try:
@@ -41,7 +41,7 @@ class TestPerformanceBenchmark:
         with open(self.results_file, "w") as f:
             json.dump(self.baseline_data, f, indent=2)
 
-    def run_test_command(self, command: List[str], name: str) -> Dict[str, Any]:
+    def run_test_command(self, command: list[str], name: str) -> dict[str, Any]:
         """Run a test command and measure performance"""
         print(f"📊 Benchmarking: {name}")
         print(f"Command: {' '.join(command)}")
@@ -215,7 +215,7 @@ class TestPerformanceBenchmark:
 
         return benchmarks
 
-    def update_averages(self, new_benchmarks: List[Dict[str, Any]]):
+    def update_averages(self, new_benchmarks: list[dict[str, Any]]):
         """Update running averages"""
         for benchmark in new_benchmarks:
             name = benchmark["name"]
@@ -236,7 +236,7 @@ class TestPerformanceBenchmark:
             for key in avg_data:
                 avg_data[key] = avg_data[key][-10:]
 
-    def print_summary(self, benchmarks: List[Dict[str, Any]]):
+    def print_summary(self, benchmarks: list[dict[str, Any]]):
         """Print benchmark summary"""
         print("\n" + "=" * 60)
         print("📈 PERFORMANCE BENCHMARK SUMMARY")
@@ -282,7 +282,7 @@ class TestPerformanceBenchmark:
         print("- Use 'python tests/run_tests.py fast' for quick feedback during development")
         print("- Integration tests are automatically run nightly in CI")
 
-    def compare_with_baseline(self, current_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def compare_with_baseline(self, current_results: list[dict[str, Any]]) -> dict[str, Any]:
         """Compare current results with baseline"""
         comparison = {"improved": [], "regressed": [], "new": [], "overall_change": 0}
 

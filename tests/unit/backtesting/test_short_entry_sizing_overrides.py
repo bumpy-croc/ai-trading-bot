@@ -1,10 +1,16 @@
 from datetime import datetime, timedelta
+from unittest.mock import Mock
 
 import pandas as pd
+import pytest
 
 from src.backtesting.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
+from src.risk.risk_manager import RiskParameters
 from src.strategies.base import BaseStrategy
+from src.strategies.ml_basic import MlBasic
+
+pytestmark = pytest.mark.unit
 
 
 class ShortStrategy(BaseStrategy):
@@ -61,18 +67,6 @@ def test_short_entry_uses_overrides_and_caps_fraction():
     # We should have at least one trade attempted; if none, the test still
     # validates that the backtest runs with overrides without error.
     assert "total_trades" in result
-
-
-from unittest.mock import Mock
-
-import pandas as pd
-import pytest
-
-from backtesting.engine import Backtester
-from risk.risk_manager import RiskParameters
-from strategies.ml_basic import MlBasic
-
-pytestmark = pytest.mark.unit
 
 
 def test_short_entry_with_overrides_uses_risk_manager_sizer(mock_data_provider):

@@ -285,9 +285,11 @@ def test_pipeline_sentiment_enabled_adds_columns(mock_get):
 
     df = _make_price_df(n=5)
     pipe = FeaturePipeline(
-        enable_technical=False,
-        enable_sentiment=True,
-        enable_market_microstructure=False,
+        config={
+            "technical_features": {"enabled": False},
+            "sentiment_features": {"enabled": True},
+            "market_features": {"enabled": False},
+        },
         use_cache=False,
     )
     out = pipe.transform(df)
@@ -310,9 +312,11 @@ def test_pipeline_sentiment_enabled_adds_columns(mock_get):
 def test_pipeline_sentiment_fallback_neutral(mock_get):
     df = _make_price_df(n=5)
     pipe = FeaturePipeline(
-        enable_technical=False,
-        enable_sentiment=True,
-        enable_market_microstructure=False,
+        config={
+            "technical_features": {"enabled": False},
+            "sentiment_features": {"enabled": True},
+            "market_features": {"enabled": False},
+        },
         use_cache=False,
     )
     out = pipe.transform(df)

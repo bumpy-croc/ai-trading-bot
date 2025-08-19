@@ -1,11 +1,8 @@
 """
-Price-Only Feature Extractor
+Price-only feature extractor.
 
-Produces only normalized OHLCV features using rolling min-max normalization
-with the same semantics as used by MlBasic (sequence_length window).
+This module provides basic price-based features without technical indicators.
 """
-
-from typing import List
 
 import numpy as np
 import pandas as pd
@@ -52,5 +49,5 @@ class PriceOnlyFeatureExtractor(FeatureExtractor):
         _norm("open", "open_normalized")
         return df
 
-    def get_feature_names(self) -> List[str]:
+    def get_feature_names(self) -> list[str]:
         return self._feature_names.copy()

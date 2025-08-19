@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from strategies.base import BaseStrategy
 from strategies.bull import Bull
@@ -24,8 +24,8 @@ class StrategyVersion:
     version: str
     timestamp: datetime
     model_path: Optional[str] = None
-    config: Optional[Dict] = None
-    performance_metrics: Optional[Dict] = None
+    config: Optional[dict] = None
+    performance_metrics: Optional[dict] = None
 
 
 class StrategyManager:
@@ -75,11 +75,11 @@ class StrategyManager:
             pass
 
         # Version history
-        self.version_history: Dict[str, StrategyVersion] = {}
+        self.version_history: dict[str, StrategyVersion] = {}
 
         # Threading for safe updates
         self.update_lock = threading.RLock()
-        self.pending_update: Optional[Dict] = None
+        self.pending_update: Optional[dict] = None
 
         # Callbacks for live trading engine
         self.on_strategy_change: Optional[Callable] = None
@@ -88,7 +88,7 @@ class StrategyManager:
         logger.info("StrategyManager initialized")
 
     def load_strategy(
-        self, strategy_name: str, version: str = "latest", config: Optional[Dict] = None
+        self, strategy_name: str, version: str = "latest", config: Optional[dict] = None
     ) -> BaseStrategy:
         """Load a strategy with version control"""
 
@@ -129,7 +129,7 @@ class StrategyManager:
     def hot_swap_strategy(
         self,
         new_strategy_name: str,
-        new_config: Optional[Dict] = None,
+        new_config: Optional[dict] = None,
         close_existing_positions: bool = False,
     ) -> bool:
         """
@@ -273,7 +273,7 @@ class StrategyManager:
             finally:
                 self.pending_update = None
 
-    def _apply_strategy_swap(self, swap_data: Dict) -> bool:
+    def _apply_strategy_swap(self, swap_data: dict) -> bool:
         """Apply strategy swap"""
         try:
             old_strategy = swap_data["old_strategy"]
@@ -289,7 +289,7 @@ class StrategyManager:
             logger.error(f"Strategy swap failed: {e}")
             return False
 
-    def _apply_model_update(self, update_data: Dict) -> bool:
+    def _apply_model_update(self, update_data: dict) -> bool:
         """Apply model update"""
         try:
             strategy_name = update_data["strategy_name"]
@@ -338,12 +338,12 @@ class StrategyManager:
         logger.info("Rollback functionality - to be implemented")
         return False
 
-    def get_performance_comparison(self) -> Dict[str, Any]:
+    def get_performance_comparison(self) -> dict[str, Any]:
         """Compare performance between strategy versions"""
         # Implementation for performance comparison
         return {}
 
-    def list_available_strategies(self) -> Dict[str, Any]:
+    def list_available_strategies(self) -> dict[str, Any]:
         """List all available strategies and their versions"""
         return {
             "available_strategies": list(self.strategy_registry.keys()),
@@ -363,6 +363,6 @@ class StrategyManager:
         """Check if there's a pending update"""
         return self.pending_update is not None
 
-    def get_pending_update_info(self) -> Optional[Dict]:
+    def get_pending_update_info(self) -> Optional[dict]:
         """Get information about pending update"""
         return self.pending_update

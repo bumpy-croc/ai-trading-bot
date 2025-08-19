@@ -1,21 +1,11 @@
 """
-Technical Feature Extractor
+Technical indicator feature extractor.
 
-This module extracts technical indicators from raw OHLCV data,
-consolidating all technical analysis functionality from the existing strategies.
+This module provides technical analysis features for prediction.
 """
-
-from typing import Dict, List
 
 import numpy as np
 import pandas as pd
-from indicators.technical import (
-    calculate_atr,
-    calculate_bollinger_bands,
-    calculate_macd,
-    calculate_moving_averages,
-    calculate_rsi,
-)
 
 from config.constants import (
     DEFAULT_ATR_PERIOD,
@@ -28,6 +18,13 @@ from config.constants import (
     DEFAULT_NORMALIZATION_WINDOW,
     DEFAULT_RSI_PERIOD,
     DEFAULT_SEQUENCE_LENGTH,
+)
+from indicators.technical import (
+    calculate_atr,
+    calculate_bollinger_bands,
+    calculate_macd,
+    calculate_moving_averages,
+    calculate_rsi,
 )
 
 from .base import FeatureExtractor
@@ -49,10 +46,11 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         atr_period: int = DEFAULT_ATR_PERIOD,
         bollinger_period: int = DEFAULT_BOLLINGER_PERIOD,
         bollinger_std_dev: float = DEFAULT_BOLLINGER_STD_DEV,
-        ma_periods: List[int] = None,
+        ma_periods: list[int] = None,
         macd_fast: int = DEFAULT_MACD_FAST_PERIOD,
         macd_slow: int = DEFAULT_MACD_SLOW_PERIOD,
         macd_signal: int = DEFAULT_MACD_SIGNAL_PERIOD,
+        nan_threshold: float = 0.5,
     ):
         """
         Initialize the technical feature extractor.
@@ -68,6 +66,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
             macd_fast: Fast period for MACD
             macd_slow: Slow period for MACD
             macd_signal: Signal period for MACD
+            nan_threshold: Maximum allowed ratio of NaN values in features
         """
         super().__init__("technical")
 
@@ -82,6 +81,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         self.macd_fast = macd_fast
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
+        self.nan_threshold = nan_threshold
 
         # Initialize feature names from schema
         self._feature_names = TECHNICAL_FEATURES_SCHEMA.get_feature_names()
@@ -190,52 +190,60 @@ class TechnicalFeatureExtractor(FeatureExtractor):
 
         return df
 
-    def get_feature_names(self) -> List[str]:
+    def get_feature_names(self) -> list[str]:
         """Return list of feature names this extractor produces."""
         return self._feature_names.copy()
 
-    def get_normalized_features(self) -> List[str]:
+    def get_normalized_features(self) -> list[str]:
         """Get list of normalized price feature names."""
         return [f"{feature}_normalized" for feature in ["close", "volume", "high", "low", "open"]]
 
-    def get_technical_indicators(self) -> List[str]:
+    def get_technical_indicators(self) -> list[str]:
         """Get list of technical indicator names."""
         indicators = ["rsi", "atr", "atr_pct"]
-
-        # Add moving averages
-        indicators.extend([f"ma_{period}" for period in self.ma_periods])
-
-        # Add Bollinger Bands
-        indicators.extend(["bb_upper", "bb_lower", "bb_middle"])
-
-        # Add MACD
-        indicators.extend(["macd", "macd_signal", "macd_hist"])
-
+        if self.enable_bollinger:
+            indicators.extend(["bb_upper", "bb_lower", "bb_width", "bb_position"])
+        if self.enable_macd:
+            indicators.extend(["macd", "macd_signal", "macd_histogram"])
+        if self.enable_moving_averages:
+            for period in self.ma_periods:
+                indicators.extend([f"ma_{period}", f"ma_{period}_pct"])
         return indicators
 
-    def get_derived_features(self) -> List[str]:
+    def get_derived_features(self) -> list[str]:
         """Get list of derived feature names."""
         return ["returns", "volatility_20", "volatility_50", "trend_strength", "trend_direction"]
 
-    def validate_features(self, data: pd.DataFrame) -> Dict[str, bool]:
+    def validate_features(self, data: pd.DataFrame) -> dict[str, bool]:
         """
         Validate that all expected features are present and valid.
 
         Args:
-            data: DataFrame to validate
+            data: DataFrame with extracted features
 
         Returns:
             Dictionary mapping feature names to validation status
         """
         validation_results = {}
+        expected_features = self.get_feature_names()
 
-        for feature_name in self.get_feature_names():
-            if feature_name in data.columns:
-                # Check for excessive NaN values
-                nan_ratio = data[feature_name].isna().sum() / len(data)
-                validation_results[feature_name] = nan_ratio < 0.5  # Less than 50% NaN
-            else:
-                validation_results[feature_name] = False
+        for feature in expected_features:
+            if feature not in data.columns:
+                validation_results[feature] = False
+                continue
+
+            # Check for infinite values
+            if np.isinf(data[feature]).any():
+                validation_results[feature] = False
+                continue
+
+            # Check for excessive NaN values
+            nan_ratio = data[feature].isna().sum() / len(data[feature])
+            if nan_ratio > self.nan_threshold:
+                validation_results[feature] = False
+                continue
+
+            validation_results[feature] = True
 
         return validation_results
 
@@ -258,41 +266,27 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         )
         return config
 
-    def get_feature_importance_weights(self) -> Dict[str, float]:
+    def get_feature_importance_weights(self) -> dict[str, float]:
         """
         Get feature importance weights based on common usage in strategies.
 
         Returns:
-            Dictionary mapping feature names to importance weights (0.0 to 1.0)
+            Dictionary mapping feature names to importance weights
         """
-        # Based on usage frequency in existing strategies
         weights = {}
-
-        # Normalized prices (most important for ML models)
-        for feature in self.get_normalized_features():
-            weights[feature] = 1.0
-
-        # Key technical indicators
-        weights.update(
-            {
-                "rsi": 0.8,
-                "atr": 0.7,
-                "atr_pct": 0.7,
-                "macd_hist": 0.8,
-                "volatility_20": 0.9,
-                "trend_direction": 0.9,
-                "trend_strength": 0.8,
-            }
-        )
-
-        # Moving averages
-        for period in self.ma_periods:
-            weights[f"ma_{period}"] = 0.6
-
-        # Bollinger Bands
-        weights.update({"bb_upper": 0.6, "bb_lower": 0.6, "bb_middle": 0.5})
-
-        # Other derived features
-        weights.update({"returns": 0.7, "volatility_50": 0.6, "macd": 0.6, "macd_signal": 0.6})
-
+        for feature in self.get_feature_names():
+            # Normalized features get highest weights (most important for ML models)
+            if feature.endswith("_normalized"):
+                weights[feature] = 1.0
+            # Technical indicators get high weights
+            elif feature in ["rsi", "atr", "macd", "bb_position"]:
+                weights[feature] = 0.8
+            # Derived features get medium weights
+            elif feature in ["returns", "volatility_20", "trend_strength"]:
+                weights[feature] = 0.8
+            # Moving averages get lower weights
+            elif feature.startswith("ma_"):
+                weights[feature] = 0.5
+            else:
+                weights[feature] = 0.6
         return weights

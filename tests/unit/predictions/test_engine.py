@@ -78,7 +78,13 @@ class TestPredictionEngineInit:
 
         assert engine.config == config
         mock_pipeline.assert_called_once_with(
-            enable_sentiment=True, enable_market_microstructure=True, cache_ttl=600
+            config={
+                "technical_features": {"enabled": True},
+                "sentiment_features": {"enabled": True},
+                "market_features": {"enabled": True},
+            },
+            use_cache=True,
+            cache_ttl=600,
         )
         mock_registry.assert_called_once_with(config)
 

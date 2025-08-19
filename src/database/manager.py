@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generator
 
 from sqlalchemy import and_, create_engine, text  # type: ignore
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # type: ignore
@@ -105,7 +105,7 @@ class DatabaseManager:
         # Guard SQLite usage behind the integration flag to avoid accidental use in production
         run_integration = os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
         is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
-        
+
         # Allow SQLite for local integration testing when PostgreSQL is not available
         if is_sqlite and run_integration and is_github_actions:
             raise ValueError(
@@ -218,7 +218,7 @@ class DatabaseManager:
             raise
 
     @contextmanager
-    def get_session(self) -> Session:
+    def get_session(self) -> Generator[Session, None, None]:
         """
         Get a database session with automatic cleanup.
 
@@ -672,7 +672,6 @@ class DatabaseManager:
                 # Convert to float for calculation, then back to Decimal
                 current_price_float = float(current_price)
                 entry_price_float = float(position.entry_price)
-                
                 if position.side == PositionSide.LONG:
                     unrealized_pnl_percent = (
                         (current_price_float - entry_price_float) / entry_price_float

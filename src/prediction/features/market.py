@@ -1,11 +1,8 @@
 """
-Market Microstructure Feature Extractor
+Market microstructure feature extractor.
 
-This module extracts market microstructure features from order book and trade data.
-For MVP, this extractor is disabled and not used.
+This module provides features related to market microstructure analysis.
 """
-
-from typing import List
 
 import pandas as pd
 
@@ -63,7 +60,7 @@ class MarketFeatureExtractor(FeatureExtractor):
 
         return data.copy()
 
-    def get_feature_names(self) -> List[str]:
+    def get_feature_names(self) -> list[str]:
         """Return list of feature names this extractor produces."""
         return self._feature_names.copy() if self.enabled else []
 

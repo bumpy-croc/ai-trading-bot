@@ -1,13 +1,12 @@
 """
-Feature Schemas
+Feature schemas and definitions.
 
-This module defines the structure and metadata for different types of features
-used in the prediction engine.
+This module defines the schema for features and feature extractors.
 """
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
 
 class FeatureType(Enum):
@@ -44,7 +43,7 @@ class FeatureDefinition:
     default_value: Optional[float] = None
     min_value: Optional[float] = None
     max_value: Optional[float] = None
-    dependencies: List[str] = None
+    dependencies: list[str] = None
 
     def __post_init__(self):
         if self.dependencies is None:
@@ -59,19 +58,19 @@ class FeatureSchema:
 
     name: str
     version: str
-    features: List[FeatureDefinition]
+    features: list[FeatureDefinition]
     description: str
     sequence_length: int = 120
 
-    def get_feature_names(self) -> List[str]:
+    def get_feature_names(self) -> list[str]:
         """Get list of feature names in this schema."""
         return [f.name for f in self.features]
 
-    def get_required_features(self) -> List[str]:
+    def get_required_features(self) -> list[str]:
         """Get list of required feature names."""
         return [f.name for f in self.features if f.required]
 
-    def get_features_by_type(self, feature_type: FeatureType) -> List[FeatureDefinition]:
+    def get_features_by_type(self, feature_type: FeatureType) -> list[FeatureDefinition]:
         """Get features of a specific type."""
         return [f for f in self.features if f.feature_type == feature_type]
 

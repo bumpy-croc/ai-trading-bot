@@ -1,34 +1,7 @@
 import pandas as pd
-
-from src.risk.risk_manager import RiskManager, RiskParameters
-
-
-def test_daily_risk_cap_enforced_across_positions():
-    params = RiskParameters(max_daily_risk=0.15, max_position_size=0.2, base_risk_per_trade=0.1)
-    rm = RiskManager(params)
-
-    # Fake DF with ATR to enable atr_risk sizer
-    df = pd.DataFrame({"close": [100, 101, 102], "high": [101, 102, 103], "low": [99, 100, 101]})
-    df["atr"] = 1.0
-
-    overrides = {"position_sizer": "fixed_fraction", "base_fraction": 0.2}
-
-    f1 = rm.calculate_position_fraction(
-        df, 2, balance=10_000, price=102, strategy_overrides=overrides
-    )
-    # Open first position and update daily risk
-    rm.update_position("A", "long", f1, 102)
-
-    # Second allocation should be capped by remaining daily risk (0.15 - f1)
-    f2 = rm.calculate_position_fraction(
-        df, 2, balance=10_000, price=102, strategy_overrides=overrides
-    )
-    assert f2 <= max(0.0, params.max_daily_risk - rm.daily_risk_used) + 1e-9
-
-
 import pytest
 
-from risk.risk_manager import RiskManager, RiskParameters
+from src.risk.risk_manager import RiskManager, RiskParameters
 
 pytestmark = pytest.mark.unit
 
