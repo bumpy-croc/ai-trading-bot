@@ -513,6 +513,8 @@ class DatabaseManager:
         confidence_score: float | None = None,
         strategy_config: dict | None = None,
         session_id: int | None = None,
+        quantity: float | None = None,
+        commission: float | None = None,
     ) -> int:
         """
         Log a completed trade to the database.
@@ -544,10 +546,12 @@ class DatabaseManager:
                 entry_price=entry_price,
                 exit_price=exit_price,
                 size=size,
+                quantity=quantity,
                 entry_time=entry_time,
                 exit_time=exit_time,
                 pnl=pnl,
                 pnl_percent=pnl_percent,
+                commission=commission or 0.0,
                 exit_reason=exit_reason,
                 strategy_name=strategy_name,
                 stop_loss=stop_loss,
@@ -658,34 +662,38 @@ class DatabaseManager:
                 return
 
             if current_price is not None:
-                position.current_price = current_price
+                position.current_price = Decimal(str(current_price))
             if size is not None:
-                position.size = size
+                position.size = Decimal(str(size))
             position.last_update = datetime.utcnow()
 
             # Calculate unrealized P&L if not provided - with division by zero protection
             if unrealized_pnl is None and current_price is not None and position.entry_price > 0:
+                # Convert to float for calculation, then back to Decimal
+                current_price_float = float(current_price)
+                entry_price_float = float(position.entry_price)
+                
                 if position.side == PositionSide.LONG:
                     unrealized_pnl_percent = (
-                        (current_price - position.entry_price) / position.entry_price
+                        (current_price_float - entry_price_float) / entry_price_float
                     ) * 100
                 else:
                     unrealized_pnl_percent = (
-                        (position.entry_price - current_price) / position.entry_price
+                        (entry_price_float - current_price_float) / entry_price_float
                     ) * 100
 
-                position.unrealized_pnl_percent = unrealized_pnl_percent
+                position.unrealized_pnl_percent = Decimal(str(unrealized_pnl_percent))
             else:
                 if unrealized_pnl is not None:
-                    position.unrealized_pnl = unrealized_pnl
+                    position.unrealized_pnl = Decimal(str(unrealized_pnl))
                 if unrealized_pnl_percent is not None:
-                    position.unrealized_pnl_percent = unrealized_pnl_percent
+                    position.unrealized_pnl_percent = Decimal(str(unrealized_pnl_percent))
 
             # Update stop loss / take profit if provided
             if stop_loss is not None:
-                position.stop_loss = stop_loss
+                position.stop_loss = Decimal(str(stop_loss))
             if take_profit is not None:
-                position.take_profit = take_profit
+                position.take_profit = Decimal(str(take_profit))
 
             session.commit()
 
@@ -1058,7 +1066,12 @@ class DatabaseManager:
 
             gross_profit = sum(t.pnl for t in winning_trades)
             gross_loss = abs(sum(t.pnl for t in losing_trades))
-            profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float("inf")
+            if gross_loss > 0:
+                profit_factor = gross_profit / gross_loss
+                # Cap profit factor at a reasonable maximum to avoid infinite values
+                profit_factor = min(profit_factor, 999999.99)
+            else:
+                profit_factor = 999999.99  # Use a large finite value instead of infinity
 
             # Get account history for drawdown calculation
             history_query = session.query(AccountHistory)

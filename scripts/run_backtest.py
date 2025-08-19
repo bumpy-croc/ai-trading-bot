@@ -85,6 +85,9 @@ def parse_args():
         action="store_true",
         help="Enable short entries (recommended for bear strategy)",
     )
+    parser.add_argument(
+        "--max-drawdown", type=float, default=0.5, help="Maximum drawdown before stopping (default: 0.5 = 50%)"
+    )
     return parser.parse_args()
 
 
@@ -148,7 +151,9 @@ def main() -> int:
 
         # Set up risk parameters
         risk_params = RiskParameters(
-            base_risk_per_trade=args.risk_per_trade, max_risk_per_trade=args.max_risk_per_trade
+            base_risk_per_trade=args.risk_per_trade, 
+            max_risk_per_trade=args.max_risk_per_trade,
+            max_drawdown=args.max_drawdown
         )
 
         # Create and run backtester
