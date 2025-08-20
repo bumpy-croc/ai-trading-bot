@@ -213,11 +213,11 @@ class TestDynamicRiskManager:
         
         adjusted_params = self.manager.apply_risk_adjustments(original_params, adjustments)
         
-        assert adjusted_params.base_risk_per_trade == 0.016  # 0.02 * 0.8
-        assert adjusted_params.max_risk_per_trade == 0.024   # 0.03 * 0.8
-        assert adjusted_params.max_position_size == 0.2      # 0.25 * 0.8
-        assert adjusted_params.max_daily_risk == 0.042       # 0.06 * 0.7
-        assert adjusted_params.position_size_atr_multiplier == 1.2  # 1.0 * 1.2
+        assert adjusted_params.base_risk_per_trade == pytest.approx(0.016)  # 0.02 * 0.8
+        assert adjusted_params.max_risk_per_trade == pytest.approx(0.024)   # 0.03 * 0.8
+        assert adjusted_params.max_position_size == pytest.approx(0.2)      # 0.25 * 0.8
+        assert adjusted_params.max_daily_risk == pytest.approx(0.042)       # 0.06 * 0.7
+        assert adjusted_params.position_size_atr_multiplier == pytest.approx(1.2)  # 1.0 * 1.2
     
     def test_current_drawdown_calculation(self):
         """Test drawdown calculation"""

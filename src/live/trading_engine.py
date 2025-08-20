@@ -288,6 +288,26 @@ class LiveTradingEngine:
         self.max_consecutive_errors = max_consecutive_errors
         self.consecutive_errors = 0
 
+        # Threading
+        self.main_thread = None
+        self.stop_event = threading.Event()
+
+        # Optional regime detector (feature-gated)
+        self.regime_detector = None
+        try:
+            if os.getenv("FEATURE_ENABLE_REGIME_DETECTION", "").lower() == "true":
+                self.regime_detector = RegimeDetector()
+        except Exception:
+            self.regime_detector = None
+
+        # Setup graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+        logger.info(
+            f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}"
+        )
+
     def _get_dynamic_risk_adjusted_size(self, original_size: float) -> float:
         """Apply dynamic risk adjustments to position size"""
         if not self.dynamic_risk_manager:
@@ -342,29 +362,6 @@ class LiveTradingEngine:
         except Exception as e:
             logger.warning(f"Failed to get dynamic risk adjusted parameters: {e}")
             return self.risk_manager.params
-        self.consecutive_errors = 0
-        self.max_consecutive_errors = max_consecutive_errors
-        self.error_cooldown = 300  # 5 minutes
-
-        # Threading
-        self.main_thread = None
-        self.stop_event = threading.Event()
-
-        # Optional regime detector (feature-gated)
-        self.regime_detector = None
-        try:
-            if os.getenv("FEATURE_ENABLE_REGIME_DETECTION", "").lower() == "true":
-                self.regime_detector = RegimeDetector()
-        except Exception:
-            self.regime_detector = None
-
-        # Setup graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-
-        logger.info(
-            f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}"
-        )
 
     def start(self, symbol: str, timeframe: str = "1h", max_steps: int = None):
         """Start the live trading engine"""
