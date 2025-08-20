@@ -30,9 +30,11 @@ class TestDatabaseManager:
         """Create DatabaseManager with mocked PostgreSQL for testing"""
         postgresql_url = "postgresql://test_user:test_pass@localhost:5432/test_db"
 
-        with patch("database.manager.create_engine") as mock_create_engine, patch(
-            "database.manager.sessionmaker"
-        ) as mock_sessionmaker, patch("database.manager.Base"):
+        with (
+            patch("database.manager.create_engine") as mock_create_engine,
+            patch("database.manager.sessionmaker") as mock_sessionmaker,
+            patch("database.manager.Base"),
+        ):
             # Setup mocks
             mock_engine = Mock()
             mock_session_factory = Mock()
@@ -82,8 +84,10 @@ class TestInitialization(TestDatabaseManager):
         """Test initialization with valid PostgreSQL URL"""
         postgresql_url = "postgresql://test:test@localhost:5432/test"
 
-        with patch("database.manager.create_engine"), patch("database.manager.sessionmaker"), patch(
-            "database.manager.Base.metadata.create_all"
+        with (
+            patch("database.manager.create_engine"),
+            patch("database.manager.sessionmaker"),
+            patch("database.manager.Base.metadata.create_all"),
         ):
             db_manager = DatabaseManager(database_url=postgresql_url)
             assert db_manager.database_url == postgresql_url
@@ -92,10 +96,11 @@ class TestInitialization(TestDatabaseManager):
         """Test initialization from DATABASE_URL environment variable"""
         postgresql_url = "postgresql://test:test@localhost:5432/test"
 
-        with patch("database.manager.get_config") as mock_config, patch(
-            "database.manager.create_engine"
-        ), patch("database.manager.sessionmaker"), patch(
-            "database.manager.Base.metadata.create_all"
+        with (
+            patch("database.manager.get_config") as mock_config,
+            patch("database.manager.create_engine"),
+            patch("database.manager.sessionmaker"),
+            patch("database.manager.Base.metadata.create_all"),
         ):
             mock_config.return_value.get.return_value = postgresql_url
 

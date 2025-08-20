@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
-
 
 # Ensure project root and src are in sys.path for absolute imports
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -96,5 +94,3 @@ def call_with_supported_params(func, maybe_kwargs: dict[str, Any]) -> Any:
     sig = _inspect.signature(func)
     accepted = {k: v for k, v in maybe_kwargs.items() if k in sig.parameters and v is not None}
     return func(**accepted)
-
-

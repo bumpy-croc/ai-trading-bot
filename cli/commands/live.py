@@ -12,13 +12,16 @@ def _handle(ns: argparse.Namespace) -> int:
 
 def _control(ns: argparse.Namespace) -> int:
     # Minimal inline controller using SafeModelTrainer
-    from scripts.safe_model_trainer import SafeModelTrainer
     import json
+
+    from scripts.safe_model_trainer import SafeModelTrainer
 
     trainer = SafeModelTrainer()
 
     if ns.control_cmd == "train":
-        result = trainer.train_model_safe(symbol=ns.symbol, with_sentiment=ns.sentiment, days=ns.days, epochs=ns.epochs)
+        result = trainer.train_model_safe(
+            symbol=ns.symbol, with_sentiment=ns.sentiment, days=ns.days, epochs=ns.epochs
+        )
         if not result.get("success"):
             print(f"❌ Model training failed: {result.get('error')}")
             return 1
@@ -31,7 +34,14 @@ def _control(ns: argparse.Namespace) -> int:
         return 0
 
     if ns.control_cmd == "deploy-model":
-        ok = trainer.deploy_model_to_live({"staging_path": ns.model_path, "strategy_name": "ml_basic", "ready_for_deployment": True}, close_positions=ns.close_positions)
+        ok = trainer.deploy_model_to_live(
+            {
+                "staging_path": ns.model_path,
+                "strategy_name": "ml_basic",
+                "ready_for_deployment": True,
+            },
+            close_positions=ns.close_positions,
+        )
         print("✅ Model deployment successful!" if ok else "❌ Model deployment failed!")
         return 0 if ok else 1
 
@@ -41,7 +51,12 @@ def _control(ns: argparse.Namespace) -> int:
 
     if ns.control_cmd == "status":
         # Placeholder until wired into running engine
-        status = {"connected": False, "running": False, "current_strategy": "Unknown", "active_positions": 0}
+        status = {
+            "connected": False,
+            "running": False,
+            "current_strategy": "Unknown",
+            "active_positions": 0,
+        }
         print(json.dumps(status, indent=2))
         return 0
 
@@ -50,7 +65,9 @@ def _control(ns: argparse.Namespace) -> int:
         return 0
 
     if ns.control_cmd == "swap-strategy":
-        print(f"🔄 Strategy swap requested to {ns.strategy} (close_positions={ns.close_positions}) (simulated)")
+        print(
+            f"🔄 Strategy swap requested to {ns.strategy} (close_positions={ns.close_positions}) (simulated)"
+        )
         return 0
 
     return 1
@@ -62,7 +79,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_handle)
 
     # Control group
-    pc = subparsers.add_parser("live-control", help="Control live trading (train/deploy/swap/status)")
+    pc = subparsers.add_parser(
+        "live-control", help="Control live trading (train/deploy/swap/status)"
+    )
     sub = pc.add_subparsers(dest="control_cmd", required=True)
 
     p_train = sub.add_parser("train", help="Train new model")
@@ -91,5 +110,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_swap.add_argument("--strategy", required=True)
     p_swap.add_argument("--close-positions", action="store_true")
     p_swap.set_defaults(func=_control)
-
-
