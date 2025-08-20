@@ -185,6 +185,22 @@ class Position(Base):
     __table_args__ = (UniqueConstraint("order_id", "session_id", name="uq_position_order_session"),)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Time-based exit fields
+    max_holding_until = Column(DateTime)  # When position must be closed
+    end_of_day_exit = Column(Boolean, default=False)
+    weekend_exit = Column(Boolean, default=False)
+    time_restriction_group = Column(String(50))
+
+
+class MarketSession(Base):
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), unique=True, index=True)
+    timezone = Column(String(50), default="UTC")
+    open_time = Column(DateTime)  # store as time-of-day using DateTime with arbitrary epoch or convert in app
+    close_time = Column(DateTime)
+    days_of_week = Column(JSONType)  # e.g., [1,2,3,4,5]
+    is_24h = Column(Boolean, default=False)
+
 
 class AccountHistory(Base):
     """Account balance history table"""

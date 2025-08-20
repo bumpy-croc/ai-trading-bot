@@ -34,6 +34,7 @@ from performance.metrics import Side, pnl_percent
 from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
+from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
 
 from .account_sync import AccountSynchronizer
 
@@ -134,6 +135,7 @@ class LiveTradingEngine:
         max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
         account_snapshot_interval: int = DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,  # Account snapshot interval in seconds (30 minutes)
         provider: str = "binance",  # 'binance' (default) or 'coinbase'
+        time_exit_policy: TimeExitPolicy | None = None,
     ):
         """
         Initialize the live trading engine.
@@ -262,6 +264,9 @@ class LiveTradingEngine:
         self.consecutive_errors = 0
         self.max_consecutive_errors = max_consecutive_errors
         self.error_cooldown = 300  # 5 minutes
+
+        # Time exit policy
+        self.time_exit_policy = time_exit_policy
 
         # Threading
         self.main_thread = None
@@ -709,10 +714,20 @@ class LiveTradingEngine:
                 should_exit = True
                 exit_reason = "Take profit"
 
-            # Check maximum position time (24 hours)
-            elif (datetime.now() - position.entry_time).total_seconds() > 86400:
-                should_exit = True
-                exit_reason = "Time limit"
+            # Check time-based exits via policy (fallback to 24h if not provided)
+            else:
+                hit_time_exit = False
+                reason = None
+                if self.time_exit_policy is not None:
+                    hit_time_exit, reason = self.time_exit_policy.check_time_exit_conditions(
+                        position.entry_time, datetime.utcnow()
+                    )
+                else:
+                    hit_time_exit = (datetime.now() - position.entry_time).total_seconds() > 86400
+                    reason = "Time limit"
+                if hit_time_exit:
+                    should_exit = True
+                    exit_reason = reason or "Time exit"
 
             # Log exit decision for each position
             if self.db_manager:
