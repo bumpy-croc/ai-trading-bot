@@ -38,6 +38,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         import os
         import sys
         from datetime import datetime
+
         from database.manager import DatabaseManager
         from database.models import EventType
 
@@ -59,5 +60,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_hb = sub.add_parser("heartbeat", help="Log a heartbeat SystemEvent")
     p_hb.set_defaults(func=_handle_heartbeat)
-
-

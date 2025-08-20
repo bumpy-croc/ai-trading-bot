@@ -21,7 +21,11 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
 
     def _handle_health(self):
         try:
-            response = {"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "service": "ai-trading-bot"}
+            response = {
+                "status": "healthy",
+                "timestamp": datetime.utcnow().isoformat(),
+                "service": "ai-trading-bot",
+            }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -31,7 +35,12 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
 
     def _handle_status(self):
         try:
-            status = {"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "service": "ai-trading-bot", "components": {}}
+            status = {
+                "status": "healthy",
+                "timestamp": datetime.utcnow().isoformat(),
+                "service": "ai-trading-bot",
+                "components": {},
+            }
             # Config providers
             try:
                 from config.config_manager import get_config
@@ -62,13 +71,23 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
                 prov = BinanceProvider()
                 df = prov.get_live_data("BTCUSDT", "1h", limit=1)
                 if df is not None and not df.empty and "close" in df.columns:
-                    status["components"]["binance_api"] = {"status": "healthy", "btc_price": float(df["close"].iloc[-1])}
+                    status["components"]["binance_api"] = {
+                        "status": "healthy",
+                        "btc_price": float(df["close"].iloc[-1]),
+                    }
                 else:
-                    status["components"]["binance_api"] = {"status": "unhealthy", "error": "No price data returned"}
+                    status["components"]["binance_api"] = {
+                        "status": "unhealthy",
+                        "error": "No price data returned",
+                    }
             except Exception as e:
                 status["components"]["binance_api"] = {"status": "unhealthy", "error": str(e)}
 
-            unhealthy = [name for name, comp in status["components"].items() if comp.get("status") != "healthy"]
+            unhealthy = [
+                name
+                for name, comp in status["components"].items()
+                if comp.get("status") != "healthy"
+            ]
             if unhealthy:
                 status["status"] = "degraded"
                 status["unhealthy_components"] = unhealthy
@@ -78,7 +97,11 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(status, indent=2).encode())
         except Exception as e:  # pragma: no cover
-            error_response = {"status": "unhealthy", "timestamp": datetime.utcnow().isoformat(), "error": str(e)}
+            error_response = {
+                "status": "unhealthy",
+                "timestamp": datetime.utcnow().isoformat(),
+                "error": str(e),
+            }
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -91,12 +114,14 @@ class _HealthCheckHandler(BaseHTTPRequestHandler):
 def _run_health_server(port: int) -> None:
     try:
         httpd = HTTPServer(("", port), _HealthCheckHandler)
-        print(f"Health check server running on port {port}\nEndpoints: /health (basic), /status (detailed)")
+        print(
+            f"Health check server running on port {port}\nEndpoints: /health (basic), /status (detailed)"
+        )
         httpd.serve_forever()
     except OSError as e:
         if e.errno == 48:  # Address already in use
             print(f"⚠️  Port {port} is already in use. Health server will not start.")
-            print(f"   You can set a different port with: PORT=<port> make live-health")
+            print("   You can set a different port with: PORT=<port> make live-health")
         else:
             raise
 
@@ -112,10 +137,14 @@ def _handle(ns: argparse.Namespace) -> int:
     filtered_args = []
     i = 0
     while i < len(tail):
-        if tail[i] in ['--port', '--help'] and i + 1 < len(tail) and not tail[i + 1].startswith('-'):
+        if (
+            tail[i] in ["--port", "--help"]
+            and i + 1 < len(tail)
+            and not tail[i + 1].startswith("-")
+        ):
             # Skip --port and its value
             i += 2
-        elif tail[i] in ['--port', '--help']:
+        elif tail[i] in ["--port", "--help"]:
             # Skip --port without value
             i += 1
         else:
@@ -131,5 +160,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed through to runner")
     p.set_defaults(func=_handle)
-
-

@@ -20,5 +20,3 @@ def forward_to_module_main(module_name: str, argv_tail: list[str]) -> int:
         return int(module.main() or 0)
     finally:
         sys.argv = original_argv
-
-

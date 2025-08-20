@@ -54,7 +54,6 @@ def _get_date_range(args):
 def _handle(ns: argparse.Namespace) -> int:
     try:
         from backtesting import Backtester
-        from config.constants import DEFAULT_INITIAL_BALANCE
         from data_providers.feargreed_provider import FearGreedProvider
         from risk import RiskParameters
 
@@ -113,7 +112,9 @@ def _handle(ns: argparse.Namespace) -> int:
             else strategy.get_trading_pair()
         )
 
-        results = backtester.run(symbol=trading_symbol, timeframe=ns.timeframe, start=start_date, end=end_date)
+        results = backtester.run(
+            symbol=trading_symbol, timeframe=ns.timeframe, start=start_date, end=end_date
+        )
 
         print("\nBacktest Results:")
         print("=" * 50)
@@ -186,9 +187,13 @@ def _handle(ns: argparse.Namespace) -> int:
 
         if sentiment_provider is not None:
             df = data_provider.get_historical_data(ns.symbol, ns.timeframe, start_date, end_date)
-            sentiment_df = sentiment_provider.get_historical_sentiment(ns.symbol, start_date, end_date)
+            sentiment_df = sentiment_provider.get_historical_sentiment(
+                ns.symbol, start_date, end_date
+            )
             if not sentiment_df.empty:
-                sentiment_df = sentiment_provider.aggregate_sentiment(sentiment_df, window=ns.timeframe)
+                sentiment_df = sentiment_provider.aggregate_sentiment(
+                    sentiment_df, window=ns.timeframe
+                )
                 aligned_df = df.join(sentiment_df, how="left")
                 print(f"Shape of aligned DataFrame: {aligned_df.shape}")
                 if aligned_df.empty:
@@ -219,13 +224,19 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--end", help="End date (YYYY-MM-DD)")
     from config.constants import DEFAULT_INITIAL_BALANCE
 
-    p.add_argument("--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance")
+    p.add_argument(
+        "--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
+    )
     p.add_argument("--risk-per-trade", type=float, default=0.01, help="Risk per trade (1% = 0.01)")
     p.add_argument("--max-risk-per-trade", type=float, default=0.02, help="Maximum risk per trade")
-    p.add_argument("--use-sentiment", action="store_true", help="Use sentiment analysis in backtest")
+    p.add_argument(
+        "--use-sentiment", action="store_true", help="Use sentiment analysis in backtest"
+    )
     p.add_argument("--no-cache", action="store_true", help="Disable data caching")
     p.add_argument("--cache-ttl", type=int, default=24, help="Cache TTL in hours (default: 24)")
-    p.add_argument("--no-db", action="store_true", help="Disable database logging for this backtest")
+    p.add_argument(
+        "--no-db", action="store_true", help="Disable database logging for this backtest"
+    )
     p.add_argument(
         "--provider",
         choices=["coinbase", "binance"],
@@ -237,5 +248,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Enable short entries (recommended for bear strategy)",
     )
-    p.add_argument("--max-drawdown", type=float, default=0.5, help="Maximum drawdown before stopping (default: 0.5 = 50%)")
+    p.add_argument(
+        "--max-drawdown",
+        type=float,
+        default=0.5,
+        help="Maximum drawdown before stopping (default: 0.5 = 50%)",
+    )
     p.set_defaults(func=_handle)

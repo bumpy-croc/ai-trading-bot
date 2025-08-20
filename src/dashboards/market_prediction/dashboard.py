@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -87,9 +86,7 @@ class MarketPredictionDashboard:
         df: pd.DataFrame | None = None
         if provider is not None:
             try:
-                df = provider.get_historical_data(
-                    symbol, "1d", start=start_dt, end=end_dt
-                )
+                df = provider.get_historical_data(symbol, "1d", start=start_dt, end=end_dt)
             except Exception as exc:  # pragma: no cover
                 logger.warning("Failed fetching Binance data: %s", exc)
                 df = None
@@ -108,7 +105,7 @@ class MarketPredictionDashboard:
             df.index = df.index.tz_localize(timezone.utc)
         return df
 
-    def _linear_regression_forecast(self, close: pd.Series, horizon: int) -> Dict[str, float]:
+    def _linear_regression_forecast(self, close: pd.Series, horizon: int) -> dict[str, float]:
         """Simple linear regression forecast returning predicted price & r2 score."""
         # Use ordinal day count as x variable
         y = close.values.astype(float)
@@ -134,22 +131,20 @@ class MarketPredictionDashboard:
         except Exception:
             return conf
         # sentiment_primary is 0..1 where >0.5 is greed, <0.5 is fear
-        if (direction > 0 and latest_sentiment > 0.6) or (
-            direction < 0 and latest_sentiment < 0.4
-        ):
+        if (direction > 0 and latest_sentiment > 0.6) or (direction < 0 and latest_sentiment < 0.4):
             conf = min(1.0, conf + 0.1)
         else:
             conf = max(0.0, conf - 0.05)
         return conf
 
-    def _generate_prediction_payload(self, symbol: str) -> Dict[str, Any]:
+    def _generate_prediction_payload(self, symbol: str) -> dict[str, Any]:
         df = self._load_price_history(symbol)
         if df.empty or "close" not in df.columns:
             return {"error": "No price data available"}
         close = df["close"].astype(float)
         current_price = float(close.iloc[-1])
 
-        predictions: List[Dict[str, Any]] = []
+        predictions: list[dict[str, Any]] = []
         for horizon in self._HORIZONS_DAYS:
             res = self._linear_regression_forecast(close, horizon)
             pred_price = res["predicted_price"]
@@ -178,13 +173,11 @@ class MarketPredictionDashboard:
             )
 
         # Latest Fear & Greed info
-        sentiment_info: Dict[str, Any] = {}
+        sentiment_info: dict[str, Any] = {}
         if not self._sentiment_provider.data.empty:
             latest_row = self._sentiment_provider.data.iloc[-1]
             sentiment_info = {
-                "index_value": float(latest_row["value"])
-                if "value" in latest_row
-                else None,
+                "index_value": float(latest_row["value"]) if "value" in latest_row else None,
                 "sentiment_primary": float(latest_row.get("sentiment_primary", 0.5)),
                 "classification": latest_row.get("classification", ""),
                 "timestamp": latest_row.name.isoformat(),

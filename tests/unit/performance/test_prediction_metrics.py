@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-
 from performance.metrics import (
     brier_score_direction,
     directional_accuracy,
