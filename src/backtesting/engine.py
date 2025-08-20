@@ -31,6 +31,7 @@ from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
 from performance.metrics import cash_pnl
+from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
 from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
@@ -81,6 +82,9 @@ class Backtester:
         default_take_profit_pct: Optional[float] = None,
         legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
         enable_engine_risk_exits: bool = False,  # Enforce engine-level SL/TP exits (off to preserve baseline)
+        # Dynamic risk management
+        enable_dynamic_risk: bool = False,  # Disabled by default for backtesting to preserve historical results
+        dynamic_risk_config: Optional[DynamicRiskConfig] = None,
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -91,6 +95,15 @@ class Backtester:
         self.peak_balance = initial_balance
         self.trades: list[dict] = []
         self.current_trade: Optional[ActiveTrade] = None
+
+        # Dynamic risk management
+        self.enable_dynamic_risk = enable_dynamic_risk
+        self.dynamic_risk_manager = None
+        self.session_id = None  # Will be set when database is available
+        if enable_dynamic_risk:
+            config = dynamic_risk_config or DynamicRiskConfig()
+            # Initialize without db_manager for now - will be set later if database logging is enabled
+            self.dynamic_risk_manager = DynamicRiskManager(config, db_manager=None)
 
         # Feature flags for parity tuning
         self.enable_short_trading = enable_short_trading
@@ -171,6 +184,41 @@ class Backtester:
 
                     self.db_manager = DummyDBManager()
 
+    def _get_dynamic_risk_adjusted_size(self, original_size: float, current_time: datetime) -> float:
+        """Apply dynamic risk adjustments to position size in backtesting"""
+        if not self.dynamic_risk_manager:
+            return original_size
+            
+        try:
+            # Calculate dynamic risk adjustments
+            adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
+                current_balance=self.balance,
+                peak_balance=self.peak_balance,
+                session_id=getattr(self, 'trading_session_id', None)
+            )
+            
+            # Apply position size adjustment
+            adjusted_size = original_size * adjustments.position_size_factor
+            
+            # Log significant adjustments for analysis
+            if abs(adjustments.position_size_factor - 1.0) > 0.1:  # >10% change
+                logger.debug(
+                    f"Dynamic risk adjustment at {current_time}: "
+                    f"size factor={adjustments.position_size_factor:.2f}, "
+                    f"reason={adjustments.primary_reason}"
+                )
+            
+            return adjusted_size
+            
+        except Exception as e:
+            logger.warning(f"Failed to apply dynamic risk adjustment: {e}")
+            return original_size
+
+    def _update_peak_balance(self):
+        """Update peak balance for drawdown tracking"""
+        if self.balance > self.peak_balance:
+            self.peak_balance = self.balance
+
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
     ) -> dict:
@@ -191,6 +239,10 @@ class Backtester:
                 # Set session ID on strategy for logging
                 if hasattr(self.strategy, "session_id"):
                     self.strategy.session_id = self.trading_session_id
+
+                # Update dynamic risk manager with database connection
+                if self.enable_dynamic_risk and self.dynamic_risk_manager and self.db_manager:
+                    self.dynamic_risk_manager.db_manager = self.db_manager
 
             # Fetch price data
             df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
@@ -379,6 +431,9 @@ class Backtester:
                         # Update balance
                         self.balance += trade_pnl_cash
 
+                        # Update peak balance for drawdown tracking
+                        self._update_peak_balance()
+
                         # Update metrics
                         total_trades += 1
                         if trade_pnl_cash > 0:
@@ -475,6 +530,12 @@ class Backtester:
                         )
                     else:
                         size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+
+                    # Apply dynamic risk adjustments
+                    if size_fraction > 0 and self.enable_dynamic_risk:
+                        size_fraction = self._get_dynamic_risk_adjusted_size(
+                            size_fraction, current_time
+                        )
 
                     # Log entry decision
                     if self.log_to_database and self.db_manager:
@@ -597,6 +658,12 @@ class Backtester:
                         )
                     else:
                         size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+
+                    # Apply dynamic risk adjustments
+                    if size_fraction > 0 and self.enable_dynamic_risk:
+                        size_fraction = self._get_dynamic_risk_adjusted_size(
+                            size_fraction, current_time
+                        )
 
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
