@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -16,7 +16,15 @@ import pandas as pd
 from performance.metrics import Side, pnl_percent
 from regime.detector import RegimeDetector
 
-from config.constants import DEFAULT_INITIAL_BALANCE
+from config.constants import (
+    DEFAULT_INITIAL_BALANCE,
+    DEFAULT_CHECK_INTERVAL,
+    DEFAULT_MIN_CHECK_INTERVAL,
+    DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_SLEEP_POLL_INTERVAL,
+    DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
+    DEFAULT_DATA_FRESHNESS_THRESHOLD,
+)
 from data_providers.binance_provider import BinanceProvider
 from data_providers.coinbase_provider import CoinbaseProvider
 from data_providers.data_provider import DataProvider
@@ -114,7 +122,7 @@ class LiveTradingEngine:
         data_provider: DataProvider,
         sentiment_provider: SentimentDataProvider | None = None,
         risk_parameters: RiskParameters | None = None,
-        check_interval: int = 60,  # seconds
+        check_interval: int = DEFAULT_CHECK_INTERVAL,  # seconds
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
         max_position_size: float = 0.1,  # 10% of balance per position
         enable_live_trading: bool = False,  # Safety flag - must be explicitly enabled
@@ -124,7 +132,7 @@ class LiveTradingEngine:
         resume_from_last_balance: bool = True,  # Resume balance from last account snapshot
         database_url: str | None = None,  # Database connection URL
         max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
-        account_snapshot_interval: int = 1800,  # Account snapshot interval in seconds (30 minutes)
+        account_snapshot_interval: int = DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,  # Account snapshot interval in seconds (30 minutes)
         provider: str = "binance",  # 'binance' (default) or 'coinbase'
     ):
         """
@@ -157,7 +165,13 @@ class LiveTradingEngine:
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
         self.risk_manager = RiskManager(risk_parameters)
+        # Timing configuration
+        self.base_check_interval = check_interval
         self.check_interval = check_interval
+        self.min_check_interval = DEFAULT_MIN_CHECK_INTERVAL
+        self.max_check_interval = DEFAULT_MAX_CHECK_INTERVAL
+        self.data_freshness_threshold = DEFAULT_DATA_FRESHNESS_THRESHOLD
+        self.last_data_timestamp = None
         self.initial_balance = initial_balance
         self.current_balance = initial_balance  # Will be updated during startup
         self.max_position_size = max_position_size
@@ -451,6 +465,14 @@ class LiveTradingEngine:
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
                     logger.warning("No market data received")
+                    self.check_interval = self._calculate_adaptive_interval()
+                    self._sleep_with_interrupt(self.check_interval)
+                    continue
+                    
+                # Check data freshness to avoid redundant processing
+                if not self._is_data_fresh(df):
+                    logger.debug("Data is not fresh enough, using longer interval")
+                    self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
                 # Add sentiment data if available
@@ -472,6 +494,7 @@ class LiveTradingEngine:
                 df = df.dropna()
                 if len(df) < 2:
                     logger.warning("Insufficient data for analysis")
+                    self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
                 current_index = len(df) - 1
@@ -581,6 +604,11 @@ class LiveTradingEngine:
                     self._log_status(symbol, current_price)
                 # Reset error counter on successful iteration
                 self.consecutive_errors = 0
+                
+                # Calculate and use adaptive interval for next iteration
+                current_price = df.iloc[-1]["close"] if df is not None and not df.empty else None
+                self.check_interval = self._calculate_adaptive_interval(current_price)
+                
             except Exception as e:
                 self.consecutive_errors += 1
                 logger.error(
@@ -593,12 +621,12 @@ class LiveTradingEngine:
                     )
                     self.stop()
                     break
-                # Sleep longer after errors
+                # Exponential backoff with adaptive intervals
                 sleep_time = min(self.error_cooldown, self.check_interval * self.consecutive_errors)
                 self._sleep_with_interrupt(sleep_time)
                 continue
-
-            # Normal sleep between checks
+            
+            # Sleep with current interval
             self._sleep_with_interrupt(self.check_interval)
 
         logger.info("Trading loop ended")
@@ -1154,10 +1182,47 @@ class LiveTradingEngine:
     def _sleep_with_interrupt(self, seconds: float):
         """Sleep in small increments to allow for interrupt and float seconds"""
         end_time = time.time() + seconds
+        poll_interval = DEFAULT_SLEEP_POLL_INTERVAL  # Use configurable interval instead of 0.1
         while time.time() < end_time:
             if self.stop_event.is_set():
                 break
-            time.sleep(min(0.1, end_time - time.time()))
+            time.sleep(min(poll_interval, end_time - time.time()))
+
+    def _calculate_adaptive_interval(self, current_price: float = None) -> int:
+        """Calculate adaptive check interval based on recent trading activity and market conditions"""
+        # Base interval from configuration
+        interval = self.base_check_interval
+        
+        # Factor in recent trading activity
+        recent_trades = len([p for p in self.positions.values() if p.entry_time > datetime.now() - timedelta(hours=1)])
+        if recent_trades > 0:
+            # More frequent checks if we have recent activity
+            interval = max(self.min_check_interval, interval // 2)
+        elif len(self.positions) == 0:
+            # Less frequent checks if no active positions
+            interval = min(self.max_check_interval, interval * 2)
+        
+        # Consider time of day (basic market hours awareness)
+        current_hour = datetime.now().hour
+        if current_hour < 6 or current_hour > 22:  # Off-hours (UTC)
+            interval = min(self.max_check_interval, interval * 1.5)
+        
+        return int(interval)
+
+    def _is_data_fresh(self, df: pd.DataFrame) -> bool:
+        """Check if the data is fresh enough to warrant processing"""
+        if df is None or df.empty:
+            return False
+            
+        latest_timestamp = df.index[-1] if hasattr(df.index[-1], 'timestamp') else datetime.now()
+        if isinstance(latest_timestamp, str):
+            try:
+                latest_timestamp = pd.to_datetime(latest_timestamp)
+            except:
+                return True  # Assume fresh if we can't parse timestamp
+                
+        age_seconds = (datetime.now() - latest_timestamp).total_seconds()
+        return age_seconds <= self.data_freshness_threshold
 
     def _print_final_stats(self):
         """Print final trading statistics"""
