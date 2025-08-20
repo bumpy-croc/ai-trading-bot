@@ -105,9 +105,7 @@ class CachedDataProvider(DataProvider):
         """
         try:
             with open(cache_path, "rb") as f:
-                data = pickle.load(
-                    f
-                )  # nosec B301: loading only trusted, locally-created cache files
+                data = pickle.load(f)  # nosec B301: loading only trusted, locally-created cache files
             return data
         except Exception as e:
             logger.warning(f"Failed to load cache from {cache_path}: {e}")

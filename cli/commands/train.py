@@ -48,5 +48,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_validate = sub.add_parser("validate", help="Simple model validator")
     p_validate.add_argument("args", nargs=argparse.REMAINDER)
     p_validate.set_defaults(func=_handle_simple_validator)
-
-

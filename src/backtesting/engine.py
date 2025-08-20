@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
+from performance.metrics import cash_pnl
+from regime.detector import RegimeDetector
 from sqlalchemy.exc import SQLAlchemyError
 
 from backtesting.models import Trade as CompletedTrade
@@ -25,16 +27,14 @@ from backtesting.utils import (
 from backtesting.utils import (
     extract_sentiment_data as util_extract_sentiment,
 )
+from config.config_manager import get_config
 from config.constants import DEFAULT_INITIAL_BALANCE
 from data_providers.data_provider import DataProvider
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
-from performance.metrics import cash_pnl
-from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
-from config.config_manager import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -316,7 +316,9 @@ class Backtester:
                             else (
                                 "Take profit"
                                 if hit_take_profit
-                                else "Time limit" if hit_time_limit else "Hold"
+                                else "Time limit"
+                                if hit_time_limit
+                                else "Hold"
                             )
                         )
                     )
@@ -742,9 +744,7 @@ class Backtester:
                             "prediction_confidence"
                         ].reindex(pred_series.index).fillna(0.5) + (
                             pred_series.shift(1) >= pred_series
-                        ).astype(
-                            float
-                        ) * (
+                        ).astype(float) * (
                             1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(0.5)
                         )
                         actual_up = (actual_series.diff() > 0).astype(float)

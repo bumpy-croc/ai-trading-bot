@@ -122,7 +122,7 @@ class DemoDataGenerator:
 
         cursor.execute(
             """
-        INSERT INTO trading_sessions 
+        INSERT INTO trading_sessions
         (strategy_name, symbol, timeframe, mode, initial_balance, start_time)
         VALUES (%s, %s, %s, %s, %s, %s)
         """,
@@ -180,7 +180,7 @@ class DemoDataGenerator:
         # Update session with final balance
         cursor.execute(
             """
-        UPDATE trading_sessions 
+        UPDATE trading_sessions
         SET final_balance = %s, end_time = %s
         WHERE id = %s
         """,
@@ -233,7 +233,7 @@ class DemoDataGenerator:
         order_id = f"demo_{int(time.time())}_{random.randint(1000, 9999)}"
         cursor.execute(
             """
-        INSERT INTO positions 
+        INSERT INTO positions
         (symbol, side, entry_price, exit_price, quantity, entry_time, exit_time, order_id, session_id)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
@@ -253,7 +253,7 @@ class DemoDataGenerator:
         # Insert trade
         cursor.execute(
             """
-        INSERT INTO trades 
+        INSERT INTO trades
         (symbol, side, entry_price, exit_price, quantity, entry_time, exit_time, pnl, exit_reason, session_id)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
@@ -287,7 +287,7 @@ class DemoDataGenerator:
 
             cursor.execute(
                 """
-            INSERT INTO positions 
+            INSERT INTO positions
             (symbol, side, entry_price, quantity, entry_time, order_id, session_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
@@ -333,7 +333,7 @@ class DemoDataGenerator:
 
             cursor.execute(
                 """
-            INSERT INTO system_events 
+            INSERT INTO system_events
             (event_type, message, timestamp, component, session_id)
             VALUES (%s, %s, %s, %s, %s)
             """,

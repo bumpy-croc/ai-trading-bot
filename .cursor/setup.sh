@@ -71,4 +71,4 @@ environment=PYTHONPATH="/workspace",PYTHONUNBUFFERED="1"
 priority=300
 EOF
 
-echo "Setup completed successfully!" 
+echo "Setup completed successfully!"

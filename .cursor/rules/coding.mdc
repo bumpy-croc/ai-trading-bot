@@ -18,6 +18,11 @@
 - Use fixtures; mock network/IO.
 - Run `python tests/run_tests.py unit` locally; aim for green before PRs.
 
+### Code Quality
+- Run linting checks before finishing any job: `ruff check . --fix`
+- Ensure all code passes ruff linting before committing
+- Use pre-commit hooks: `pre-commit install` to automatically run checks
+
 ## 2. Security & Sensitive Information
 
 - **Priority:** Security is paramount in all code generation.
@@ -111,6 +116,6 @@
 # 5. Pull Request (PR) Reviews
 
 When I ask you to review a pull request:
-- Always use the github MCP server to get the details of a pull request I mention. 
+- Always use the github MCP server to get the details of a pull request I mention.
 - Investigate existing comments and address the feedback where appropriate. If you disagree with a comment, say so and why instead of making the change.
 - Review the pull request like you were a senior software engineer. Add a github review with your comments, and summarize the changes requested for me before implementing anything.

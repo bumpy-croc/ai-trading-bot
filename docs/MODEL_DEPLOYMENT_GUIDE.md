@@ -154,4 +154,4 @@ cp src/ml/btcusdt_sentiment.onnx.backup src/ml/btcusdt_sentiment.onnx
 sudo systemctl restart ai-trading-bot
 ```
 
-This simplified architecture makes the system more reliable, easier to maintain, and follows production best practices. 
+This simplified architecture makes the system more reliable, easier to maintain, and follows production best practices.

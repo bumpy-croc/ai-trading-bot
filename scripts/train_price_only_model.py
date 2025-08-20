@@ -12,6 +12,7 @@ Notes:
 - Exports ONNX with input shape (1, seq_len, 5) and a single scalar output.
 - Saves minimal metadata JSON alongside the ONNX.
 """
+
 import argparse
 import json
 import sys

@@ -18,7 +18,7 @@ Our testing strategy prioritizes components based on risk to capital and system 
 ### Test Categories
 
 - **Unit Tests**: Individual component testing
-- **Integration Tests**: Component interaction testing  
+- **Integration Tests**: Component interaction testing
 - **Live Trading Tests**: Real-money simulation tests
 - **Performance Tests**: Load and timing tests
 - **Risk Tests**: Capital protection validation
@@ -340,7 +340,7 @@ Tests validate risk management is working:
 def test_maximum_position_limits():
     """Ensure position limits are enforced"""
     # Test that positions never exceed configured limits
-    
+
 def test_stop_loss_enforcement():
     """Ensure stop losses are triggered"""
     # Test that losses are limited as configured
@@ -406,7 +406,7 @@ def validate_live_config():
     assert config.initial_balance > 0
     assert config.max_position_size <= 0.25  # Max 25%
     assert config.max_risk_per_trade <= 0.03  # Max 3%
-    
+
     # Validate API keys are set
     assert os.getenv('BINANCE_API_KEY')
     assert os.getenv('BINANCE_API_SECRET')
@@ -454,7 +454,7 @@ def test_concurrent_trading():
     for i in range(10):
         engine = create_test_engine()
         engines.append(engine)
-    
+
     # Run all engines concurrently
     # Verify no data corruption or deadlocks
 ```
@@ -468,15 +468,15 @@ def test_memory_usage():
     """Test for memory leaks"""
     import psutil
     process = psutil.Process()
-    
+
     initial_memory = process.memory_info().rss
-    
+
     # Run trading simulation
     run_trading_simulation(hours=24)
-    
+
     final_memory = process.memory_info().rss
     memory_increase = final_memory - initial_memory
-    
+
     # Memory should not increase significantly
     assert memory_increase < 100 * 1024 * 1024  # 100MB limit
 ```
@@ -556,10 +556,10 @@ def test_specific_behavior(fixture1, fixture2):
     # Arrange
     setup_data = fixture1
     expected_result = calculate_expected()
-    
+
     # Act
     actual_result = function_under_test(setup_data)
-    
+
     # Assert
     assert actual_result == expected_result
     assert other_condition_is_true()

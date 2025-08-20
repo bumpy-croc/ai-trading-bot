@@ -1,6 +1,6 @@
 ---
 description: Trading Bot Core Architecture & System Overview
-globs: 
+globs:
 alwaysApply: false
 ---
 

@@ -8,8 +8,6 @@ from cli.core.forward import forward_to_module_main
 
 
 def _list_scripts() -> list[str]:
-    from pathlib import Path as _Path
-
     root = Path(__file__).resolve().parents[3]
     out: list[str] = []
     for fp in sorted((root / "scripts").glob("*.py")):
@@ -18,7 +16,7 @@ def _list_scripts() -> list[str]:
         mod_name = f"scripts.{fp.stem}"
         try:
             mod = importlib.import_module(mod_name)
-            if hasattr(mod, "main") and callable(getattr(mod, "main")):
+            if hasattr(mod, "main") and callable(mod.main):
                 out.append(fp.stem)
         except Exception:
             continue
@@ -53,5 +51,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_run.add_argument("name", help="Module name under scripts/ (without .py)")
     p_run.add_argument("args", nargs=argparse.REMAINDER, help="Args passed to the module")
     p_run.set_defaults(func=_handle_run)
-
-

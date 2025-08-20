@@ -4,10 +4,21 @@ import argparse
 import os
 from typing import Any
 
-from cli.core.discovery import DiscoveredDashboard, call_with_supported_params, discover_dashboards, _import_module
+from cli.core.discovery import (
+    DiscoveredDashboard,
+    _import_module,
+    call_with_supported_params,
+    discover_dashboards,
+)
 
 
-def _run_dashboard(name: str, host: str | None, port: int | None, debug: bool, extra_init: dict[str, Any] | None = None) -> int:
+def _run_dashboard(
+    name: str,
+    host: str | None,
+    port: int | None,
+    debug: bool,
+    extra_init: dict[str, Any] | None = None,
+) -> int:
     dashboards = discover_dashboards()
     if name not in dashboards:
         available = ", ".join(sorted(dashboards)) or "(none found)"
@@ -29,11 +40,11 @@ def _run_dashboard(name: str, host: str | None, port: int | None, debug: bool, e
 
         # Call run(host, port, debug) with supported params only
         run_kwargs = {"host": host, "port": port, "debug": debug}
-        call_with_supported_params(getattr(instance, "run"), run_kwargs)
+        call_with_supported_params(instance.run, run_kwargs)
         return 0
 
     # Fallback to module main()
-    main_func = getattr(mod, "main")
+    main_func = mod.main
     main_func()
     return 0
 
@@ -78,5 +89,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_run.add_argument("--update-interval", dest="update_interval", type=int, default=None)
     p_run.add_argument("--logs-dir", dest="logs_dir", default=None)
     p_run.set_defaults(func=_handle_run)
-
-
