@@ -22,6 +22,7 @@ from config.constants import (
     DEFAULT_SLEEP_POLL_INTERVAL,
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
+    DEFAULT_DYNAMIC_RISK_ENABLED,
 )
 from data_providers.binance_provider import BinanceProvider
 from data_providers.coinbase_provider import CoinbaseProvider
@@ -31,6 +32,7 @@ from database.manager import DatabaseManager
 from database.models import TradeSource
 from live.strategy_manager import StrategyManager
 from performance.metrics import Side, pnl_percent
+from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
 from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
@@ -134,6 +136,9 @@ class LiveTradingEngine:
         max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
         account_snapshot_interval: int = DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,  # Account snapshot interval in seconds (30 minutes)
         provider: str = "binance",  # 'binance' (default) or 'coinbase'
+        # Dynamic risk management
+        enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
+        dynamic_risk_config: DynamicRiskConfig | None = None,
     ):
         """
         Initialize the live trading engine.
@@ -165,6 +170,15 @@ class LiveTradingEngine:
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
         self.risk_manager = RiskManager(risk_parameters)
+        
+        # Dynamic risk management
+        self.enable_dynamic_risk = enable_dynamic_risk
+        self.dynamic_risk_manager = None
+        if enable_dynamic_risk:
+            config = dynamic_risk_config or DynamicRiskConfig()
+            # Will be initialized after db_manager is available
+            self._dynamic_risk_config = config
+        
         # Timing configuration
         self.base_check_interval = check_interval
         self.check_interval = check_interval
@@ -192,6 +206,18 @@ class LiveTradingEngine:
             raise RuntimeError("Database connection required. Service stopped.") from e
         self.trading_session_id: int | None = None
 
+        # Initialize dynamic risk manager after database is available
+        if self.enable_dynamic_risk:
+            try:
+                self.dynamic_risk_manager = DynamicRiskManager(
+                    config=self._dynamic_risk_config,
+                    db_manager=self.db_manager
+                )
+                logger.info("Dynamic risk management enabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize dynamic risk manager: {e}")
+                self.dynamic_risk_manager = None
+        
         # Initialize exchange interface and account synchronizer
         self.exchange_interface = None
         self.account_synchronizer = None
@@ -259,6 +285,63 @@ class LiveTradingEngine:
         self.max_drawdown = 0.0
 
         # Error handling
+        self.max_consecutive_errors = max_consecutive_errors
+        self.consecutive_errors = 0
+
+    def _get_dynamic_risk_adjusted_size(self, original_size: float) -> float:
+        """Apply dynamic risk adjustments to position size"""
+        if not self.dynamic_risk_manager:
+            return original_size
+            
+        try:
+            # Calculate dynamic risk adjustments
+            adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
+                current_balance=self.current_balance,
+                peak_balance=self.peak_balance,
+                session_id=self.trading_session_id
+            )
+            
+            # Apply position size adjustment
+            adjusted_size = original_size * adjustments.position_size_factor
+            
+            # Log the adjustment if significant
+            if abs(adjustments.position_size_factor - 1.0) > 0.1:  # >10% change
+                logger.info(
+                    f"🎛️ Dynamic risk adjustment applied: "
+                    f"size factor={adjustments.position_size_factor:.2f}, "
+                    f"reason={adjustments.primary_reason}"
+                )
+            
+            return adjusted_size
+            
+        except Exception as e:
+            logger.warning(f"Failed to apply dynamic risk adjustment: {e}")
+            return original_size
+
+    def _get_dynamic_risk_adjusted_params(self) -> RiskParameters:
+        """Get risk parameters with dynamic adjustments applied"""
+        if not self.dynamic_risk_manager:
+            return self.risk_manager.params
+            
+        try:
+            # Calculate dynamic risk adjustments
+            adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
+                current_balance=self.current_balance,
+                peak_balance=self.peak_balance,
+                session_id=self.trading_session_id
+            )
+            
+            # Apply adjustments to risk parameters
+            adjusted_params = self.dynamic_risk_manager.apply_risk_adjustments(
+                self.risk_manager.params,
+                adjustments
+            )
+            
+            return adjusted_params
+            
+        except Exception as e:
+            logger.warning(f"Failed to get dynamic risk adjusted parameters: {e}")
+            return self.risk_manager.params
         self.consecutive_errors = 0
         self.max_consecutive_errors = max_consecutive_errors
         self.error_cooldown = 300  # 5 minutes
@@ -543,6 +626,9 @@ class LiveTradingEngine:
                                 short_position_size = min(
                                     short_position_size, self.max_position_size
                                 )
+                            
+                            # Apply dynamic risk adjustments
+                            short_position_size = self._get_dynamic_risk_adjusted_size(short_position_size)
                             if short_position_size > 0:
                                 if overrides and (
                                     ("stop_loss_pct" in overrides)
@@ -799,6 +885,10 @@ class LiveTradingEngine:
                 )
                 position_size = min(position_size, self.max_position_size)
 
+        # Apply dynamic risk adjustments
+        if position_size > 0:
+            position_size = self._get_dynamic_risk_adjusted_size(position_size)
+
         # Log strategy execution decision
         if self.db_manager:
             self.db_manager.log_strategy_execution(
@@ -970,6 +1060,98 @@ class LiveTradingEngine:
         # This is a placeholder - implement actual order closing
         logger.warning("Real order closing not implemented - using paper trading")
         return True
+
+    def _close_position(self, position: Position, reason: str):
+        """Close a position and update balance"""
+        try:
+            current_price = self.data_provider.get_current_price(position.symbol)
+            if not current_price:
+                logger.error(f"Could not get current price for {position.symbol}")
+                return
+
+            # Calculate P&L
+            if position.side == PositionSide.LONG:
+                pnl = pnl_percent(position.entry_price, current_price, Side.LONG, position.size)
+            else:
+                pnl = pnl_percent(position.entry_price, current_price, Side.SHORT, position.size)
+
+            # Update balance
+            position_value = position.size * self.current_balance
+            realized_pnl = position_value * pnl
+            self.current_balance += realized_pnl
+            self.total_pnl += realized_pnl
+
+            # Update peak balance for drawdown tracking
+            if self.current_balance > self.peak_balance:
+                self.peak_balance = self.current_balance
+
+            # Create trade record
+            trade = Trade(
+                symbol=position.symbol,
+                side=position.side,
+                size=position.size,
+                entry_price=position.entry_price,
+                exit_price=current_price,
+                entry_time=position.entry_time,
+                exit_time=datetime.now(),
+                pnl=pnl,
+                exit_reason=reason,
+                order_id=position.order_id,
+            )
+
+            # Update statistics
+            self.total_trades += 1
+            if pnl > 0:
+                self.winning_trades += 1
+
+            # Log trade
+            self.completed_trades.append(trade)
+            if self.log_trades:
+                self._log_trade(trade)
+
+            # Log to database
+            if self.trading_session_id is not None:
+                self.db_manager.log_trade(
+                    symbol=position.symbol,
+                    side=position.side.value,
+                    entry_price=position.entry_price,
+                    exit_price=current_price,
+                    size=position.size,
+                    pnl=pnl,
+                    strategy_name=self.strategy.__class__.__name__,
+                    exit_reason=reason,
+                    entry_time=position.entry_time,
+                    exit_time=datetime.now(),
+                    session_id=self.trading_session_id,
+                )
+
+                # Close position in database if it exists
+                if position.order_id in self.position_db_ids:
+                    position_db_id = self.position_db_ids[position.order_id]
+                    self.db_manager.close_position(
+                        position_id=position_db_id,
+                        exit_price=current_price,
+                        exit_time=datetime.now(),
+                        pnl=pnl
+                    )
+                    del self.position_db_ids[position.order_id]
+
+            # Close real order if needed
+            if self.enable_live_trading:
+                self._close_order(position.symbol, position.order_id)
+
+            # Remove from active positions
+            if position.order_id in self.positions:
+                del self.positions[position.order_id]
+
+            logger.info(
+                f"📈 Closed {position.side.value} position for {position.symbol}: "
+                f"P&L={pnl:.2%}, Reason={reason}, "
+                f"Balance=${self.current_balance:,.2f}"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to close position {position.order_id}: {e}", exc_info=True)
 
     def _check_stop_loss(self, position: Position, current_price: float) -> bool:
         """Check if stop loss should be triggered"""
