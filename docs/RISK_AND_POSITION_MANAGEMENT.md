@@ -105,14 +105,14 @@ final_position_factor = min(
 ```
 
 ### Database Models
-Dynamic risk management includes new database models for tracking:
+Planned enhancements include new database models for tracking dynamic risk behavior. These are not yet implemented in the current codebase and will be introduced in a subsequent PR:
 
-**`dynamic_performance_metrics` table:**
+**`dynamic_performance_metrics` (planned):**
 - Rolling performance metrics (win rate, Sharpe ratio, drawdown)
 - Volatility measurements and consecutive loss/win tracking
 - Risk adjustment factors applied
 
-**`risk_adjustments` table:**
+**`risk_adjustments` (planned):**
 - All risk parameter changes with timestamps and reasons
 - Original vs adjusted values with adjustment factors
 - Context information (drawdown, performance score, volatility)
