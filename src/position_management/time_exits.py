@@ -51,83 +51,54 @@ class MarketSessionDef:
         return self.open_time <= local_t <= self.close_time
 
     def next_close_after(self, dt_utc: datetime) -> Optional[datetime]:
+        # Return None when we cannot determine a close time
         if self.is_24h:
             return None
         if not self.open_time or not self.close_time:
             return None
 
+        # Bound the search to a reasonable number of days to avoid infinite loops
+        MAX_DAYS_TO_SCAN = 14
+
         tz = ZoneInfo(self.timezone) if ZoneInfo else None
         local_dt = dt_utc.astimezone(tz) if tz else dt_utc
-        # If currently after close, next close is today's close if within session day; else next session day close
-        close_today = local_dt.replace(
+
+        # Start from today; if already past close, start from next day
+        start_date = local_dt.date()
+        close_today = datetime(
+            year=start_date.year,
+            month=start_date.month,
+            day=start_date.day,
+            hour=self.close_time.hour,
+            minute=self.close_time.minute,
+            second=self.close_time.second,
+            microsecond=0,
+            tzinfo=local_dt.tzinfo,
+        )
+
+        candidate_close = close_today
+        if local_dt > candidate_close:
+            candidate_close = candidate_close + timedelta(days=1)
+
+        # If days_of_week is provided, move forward to the next valid weekday
+        if self.days_of_week:
+            for _ in range(MAX_DAYS_TO_SCAN):
+                if candidate_close.isoweekday() in self.days_of_week:
+                    break
+                candidate_close = candidate_close + timedelta(days=1)
+            else:
+                raise ValueError("No valid session day found within MAX_DAYS_TO_SCAN")
+
+        # Align the time to the session close on the chosen day (in local tz)
+        candidate_close = candidate_close.replace(
             hour=self.close_time.hour,
             minute=self.close_time.minute,
             second=self.close_time.second,
             microsecond=0,
         )
-        if self.days_of_week:
-            # Advance to a day that is in the session's days_of_week
-            advance = 0
-            while True:
-                candidate = close_today + timedelta(days=advance)
-                if candidate.isoweekday() in self.days_of_week:
-                    close_today = candidate
-                    break
-                advance += 1
-        # If we've already passed today's close, move to the next eligible day
-        if local_dt > close_today:
-            next_day = close_today + timedelta(days=1)
-            if self.days_of_week:
-                advance = 0
-                while True:
-                    candidate = next_day + timedelta(days=advance)
-                    if candidate.isoweekday() in self.days_of_week:
-                        next_day = candidate
-                        break
-            found = False
-            while advance < MAX_ADVANCE_DAYS:
-                candidate = close_today + timedelta(days=advance)
-                if candidate.isoweekday() in self.days_of_week:
-                    close_today = candidate
-                    found = True
-                    break
-                advance += 1
-            if not found:
-                raise ValueError("No valid session day found within MAX_ADVANCE_DAYS")
-        # If we've already passed today's close, move to the next eligible day
-        if local_dt > close_today:
-            next_day = close_today + timedelta(days=1)
-            if self.days_of_week:
-                advance = 0
-                found = False
-                while advance < MAX_ADVANCE_DAYS:
-                    candidate = next_day + timedelta(days=advance)
-                    if candidate.isoweekday() in self.days_of_week:
-                        next_day = candidate
-                        found = True
-                        break
-                max_iterations = 7  # There are only 7 days in a week
-                iterations = 0
-                while iterations < max_iterations:
-                    candidate = next_day + timedelta(days=advance)
-                    if candidate.isoweekday() in self.days_of_week:
-                        next_day = candidate
-                        break
-                    advance += 1
-                    iterations += 1
-                else:
-                    # If we didn't find a valid day, raise an error or return None
-                    raise ValueError("No valid session day found within 7 days. Check days_of_week configuration.")
-                if not found:
-                    raise ValueError("No valid session day found within MAX_ADVANCE_DAYS")
-            close_today = next_day.replace(
-                hour=self.close_time.hour,
-                minute=self.close_time.minute,
-                second=self.close_time.second,
-                microsecond=0,
-            )
-        # Convert back to UTC
-        return close_today.astimezone(ZoneInfo("UTC")) if tz else close_today
+
+        # Convert back to UTC if we used a timezone
+        return candidate_close.astimezone(ZoneInfo("UTC")) if tz else candidate_close
 
 
 @dataclass
