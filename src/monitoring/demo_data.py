@@ -329,7 +329,9 @@ class DemoDataGenerator:
                 ]
 
             message = random.choice(messages)  # nosec B311
-            timestamp = datetime.now() - timedelta(hours=random.uniform(0, duration_hours))  # nosec B311
+            timestamp = datetime.now() - timedelta(
+                hours=random.uniform(0, duration_hours)
+            )  # nosec B311
 
             cursor.execute(
                 """
