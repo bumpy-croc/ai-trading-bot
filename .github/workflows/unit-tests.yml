@@ -2,11 +2,12 @@ name: Unit Tests
 
 on:
   pull_request
-
+ 
 permissions:
   contents: read
   issues: write
   pull-requests: read
+  actions: write
 
 jobs:
   test:
@@ -69,12 +70,13 @@ jobs:
 
   autofix_agent:
     needs: test
-    if: ${{ needs.test.result == 'failure' }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     env:
       COPILOT_AGENT_ASSIGNEE: copilot-coding-agent
     steps:
       - name: Request Copilot agent to fix on PR branch
+        if: ${{ needs.test.result == 'failure' }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -93,7 +95,8 @@ jobs:
             const canModifyFork = !!pr.maintainer_can_modify;
             const canPush = sameRepo || canModifyFork;
 
-            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const runId = process.env.GITHUB_RUN_ID;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
             const title = `Auto-fix CI on PR #${pr.number} (commit to ${pr.head.ref})`;
 
             const instructions = (canPush
@@ -128,10 +131,24 @@ jobs:
               return;
             }
 
+            // Ensure labels exist
+            const desiredLabels = ['ai:autofix','ci-failure'];
+            for (const name of desiredLabels) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (err) {
+                if (err.status === 404) {
+                  await github.rest.issues.createLabel({ owner, repo, name, color: '0E8A16' });
+                } else {
+                  core.warning(`Label check failed for ${name}: ${err.message}`);
+                }
+              }
+            }
+
             const issue = await github.rest.issues.create({
               owner, repo,
               title,
-              body: `${instructions}\n\nRun ID: ${context.runId}`,
+              body: `${instructions}\n\nRun ID: ${runId}`,
               labels: ['ai:autofix','ci-failure'],
               assignees: [process.env.COPILOT_AGENT_ASSIGNEE],
             });

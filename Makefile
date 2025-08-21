@@ -82,7 +82,7 @@ lint: venv
 	$(VENV_BIN)/ruff check . || true
 
 code-quality: venv
-	$(VENV_BIN)/black .  && $(VENV_BIN)/ruff check .  && python bin/run_mypypy && $(VENV_BIN)/bandit -c pyproject.toml -r src
+	$(VENV_BIN)/black .  && $(VENV_BIN)/ruff check .  && $(PY) bin/run_mypy.py && $(VENV_BIN)/bandit -c pyproject.toml -r src
 
 # --------------------------------- Hygiene --------------------------------------------
 clean:
