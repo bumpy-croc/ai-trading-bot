@@ -423,3 +423,89 @@ DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01
 DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 ```
+
+## Partial Exits and Scale-Ins
+
+Professional position management often requires taking profits in stages and adding to winners under controlled risk. This system supports both via a dedicated policy.
+
+### Configuration
+
+Defaults are provided in `src/config/constants.py` and are surfaced via `RiskParameters`:
+
+- DEFAULT_PARTIAL_EXIT_TARGETS = [0.03, 0.06, 0.10]
+- DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]
+- DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]
+- DEFAULT_SCALE_IN_SIZES = [0.25, 0.25]
+- DEFAULT_MAX_SCALE_INS = 2
+
+`RiskParameters` exposes matching fields so strategies can override:
+
+```python
+params = RiskParameters(
+    partial_exit_targets=[0.03, 0.06, 0.10],
+    partial_exit_sizes=[0.25, 0.25, 0.50],
+    scale_in_thresholds=[0.02, 0.05],
+    scale_in_sizes=[0.25, 0.25],
+    max_scale_ins=2,
+)
+```
+
+### Policy
+
+`src/position_management/partial_manager.py` defines:
+- `PartialExitPolicy`: computes when to trigger partial exits and scale-ins
+- `PositionState`: lightweight state for engines/backtests
+
+Key methods:
+- `check_partial_exits(position, current_price) -> list[dict]`
+- `check_scale_in_opportunity(position, current_price, market_data) -> Optional[dict]`
+
+### Database Schema
+
+The `positions` table includes fields to track partial operations:
+- `original_size`, `current_size`
+- `partial_exits_taken`, `scale_ins_taken`
+- `last_partial_exit_price`, `last_scale_in_price`
+
+`partial_trades` table logs each partial operation with type, size, price, pnl, and target/threshold level.
+
+Migration: `0004_partial_operations.py`.
+
+### Live Engine Integration
+
+`LiveTradingEngine` accepts an optional `partial_manager` and otherwise derives from `RiskParameters`. On each loop:
+- Evaluates partial exits first; realizes P&L on the exited fraction and reduces `current_size`
+- Evaluates scale-ins; increases `current_size` and `size` subject to caps and daily risk
+- When `current_size` reaches 0, the position is fully closed
+
+RiskManager updates exposure via:
+- `adjust_position_after_partial_exit(symbol, executed_fraction)`
+- `adjust_position_after_scale_in(symbol, added_fraction)`
+
+### Backtester Integration
+
+`Backtester` mirrors live logic, realizing P&L for partial exits and adjusting size for scale-ins. Results include updated balances and trade records sized by the remaining `current_size` at final close.
+
+### Example Usage
+
+```python
+from src.position_management.partial_manager import PartialExitPolicy
+
+engine = LiveTradingEngine(
+    strategy=strategy,
+    data_provider=provider,
+    partial_manager=PartialExitPolicy(
+        exit_targets=[0.03, 0.06, 0.10],
+        exit_sizes=[0.25, 0.25, 0.50],
+        scale_in_thresholds=[0.02, 0.05],
+        scale_in_sizes=[0.25, 0.25],
+        max_scale_ins=2,
+    ),
+)
+```
+
+### Notes
+
+- Sizes are expressed as fractions of the original entry size.
+- All operations respect `max_position_size` and `max_daily_risk`.
+- Works for both long and short via PnL-sign logic.

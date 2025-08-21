@@ -4,6 +4,13 @@ from typing import Any, Optional
 import pandas as pd
 
 from src.indicators.technical import calculate_atr
+from src.config.constants import (
+    DEFAULT_PARTIAL_EXIT_TARGETS,
+    DEFAULT_PARTIAL_EXIT_SIZES,
+    DEFAULT_SCALE_IN_THRESHOLDS,
+    DEFAULT_SCALE_IN_SIZES,
+    DEFAULT_MAX_SCALE_INS,
+)
 
 
 @dataclass
@@ -21,6 +28,12 @@ class RiskParameters:
     atr_period: int = 14
     # Time exit config (optional; strategies may override)
     time_exits: Optional[dict] = None
+    # Partial operations (defaults can be overridden by strategies)
+    partial_exit_targets: list[float] | None = None
+    partial_exit_sizes: list[float] | None = None
+    scale_in_thresholds: list[float] | None = None
+    scale_in_sizes: list[float] | None = None
+    max_scale_ins: int = DEFAULT_MAX_SCALE_INS
 
     def __post_init__(self):
         """Validate risk parameters after initialization"""
@@ -42,6 +55,30 @@ class RiskParameters:
         # Logical consistency checks
         if self.base_risk_per_trade > self.max_risk_per_trade:
             raise ValueError("base_risk_per_trade cannot be greater than max_risk_per_trade")
+
+        # Default partial operations if not provided
+        if self.partial_exit_targets is None:
+            self.partial_exit_targets = list(DEFAULT_PARTIAL_EXIT_TARGETS)
+        if self.partial_exit_sizes is None:
+            self.partial_exit_sizes = list(DEFAULT_PARTIAL_EXIT_SIZES)
+        if self.scale_in_thresholds is None:
+            self.scale_in_thresholds = list(DEFAULT_SCALE_IN_THRESHOLDS)
+        if self.scale_in_sizes is None:
+            self.scale_in_sizes = list(DEFAULT_SCALE_IN_SIZES)
+
+        # Validate partial operations configuration lengths and ranges
+        if len(self.partial_exit_targets) != len(self.partial_exit_sizes):
+            raise ValueError("partial_exit_targets and partial_exit_sizes must have equal length")
+        if len(self.scale_in_thresholds) != len(self.scale_in_sizes):
+            raise ValueError("scale_in_thresholds and scale_in_sizes must have equal length")
+        if any(t <= 0 for t in self.partial_exit_targets):
+            raise ValueError("partial_exit_targets must be positive percentages (decimals)")
+        if any(s <= 0 or s > 1 for s in self.partial_exit_sizes):
+            raise ValueError("partial_exit_sizes must be in (0, 1]")
+        if any(t <= 0 for t in self.scale_in_thresholds):
+            raise ValueError("scale_in_thresholds must be positive percentages (decimals)")
+        if any(s <= 0 or s > 1 for s in self.scale_in_sizes):
+            raise ValueError("scale_in_sizes must be in (0, 1]")
 
 
 class RiskManager:
@@ -306,3 +343,35 @@ class RiskManager:
     def get_max_concurrent_positions(self) -> int:
         """Return the maximum number of concurrent positions allowed."""
         return self.max_concurrent_positions
+
+    def adjust_position_after_partial_exit(self, symbol: str, executed_fraction_of_original: float) -> None:
+        """Reduce tracked exposure after a partial exit.
+
+        executed_fraction_of_original is the fraction of ORIGINAL size removed.
+        """
+        pos = self.positions.get(symbol)
+        if not pos:
+            return
+        current = float(pos.get("size", 0.0))
+        new_size = max(0.0, current - float(executed_fraction_of_original))
+        pos["size"] = new_size
+        # Reduce daily risk used proportionally (approximation)
+        self.daily_risk_used = max(0.0, self.daily_risk_used - float(executed_fraction_of_original))
+
+    def adjust_position_after_scale_in(self, symbol: str, added_fraction_of_original: float) -> None:
+        """Increase tracked exposure after a scale-in, enforcing daily and per-position caps."""
+        pos = self.positions.get(symbol)
+        if not pos:
+            return
+        current = float(pos.get("size", 0.0))
+        # Enforce per-position cap and remaining daily risk
+        remaining_daily = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+        effective_add = min(
+            float(added_fraction_of_original),
+            remaining_daily,
+            max(0.0, self.params.max_position_size - current),
+        )
+        if effective_add <= 0:
+            return
+        pos["size"] = current + effective_add
+        self.daily_risk_used = min(self.params.max_daily_risk, self.daily_risk_used + effective_add)

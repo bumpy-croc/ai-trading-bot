@@ -46,6 +46,7 @@ from config.constants import (
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_TIME_RESTRICTIONS,
 )
+from position_management.partial_manager import PartialExitPolicy, PositionState
 
 from .account_sync import AccountSynchronizer
 
@@ -78,6 +79,11 @@ class Position:
     take_profit: float | None = None
     unrealized_pnl: float = 0.0
     order_id: str | None = None
+    # Partial operations runtime state
+    original_size: float | None = None
+    current_size: float | None = None
+    partial_exits_taken: int = 0
+    scale_ins_taken: int = 0
 
 
 @dataclass
@@ -150,6 +156,8 @@ class LiveTradingEngine:
         enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
         dynamic_risk_config: DynamicRiskConfig | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
+        partial_manager: PartialExitPolicy | None = None,
+        enable_partial_operations: bool = False,
     ):
         """
         Initialize the live trading engine.
@@ -206,6 +214,20 @@ class LiveTradingEngine:
         self.enable_hot_swapping = enable_hot_swapping
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
+        # Partial operations policy (disabled by default for parity)
+        if partial_manager is not None:
+            self.partial_manager = partial_manager
+        elif enable_partial_operations:
+            rp = self.risk_manager.params if self.risk_manager else RiskParameters()
+            self.partial_manager = PartialExitPolicy(
+                exit_targets=rp.partial_exit_targets or [],
+                exit_sizes=rp.partial_exit_sizes or [],
+                scale_in_thresholds=rp.scale_in_thresholds or [],
+                scale_in_sizes=rp.scale_in_sizes or [],
+                max_scale_ins=rp.max_scale_ins,
+            )
+        else:
+            self.partial_manager = None
 
         # Initialize database manager
         try:
@@ -696,6 +718,8 @@ class LiveTradingEngine:
                 self._update_position_pnl(current_price)
                 # Check exit conditions for existing positions
                 self._check_exit_conditions(df, current_index, current_price)
+                # Evaluate partial exits and scale-ins for open positions
+                self._check_partial_and_scale_ops(df, current_index, current_price)
                 # Check entry conditions if not at maximum positions
                 if len(self.positions) < self.risk_manager.get_max_concurrent_positions():
                     self._check_entry_conditions(df, current_index, symbol, current_price)
@@ -1107,6 +1131,8 @@ class LiveTradingEngine:
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 order_id=order_id,
+                original_size=size,
+                current_size=size,
             )
 
             self.positions[order_id] = position
@@ -1126,6 +1152,17 @@ class LiveTradingEngine:
                     session_id=self.trading_session_id,
                 )
                 self.position_db_ids[order_id] = position_db_id
+                # Initialize DB partial fields
+                try:
+                    self.db_manager.update_position(
+                        position_id=position_db_id,
+                        original_size=size,
+                        current_size=size,
+                        partial_exits_taken=0,
+                        scale_ins_taken=0,
+                    )
+                except Exception as e:
+                    logger.debug(f"Partial fields init failed: {e}")
             else:
                 logger.warning(
                     "⚠️ Cannot log position to database - no trading session ID available"
@@ -1186,14 +1223,15 @@ class LiveTradingEngine:
                 logger.error(f"Could not get current price for {position.symbol}")
                 return
 
-            # Calculate P&L
+            # Calculate P&L based on CURRENT remaining size
+            fraction = float(position.current_size if position.current_size is not None else position.size)
             if position.side == PositionSide.LONG:
-                pnl = pnl_percent(position.entry_price, current_price, Side.LONG, position.size)
+                pnl = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
             else:
-                pnl = pnl_percent(position.entry_price, current_price, Side.SHORT, position.size)
+                pnl = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
 
             # Update balance
-            position_value = position.size * self.current_balance
+            position_value = fraction * self.current_balance
             realized_pnl = position_value * pnl
             self.current_balance += realized_pnl
             self.total_pnl += realized_pnl
@@ -1206,7 +1244,7 @@ class LiveTradingEngine:
             trade = Trade(
                 symbol=position.symbol,
                 side=position.side,
-                size=position.size,
+                size=fraction,
                 entry_price=position.entry_price,
                 exit_price=current_price,
                 entry_time=position.entry_time,
@@ -1233,7 +1271,7 @@ class LiveTradingEngine:
                     side=position.side.value,
                     entry_price=position.entry_price,
                     exit_price=current_price,
-                    size=position.size,
+                    size=fraction,
                     pnl=pnl,
                     strategy_name=self.strategy.__class__.__name__,
                     exit_reason=reason,
@@ -1245,12 +1283,7 @@ class LiveTradingEngine:
                 # Close position in database if it exists
                 if position.order_id in self.position_db_ids:
                     position_db_id = self.position_db_ids[position.order_id]
-                    self.db_manager.close_position(
-                        position_id=position_db_id,
-                        exit_price=current_price,
-                        exit_time=datetime.now(),
-                        pnl=pnl
-                    )
+                    self.db_manager.close_position(position_id=position_db_id)
                     del self.position_db_ids[position.order_id]
 
             # Close real order if needed
@@ -1269,6 +1302,128 @@ class LiveTradingEngine:
 
         except Exception as e:
             logger.error(f"Failed to close position {position.order_id}: {e}", exc_info=True)
+
+    def _check_partial_and_scale_ops(self, df: pd.DataFrame, current_index: int, current_price: float):
+        """Evaluate partial exits and scale-ins for open positions."""
+        if not self.partial_manager:
+            return
+        indicators = self._extract_indicators(df, current_index)
+        for position in list(self.positions.values()):
+            # Build state
+            state = PositionState(
+                entry_price=position.entry_price,
+                side=position.side.value,
+                original_size=float(position.original_size or position.size),
+                current_size=float(position.current_size or position.size),
+                partial_exits_taken=int(getattr(position, "partial_exits_taken", 0)),
+                scale_ins_taken=int(getattr(position, "scale_ins_taken", 0)),
+                last_partial_exit_price=getattr(position, "last_partial_exit_price", None),
+                last_scale_in_price=getattr(position, "last_scale_in_price", None),
+            )
+
+            # Partial exits
+            actions = self.partial_manager.check_partial_exits(state, current_price)
+            for act in actions:
+                # Translate fraction-of-original to immediate execution fraction
+                exec_frac = float(act["size"])  # fraction of ORIGINAL size
+                delta = exec_frac * state.original_size  # fraction of BALANCE to exit now
+                if exec_frac <= 0:
+                    continue
+                # Execute partial exit: reduce runtime state and DB
+                cash_fraction = min(delta, state.current_size)
+                if cash_fraction <= 0:
+                    continue
+                self._execute_partial_exit(position, cash_fraction, current_price, act["target_level"], exec_frac)
+                # Update local state for cascade checks in the same tick
+                state.current_size = max(0.0, state.current_size - cash_fraction)
+                state.partial_exits_taken += 1
+                state.last_partial_exit_price = current_price
+
+            # Scale-in (only if still open and under max)
+            scale = self.partial_manager.check_scale_in_opportunity(state, current_price, indicators)
+            if scale is not None:
+                add_frac = float(scale["size"])  # fraction of ORIGINAL size
+                if add_frac > 0:
+                    # Enforce engine-level max size
+                    delta_add = add_frac * state.original_size
+                    max_additional = max(0.0, self.max_position_size - float(position.size))
+                    add_effective = min(delta_add, max_additional)
+                    if add_effective > 0:
+                        self._execute_scale_in(position, add_effective, current_price, scale["threshold_level"], add_frac)
+
+    def _execute_partial_exit(self, position: Position, delta_fraction: float, price: float, target_level: int, fraction_of_original: float):
+        # Adjust runtime position sizes
+        if position.original_size is None:
+            position.original_size = position.size
+        if position.current_size is None:
+            position.current_size = position.size
+        position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
+        position.partial_exits_taken = int(getattr(position, "partial_exits_taken", 0)) + 1
+        position.last_partial_exit_price = price
+
+        # Realize PnL on the exited fraction
+        if position.side == PositionSide.LONG:
+            pnl_frac = pnl_percent(position.entry_price, price, Side.LONG, delta_fraction)
+        else:
+            pnl_frac = pnl_percent(position.entry_price, price, Side.SHORT, delta_fraction)
+        cash_pnl = pnl_frac * self.current_balance
+        self.current_balance += cash_pnl
+        self.total_pnl += cash_pnl
+
+        # Risk manager: reduce exposure and daily risk
+        if self.risk_manager:
+            try:
+                self.risk_manager.adjust_position_after_partial_exit(position.symbol, delta_fraction)
+            except Exception as e:
+                logger.debug(f"Risk manager partial-exit accounting failed: {e}")
+
+        # Persist to DB
+        if self.trading_session_id is not None and position.order_id in self.position_db_ids:
+            pid = self.position_db_ids[position.order_id]
+            try:
+                self.db_manager.apply_partial_exit_update(
+                    position_id=pid,
+                    executed_fraction_of_original=float(fraction_of_original),
+                    price=float(price),
+                    target_level=int(target_level),
+                )
+            except Exception as e:
+                logger.debug(f"DB partial-exit update failed: {e}")
+
+        # If fully closed by partials, close position
+        if position.current_size <= 1e-9:
+            self._close_position(position, reason=f"Partial exits complete @ level {target_level}")
+
+    def _execute_scale_in(self, position: Position, delta_fraction: float, price: float, threshold_level: int, fraction_of_original: float):
+        # Increase runtime size within caps
+        if position.original_size is None:
+            position.original_size = position.size
+        if position.current_size is None:
+            position.current_size = position.size
+        position.current_size = min(1.0, float(position.current_size) + float(delta_fraction))
+        position.size = min(self.max_position_size, float(position.size) + float(delta_fraction))
+        position.scale_ins_taken = int(getattr(position, "scale_ins_taken", 0)) + 1
+        position.last_scale_in_price = price
+
+        # Risk manager: increase exposure and daily risk with enforcement
+        if self.risk_manager:
+            try:
+                self.risk_manager.adjust_position_after_scale_in(position.symbol, delta_fraction)
+            except Exception as e:
+                logger.debug(f"Risk manager scale-in accounting failed: {e}")
+
+        # Persist to DB
+        if self.trading_session_id is not None and position.order_id in self.position_db_ids:
+            pid = self.position_db_ids[position.order_id]
+            try:
+                self.db_manager.apply_scale_in_update(
+                    position_id=pid,
+                    added_fraction_of_original=float(fraction_of_original),
+                    price=float(price),
+                    threshold_level=int(threshold_level),
+                )
+            except Exception as e:
+                logger.debug(f"DB scale-in update failed: {e}")
 
     def _check_stop_loss(self, position: Position, current_price: float) -> bool:
         """Check if stop loss should be triggered"""

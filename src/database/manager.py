@@ -31,6 +31,8 @@ from .models import (
     PerformanceMetrics,
     Position,
     PositionSide,
+    PartialTrade,
+    PartialOperationType,
     RiskAdjustment,
     StrategyExecution,
     SystemEvent,
@@ -661,6 +663,12 @@ class DatabaseManager:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         size: float | None = None,
+        original_size: float | None = None,
+        current_size: float | None = None,
+        partial_exits_taken: int | None = None,
+        scale_ins_taken: int | None = None,
+        last_partial_exit_price: float | None = None,
+        last_scale_in_price: float | None = None,
     ):
         """Update an existing position with current market data."""
         with self.get_session() as session:
@@ -673,6 +681,18 @@ class DatabaseManager:
                 position.current_price = Decimal(str(current_price))
             if size is not None:
                 position.size = Decimal(str(size))
+            if original_size is not None:
+                position.original_size = Decimal(str(original_size))
+            if current_size is not None:
+                position.current_size = Decimal(str(current_size))
+            if partial_exits_taken is not None:
+                position.partial_exits_taken = int(partial_exits_taken)
+            if scale_ins_taken is not None:
+                position.scale_ins_taken = int(scale_ins_taken)
+            if last_partial_exit_price is not None:
+                position.last_partial_exit_price = Decimal(str(last_partial_exit_price))
+            if last_scale_in_price is not None:
+                position.last_scale_in_price = Decimal(str(last_scale_in_price))
             position.last_update = datetime.utcnow()
 
             # Calculate unrealized P&L if not provided - with division by zero protection
@@ -1721,3 +1741,101 @@ class DatabaseManager:
                 "consecutive_losses": 0,
                 "consecutive_wins": 0
             }
+
+    def log_partial_trade(
+        self,
+        position_id: int,
+        operation_type: str,
+        size: float,
+        price: float,
+        pnl: float | None = None,
+        target_level: int | None = None,
+    ) -> int:
+        """Log a partial exit or scale-in operation for a position."""
+        with self.get_session() as session:
+            try:
+                op_type = (
+                    PartialOperationType.PARTIAL_EXIT
+                    if operation_type == "partial_exit"
+                    else PartialOperationType.SCALE_IN
+                )
+                record = PartialTrade(
+                    position_id=position_id,
+                    operation_type=op_type,
+                    size=Decimal(str(size)),
+                    price=Decimal(str(price)),
+                    pnl=Decimal(str(pnl)) if pnl is not None else None,
+                    target_level=target_level,
+                    timestamp=datetime.utcnow(),
+                )
+                session.add(record)
+                session.commit()
+                return record.id
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Failed to log partial trade for position {position_id}: {e}")
+                raise
+
+    def apply_partial_exit_update(
+        self,
+        position_id: int,
+        executed_fraction_of_original: float,
+        price: float,
+        target_level: int,
+    ) -> None:
+        """Convenience method: append partial trade, decrement current size, increment counters."""
+        with self.get_session() as session:
+            position = session.query(Position).filter_by(id=position_id).first()
+            if not position:
+                logger.error(f"Position {position_id} not found")
+                return
+            # Log partial trade
+            pt = PartialTrade(
+                position_id=position_id,
+                operation_type=PartialOperationType.PARTIAL_EXIT,
+                size=Decimal(str(executed_fraction_of_original)),
+                price=Decimal(str(price)),
+                target_level=target_level,
+                timestamp=datetime.utcnow(),
+            )
+            session.add(pt)
+            # Update position current size and counters
+            cur = float(position.current_size or position.size or 0.0)
+            new_cur = max(0.0, cur - float(executed_fraction_of_original))
+            position.current_size = Decimal(str(new_cur))
+            position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
+            position.last_partial_exit_price = Decimal(str(price))
+            position.last_update = datetime.utcnow()
+            session.commit()
+
+    def apply_scale_in_update(
+        self,
+        position_id: int,
+        added_fraction_of_original: float,
+        price: float,
+        threshold_level: int,
+    ) -> None:
+        """Convenience method: append scale-in trade, increment current size and counters."""
+        with self.get_session() as session:
+            position = session.query(Position).filter_by(id=position_id).first()
+            if not position:
+                logger.error(f"Position {position_id} not found")
+                return
+            # Log scale-in trade
+            pt = PartialTrade(
+                position_id=position_id,
+                operation_type=PartialOperationType.SCALE_IN,
+                size=Decimal(str(added_fraction_of_original)),
+                price=Decimal(str(price)),
+                target_level=threshold_level,
+                timestamp=datetime.utcnow(),
+            )
+            session.add(pt)
+            # Update position current size and counters
+            cur = float(position.current_size or position.size or 0.0)
+            new_cur = min(1.0, cur + float(added_fraction_of_original))
+            position.current_size = Decimal(str(new_cur))
+            position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
+            position.last_scale_in_price = Decimal(str(price))
+            position.last_update = datetime.utcnow()
+            session.commit()
