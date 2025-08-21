@@ -15,7 +15,7 @@ from typing import Optional, Sequence
 try:
     # Python 3.9+
     from zoneinfo import ZoneInfo
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     # Fallback for environments without zoneinfo; will behave as naive UTC
     ZoneInfo = None  # type: ignore
 
