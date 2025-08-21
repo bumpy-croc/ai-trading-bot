@@ -523,6 +523,12 @@ class DatabaseManager:
         session_id: int | None = None,
         quantity: float | None = None,
         commission: float | None = None,
+        mfe: float | None = None,
+        mae: float | None = None,
+        mfe_price: float | None = None,
+        mae_price: float | None = None,
+        mfe_time: datetime | None = None,
+        mae_time: datetime | None = None,
     ) -> int:
         """
         Log a completed trade to the database.
@@ -568,6 +574,12 @@ class DatabaseManager:
                 confidence_score=confidence_score,
                 strategy_config=strategy_config,
                 session_id=session_id or self._current_session_id,
+                mfe=mfe,
+                mae=mae,
+                mfe_price=mfe_price,
+                mae_price=mae_price,
+                mfe_time=mfe_time,
+                mae_time=mae_time,
             )
 
             session.add(trade)
@@ -607,6 +619,12 @@ class DatabaseManager:
         confidence_score: float | None = None,
         quantity: float | None = None,
         session_id: int | None = None,
+        mfe: float | None = None,
+        mae: float | None = None,
+        mfe_price: float | None = None,
+        mae_price: float | None = None,
+        mfe_time: datetime | None = None,
+        mae_time: datetime | None = None,
     ) -> int:
         """
         Log a new position to the database.
@@ -633,6 +651,12 @@ class DatabaseManager:
                 confidence_score=confidence_score,
                 order_id=order_id,
                 session_id=session_id or self._current_session_id,
+                mfe=mfe,
+                mae=mae,
+                mfe_price=mfe_price,
+                mae_price=mae_price,
+                mfe_time=mfe_time,
+                mae_time=mae_time,
             )
 
             session.add(position)
@@ -661,6 +685,12 @@ class DatabaseManager:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         size: float | None = None,
+        mfe: float | None = None,
+        mae: float | None = None,
+        mfe_price: float | None = None,
+        mae_price: float | None = None,
+        mfe_time: datetime | None = None,
+        mae_time: datetime | None = None,
     ):
         """Update an existing position with current market data."""
         with self.get_session() as session:
@@ -701,6 +731,20 @@ class DatabaseManager:
                 position.stop_loss = Decimal(str(stop_loss))
             if take_profit is not None:
                 position.take_profit = Decimal(str(take_profit))
+
+            # Update MFE/MAE if provided (stored as decimals without percentage scaling)
+            if mfe is not None:
+                position.mfe = Decimal(str(mfe))
+            if mae is not None:
+                position.mae = Decimal(str(mae))
+            if mfe_price is not None:
+                position.mfe_price = Decimal(str(mfe_price))
+            if mae_price is not None:
+                position.mae_price = Decimal(str(mae_price))
+            if mfe_time is not None:
+                position.mfe_time = mfe_time
+            if mae_time is not None:
+                position.mae_time = mae_time
 
             session.commit()
 
@@ -987,6 +1031,12 @@ class DatabaseManager:
                     "take_profit": p.take_profit,
                     "entry_time": p.entry_time,
                     "strategy": p.strategy_name,
+                    "mfe": p.mfe,
+                    "mae": p.mae,
+                    "mfe_price": p.mfe_price,
+                    "mae_price": p.mae_price,
+                    "mfe_time": p.mfe_time,
+                    "mae_time": p.mae_time,
                 }
                 for p in positions
             ]
@@ -1017,6 +1067,12 @@ class DatabaseManager:
                     "exit_time": t.exit_time,
                     "exit_reason": t.exit_reason,
                     "strategy": t.strategy_name,
+                    "mfe": t.mfe,
+                    "mae": t.mae,
+                    "mfe_price": t.mfe_price,
+                    "mae_price": t.mae_price,
+                    "mfe_time": t.mfe_time,
+                    "mae_time": t.mae_time,
                 }
                 for t in trades
             ]

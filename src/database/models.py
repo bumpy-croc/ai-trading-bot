@@ -126,6 +126,14 @@ class Trade(Base):
     exchange = Column(String(50), default="binance")
     timeframe = Column(String(10))
 
+    # MFE/MAE for completed trades (percent decimals, e.g., 0.05 = +5%)
+    mfe = Column(Numeric(18, 8), default=0.0)
+    mae = Column(Numeric(18, 8), default=0.0)
+    mfe_price = Column(Numeric(18, 8))
+    mae_price = Column(Numeric(18, 8))
+    mfe_time = Column(DateTime)
+    mae_time = Column(DateTime)
+
     # Relationships
     position_id = Column(Integer, ForeignKey("positions.id"))
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
@@ -169,6 +177,14 @@ class Position(Base):
     current_price = Column(Numeric(18, 8))
     unrealized_pnl = Column(Numeric(18, 8), default=0.0)
     unrealized_pnl_percent = Column(Numeric(18, 8), default=0.0)
+
+    # Rolling MFE/MAE for active positions (percent decimals)
+    mfe = Column(Numeric(18, 8), default=0.0)
+    mae = Column(Numeric(18, 8), default=0.0)
+    mfe_price = Column(Numeric(18, 8))
+    mae_price = Column(Numeric(18, 8))
+    mfe_time = Column(DateTime)
+    mae_time = Column(DateTime)
 
     # Strategy information
     strategy_name = Column(String(100), nullable=False)

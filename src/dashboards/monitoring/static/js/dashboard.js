@@ -452,7 +452,7 @@ class TradingDashboard {
         if (!tbody) return;
 
         if (!positions || positions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No active positions</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center">No active positions</td></tr>';
             return;
         }
 
@@ -461,6 +461,8 @@ class TradingDashboard {
             const quantity = typeof position.quantity === 'number' ? position.quantity : 0;
             const entryPrice = typeof position.entry_price === 'number' ? position.entry_price : 0.0;
             const currentPrice = typeof position.current_price === 'number' ? position.current_price : 0.0;
+            const mfe = typeof position.mfe === 'number' ? position.mfe : 0.0;
+            const mae = typeof position.mae === 'number' ? position.mae : 0.0;
             return `
             <tr>
                 <td>${position.symbol}</td>
@@ -471,6 +473,8 @@ class TradingDashboard {
                 <td class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">
                     ${this.formatCurrency(unrealizedPnl)}
                 </td>
+                <td class="${mfe >= 0 ? 'text-success' : 'text-muted'}">${(mfe * 100).toFixed(2)}%</td>
+                <td class="${mae <= 0 ? 'text-danger' : 'text-muted'}">${(mae * 100).toFixed(2)}%</td>
             </tr>
             `;
         }).join('');
