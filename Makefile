@@ -30,7 +30,7 @@ help:
 	@echo "  make backtest             # run backtest for STRATEGY=$(STRATEGY)"
 	@echo "  make optimizer            # run optimizer"
 	@echo "  make test                 # run pytest with 4 workers"
-	@echo "  make lint / make fmt      # ruff/black"
+	@echo "  make code-quality         # ruff/black/mypy/bandit"
 	@echo "  make clean                # remove caches, build artifacts"
 
 venv:
@@ -81,8 +81,8 @@ test: deps
 lint: venv
 	$(VENV_BIN)/ruff check . || true
 
-fmt: venv
-	$(VENV_BIN)/black . || true
+code-quality: venv
+	$(VENV_BIN)/black .  && $(VENV_BIN)/ruff check .  && python bin/run_mypypy && $(VENV_BIN)/bandit -c pyproject.toml -r src
 
 # --------------------------------- Hygiene --------------------------------------------
 clean:

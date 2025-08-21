@@ -98,7 +98,7 @@ pytest tests/unit/test_backtesting.py  # Specific test file
 # Quality checks
 ruff check .
 black --check .
-mypy --config-file mypy.ini src
+python bin/run_mypy.py
 bandit -c pyproject.toml -r src
 
 # Tests (match CI environment)
@@ -160,7 +160,7 @@ export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_
 
 # Regular development
 make test                    # Run tests
-make lint && make fmt        # Code quality
+make code-quality            # Code quality
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30  # Test functionality
 ```
 
