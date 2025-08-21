@@ -47,7 +47,8 @@ class FearGreedProvider(SentimentDataProvider):
                 # Map 0..100 to 0..1 then to -1..1
                 n01 = max(0.0, min(100.0, v)) / 100.0
                 values.append(n01 * 2 - 1)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Skipping invalid fear/greed value: {e}")
                 continue
         if not values:
             return 0.0

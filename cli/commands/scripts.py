@@ -8,7 +8,6 @@ from cli.core.forward import forward_to_module_main
 
 
 def _list_scripts() -> list[str]:
-
     root = Path(__file__).resolve().parents[3]
     out: list[str] = []
     for fp in sorted((root / "scripts").glob("*.py")):

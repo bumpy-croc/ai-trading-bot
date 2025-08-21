@@ -62,7 +62,7 @@ make deps-server             # Lighter requirements
 ```
 
 **CLI Import Errors:**
-- Ensure `make install` completed successfully 
+- Ensure `make install` completed successfully
 - CLI requires core dependencies (ccxt, python-binance) to import
 - Run in venv: `.venv/bin/atb --help`
 
@@ -108,7 +108,7 @@ PYTHONPATH=./src:. pytest -m "not integration" -n 2 --dist=loadgroup
 ### Coverage Requirements
 - Overall: 85% minimum
 - Live Trading Engine: 95%
-- Risk Management: 95% 
+- Risk Management: 95%
 - Strategies: 85%
 - Generate: `pytest --cov=src --cov-report=html`
 
@@ -119,7 +119,7 @@ PYTHONPATH=./src:. pytest -m "not integration" -n 2 --dist=loadgroup
 backtesting/       # Vectorized simulation engine
 config/            # Typed configuration + constants + feature flags
 data_providers/    # Market & sentiment providers + caching
-database/          # SQLAlchemy models + DatabaseManager  
+database/          # SQLAlchemy models + DatabaseManager
 live/              # Live trading engine
 ml/                # Trained models (.onnx/.keras) + metadata
 monitoring/        # Real-time dashboards (Flask + SocketIO)
@@ -132,7 +132,7 @@ utils/             # Shared utilities
 ### Key Configuration Files
 - `pyproject.toml`: Build config, ruff/black settings
 - `pytest.ini`: Test configuration, markers, paths
-- `mypy.ini`: Type checking configuration  
+- `mypy.ini`: Type checking configuration
 - `.coveragerc`: Coverage settings
 - `docker-compose.yml`: Local PostgreSQL setup
 - `Makefile`: Build automation
@@ -182,7 +182,7 @@ python src/database_manager/app.py          # DB admin UI
 
 **Priority Order:**
 1. Railway environment variables (production)
-2. Environment variables (Docker/CI/local)  
+2. Environment variables (Docker/CI/local)
 3. `.env` file (local development)
 
 **Essential Variables:**

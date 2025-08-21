@@ -477,8 +477,8 @@ class MonitoringDashboard:
         """Get total PnL across all trades"""
         try:
             query = """
-            SELECT COALESCE(SUM(pnl), 0) as total_pnl 
-            FROM trades 
+            SELECT COALESCE(SUM(pnl), 0) as total_pnl
+            FROM trades
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -492,9 +492,9 @@ class MonitoringDashboard:
         try:
             # Get latest account snapshot
             query = """
-            SELECT balance 
-            FROM account_history 
-            ORDER BY timestamp DESC 
+            SELECT balance
+            FROM account_history
+            ORDER BY timestamp DESC
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
@@ -507,10 +507,10 @@ class MonitoringDashboard:
         """Calculate win rate percentage"""
         try:
             query = """
-            SELECT 
+            SELECT
                 COUNT(*) as total_trades,
                 COUNT(CASE WHEN pnl > 0 THEN 1 END) as winning_trades
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -643,9 +643,9 @@ class MonitoringDashboard:
         try:
             # Check recent activity
             query = """
-            SELECT timestamp 
-            FROM account_history 
-            ORDER BY timestamp DESC 
+            SELECT timestamp
+            FROM account_history
+            ORDER BY timestamp DESC
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
@@ -681,9 +681,9 @@ class MonitoringDashboard:
         """Get count of recent errors (last 24 hours)"""
         try:
             query = """
-            SELECT COUNT(*) as count 
-            FROM system_events 
-            WHERE event_type = 'ERROR' 
+            SELECT COUNT(*) as count
+            FROM system_events
+            WHERE event_type = 'ERROR'
             AND timestamp > NOW() - INTERVAL '1 day'
             """
             result = self.db_manager.execute_query(query)
@@ -696,9 +696,9 @@ class MonitoringDashboard:
         """Get current active strategy"""
         try:
             query = """
-            SELECT strategy_name 
-            FROM trading_sessions 
-            ORDER BY start_time DESC 
+            SELECT strategy_name
+            FROM trading_sessions
+            ORDER BY start_time DESC
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
@@ -716,8 +716,8 @@ class MonitoringDashboard:
         """Get number of signals generated today"""
         try:
             query = """
-            SELECT COUNT(*) as count 
-            FROM trades 
+            SELECT COUNT(*) as count
+            FROM trades
             WHERE DATE(entry_time) = CURRENT_DATE
             """
             result = self.db_manager.execute_query(query)
@@ -826,9 +826,9 @@ class MonitoringDashboard:
         try:
             # Check when we last received data
             query = """
-            SELECT timestamp 
-            FROM account_history 
-            ORDER BY timestamp DESC 
+            SELECT timestamp
+            FROM account_history
+            ORDER BY timestamp DESC
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
@@ -854,10 +854,10 @@ class MonitoringDashboard:
         """Get error rate over the last hour"""
         try:
             query = """
-            SELECT 
+            SELECT
                 COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
                 COUNT(*) as total
-            FROM system_events 
+            FROM system_events
             WHERE timestamp > NOW() - INTERVAL '1 hour'
             """
             result = self.db_manager.execute_query(query)
@@ -932,8 +932,8 @@ class MonitoringDashboard:
         """Get P&L for today"""
         try:
             query = """
-            SELECT COALESCE(SUM(pnl), 0) as daily_pnl 
-            FROM trades 
+            SELECT COALESCE(SUM(pnl), 0) as daily_pnl
+            FROM trades
             WHERE DATE(exit_time) = CURRENT_DATE
             AND exit_time IS NOT NULL
             """
@@ -947,8 +947,8 @@ class MonitoringDashboard:
         """Get P&L for the last 7 days"""
         try:
             query = """
-            SELECT COALESCE(SUM(pnl), 0) as weekly_pnl 
-            FROM trades 
+            SELECT COALESCE(SUM(pnl), 0) as weekly_pnl
+            FROM trades
             WHERE exit_time > NOW() - INTERVAL '7 days'
             AND exit_time IS NOT NULL
             """
@@ -997,7 +997,7 @@ class MonitoringDashboard:
             # This would need to be tracked in order execution logs
             # For now, calculate based on successful vs failed trades
             query = """
-            SELECT 
+            SELECT
                 COUNT(*) as total_orders,
                 COUNT(CASE WHEN status::text = 'filled' THEN 1 END) as filled_orders
             FROM positions
@@ -1018,11 +1018,11 @@ class MonitoringDashboard:
             # Calculate slippage as difference between expected and actual execution price
             # This is a simplified calculation - in practice you'd track intended vs actual prices
             query = """
-            SELECT 
+            SELECT
                 entry_price,
                 exit_price,
                 side
-            FROM trades 
+            FROM trades
             WHERE exit_time > NOW() - INTERVAL '24 hours'
             AND exit_time IS NOT NULL
             LIMIT 50
@@ -1172,7 +1172,7 @@ class MonitoringDashboard:
         try:
             query = """
             SELECT pnl
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             ORDER BY exit_time DESC
             LIMIT 10
@@ -1199,10 +1199,10 @@ class MonitoringDashboard:
         """Get profit factor (gross profit / gross loss)"""
         try:
             query = """
-            SELECT 
+            SELECT
                 SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END) as gross_profit,
                 SUM(CASE WHEN pnl < 0 THEN ABS(pnl) ELSE 0 END) as gross_loss
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -1226,10 +1226,10 @@ class MonitoringDashboard:
         """Get average win to loss ratio"""
         try:
             query = """
-            SELECT 
+            SELECT
                 AVG(CASE WHEN pnl > 0 THEN pnl END) as avg_win,
                 AVG(CASE WHEN pnl < 0 THEN ABS(pnl) END) as avg_loss
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -1307,10 +1307,10 @@ class MonitoringDashboard:
         """Get recent completed trades"""
         try:
             query = """
-            SELECT 
+            SELECT
                 symbol, side, entry_price, exit_price, quantity,
                 entry_time, exit_time, pnl, exit_reason
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             ORDER BY exit_time DESC
             LIMIT %s
@@ -1407,7 +1407,7 @@ class MonitoringDashboard:
         """Get timestamp of last trade"""
         try:
             query = """
-            SELECT MAX(entry_time) as last_trade 
+            SELECT MAX(entry_time) as last_trade
             FROM trades
             """
             result = self.db_manager.execute_query(query)
@@ -1434,10 +1434,10 @@ class MonitoringDashboard:
         """Get error rate over last hour"""
         try:
             query = """
-            SELECT 
+            SELECT
                 COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
                 COUNT(*) as total
-            FROM system_events 
+            FROM system_events
             WHERE timestamp > NOW() - INTERVAL '1 hour'
             """
             result = self.db_manager.execute_query(query)

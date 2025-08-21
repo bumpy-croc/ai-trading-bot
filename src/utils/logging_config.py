@@ -7,7 +7,7 @@ from typing import Any
 
 
 def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
-    level = (level_name or os.getenv("LOG_LEVEL", "INFO")).upper()
+    level = (level_name or os.getenv("LOG_LEVEL") or "INFO").upper()
     if json:
         formatter = {
             "()": "pythonjsonlogger.jsonlogger.JsonFormatter",

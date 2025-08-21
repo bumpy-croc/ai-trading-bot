@@ -69,7 +69,7 @@ When the trading bot starts:
 # Automatic sync on startup
 if self.account_synchronizer and self.enable_live_trading:
     sync_result = self.account_synchronizer.sync_account_data(force=True)
-    
+
     if sync_result.success:
         # Check if balance was corrected
         balance_sync = sync_result.data.get('balance_sync', {})
@@ -392,10 +392,10 @@ To add a new exchange (e.g., Coinbase):
 class CoinbaseExchange(ExchangeInterface):
     def _initialize_client(self):
         # Initialize Coinbase client
-        
+
     def get_balances(self) -> List[AccountBalance]:
         # Implement Coinbase balance retrieval
-        
+
     def place_order(self, ...) -> Optional[str]:
         # Implement Coinbase order placement
 ```

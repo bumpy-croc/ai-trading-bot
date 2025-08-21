@@ -33,10 +33,10 @@ Each strategy defines its own parameters and trading pair:
 class MyStrategy(BaseStrategy):
     def __init__(self, name="MyStrategy"):
         super().__init__(name)
-        
+
         # Set strategy-specific trading pair
         self.trading_pair = 'ETH-USD'  # Use SymbolFactory for conversion if needed
-        
+
         # Strategy parameters
         self.risk_per_trade = 0.02
         self.stop_loss_pct = 0.015
@@ -91,4 +91,4 @@ class NewStrategy(BaseStrategy):
         self.trading_pair = 'ADAUSDT'  # Strategy-specific pair
         self.risk_per_trade = 0.015
         # ... other parameters
-``` 
+```
