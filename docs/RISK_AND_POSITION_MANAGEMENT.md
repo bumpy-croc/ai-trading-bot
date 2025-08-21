@@ -292,6 +292,70 @@ Example:
 - `daily_risk_used` approximates risk as the sum of opened fraction sizes; adjust as needed for your brokerage/exchange semantics.
 - For correlated exposure controls, extend `get_position_correlation_risk` to use actual correlation matrices across symbols/timeframes.
 
+## Time-Based Exit Policies
+
+Time-based exits provide guardrails to control holding time, overnight/weekend exposure, and align trading with market sessions.
+
+- Core types
+  - Maximum holding period: Force-close after N hours.
+  - End-of-day flat: Exit positions at market close.
+  - Weekend flat / No weekend: Avoid holding over weekends.
+  - Trading-hours-only: Exit outside defined session hours.
+
+- Key components
+  - `src/position_management/time_exits.py`
+    - `TimeExitPolicy`: Implements checks and next-exit scheduling (timezone-aware via zoneinfo).
+    - `MarketSessionDef`: In-memory session definition for engines/backtests.
+    - `TimeRestrictions`: Flags for overnight/weekend/hours-only.
+  - DB schema (migration `0004_time_exits`)
+    - `positions`: `max_holding_until`, `end_of_day_exit`, `weekend_exit`, `time_restriction_group`.
+    - `trading_sessions`: `time_exit_config`, `market_timezone`.
+    - `market_sessions`: session catalog with timezone, open/close times, days of week.
+
+- Configuration defaults (`src/config/constants.py`)
+  - `DEFAULT_MAX_HOLDING_HOURS = 24`
+  - `DEFAULT_END_OF_DAY_FLAT = False`
+  - `DEFAULT_WEEKEND_FLAT = False`
+  - `DEFAULT_MARKET_TIMEZONE = 'UTC'`
+  - `DEFAULT_TIME_RESTRICTIONS` with `no_overnight`, `no_weekend`, `trading_hours_only`
+
+### Engine Integration
+
+- Live engine (`src/live/trading_engine.py`): accepts optional `time_exit_policy` and replaces hardcoded 24h with policy-based checks.
+- Backtester (`src/backtesting/engine.py`): accepts optional `time_exit_policy` and applies time exits in close checks.
+
+### Example Usage
+
+```python
+from datetime import time
+from src.position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
+
+us_equities = MarketSessionDef(
+    name='US_EQUITIES',
+    timezone='America/New_York',
+    open_time=time(9, 30),
+    close_time=time(16, 0),
+    days_of_week=[1,2,3,4,5],
+)
+
+policy = TimeExitPolicy(
+    max_holding_hours=48,
+    end_of_day_flat=True,
+    weekend_flat=True,
+    market_timezone='America/New_York',
+    time_restrictions=TimeRestrictions(no_overnight=True, trading_hours_only=True),
+    market_session=us_equities,
+)
+```
+
+Pass `time_exit_policy=policy` to both `LiveTradingEngine` and `Backtester`.
+
+### Notes and Edge Cases
+
+- All time comparisons are UTC-normalized; `zoneinfo` is used for local market time computations when available.
+- DST transitions: end-of-day logic uses local market session close time each day; tests should include DST boundaries.
+- Holiday-aware sessions are planned for future work; current implementation supports weekdays and 24h markets.
+
 ## Performance Considerations
 
 - **Caching**: Performance metrics are cached for 5 minutes to minimize database overhead

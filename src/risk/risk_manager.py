@@ -19,6 +19,8 @@ class RiskParameters:
     position_size_atr_multiplier: float = 1.0
     default_take_profit_pct: Optional[float] = None  # if None, engine/strategy may supply
     atr_period: int = 14
+    # Time exit config (optional; strategies may override)
+    time_exits: Optional[dict] = None
 
     def __post_init__(self):
         """Validate risk parameters after initialization"""

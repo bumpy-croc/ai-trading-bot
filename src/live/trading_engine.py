@@ -38,6 +38,14 @@ from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConf
 from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
+from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
+from config.constants import (
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_WEEKEND_FLAT,
+    DEFAULT_MARKET_TIMEZONE,
+    DEFAULT_TIME_RESTRICTIONS,
+)
 
 from .account_sync import AccountSynchronizer
 
@@ -141,6 +149,7 @@ class LiveTradingEngine:
         # Dynamic risk management
         enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
         dynamic_risk_config: DynamicRiskConfig | None = None,
+        time_exit_policy: TimeExitPolicy | None = None,
     ):
         """
         Initialize the live trading engine.
@@ -291,6 +300,37 @@ class LiveTradingEngine:
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
         self.consecutive_errors = 0
+
+        # Time exit policy (construct from overrides if not provided)
+        self.time_exit_policy = time_exit_policy
+        if self.time_exit_policy is None:
+            overrides = None
+            try:
+                overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, "get_risk_overrides") else None
+            except Exception:
+                overrides = None
+            time_cfg = None
+            if overrides and isinstance(overrides, dict):
+                time_cfg = overrides.get("time_exits")
+            if not time_cfg and self.risk_manager and getattr(self.risk_manager, "params", None):
+                time_cfg = getattr(self.risk_manager.params, "time_exits", None)
+            try:
+                if time_cfg:
+                    tr = time_cfg.get("time_restrictions") or DEFAULT_TIME_RESTRICTIONS
+                    restrictions = TimeRestrictions(
+                        no_overnight=bool(tr.get("no_overnight", False)),
+                        no_weekend=bool(tr.get("no_weekend", False)),
+                        trading_hours_only=bool(tr.get("trading_hours_only", False)),
+                    )
+                    self.time_exit_policy = TimeExitPolicy(
+                        max_holding_hours=time_cfg.get("max_holding_hours", DEFAULT_MAX_HOLDING_HOURS),
+                        end_of_day_flat=time_cfg.get("end_of_day_flat", DEFAULT_END_OF_DAY_FLAT),
+                        weekend_flat=time_cfg.get("weekend_flat", DEFAULT_WEEKEND_FLAT),
+                        market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
+                        time_restrictions=restrictions,
+                    )
+            except Exception:
+                pass
 
         # Threading
         self.main_thread = None
@@ -447,6 +487,20 @@ class LiveTradingEngine:
         # Create new trading session in database if none exists
         if self.trading_session_id is None:
             mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
+            # Prepare time-exit session config for persistence
+            tx_cfg = None
+            if self.time_exit_policy:
+                tx_cfg = {
+                    "max_holding_hours": self.time_exit_policy.max_holding_hours,
+                    "end_of_day_flat": self.time_exit_policy.end_of_day_flat,
+                    "weekend_flat": self.time_exit_policy.weekend_flat,
+                    "time_restrictions": {
+                        "no_overnight": self.time_exit_policy.time_restrictions.no_overnight,
+                        "no_weekend": self.time_exit_policy.time_restrictions.no_weekend,
+                        "trading_hours_only": self.time_exit_policy.time_restrictions.trading_hours_only,
+                    },
+                }
+
             self.trading_session_id = self.db_manager.create_trading_session(
                 strategy_name=self.strategy.__class__.__name__,
                 symbol=symbol,
@@ -454,6 +508,8 @@ class LiveTradingEngine:
                 mode=mode,
                 initial_balance=self.current_balance,  # Use current balance (might be recovered)
                 strategy_config=getattr(self.strategy, "config", {}),
+                time_exit_config=tx_cfg,
+                market_timezone=(self.time_exit_policy.market_timezone if self.time_exit_policy else None),
             )
 
             # Initialize balance tracking
@@ -845,10 +901,21 @@ class LiveTradingEngine:
                 should_exit = True
                 exit_reason = "Take profit"
 
-            # Check maximum position time (24 hours)
-            elif (datetime.now() - position.entry_time).total_seconds() > 86400:
-                should_exit = True
-                exit_reason = "Time limit"
+            # Check time-based exits via policy (fallback to 24h if not provided)
+            else:
+                hit_time_exit = False
+                reason = None
+                if self.time_exit_policy is not None:
+                    hit_time_exit, reason = self.time_exit_policy.check_time_exit_conditions(
+                        position.entry_time, datetime.utcnow()
+                    )
+                else:
+                    # Use UTC consistently to avoid timezone drift with naive datetimes
+                    hit_time_exit = (datetime.utcnow() - position.entry_time).total_seconds() > 86400
+                    reason = "Time limit"
+                if hit_time_exit:
+                    should_exit = True
+                    exit_reason = reason or "Time exit"
 
             # Log exit decision for each position
             if self.db_manager:
@@ -878,7 +945,7 @@ class LiveTradingEngine:
                     reasons=[
                         exit_reason if should_exit else "holding_position",
                         f"current_pnl_{current_pnl:.4f}",
-                        f"position_age_{(datetime.now() - position.entry_time).total_seconds():.0f}s",
+                        f"position_age_{(datetime.utcnow() - position.entry_time).total_seconds():.0f}s",
                         f"entry_price_{position.entry_price:.2f}",
                     ],
                     volume=indicators.get("volume"),
@@ -1036,7 +1103,7 @@ class LiveTradingEngine:
                 side=side,
                 size=size,
                 entry_price=price,
-                entry_time=datetime.now(),
+                entry_time=datetime.utcnow(),
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 order_id=order_id,

@@ -50,6 +50,17 @@ DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 # Strategy/Engine integration flags
 DEFAULT_USE_PREDICTION_ENGINE = False
 
+# Time Exits Defaults
+DEFAULT_MAX_HOLDING_HOURS = 24
+DEFAULT_END_OF_DAY_FLAT = False
+DEFAULT_WEEKEND_FLAT = False
+DEFAULT_MARKET_TIMEZONE = 'UTC'
+DEFAULT_TIME_RESTRICTIONS = {
+    'no_overnight': True,
+    'no_weekend': True,
+    'trading_hours_only': False,
+}
+
 # Regime Detection Defaults (constants)
 DEFAULT_REGIME_ADJUST_POSITION_SIZE: bool = False
 DEFAULT_REGIME_HYSTERESIS_K: int = 3
