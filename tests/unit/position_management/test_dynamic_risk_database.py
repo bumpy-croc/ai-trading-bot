@@ -129,7 +129,10 @@ class TestDynamicRiskDatabase:
         """Test volatility estimation from account equity history"""
         # Mock the database session and AccountHistory query
         mock_session = Mock()
-        mock_db_manager.get_session.return_value.__enter__.return_value = mock_session
+        mock_context = Mock()
+        mock_context.__enter__ = Mock(return_value=mock_session)
+        mock_context.__exit__ = Mock(return_value=None)
+        mock_db_manager.get_session.return_value = mock_context
         
         # Create mock account history records
         mock_records = []
@@ -194,7 +197,10 @@ class TestDatabaseManagerMethods:
     def test_log_dynamic_performance_metrics(self, db_manager):
         """Test logging dynamic performance metrics"""
         mock_session = Mock()
-        db_manager.get_session.return_value.__enter__.return_value = mock_session
+        mock_context = Mock()
+        mock_context.__enter__ = Mock(return_value=mock_session)
+        mock_context.__exit__ = Mock(return_value=None)
+        db_manager.get_session.return_value = mock_context
 
         # Test logging metrics
         metrics_id = db_manager.log_dynamic_performance_metrics(
@@ -215,7 +221,10 @@ class TestDatabaseManagerMethods:
     def test_log_risk_adjustment(self, db_manager):
         """Test logging risk adjustments"""
         mock_session = Mock()
-        db_manager.get_session.return_value.__enter__.return_value = mock_session
+        mock_context = Mock()
+        mock_context.__enter__ = Mock(return_value=mock_session)
+        mock_context.__exit__ = Mock(return_value=None)
+        db_manager.get_session.return_value = mock_context
 
         # Test logging adjustment
         adjustment_id = db_manager.log_risk_adjustment(
@@ -238,7 +247,10 @@ class TestDatabaseManagerMethods:
     def test_get_performance_metrics_calculation(self, db_manager):
         """Test performance metrics calculation from trade data"""
         mock_session = Mock()
-        db_manager.get_session.return_value.__enter__.return_value = mock_session
+        mock_context = Mock()
+        mock_context.__enter__ = Mock(return_value=mock_session)
+        mock_context.__exit__ = Mock(return_value=None)
+        db_manager.get_session.return_value = mock_context
 
         # Mock trade data
         mock_trades = []
@@ -267,7 +279,10 @@ class TestDatabaseManagerMethods:
     def test_performance_metrics_empty_data(self, db_manager):
         """Test performance metrics with no trade data"""
         mock_session = Mock()
-        db_manager.get_session.return_value.__enter__.return_value = mock_session
+        mock_context = Mock()
+        mock_context.__enter__ = Mock(return_value=mock_session)
+        mock_context.__exit__ = Mock(return_value=None)
+        db_manager.get_session.return_value = mock_context
         
         # Mock empty trade data
         mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.filter.return_value.all.return_value = []

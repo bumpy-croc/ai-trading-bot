@@ -3,6 +3,7 @@ Test per-strategy dynamic risk override functionality.
 """
 
 import pytest
+import pandas as pd
 from unittest.mock import Mock
 
 from src.strategies.base import BaseStrategy
@@ -23,6 +24,26 @@ class TestStrategy(BaseStrategy):
 
     def calculate_indicators(self, df):
         return df
+
+    def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+        """Check if entry conditions are met at the given index"""
+        return False
+
+    def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
+        """Check if exit conditions are met at the given index"""
+        return False
+
+    def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
+        """Calculate the position size for a new trade"""
+        return 0.0
+
+    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = "long") -> float:
+        """Calculate stop loss level for a position"""
+        return price * 0.95 if side == "long" else price * 1.05
+
+    def get_parameters(self) -> dict:
+        """Return strategy parameters for logging"""
+        return {"test_strategy": True}
 
     def get_risk_overrides(self):
         return self._overrides
