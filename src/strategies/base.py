@@ -145,12 +145,28 @@ class BaseStrategy(ABC):
         """
         Optional hook: strategies can provide risk/position management overrides.
         Expected keys may include:
-          - position_sizer: 'fixed_fraction' | 'confidence_weighted'
+          - position_sizer: 'fixed_fraction' | 'confidence_weighted' | 'atr_risk'
           - base_fraction: float (e.g., 0.02 for 2%)
           - min_fraction: float
           - max_fraction: float
           - stop_loss_pct: float
           - take_profit_pct: float or None
+          - dynamic_risk: dict with dynamic risk configuration overrides:
+            - enabled: bool
+            - drawdown_thresholds: List[float]
+            - risk_reduction_factors: List[float]
+            - recovery_thresholds: List[float]
+            - volatility_adjustment_enabled: bool
+            
+        Example:
+            return {
+                'dynamic_risk': {
+                    'enabled': True,
+                    'drawdown_thresholds': [0.03, 0.08, 0.15],
+                    'risk_reduction_factors': [0.9, 0.7, 0.5]
+                }
+            }
+            
         If None, the RiskManager defaults are used.
         """
         return None
