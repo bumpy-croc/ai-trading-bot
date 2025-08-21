@@ -22,6 +22,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
+from sqlalchemy import Time
 
 
 # Portable JSON that chooses JSONB on PostgreSQL and JSON elsewhere (e.g., SQLite)
@@ -193,11 +194,13 @@ class Position(Base):
 
 
 class MarketSession(Base):
+    __tablename__ = "market_sessions"
+
     id = Column(Integer, primary_key=True)
     name = Column(String(50), unique=True, index=True)
     timezone = Column(String(50), default="UTC")
-    open_time = Column(DateTime)  # store as time-of-day using DateTime with arbitrary epoch or convert in app
-    close_time = Column(DateTime)
+    open_time = Column(Time)
+    close_time = Column(Time)
     days_of_week = Column(JSONType)  # e.g., [1,2,3,4,5]
     is_24h = Column(Boolean, default=False)
 

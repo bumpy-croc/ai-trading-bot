@@ -163,6 +163,8 @@ class TimeExitPolicy:
     def get_next_exit_time(self, entry_time: datetime, now_time: datetime) -> Optional[datetime]:
         """Return the next scheduled exit time (UTC) based on policy, if any.
         """
+        # Preserve naivety if both inputs are naive
+        preserve_naive = entry_time.tzinfo is None and now_time.tzinfo is None
         now_utc = self._as_utc(now_time)
         entry_utc = self._as_utc(entry_time)
 
@@ -190,5 +192,11 @@ class TimeExitPolicy:
 
         # Return soonest in the future
         future = [c for c in candidates if c > now_utc]
-        return min(future) if future else min(candidates)
+        nxt = min(future) if future else min(candidates)
+        if preserve_naive:
+            try:
+                return nxt.replace(tzinfo=None)
+            except Exception:
+                return nxt
+        return nxt
 
