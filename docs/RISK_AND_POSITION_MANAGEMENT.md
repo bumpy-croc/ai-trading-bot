@@ -354,7 +354,8 @@ Pass `time_exit_policy=policy` to both `LiveTradingEngine` and `Backtester`.
 
 - All time comparisons are UTC-normalized; `zoneinfo` is used for local market time computations when available.
 - DST transitions: end-of-day logic uses local market session close time each day; tests should include DST boundaries.
--- Holiday-aware sessions are planned for future work; current implementation supports weekdays and 24h markets.
+- Holiday-aware sessions are planned for future work; current implementation supports weekdays and 24h markets.
+
 ## Performance Considerations
 
 - **Caching**: Performance metrics are cached for 5 minutes to minimize database overhead
@@ -422,4 +423,3 @@ DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01
 DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 ```
->>>>>>> 827e33b (Implement Comprehensive Dynamic Risk Management System with Database Persistence and Monitoring (#166))
