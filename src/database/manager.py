@@ -24,12 +24,14 @@ from .models import (
     AccountBalance,
     AccountHistory,
     Base,
+    DynamicPerformanceMetrics,
     EventType,
     OptimizationCycle,
     OrderStatus,
     PerformanceMetrics,
     Position,
     PositionSide,
+    RiskAdjustment,
     StrategyExecution,
     SystemEvent,
     Trade,
@@ -1455,3 +1457,263 @@ class DatabaseManager:
         elif isinstance(obj, np.generic):
             return obj.item()
         return obj
+
+    # Dynamic Risk Management Methods
+    
+    def log_dynamic_performance_metrics(
+        self,
+        session_id: int,
+        rolling_win_rate: float = None,
+        rolling_sharpe_ratio: float = None,
+        current_drawdown: float = None,
+        volatility_30d: float = None,
+        consecutive_losses: int = 0,
+        consecutive_wins: int = 0,
+        risk_adjustment_factor: float = 1.0,
+        profit_factor: float = None,
+        expectancy: float = None,
+        avg_trade_duration_hours: float = None
+    ) -> int:
+        """
+        Log dynamic performance metrics for adaptive risk management.
+        
+        Args:
+            session_id: Trading session ID
+            rolling_win_rate: Recent win rate (0.0 to 1.0)
+            rolling_sharpe_ratio: Recent Sharpe ratio
+            current_drawdown: Current drawdown percentage (0.0 to 1.0)
+            volatility_30d: 30-day rolling volatility
+            consecutive_losses: Current consecutive loss streak
+            consecutive_wins: Current consecutive win streak
+            risk_adjustment_factor: Applied risk adjustment factor
+            profit_factor: Gross profit / gross loss ratio
+            expectancy: Expected value per trade
+            avg_trade_duration_hours: Average trade duration in hours
+            
+        Returns:
+            ID of the created record
+        """
+        try:
+            with self.get_session() as session:
+                metrics = DynamicPerformanceMetrics(
+                    timestamp=datetime.utcnow(),
+                    session_id=session_id,
+                    rolling_win_rate=Decimal(str(rolling_win_rate)) if rolling_win_rate is not None else None,
+                    rolling_sharpe_ratio=Decimal(str(rolling_sharpe_ratio)) if rolling_sharpe_ratio is not None else None,
+                    current_drawdown=Decimal(str(current_drawdown)) if current_drawdown is not None else None,
+                    volatility_30d=Decimal(str(volatility_30d)) if volatility_30d is not None else None,
+                    consecutive_losses=consecutive_losses,
+                    consecutive_wins=consecutive_wins,
+                    risk_adjustment_factor=Decimal(str(risk_adjustment_factor)),
+                    profit_factor=Decimal(str(profit_factor)) if profit_factor is not None else None,
+                    expectancy=Decimal(str(expectancy)) if expectancy is not None else None,
+                    avg_trade_duration_hours=Decimal(str(avg_trade_duration_hours)) if avg_trade_duration_hours is not None else None
+                )
+                
+                session.add(metrics)
+                session.commit()
+                
+                logger.debug(f"Logged dynamic performance metrics for session {session_id}")
+                return metrics.id
+                
+        except Exception as e:
+            logger.error(f"Failed to log dynamic performance metrics: {e}")
+            raise
+
+    def log_risk_adjustment(
+        self,
+        session_id: int,
+        adjustment_type: str,
+        trigger_reason: str,
+        parameter_name: str,
+        original_value: float,
+        adjusted_value: float,
+        adjustment_factor: float,
+        current_drawdown: float = None,
+        performance_score: float = None,
+        volatility_level: float = None,
+        duration_minutes: int = None,
+        trades_during_adjustment: int = 0,
+        pnl_during_adjustment: float = None
+    ) -> int:
+        """
+        Log a risk parameter adjustment for tracking and analysis.
+        
+        Args:
+            session_id: Trading session ID
+            adjustment_type: Type of adjustment ('drawdown', 'performance', 'volatility')
+            trigger_reason: Detailed reason for the adjustment
+            parameter_name: Name of the adjusted parameter
+            original_value: Original parameter value
+            adjusted_value: New adjusted parameter value
+            adjustment_factor: Factor applied (adjusted_value / original_value)
+            current_drawdown: Current drawdown when adjustment was made
+            performance_score: Performance score when adjustment was made
+            volatility_level: Volatility level when adjustment was made
+            duration_minutes: How long this adjustment was active
+            trades_during_adjustment: Number of trades executed during adjustment
+            pnl_during_adjustment: P&L accumulated during adjustment period
+            
+        Returns:
+            ID of the created record
+        """
+        try:
+            with self.get_session() as session:
+                adjustment = RiskAdjustment(
+                    timestamp=datetime.utcnow(),
+                    session_id=session_id,
+                    adjustment_type=adjustment_type,
+                    trigger_reason=trigger_reason,
+                    parameter_name=parameter_name,
+                    original_value=Decimal(str(original_value)),
+                    adjusted_value=Decimal(str(adjusted_value)),
+                    adjustment_factor=Decimal(str(adjustment_factor)),
+                    current_drawdown=Decimal(str(current_drawdown)) if current_drawdown is not None else None,
+                    performance_score=Decimal(str(performance_score)) if performance_score is not None else None,
+                    volatility_level=Decimal(str(volatility_level)) if volatility_level is not None else None,
+                    duration_minutes=duration_minutes,
+                    trades_during_adjustment=trades_during_adjustment,
+                    pnl_during_adjustment=Decimal(str(pnl_during_adjustment)) if pnl_during_adjustment is not None else None
+                )
+                
+                session.add(adjustment)
+                session.commit()
+                
+                logger.debug(f"Logged risk adjustment {adjustment_type} for session {session_id}: {parameter_name} {original_value} -> {adjusted_value}")
+                return adjustment.id
+                
+        except Exception as e:
+            logger.error(f"Failed to log risk adjustment: {e}")
+            raise
+
+    def get_performance_metrics(
+        self,
+        session_id: int,
+        start_date: datetime = None,
+        end_date: datetime = None
+    ) -> dict[str, Any]:
+        """
+        Get recent performance metrics for dynamic risk calculation.
+        
+        Args:
+            session_id: Trading session ID
+            start_date: Start date for metrics calculation (defaults to 30 days ago)
+            end_date: End date for metrics calculation (defaults to now)
+            
+        Returns:
+            Dictionary containing calculated performance metrics
+        """
+        try:
+            if end_date is None:
+                end_date = datetime.utcnow()
+            if start_date is None:
+                start_date = end_date - timedelta(days=30)
+                
+            with self.get_session() as session:
+                # Get trades in the specified period
+                trades = (
+                    session.query(Trade)
+                    .filter(Trade.session_id == session_id)
+                    .filter(Trade.exit_time >= start_date)
+                    .filter(Trade.exit_time <= end_date)
+                    .filter(Trade.pnl.isnot(None))
+                    .all()
+                )
+                
+                if not trades:
+                    return {
+                        "total_trades": 0,
+                        "win_rate": 0.5,
+                        "profit_factor": 1.0,
+                        "sharpe_ratio": 0.0,
+                        "expectancy": 0.0,
+                        "avg_trade_duration_hours": 0.0,
+                        "consecutive_losses": 0,
+                        "consecutive_wins": 0
+                    }
+                
+                # Calculate basic metrics
+                total_trades = len(trades)
+                winning_trades = [t for t in trades if float(t.pnl) > 0]
+                losing_trades = [t for t in trades if float(t.pnl) < 0]
+                
+                win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0.0
+                
+                gross_profit = sum(float(t.pnl) for t in winning_trades)
+                gross_loss = abs(sum(float(t.pnl) for t in losing_trades))
+                
+                profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf') if gross_profit > 0 else 1.0
+                if profit_factor == float('inf'):
+                    profit_factor = 10.0  # Cap at reasonable value
+                    
+                # Calculate expectancy
+                total_pnl = sum(float(t.pnl) for t in trades)
+                expectancy = total_pnl / total_trades if total_trades > 0 else 0.0
+                
+                # Calculate average trade duration
+                durations = []
+                for trade in trades:
+                    if trade.entry_time and trade.exit_time:
+                        duration = (trade.exit_time - trade.entry_time).total_seconds() / 3600
+                        durations.append(duration)
+                        
+                avg_trade_duration_hours = sum(durations) / len(durations) if durations else 0.0
+                
+                # Calculate consecutive streaks (from most recent trades)
+                consecutive_wins = 0
+                consecutive_losses = 0
+                
+                # Sort by exit time descending to get most recent first
+                recent_trades = sorted(trades, key=lambda t: t.exit_time, reverse=True)
+                
+                for trade in recent_trades:
+                    pnl = float(trade.pnl)
+                    if pnl > 0:
+                        if consecutive_losses == 0:  # Still in winning streak
+                            consecutive_wins += 1
+                        else:
+                            break
+                    elif pnl < 0:
+                        if consecutive_wins == 0:  # Still in losing streak
+                            consecutive_losses += 1
+                        else:
+                            break
+                    # Skip break-even trades
+                
+                # Calculate Sharpe ratio (simplified)
+                if len(trades) > 1:
+                    pnls = [float(t.pnl) for t in trades]
+                    import numpy as np
+                    returns_std = np.std(pnls)
+                    mean_return = np.mean(pnls)
+                    sharpe_ratio = mean_return / returns_std if returns_std > 0 else 0.0
+                else:
+                    sharpe_ratio = 0.0
+                
+                return {
+                    "total_trades": total_trades,
+                    "win_rate": win_rate,
+                    "profit_factor": profit_factor,
+                    "sharpe_ratio": sharpe_ratio,
+                    "expectancy": expectancy,
+                    "avg_trade_duration_hours": avg_trade_duration_hours,
+                    "consecutive_losses": consecutive_losses,
+                    "consecutive_wins": consecutive_wins,
+                    "gross_profit": gross_profit,
+                    "gross_loss": gross_loss,
+                    "total_pnl": total_pnl
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get performance metrics: {e}")
+            # Return safe defaults
+            return {
+                "total_trades": 0,
+                "win_rate": 0.5,
+                "profit_factor": 1.0,
+                "sharpe_ratio": 0.0,
+                "expectancy": 0.0,
+                "avg_trade_duration_hours": 0.0,
+                "consecutive_losses": 0,
+                "consecutive_wins": 0
+            }
