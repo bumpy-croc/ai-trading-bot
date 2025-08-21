@@ -4,15 +4,16 @@ Unit tests for CPU optimization features in the live trading engine.
 
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import patch
+
 import pandas as pd
 
 from config.constants import (
     DEFAULT_CHECK_INTERVAL,
-    DEFAULT_MIN_CHECK_INTERVAL,
-    DEFAULT_MAX_CHECK_INTERVAL,
-    DEFAULT_SLEEP_POLL_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
+    DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_MIN_CHECK_INTERVAL,
+    DEFAULT_SLEEP_POLL_INTERVAL,
 )
 
 
@@ -31,10 +32,13 @@ class MockTradingEngine:
         interval = self.base_check_interval
 
         # Factor in recent trading activity
-        recent_trades = len([
-            p for p in self.positions.values()
-            if hasattr(p, 'entry_time') and p.entry_time > datetime.now() - timedelta(hours=1)
-        ])
+        recent_trades = len(
+            [
+                p
+                for p in self.positions.values()
+                if hasattr(p, "entry_time") and p.entry_time > datetime.now() - timedelta(hours=1)
+            ]
+        )
         if recent_trades > 0:
             interval = max(self.min_check_interval, interval // 2)
         elif len(self.positions) == 0:
@@ -52,11 +56,11 @@ class MockTradingEngine:
         if df is None or df.empty:
             return False
 
-        latest_timestamp = df.index[-1] if hasattr(df.index[-1], 'timestamp') else datetime.now()
+        latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now()
         if isinstance(latest_timestamp, str):
             try:
                 latest_timestamp = pd.to_datetime(latest_timestamp)
-            except:
+            except Exception:
                 return True  # Assume fresh if we can't parse timestamp
 
         age_seconds = (datetime.now() - latest_timestamp).total_seconds()
@@ -87,7 +91,7 @@ class TestCPUOptimizations(unittest.TestCase):
         """Test that interval decreases with recent trading activity"""
         # Add a recent position
         recent_position = MockPosition(datetime.now() - timedelta(minutes=30))
-        self.engine.positions['TEST'] = recent_position
+        self.engine.positions["TEST"] = recent_position
 
         interval = self.engine._calculate_adaptive_interval()
         self.assertLess(interval, self.engine.base_check_interval)
@@ -95,7 +99,7 @@ class TestCPUOptimizations(unittest.TestCase):
 
     def test_adaptive_interval_off_hours(self):
         """Test that interval increases during off-market hours"""
-        with patch('datetime.datetime') as mock_datetime:
+        with patch("datetime.datetime") as mock_datetime:
             # Mock current hour to be off-hours (3 AM UTC)
             mock_datetime.now.return_value = datetime(2024, 1, 1, 3, 0, 0)
             mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
@@ -113,7 +117,7 @@ class TestCPUOptimizations(unittest.TestCase):
         # Test minimum bound with multiple recent positions
         for i in range(5):
             recent_position = MockPosition(datetime.now() - timedelta(minutes=10))
-            self.engine.positions[f'TEST_{i}'] = recent_position
+            self.engine.positions[f"TEST_{i}"] = recent_position
 
         interval = self.engine._calculate_adaptive_interval()
         self.assertGreaterEqual(interval, self.engine.min_check_interval)
@@ -122,10 +126,7 @@ class TestCPUOptimizations(unittest.TestCase):
         """Test data freshness check with recent data"""
         # Create DataFrame with recent timestamp
         current_time = datetime.now()
-        df = pd.DataFrame(
-            {'close': [100]},
-            index=[current_time - timedelta(seconds=30)]
-        )
+        df = pd.DataFrame({"close": [100]}, index=[current_time - timedelta(seconds=30)])
 
         is_fresh = self.engine._is_data_fresh(df)
         self.assertTrue(is_fresh)
@@ -134,10 +135,7 @@ class TestCPUOptimizations(unittest.TestCase):
         """Test data freshness check with stale data"""
         # Create DataFrame with old timestamp
         old_time = datetime.now() - timedelta(seconds=self.engine.data_freshness_threshold + 60)
-        df = pd.DataFrame(
-            {'close': [100]},
-            index=[old_time]
-        )
+        df = pd.DataFrame({"close": [100]}, index=[old_time])
 
         is_fresh = self.engine._is_data_fresh(df)
         self.assertFalse(is_fresh)
@@ -162,5 +160,5 @@ class TestCPUOptimizations(unittest.TestCase):
         self.assertGreater(DEFAULT_DATA_FRESHNESS_THRESHOLD, 0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

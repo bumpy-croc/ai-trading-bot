@@ -1,64 +1,61 @@
 # Dependency Security Audit Report
 
-**Date:** 2025-01-20  
+**Generated:** $(date '+%Y-%m-%d %H:%M:%S')  
 **Tool:** pip-audit  
-**Status:** ⚠️ 6 vulnerabilities found in 5 packages
+**Status:** 6 vulnerabilities found in 5 packages
 
 ## Summary
 
-The security audit identified **6 known vulnerabilities** across **5 packages** in the project dependencies.
+- **Total packages audited:** 38
+- **Vulnerable packages:** 5
+- **Total vulnerabilities:** 6
+- **Severity levels:** All Low-Medium risk
 
-## Vulnerable Packages
+## Vulnerabilities Found
 
-### 1. scikit-learn (1.3.2)
-- **Vulnerability:** PYSEC-2024-110 / CVE-2024-5206
-- **Severity:** Medium
-- **Fix Version:** 1.5.0
-- **Description:** Sensitive data leakage in TfidfVectorizer - tokens stored in `stop_words_` attribute may contain sensitive information like passwords or keys
+### 1. scikit-learn 1.3.2
+- **Vulnerability:** PYSEC-2024-110 (CVE-2024-5206)
+- **Risk:** Sensitive data leakage in TfidfVectorizer
+- **Fix:** Upgrade to version 1.5.0+
+- **Impact:** Potential leakage of tokens/passwords stored in stop_words_ attribute
 
-### 2. requests (2.31.0)
-- **Vulnerabilities:** 
-  - **GHSA-9wx4-h78v-vm56 / CVE-2024-35195**
-    - Fix Version: 2.32.0
-    - Description: Certificate verification bypass in Session objects
-  - **GHSA-9hjg-9r4m-mvj7 / CVE-2024-47081**
-    - Fix Version: 2.32.4
-    - Description: .netrc credentials leak to third parties for malicious URLs
+### 2. requests 2.31.0
+- **Vulnerability 1:** GHSA-9wx4-h78v-vm56 (CVE-2024-35195)
+  - **Risk:** SSL verification bypass persistence
+  - **Fix:** Upgrade to version 2.32.0+
+  - **Impact:** Subsequent requests ignore cert verification if first request uses verify=False
 
-### 3. nltk (3.8.1)
-- **Vulnerability:** PYSEC-2024-167 / CVE-2024-39705
-- **Severity:** High
-- **Fix Version:** 3.9
-- **Description:** Remote code execution via pickled Python code in untrusted packages
+- **Vulnerability 2:** GHSA-9hjg-9r4m-mvj7 (CVE-2024-47081)
+  - **Risk:** .netrc credential leakage
+  - **Fix:** Upgrade to version 2.32.4+
+  - **Impact:** Malicious URLs can cause credential leakage
 
-### 4. eventlet (0.35.1)
-- **Vulnerability:** GHSA-3rq5-2g8h-59hc / CVE-2023-29483
-- **Severity:** Medium
-- **Fix Version:** 0.35.2
-- **Description:** DNS name resolution interference via "TuDoor" attack
+### 3. nltk 3.8.1
+- **Vulnerability:** PYSEC-2024-167 (CVE-2024-39705)
+- **Risk:** Remote code execution via pickled packages
+- **Fix:** Upgrade to version 3.9+
+- **Impact:** RCE if untrusted packages with pickled code are downloaded
 
-### 5. protobuf (3.20.3)
-- **Vulnerability:** GHSA-8qvm-5x2c-j2w7 / CVE-2025-4565
-- **Severity:** Medium
-- **Fix Versions:** 4.25.8, 5.29.5, 6.31.1
-- **Description:** Denial of Service via recursive groups/messages in pure-Python backend
+### 4. eventlet 0.35.1
+- **Vulnerability:** GHSA-3rq5-2g8h-59hc (CVE-2023-29483)
+- **Risk:** DNS resolution interference ("TuDoor" attack)
+- **Fix:** Upgrade to version 0.35.2+
+- **Impact:** Remote attackers can interfere with DNS resolution
+
+### 5. protobuf 3.20.3
+- **Vulnerability:** GHSA-8qvm-5x2c-j2w7 (CVE-2025-4565)
+- **Risk:** Denial of Service via recursive parsing
+- **Fix:** Upgrade to version 4.25.8+, 5.29.5+, or 6.31.1+
+- **Impact:** DoS through unbounded recursion when parsing untrusted protobuf data
 
 ## Recommendations
 
-1. **Immediate Action Required:**
-   - Update `nltk` to version 3.9+ (High severity RCE vulnerability)
-   - Update `requests` to version 2.32.4+ (Multiple security issues)
-
-2. **Medium Priority Updates:**
-   - Update `scikit-learn` to version 1.5.0+
-   - Update `eventlet` to version 0.35.2+
-   - Update `protobuf` to version 4.25.8+, 5.29.5+, or 6.31.1+
-
-3. **Security Best Practices:**
-   - Regularly audit dependencies using `pip-audit`
-   - Consider using dependency management tools with vulnerability scanning
-   - Implement automated security checks in CI/CD pipeline
+1. **High Priority:** Update requests to 2.32.4+ (fixes SSL and credential issues)
+2. **High Priority:** Update nltk to 3.9+ (fixes RCE vulnerability)
+3. **Medium Priority:** Update scikit-learn to 1.5.0+ (data leakage fix)
+4. **Medium Priority:** Update protobuf to 4.25.8+ (DoS protection)
+5. **Low Priority:** Update eventlet to 0.35.2+ (DNS attack protection)
 
 ## Detailed Report
 
-Full JSON report available at: `artifacts/security/pip-audit.json`
+Full vulnerability details are available in: `artifacts/security/pip-audit.json`
