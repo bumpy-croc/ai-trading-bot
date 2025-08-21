@@ -1,4 +1,96 @@
-# Risk and Position Management Layer
+# Risk and Position Management Documentation
+
+The AI Trading Bot features a comprehensive risk management system with both static and dynamic risk controls to protect capital and optimize performance under varying market conditions.
+
+## Overview
+
+The risk management system consists of two main components:
+
+1. **Static Risk Management** - Traditional fixed-parameter risk controls
+2. **Dynamic Risk Management** - Adaptive risk controls that adjust based on performance and market conditions
+
+## Static Risk Management
+
+### RiskParameters
+
+The base risk management is controlled by the `RiskParameters` class:
+
+```python
+@dataclass
+class RiskParameters:
+    base_risk_per_trade: float = 0.02      # 2% risk per trade
+    max_risk_per_trade: float = 0.03       # 3% maximum risk per trade
+    max_position_size: float = 0.25        # 25% maximum position size
+    max_daily_risk: float = 0.06           # 6% maximum daily risk
+    max_correlated_risk: float = 0.10      # 10% maximum risk for correlated positions
+    max_drawdown: float = 0.20             # 20% maximum drawdown threshold
+    position_size_atr_multiplier: float = 1.0
+    default_take_profit_pct: Optional[float] = None
+    atr_period: int = 14
+```
+
+### Position Sizing Methods
+
+The system supports multiple position sizing approaches:
+
+1. **fixed_fraction** - Fixed percentage of account balance
+2. **confidence_weighted** - Size based on ML model confidence scores
+3. **atr_risk** - ATR-based risk management (legacy approach)
+
+```python
+# Example: Fixed fraction sizing
+strategy_overrides = {
+    'position_sizer': 'fixed_fraction',
+    'base_fraction': 0.02,  # 2% of balance per trade
+    'max_fraction': 0.05    # 5% maximum
+}
+
+# Example: Confidence-weighted sizing
+strategy_overrides = {
+    'position_sizer': 'confidence_weighted',
+    'base_fraction': 0.03,
+    'confidence_key': 'prediction_confidence'  # From indicators
+}
+```
+
+## Dynamic Risk Management
+
+### Overview
+
+Dynamic risk management automatically adjusts position sizes, stop-loss levels, and risk limits based on:
+
+- **Portfolio drawdown levels** (5%, 10%, 15% thresholds)
+- **Recent trading performance** (win rate, profit factor)
+- **Market volatility conditions** (high/low volatility adjustments)
+- **Recovery patterns** (gradual de-throttling)
+
+### Configuration
+
+Dynamic risk is configured via `DynamicRiskConfig`:
+
+```python
+@dataclass
+class DynamicRiskConfig:
+    enabled: bool = True
+    performance_window_days: int = 30
+    
+    # Drawdown thresholds and adjustments
+    drawdown_thresholds: List[float] = [0.05, 0.10, 0.15]  # 5%, 10%, 15%
+    risk_reduction_factors: List[float] = [0.8, 0.6, 0.4]   # Reduction at each threshold
+    
+    # Recovery thresholds for de-throttling
+    recovery_thresholds: List[float] = [0.02, 0.05]  # 2%, 5% positive returns
+    
+    # Volatility adjustments
+    volatility_adjustment_enabled: bool = True
+    volatility_window_days: int = 30
+    high_volatility_threshold: float = 0.03  # 3% daily volatility
+    low_volatility_threshold: float = 0.01   # 1% daily volatility
+    volatility_risk_multipliers: Tuple[float, float] = (0.7, 1.3)  # (high_vol, low_vol)
+```
+
+### Adjustment Logic
+
 **Combination Logic:**
 Multiple adjustment factors are combined conservatively (most restrictive wins):
 ```python
@@ -9,23 +101,209 @@ final_position_factor = min(
 )
 ```
 
-### Database Models
-The following tables are implemented to support dynamic risk tracking:
+**Example Scenarios:**
 
-**`dynamic_performance_metrics`**
-- Rolling performance metrics (win rate, Sharpe ratio, drawdown)
-- Volatility measurements and consecutive loss/win tracking
-- Risk adjustment factors applied
+1. **15% Drawdown**: Position sizes reduced to 40% of normal (0.4x factor)
+2. **High Volatility**: Position sizes reduced to 70% during volatile periods
+3. **Poor Performance** (< 30% win rate): Position sizes reduced to 60%
+4. **Recovery** (5% positive return): Gradual return to normal sizing
 
-**`risk_adjustments`**
-- All risk parameter changes with timestamps and reasons
-- Original vs adjusted values with adjustment factors
-- Context information (drawdown, performance score, volatility)
-- Effectiveness tracking (trades during adjustment, P&L impact)
+### Live Trading Integration
+
+```python
+# Enable dynamic risk in live trading (default: enabled)
+engine = LiveTradingEngine(
+    strategy=strategy,
+    enable_dynamic_risk=True,
+    dynamic_risk_config=DynamicRiskConfig(
+        drawdown_thresholds=[0.05, 0.10, 0.15],
+        risk_reduction_factors=[0.8, 0.6, 0.4]
+    )
+)
+```
+
+### Backtesting Integration
+
+```python
+# Enable dynamic risk in backtesting (default: disabled for historical parity)
+backtester = Backtester(
+    strategy=strategy,
+    enable_dynamic_risk=True,
+    dynamic_risk_config=config
+)
+
+# Results include dynamic risk tracking
+results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start_date)
+print(f"Dynamic adjustments: {len(results['dynamic_risk_adjustments'])}")
+print(f"Most common reason: {results['dynamic_risk_summary']['most_common_reason']}")
+```
+
+### Per-Strategy Overrides
+
+Strategies can override dynamic risk settings via `get_risk_overrides()`:
+
+```python
+class MyStrategy(BaseStrategy):
+    def get_risk_overrides(self):
+        return {
+            'dynamic_risk': {
+                'enabled': True,
+                'drawdown_thresholds': [0.03, 0.08, 0.15],  # More aggressive thresholds
+                'risk_reduction_factors': [0.9, 0.7, 0.5],
+                'recovery_thresholds': [0.02, 0.05],
+                'volatility_adjustment_enabled': True
+            }
+        }
+```
+
+## Database Tables
+
+### dynamic_performance_metrics
+
+Tracks rolling performance metrics for adaptive risk decisions:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | Integer | Primary key |
+| timestamp | DateTime | Metric calculation time |
+| rolling_win_rate | Numeric(18,8) | Recent win rate (0.0-1.0) |
+| rolling_sharpe_ratio | Numeric(18,8) | Recent Sharpe ratio |
+| current_drawdown | Numeric(18,8) | Current drawdown percentage |
+| volatility_30d | Numeric(18,8) | 30-day rolling volatility |
+| consecutive_losses/wins | Integer | Current streak counts |
+| risk_adjustment_factor | Numeric(18,8) | Applied adjustment factor |
+| profit_factor | Numeric(18,8) | Gross profit / gross loss |
+| expectancy | Numeric(18,8) | Expected value per trade |
+| session_id | Integer | Foreign key to trading_sessions |
+
+### risk_adjustments
+
+Logs all risk parameter changes for analysis and tracking:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | Integer | Primary key |
+| timestamp | DateTime | Adjustment time |
+| adjustment_type | String(50) | 'drawdown', 'performance', 'volatility' |
+| trigger_reason | String(200) | Detailed reason (e.g., 'drawdown_15.0%') |
+| parameter_name | String(100) | 'position_size_factor', 'stop_loss_multiplier' |
+| original_value | Numeric(18,8) | Original parameter value |
+| adjusted_value | Numeric(18,8) | New adjusted value |
+| adjustment_factor | Numeric(18,8) | Adjustment factor applied |
+| current_drawdown | Numeric(18,8) | Drawdown at time of adjustment |
+| performance_score | Numeric(18,8) | Performance score context |
+| volatility_level | Numeric(18,8) | Volatility level context |
+| session_id | Integer | Foreign key to trading_sessions |
+
+## Database Migration
+
+To create the dynamic risk tables, run the migration:
+
+```bash
+# Apply the migration
+alembic upgrade head
+
+# Check migration status
+alembic current
+alembic history
+```
+
+The migration file `0003_dynamic_risk_tables.py` creates both tables with proper indexes:
+- `idx_dynamic_perf_timestamp`, `idx_dynamic_perf_session`
+- `idx_risk_adj_timestamp`, `idx_risk_adj_type`, `idx_risk_adj_session`
+
+## Monitoring and Alerts
+
+### Dashboard Integration
+
+The monitoring dashboard displays real-time dynamic risk status:
+
+- **Dynamic Risk Factor**: Current position size multiplier (e.g., "0.60x")
+- **Risk Reason**: Why adjustment is active (e.g., "drawdown_15.0%")
+- **Risk Status Indicator**: Visual status (green=normal, yellow=active, red=critical)
+
+### Alerts
+
+The system automatically generates alerts when:
+- Risk factor changes by more than 10%
+- Drawdown thresholds are crossed
+- Performance deteriorates significantly
+
+Alerts are displayed in the web dashboard and logged to the database.
 
 ## Default Behavior
+
+- **Live Trading**: Dynamic risk is **enabled by default** to protect capital
+- **Backtesting**: Dynamic risk is **disabled by default** to preserve historical accuracy
 - Position sizing uses `'fixed_fraction'` policy by default with `base_risk_per_trade`
 - SL is ATR-based if no explicit `stop_loss_pct` override is provided
-- TP uses `RiskParameters.default_take_profit_pct` if set, otherwise falls back to existing engine defaults (e.g., 4%)
+- TP uses `RiskParameters.default_take_profit_pct` if set, otherwise falls back to existing engine defaults
 - All sizes are clamped by `RiskParameters.max_position_size` and remaining `max_daily_risk`
-- **Dynamic risk adjustments are applied automatically when enabled**
+
+## Performance Considerations
+
+- **Caching**: Performance metrics are cached for 5 minutes to minimize database overhead
+- **Overhead**: Dynamic risk calculations add < 1ms per risk check
+- **Database Impact**: Metrics are logged only on significant changes (>10% adjustment)
+
+## Troubleshooting
+
+### Common Issues
+
+**1. Dynamic risk not applying adjustments**
+- Check `enable_dynamic_risk=True` in engine initialization
+- Verify database tables exist: `alembic current`
+- Check logs for dynamic risk manager initialization errors
+
+**2. Migration failures**
+- Ensure database URL is properly configured
+- Check if tables already exist manually
+- Verify PostgreSQL/SQLite compatibility
+
+**3. Performance degradation**
+- Monitor database query performance on risk_adjustments table
+- Check if excessive logging is occurring (should be < 10 logs per hour typically)
+- Verify cache TTL settings are appropriate
+
+### Debugging
+
+Enable detailed logging for dynamic risk operations:
+
+```python
+import logging
+logging.getLogger('src.position_management.dynamic_risk').setLevel(logging.DEBUG)
+```
+
+Check recent risk adjustments:
+
+```sql
+SELECT * FROM risk_adjustments 
+WHERE session_id = YOUR_SESSION_ID 
+ORDER BY timestamp DESC 
+LIMIT 10;
+```
+
+## Best Practices
+
+1. **Strategy-Specific Tuning**: Use `get_risk_overrides()` to customize thresholds per strategy
+2. **Gradual Rollout**: Start with conservative thresholds and adjust based on results
+3. **Monitoring**: Regularly review risk adjustment logs and effectiveness
+4. **Testing**: Always backtest with dynamic risk enabled to understand historical impact
+5. **Recovery Planning**: Set appropriate recovery thresholds to avoid being overly conservative during recoveries
+
+## Configuration Constants
+
+Default values are defined in `src/config/constants.py`:
+
+```python
+DEFAULT_DYNAMIC_RISK_ENABLED = True
+DEFAULT_PERFORMANCE_WINDOW_DAYS = 30
+DEFAULT_DRAWDOWN_THRESHOLDS = [0.05, 0.10, 0.15]
+DEFAULT_RISK_REDUCTION_FACTORS = [0.8, 0.6, 0.4]
+DEFAULT_RECOVERY_THRESHOLDS = [0.02, 0.05]
+DEFAULT_VOLATILITY_ADJUSTMENT_ENABLED = True
+DEFAULT_HIGH_VOLATILITY_THRESHOLD = 0.03
+DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01
+DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)
+DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
+```

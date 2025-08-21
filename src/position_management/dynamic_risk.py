@@ -131,29 +131,33 @@ class DynamicRiskManager:
 		drawdown_adjustment = self._calculate_drawdown_adjustment(current_drawdown, recovery_return)
 		performance_adjustment = self._calculate_performance_adjustment(performance_metrics)
 		volatility_adjustment = self._calculate_volatility_adjustment(performance_metrics)
+		correlation_adjustment = self._calculate_correlation_adjustment(session_id)  # Placeholder for future implementation
 		
 		# Combine adjustments (take the most conservative)
 		final_position_factor = min(
 			drawdown_adjustment.position_size_factor,
 			performance_adjustment.position_size_factor,
-			volatility_adjustment.position_size_factor
+			volatility_adjustment.position_size_factor,
+			correlation_adjustment.position_size_factor
 		)
 		
 		final_stop_loss_factor = max(
 			drawdown_adjustment.stop_loss_tightening,
 			performance_adjustment.stop_loss_tightening,
-			volatility_adjustment.stop_loss_tightening
+			volatility_adjustment.stop_loss_tightening,
+			correlation_adjustment.stop_loss_tightening
 		)
 		
 		final_daily_risk_factor = min(
 			drawdown_adjustment.daily_risk_factor,
 			performance_adjustment.daily_risk_factor,
-			volatility_adjustment.daily_risk_factor
+			volatility_adjustment.daily_risk_factor,
+			correlation_adjustment.daily_risk_factor
 		)
 		
 		# Determine primary reason
 		primary_reason = self._determine_primary_reason(
-			drawdown_adjustment, performance_adjustment, volatility_adjustment
+			drawdown_adjustment, performance_adjustment, volatility_adjustment, correlation_adjustment
 		)
 		
 		return RiskAdjustments(
@@ -167,6 +171,7 @@ class DynamicRiskManager:
 				"drawdown_adjustment": drawdown_adjustment,
 				"performance_adjustment": performance_adjustment,
 				"volatility_adjustment": volatility_adjustment,
+				"correlation_adjustment": correlation_adjustment,
 				"performance_metrics": performance_metrics
 			}
 		)
@@ -359,19 +364,37 @@ class DynamicRiskManager:
 		else:
 			return RiskAdjustments(primary_reason="normal_volatility")
 	
+	def _calculate_correlation_adjustment(self, session_id: Optional[int]) -> RiskAdjustments:
+		"""
+		Calculate adjustments based on position correlation (placeholder implementation).
+		
+		TODO: Implement full correlation risk management in future release.
+		This should analyze:
+		- Correlation between current positions
+		- Exposure concentration by sector/asset class
+		- Maximum correlated risk limits
+		
+		For now, returns neutral adjustment.
+		"""
+		# Placeholder implementation - always returns neutral
+		return RiskAdjustments(primary_reason="correlation_not_implemented")
+	
 	def _determine_primary_reason(
 		self,
 		drawdown_adj: RiskAdjustments,
 		performance_adj: RiskAdjustments,
-		volatility_adj: RiskAdjustments
+		volatility_adj: RiskAdjustments,
+		correlation_adj: RiskAdjustments
 	) -> str:
 		"""Determine the primary reason for risk adjustment"""
-		# Priority: drawdown > performance > volatility
+		# Priority: drawdown > performance > volatility > correlation
 		if drawdown_adj.position_size_factor < 1.0:
 			return drawdown_adj.primary_reason
 		elif performance_adj.position_size_factor != 1.0:
 			return performance_adj.primary_reason
 		elif volatility_adj.position_size_factor != 1.0:
 			return volatility_adj.primary_reason
+		elif correlation_adj.position_size_factor != 1.0:
+			return correlation_adj.primary_reason
 		else:
 			return "normal"
