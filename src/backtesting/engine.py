@@ -35,6 +35,7 @@ from database.manager import DatabaseManager
 from database.models import TradeSource
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
+from position_management.time_exits import TimeExitPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class Backtester:
         default_take_profit_pct: Optional[float] = None,
         legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
         enable_engine_risk_exits: bool = False,  # Enforce engine-level SL/TP exits (off to preserve baseline)
+        time_exit_policy: TimeExitPolicy | None = None,
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -301,10 +303,17 @@ class Backtester:
                             hit_take_profit = current_price >= float(self.current_trade.take_profit)
                         else:
                             hit_take_profit = current_price <= float(self.current_trade.take_profit)
-                    hit_time_limit = (
-                        self.enable_time_limit_exit
-                        and (current_time - self.current_trade.entry_time).total_seconds() > 86400
-                    )
+                    hit_time_limit = False
+                    if self.enable_time_limit_exit:
+                        if self.time_exit_policy is not None:
+                            should_exit, _reason = self.time_exit_policy.check_time_exit_conditions(
+                                self.current_trade.entry_time, current_time
+                            )
+                            hit_time_limit = should_exit
+                        else:
+                            hit_time_limit = (
+                                (current_time - self.current_trade.entry_time).total_seconds() > 86400
+                            )
 
                     should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_limit
                     exit_reason = (
