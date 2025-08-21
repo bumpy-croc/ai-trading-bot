@@ -269,7 +269,8 @@ class DatabaseManager:
                     if hasattr(self.engine.pool, nm):
                         val = getattr(self.engine.pool, nm)
                         return val() if callable(val) else val
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get pool attribute {nm}: {e}")
                 pass
             return default
 

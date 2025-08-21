@@ -166,8 +166,9 @@ class ExperimentRunner:
                     if hasattr(strategy, attr):
                         try:
                             setattr(strategy, attr, value)
-                        except Exception:
+                        except Exception as e:
                             # Ignore invalid attribute assignments to keep runner robust
+                            logger.debug(f"Failed to set attribute {attr}={value}: {e}")
                             pass
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:

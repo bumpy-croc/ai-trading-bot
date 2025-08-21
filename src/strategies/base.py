@@ -65,7 +65,8 @@ class BaseStrategy(ABC):
                 try:
                     context_pairs = [f"{k}={v}" for k, v in additional_context.items()]
                     final_reasons.extend(context_pairs)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to process additional context: {e}")
                     pass
             # Use the SymbolFactory for consistent formatting
             # Default to the strategy's trading pair when symbol is omitted or None

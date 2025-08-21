@@ -5,6 +5,7 @@ __pycache__
 .pytest_cache
 logs/
 .cursor/mcp.json
+bandit-report.json
 
 .DS_Store
 
