@@ -8,11 +8,12 @@ from pathlib import Path
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
-        from database.manager import DatabaseManager
         from optimizer.analyzer import PerformanceAnalyzer
         from optimizer.runner import ExperimentRunner
         from optimizer.schemas import ExperimentConfig, ParameterSet
         from optimizer.validator import StatisticalValidator, ValidationConfig
+
+        from database.manager import DatabaseManager
 
         end = datetime.now()
         start = end - timedelta(days=ns.days)

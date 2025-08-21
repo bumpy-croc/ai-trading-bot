@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
+from performance.metrics import cash_pnl
+from regime.detector import RegimeDetector
 from sqlalchemy.exc import SQLAlchemyError
 
 from backtesting.models import Trade as CompletedTrade
@@ -31,8 +33,6 @@ from data_providers.data_provider import DataProvider
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
-from performance.metrics import cash_pnl
-from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
 
