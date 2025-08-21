@@ -84,7 +84,31 @@ class MarketSessionDef:
                     if candidate.isoweekday() in self.days_of_week:
                         next_day = candidate
                         break
+            found = False
+            while advance < MAX_ADVANCE_DAYS:
+                candidate = close_today + timedelta(days=advance)
+                if candidate.isoweekday() in self.days_of_week:
+                    close_today = candidate
+                    found = True
+                    break
+                advance += 1
+            if not found:
+                raise ValueError("No valid session day found within MAX_ADVANCE_DAYS")
+        # If we've already passed today's close, move to the next eligible day
+        if local_dt > close_today:
+            next_day = close_today + timedelta(days=1)
+            if self.days_of_week:
+                advance = 0
+                found = False
+                while advance < MAX_ADVANCE_DAYS:
+                    candidate = next_day + timedelta(days=advance)
+                    if candidate.isoweekday() in self.days_of_week:
+                        next_day = candidate
+                        found = True
+                        break
                     advance += 1
+                if not found:
+                    raise ValueError("No valid session day found within MAX_ADVANCE_DAYS")
             close_today = next_day.replace(
                 hour=self.close_time.hour,
                 minute=self.close_time.minute,
