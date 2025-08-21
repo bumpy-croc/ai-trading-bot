@@ -338,6 +338,11 @@ class MockDatabaseManager:
 
     def get_performance_metrics(self, session_id: Optional[int] = None) -> dict[str, Any]:
         """Get performance metrics"""
+        # Backwards-compat delegator: historical callers may use this name
+        return self.get_recent_performance_metrics(session_id=session_id)
+
+    def get_recent_performance_metrics(self, session_id: Optional[int] = None) -> dict[str, Any]:
+        """Get recent performance metrics (session-scoped)"""
         if session_id is None:
             session_id = self._current_session_id
 

@@ -264,7 +264,7 @@ class TestDatabaseManagerMethods:
         mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.filter.return_value.all.return_value = mock_trades
 
         # Test calculation
-        metrics = db_manager.get_performance_metrics(
+        metrics = db_manager.get_recent_performance_metrics(
             session_id=123,
             start_date=datetime.utcnow() - timedelta(days=30)
         )
@@ -288,7 +288,7 @@ class TestDatabaseManagerMethods:
         mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.filter.return_value.all.return_value = []
 
         # Test calculation with no data
-        metrics = db_manager.get_performance_metrics(session_id=123)
+        metrics = db_manager.get_recent_performance_metrics(session_id=123)
 
         # Should return safe defaults
         assert metrics["total_trades"] == 0

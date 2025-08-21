@@ -1586,7 +1586,7 @@ class DatabaseManager:
             logger.error(f"Failed to log risk adjustment: {e}")
             raise
 
-    def get_performance_metrics(
+    def get_recent_performance_metrics(
         self,
         session_id: int,
         start_date: datetime = None,

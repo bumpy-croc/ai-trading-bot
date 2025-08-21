@@ -212,7 +212,7 @@ class TestDatabaseLogging:
             "session_id": session_id,
         }
         db_manager.log_trade(**trade_data)
-        metrics = db_manager.get_performance_metrics(session_id=session_id)
+        metrics = db_manager.get_recent_performance_metrics(session_id=session_id)
         assert metrics["total_trades"] >= 1
         db_manager.end_trading_session(session_id)
 

@@ -113,7 +113,7 @@ def test_database_logging():
         logger.info(f"  - {trade['symbol']} P&L: ${trade['pnl']:.2f} ({trade['pnl_percent']:.2f}%)")
 
     # Get performance metrics
-    metrics = db_manager.get_performance_metrics(session_id=session_id)
+    metrics = db_manager.get_recent_performance_metrics(session_id=session_id)
     logger.info("Performance metrics:")
     logger.info(f"  - Total trades: {metrics['total_trades']}")
     logger.info(f"  - Win rate: {metrics['win_rate']:.1f}%")
