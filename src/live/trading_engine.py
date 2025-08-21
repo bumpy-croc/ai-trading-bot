@@ -723,7 +723,8 @@ class LiveTradingEngine:
                         position.entry_time, datetime.utcnow()
                     )
                 else:
-                    hit_time_exit = (datetime.now() - position.entry_time).total_seconds() > 86400
+                    # Use UTC consistently to avoid timezone drift with naive datetimes
+                    hit_time_exit = (datetime.utcnow() - position.entry_time).total_seconds() > 86400
                     reason = "Time limit"
                 if hit_time_exit:
                     should_exit = True
@@ -757,7 +758,7 @@ class LiveTradingEngine:
                     reasons=[
                         exit_reason if should_exit else "holding_position",
                         f"current_pnl_{current_pnl:.4f}",
-                        f"position_age_{(datetime.now() - position.entry_time).total_seconds():.0f}s",
+                        f"position_age_{(datetime.utcnow() - position.entry_time).total_seconds():.0f}s",
                         f"entry_price_{position.entry_price:.2f}",
                     ],
                     volume=indicators.get("volume"),
@@ -911,7 +912,7 @@ class LiveTradingEngine:
                 side=side,
                 size=size,
                 entry_price=price,
-                entry_time=datetime.now(),
+                entry_time=datetime.utcnow(),
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 order_id=order_id,
