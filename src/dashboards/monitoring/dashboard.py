@@ -147,6 +147,10 @@ class MonitoringDashboard:
             "max_drawdown": {"enabled": True, "priority": "high", "format": "percentage"},
             "risk_per_trade": {"enabled": True, "priority": "medium", "format": "percentage"},
             "volatility": {"enabled": True, "priority": "medium", "format": "percentage"},
+            # Dynamic Risk Management
+            "dynamic_risk_factor": {"enabled": True, "priority": "high", "format": "number"},
+            "dynamic_risk_reason": {"enabled": True, "priority": "high", "format": "text"},
+            "dynamic_risk_active": {"enabled": True, "priority": "high", "format": "boolean"},
             # Order Execution Metrics
             "fill_rate": {"enabled": True, "priority": "high", "format": "percentage"},
             "avg_slippage": {"enabled": True, "priority": "high", "format": "percentage"},
@@ -413,6 +417,12 @@ class MonitoringDashboard:
                 metrics["risk_per_trade"] = self._get_risk_per_trade()
             if "volatility" in enabled_metrics:
                 metrics["volatility"] = self._get_volatility()
+            if "dynamic_risk_factor" in enabled_metrics:
+                metrics["dynamic_risk_factor"] = self._get_dynamic_risk_factor()
+            if "dynamic_risk_reason" in enabled_metrics:
+                metrics["dynamic_risk_reason"] = self._get_dynamic_risk_reason()
+            if "dynamic_risk_active" in enabled_metrics:
+                metrics["dynamic_risk_active"] = self._get_dynamic_risk_active()
 
             # Order Execution Metrics
             if "fill_rate" in enabled_metrics:
@@ -637,6 +647,72 @@ class MonitoringDashboard:
         except Exception as e:
             logger.error(f"Error calculating volatility: {e}")
             return 0.0
+
+    def _get_dynamic_risk_factor(self) -> float:
+        """Get current dynamic risk adjustment factor"""
+        try:
+            # Get the most recent risk adjustment
+            query = """
+            SELECT adjustment_factor, timestamp
+            FROM risk_adjustments
+            WHERE parameter_name = 'position_size_factor'
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and len(result) > 0:
+                return self._safe_float(result[0]["adjustment_factor"])
+            
+            return 1.0  # Default factor when no adjustments
+            
+        except Exception as e:
+            logger.error(f"Error getting dynamic risk factor: {e}")
+            return 1.0
+
+    def _get_dynamic_risk_reason(self) -> str:
+        """Get the reason for current dynamic risk adjustment"""
+        try:
+            # Get the most recent risk adjustment reason
+            query = """
+            SELECT trigger_reason, timestamp
+            FROM risk_adjustments
+            WHERE parameter_name = 'position_size_factor'
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and len(result) > 0:
+                return str(result[0]["trigger_reason"])
+            
+            return "normal"  # Default reason when no adjustments
+            
+        except Exception as e:
+            logger.error(f"Error getting dynamic risk reason: {e}")
+            return "normal"
+
+    def _get_dynamic_risk_active(self) -> bool:
+        """Check if dynamic risk adjustments are currently active"""
+        try:
+            # Check if there are recent risk adjustments (within last hour)
+            query = """
+            SELECT COUNT(*) as count
+            FROM risk_adjustments
+            WHERE parameter_name = 'position_size_factor'
+            AND adjustment_factor != 1.0
+            AND timestamp > NOW() - INTERVAL '1 hour'
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and len(result) > 0:
+                return int(result[0]["count"]) > 0
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking dynamic risk status: {e}")
+            return False
 
     def _get_system_health_status(self) -> str:
         """Get overall system health status"""

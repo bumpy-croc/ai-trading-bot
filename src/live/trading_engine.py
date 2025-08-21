@@ -211,8 +211,10 @@ class LiveTradingEngine:
         # Initialize dynamic risk manager after database is available
         if self.enable_dynamic_risk:
             try:
+                # Merge strategy risk overrides with engine config
+                final_config = self._merge_dynamic_risk_config(self._dynamic_risk_config)
                 self.dynamic_risk_manager = DynamicRiskManager(
-                    config=self._dynamic_risk_config,
+                    config=final_config,
                     db_manager=self.db_manager
                 )
                 logger.info("Dynamic risk management enabled")
@@ -310,6 +312,37 @@ class LiveTradingEngine:
             f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}"
         )
 
+    def _merge_dynamic_risk_config(self, base_config: DynamicRiskConfig) -> DynamicRiskConfig:
+        """Merge strategy risk overrides with base dynamic risk configuration"""
+        try:
+            # Get strategy risk overrides
+            strategy_overrides = self.strategy.get_risk_overrides() if self.strategy else None
+            if not strategy_overrides or 'dynamic_risk' not in strategy_overrides:
+                return base_config
+                
+            dynamic_overrides = strategy_overrides['dynamic_risk']
+            
+            # Create a new config with merged values
+            merged_config = DynamicRiskConfig(
+                enabled=dynamic_overrides.get('enabled', base_config.enabled),
+                performance_window_days=dynamic_overrides.get('performance_window_days', base_config.performance_window_days),
+                drawdown_thresholds=dynamic_overrides.get('drawdown_thresholds', base_config.drawdown_thresholds),
+                risk_reduction_factors=dynamic_overrides.get('risk_reduction_factors', base_config.risk_reduction_factors),
+                recovery_thresholds=dynamic_overrides.get('recovery_thresholds', base_config.recovery_thresholds),
+                volatility_adjustment_enabled=dynamic_overrides.get('volatility_adjustment_enabled', base_config.volatility_adjustment_enabled),
+                volatility_window_days=dynamic_overrides.get('volatility_window_days', base_config.volatility_window_days),
+                high_volatility_threshold=dynamic_overrides.get('high_volatility_threshold', base_config.high_volatility_threshold),
+                low_volatility_threshold=dynamic_overrides.get('low_volatility_threshold', base_config.low_volatility_threshold),
+                volatility_risk_multipliers=dynamic_overrides.get('volatility_risk_multipliers', base_config.volatility_risk_multipliers)
+            )
+            
+            logger.info(f"Merged strategy dynamic risk overrides from {self.strategy.__class__.__name__}")
+            return merged_config
+            
+        except Exception as e:
+            logger.warning(f"Failed to merge strategy dynamic risk overrides: {e}")
+            return base_config
+
     def _get_dynamic_risk_adjusted_size(self, original_size: float) -> float:
         """Apply dynamic risk adjustments to position size"""
         if not self.dynamic_risk_manager:
@@ -333,6 +366,24 @@ class LiveTradingEngine:
                     f"size factor={adjustments.position_size_factor:.2f}, "
                     f"reason={adjustments.primary_reason}"
                 )
+                
+                # Log to database for tracking
+                if self.db_manager and self.trading_session_id:
+                    try:
+                        self.db_manager.log_risk_adjustment(
+                            session_id=self.trading_session_id,
+                            adjustment_type=adjustments.primary_reason.split('_')[0],  # e.g., 'drawdown' from 'drawdown_15.0%'
+                            trigger_reason=adjustments.primary_reason,
+                            parameter_name='position_size_factor',
+                            original_value=1.0,
+                            adjusted_value=adjustments.position_size_factor,
+                            adjustment_factor=adjustments.position_size_factor,
+                            current_drawdown=adjustments.adjustment_details.get('current_drawdown'),
+                            performance_score=None,  # Could be enhanced to include performance score
+                            volatility_level=adjustments.adjustment_details.get('performance_metrics', {}).get('estimated_volatility')
+                        )
+                    except Exception as log_e:
+                        logger.warning(f"Failed to log risk adjustment to database: {log_e}")
             
             return adjusted_size
             

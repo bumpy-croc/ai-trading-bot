@@ -98,7 +98,8 @@ class DynamicRiskManager:
 		self,
 		current_balance: float,
 		peak_balance: float,
-		session_id: Optional[int] = None
+		session_id: Optional[int] = None,
+		previous_peak_balance: Optional[float] = None
 	) -> RiskAdjustments:
 		"""
 		Calculate dynamic risk adjustments based on current performance metrics.
@@ -107,6 +108,7 @@ class DynamicRiskManager:
 			current_balance: Current account balance
 			peak_balance: Peak account balance (for drawdown calculation)
 			session_id: Trading session ID for database queries
+			previous_peak_balance: Previous peak balance for recovery calculation
 			
 		Returns:
 			RiskAdjustments object with calculated adjustment factors
@@ -117,36 +119,45 @@ class DynamicRiskManager:
 		# Calculate current drawdown
 		current_drawdown = self._calculate_current_drawdown(current_balance, peak_balance)
 		
+		# Check for recovery if we have previous peak data
+		recovery_return = 0.0
+		if previous_peak_balance and previous_peak_balance > 0:
+			recovery_return = (current_balance - previous_peak_balance) / previous_peak_balance
+		
 		# Get performance metrics
 		performance_metrics = self._get_performance_metrics(session_id)
 		
 		# Calculate adjustments based on different factors
-		drawdown_adjustment = self._calculate_drawdown_adjustment(current_drawdown)
+		drawdown_adjustment = self._calculate_drawdown_adjustment(current_drawdown, recovery_return)
 		performance_adjustment = self._calculate_performance_adjustment(performance_metrics)
 		volatility_adjustment = self._calculate_volatility_adjustment(performance_metrics)
+		correlation_adjustment = self._calculate_correlation_adjustment(session_id)  # Placeholder for future implementation
 		
 		# Combine adjustments (take the most conservative)
 		final_position_factor = min(
 			drawdown_adjustment.position_size_factor,
 			performance_adjustment.position_size_factor,
-			volatility_adjustment.position_size_factor
+			volatility_adjustment.position_size_factor,
+			correlation_adjustment.position_size_factor
 		)
 		
 		final_stop_loss_factor = max(
 			drawdown_adjustment.stop_loss_tightening,
 			performance_adjustment.stop_loss_tightening,
-			volatility_adjustment.stop_loss_tightening
+			volatility_adjustment.stop_loss_tightening,
+			correlation_adjustment.stop_loss_tightening
 		)
 		
 		final_daily_risk_factor = min(
 			drawdown_adjustment.daily_risk_factor,
 			performance_adjustment.daily_risk_factor,
-			volatility_adjustment.daily_risk_factor
+			volatility_adjustment.daily_risk_factor,
+			correlation_adjustment.daily_risk_factor
 		)
 		
 		# Determine primary reason
 		primary_reason = self._determine_primary_reason(
-			drawdown_adjustment, performance_adjustment, volatility_adjustment
+			drawdown_adjustment, performance_adjustment, volatility_adjustment, correlation_adjustment
 		)
 		
 		return RiskAdjustments(
@@ -156,9 +167,11 @@ class DynamicRiskManager:
 			primary_reason=primary_reason,
 			adjustment_details={
 				"current_drawdown": current_drawdown,
+				"recovery_return": recovery_return,
 				"drawdown_adjustment": drawdown_adjustment,
 				"performance_adjustment": performance_adjustment,
 				"volatility_adjustment": volatility_adjustment,
+				"correlation_adjustment": correlation_adjustment,
 				"performance_metrics": performance_metrics
 			}
 		)
@@ -257,8 +270,22 @@ class DynamicRiskManager:
 		
 		return metrics
 	
-	def _calculate_drawdown_adjustment(self, current_drawdown: float) -> RiskAdjustments:
-		"""Calculate adjustments based on current drawdown level"""
+	def _calculate_drawdown_adjustment(self, current_drawdown: float, recovery_return: float = 0.0) -> RiskAdjustments:
+		"""Calculate adjustments based on current drawdown level and recovery"""
+		# Check for recovery first (de-throttling)
+		if recovery_return > 0:
+			for threshold in sorted(self.config.recovery_thresholds, reverse=True):
+				if recovery_return >= threshold:
+					# Gradual recovery - reduce risk reduction
+					recovery_factor = min(1.0, 1.0 + (recovery_return - threshold) * 2.0)  # Scale recovery
+					return RiskAdjustments(
+						position_size_factor=min(1.0, recovery_factor),
+						stop_loss_tightening=max(1.0, 1.0 / recovery_factor),
+						daily_risk_factor=min(1.0, recovery_factor),
+						primary_reason=f"recovery_{recovery_return:.1%}"
+					)
+		
+		# Standard drawdown logic
 		if current_drawdown <= 0:
 			return RiskAdjustments(primary_reason="normal")
 		
@@ -337,19 +364,37 @@ class DynamicRiskManager:
 		else:
 			return RiskAdjustments(primary_reason="normal_volatility")
 	
+	def _calculate_correlation_adjustment(self, session_id: Optional[int]) -> RiskAdjustments:
+		"""
+		Calculate adjustments based on position correlation (placeholder implementation).
+		
+		TODO: Implement full correlation risk management in future release.
+		This should analyze:
+		- Correlation between current positions
+		- Exposure concentration by sector/asset class
+		- Maximum correlated risk limits
+		
+		For now, returns neutral adjustment.
+		"""
+		# Placeholder implementation - always returns neutral
+		return RiskAdjustments(primary_reason="correlation_not_implemented")
+	
 	def _determine_primary_reason(
 		self,
 		drawdown_adj: RiskAdjustments,
 		performance_adj: RiskAdjustments,
-		volatility_adj: RiskAdjustments
+		volatility_adj: RiskAdjustments,
+		correlation_adj: RiskAdjustments
 	) -> str:
 		"""Determine the primary reason for risk adjustment"""
-		# Priority: drawdown > performance > volatility
+		# Priority: drawdown > performance > volatility > correlation
 		if drawdown_adj.position_size_factor < 1.0:
 			return drawdown_adj.primary_reason
 		elif performance_adj.position_size_factor != 1.0:
 			return performance_adj.primary_reason
 		elif volatility_adj.position_size_factor != 1.0:
 			return volatility_adj.primary_reason
+		elif correlation_adj.position_size_factor != 1.0:
+			return correlation_adj.primary_reason
 		else:
 			return "normal"

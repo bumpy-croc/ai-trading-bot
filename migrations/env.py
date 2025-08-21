@@ -14,8 +14,8 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 sys.path.insert(0, BASE_DIR)
 
 # Import metadata
-from config.config_manager import get_config  # noqa: E402
-from database.models import Base  # noqa: E402
+from src.config.config_manager import get_config  # noqa: E402
+from src.database.models import Base  # noqa: E402
 
 # --------------------------------------------------
 # Alembic Config
