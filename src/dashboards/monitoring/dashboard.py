@@ -118,7 +118,9 @@ class MonitoringDashboard:
                 def get_current_price(self, symbol: str):
                     return 0.0
 
-                def get_historical_data(self, symbol: str, timeframe: str, start, end):  # noqa: D401
+                def get_historical_data(
+                    self, symbol: str, timeframe: str, start, end
+                ):  # noqa: D401
                     return pd.DataFrame()
 
             self.data_provider = _OfflineProvider()
@@ -1484,9 +1486,7 @@ class MonitoringDashboard:
                 "last_updated": (
                     balance_history[0]["timestamp"].isoformat()
                     if balance_history and isinstance(balance_history[0]["timestamp"], datetime)
-                    else balance_history[0]["timestamp"]
-                    if balance_history
-                    else None
+                    else balance_history[0]["timestamp"] if balance_history else None
                 ),
                 "last_update_reason": balance_history[0]["reason"] if balance_history else None,
                 "recent_history": balance_history[:5],  # Last 5 balance changes

@@ -66,9 +66,9 @@ class TestLiveTradingFallbacks:
             )
 
             # Double-check max_position_size is a float
-            assert isinstance(engine.max_position_size, (int, float)), (
-                f"max_position_size should be numeric, got {type(engine.max_position_size)}"
-            )
+            assert isinstance(
+                engine.max_position_size, (int, float)
+            ), f"max_position_size should be numeric, got {type(engine.max_position_size)}"
 
             # Mock the missing _close_position method
             engine._close_position = MagicMock()

@@ -316,9 +316,7 @@ class Backtester:
                             else (
                                 "Take profit"
                                 if hit_take_profit
-                                else "Time limit"
-                                if hit_time_limit
-                                else "Hold"
+                                else "Time limit" if hit_time_limit else "Hold"
                             )
                         )
                     )
@@ -744,7 +742,9 @@ class Backtester:
                             "prediction_confidence"
                         ].reindex(pred_series.index).fillna(0.5) + (
                             pred_series.shift(1) >= pred_series
-                        ).astype(float) * (
+                        ).astype(
+                            float
+                        ) * (
                             1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(0.5)
                         )
                         actual_up = (actual_series.diff() > 0).astype(float)
