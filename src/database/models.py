@@ -316,6 +316,10 @@ class TradingSession(Base):
     timeframe = Column(String(10), nullable=False)
     exchange = Column(String(50), default="binance")
 
+    # Time-exit configuration
+    time_exit_config = Column(JSONType)
+    market_timezone = Column(String(50))
+
     # Performance summary
     total_pnl = Column(Numeric(18, 8))
     total_trades = Column(Integer, default=0)
