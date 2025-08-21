@@ -10,14 +10,14 @@ jobs:
         split-index: [1, 2, 3, 4]
         python-version: [3.11]
       fail-fast: false  # Continue running other groups if one fails
-    
+
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       ACTIONS_STEP_DEBUG: true
       ACTIONS_RUNNER_DEBUG: true
       PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4

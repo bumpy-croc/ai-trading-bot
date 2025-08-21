@@ -749,9 +749,10 @@ class Backtester:
                         )
                         actual_up = (actual_series.diff() > 0).astype(float)
                         brier = brier_score_direction(p_up.fillna(0.5), actual_up.fillna(0.0))
-            except Exception:
+            except Exception as e:
                 # Keep zeros if any issue
-                pass
+                logger.warning(f"Failed to calculate brier score: {e}")
+                brier = 0.0
 
             # Build balance history DataFrame for metrics
             bh_df = (

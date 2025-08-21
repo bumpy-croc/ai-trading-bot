@@ -131,4 +131,4 @@ python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-bal
 Shows performance for each calendar year in the test period.
 
 ### Early Stop Information
-If present, shows why the backtest stopped early and when. 
+If present, shows why the backtest stopped early and when.

@@ -37,4 +37,4 @@ scripts/start_dashboard.py  # Launcher script
 ## Notes
 - Database: PostgreSQL only
 - Uses WebSocket (Flask-SocketIO) for live updates
-- Responsive UI for desktop and mobile 
+- Responsive UI for desktop and mobile

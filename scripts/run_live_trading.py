@@ -213,16 +213,16 @@ def print_startup_info(args, strategy):
     print(f"Strategy: {strategy.name}")
     print(f"Symbol: {args.symbol}")
     print(f"Timeframe: {args.timeframe}")
-    print(f"Max Position Size: {args.max_position*100:.1f}% of balance")
+    print(f"Max Position Size: {args.max_position * 100:.1f}% of balance")
     print(f"Check Interval: {args.check_interval}s")
-    print(f"Risk Per Trade: {args.risk_per_trade*100:.1f}%")
+    print(f"Risk Per Trade: {args.risk_per_trade * 100:.1f}%")
     print(f"Trading Mode: {'🔴 LIVE TRADING' if args.live_trading else '📄 PAPER TRADING'}")
     print(f"Sentiment Analysis: {'✅ Enabled' if args.use_sentiment else '❌ Disabled'}")
     print(f"Data Caching: {'❌ Disabled' if args.no_cache else '✅ Enabled'}")
     print(f"Trade Logging: {'✅ Enabled' if args.log_trades else '❌ Disabled'}")
     print(f"Alerts: {'✅ Configured' if args.webhook_url else '❌ Not configured'}")
     snapshot_info = (
-        f"{args.snapshot_interval}s ({args.snapshot_interval//60}min)"
+        f"{args.snapshot_interval}s ({args.snapshot_interval // 60}min)"
         if args.snapshot_interval > 0
         else "Disabled"
     )

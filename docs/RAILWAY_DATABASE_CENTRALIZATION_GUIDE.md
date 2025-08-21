@@ -8,7 +8,7 @@ This guide outlines the setup and configuration of a centralized PostgreSQL data
 
 ### Centralized PostgreSQL Setup
 - **Trading Bot Service**: Connects to PostgreSQL database
-- **Dashboard Service**: Connects to PostgreSQL database  
+- **Dashboard Service**: Connects to PostgreSQL database
 - **Local Development**: PostgreSQL database (Docker or native)
 - **Railway Production**: PostgreSQL database service
 
