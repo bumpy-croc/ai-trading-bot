@@ -139,4 +139,4 @@ If present, shows why the backtest stopped early and when.
 3. **Monitor early stop warnings** - Understand when and why backtests stop
 4. **Start with 1-year tests** - Before running 5-year tests
 
-The MLBasic strategy with 1-hour candles consistently outperforms daily candles and provides a solid foundation for ML-based trading strategies. 
+The MLBasic strategy with 1-hour candles consistently outperforms daily candles and provides a solid foundation for ML-based trading strategies.

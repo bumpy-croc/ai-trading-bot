@@ -358,16 +358,16 @@ body {
     .metric-card {
         padding: 1rem;
     }
-    
+
     .metric-value {
         font-size: 1.5rem;
     }
-    
+
     .config-panel {
         width: 100%;
         right: -100%;
     }
-    
+
     .table-container {
         overflow-x: auto;
     }
@@ -447,4 +447,4 @@ body {
 
 .error-message i {
     margin-right: 0.5rem;
-} 
+}

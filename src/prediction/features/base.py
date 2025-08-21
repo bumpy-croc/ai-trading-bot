@@ -27,7 +27,7 @@ class FeatureExtractor(ABC):
             name: Unique name for this feature extractor
         """
         self.name = name
-        self._feature_names = []
+        self._feature_names: list[str] = []
 
     @abstractmethod
     def extract(self, data: pd.DataFrame) -> pd.DataFrame:

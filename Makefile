@@ -14,13 +14,15 @@ TIMEFRAME ?= 1h
 DAYS ?= 30
 
 .PHONY: help venv install deps deps-server atb dashboards dashboard-monitoring \
-        dashboard-backtesting live live-health backtest optimizer test lint fmt clean
+        dashboard-backtesting live live-health backtest optimizer test lint fmt clean \
+        rules setup-pre-commit
 
 help:
 	@echo "Common targets:"
 	@echo "  make venv                 # create .venv"
 	@echo "  make install              # install CLI (editable) and upgrade pip"
 	@echo "  make deps                 # install dev deps (requirements.txt)"
+	@echo "  make setup-pre-commit     # install pre-commit hooks"
 	@echo "  make dashboards           # list dashboards"
 	@echo "  make dashboard-monitoring # run monitoring dashboard on PORT=$(PORT)"
 	@echo "  make live                 # run live trading (paper by default)"
@@ -43,6 +45,9 @@ deps: venv
 
 deps-server: venv
 	$(PIP) install -r requirements-server.txt
+
+setup-pre-commit: deps
+	$(PY) scripts/setup_pre_commit.py
 
 # ------------- CLI wrappers (use venv bins directly, no need to activate) -------------
 atb: install
@@ -84,4 +89,6 @@ clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist *.egg-info
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
 
-
+# --------------------------------- Rules Generation --------------------------------------------
+rules: deps
+	$(PY) scripts/generate_rules.py

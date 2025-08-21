@@ -18,7 +18,7 @@ class TradingDashboard {
             minimumFractionDigits: 1,
             maximumFractionDigits: 1,
         });
-        
+
         this.init();
     }
 
@@ -28,40 +28,40 @@ class TradingDashboard {
         this.loadConfiguration();
         this.initializeChart();
         this.hideLoading();
-        
+
         // Load initial data immediately
         this.loadInitialData();
-        
+
         // Set up periodic updates as fallback
         setInterval(() => {
             this.loadInitialData();
         }, this.updateInterval);
     }
-    
+
     async loadInitialData() {
         try {
             // Load metrics
             const metricsResponse = await fetch('/api/metrics');
             const metrics = await metricsResponse.json();
             this.updateMetrics(metrics);
-            
+
             // Load positions
             const positionsResponse = await fetch('/api/positions');
             const positions = await positionsResponse.json();
             // Resolve per-symbol prices to avoid BTC defaulting
             await this.hydratePositionsWithPrices(positions);
             this.updatePositions(positions);
-            
+
             // Load trades
             const tradesResponse = await fetch('/api/trades?limit=10');
             const trades = await tradesResponse.json();
             this.updateTrades(trades);
-            
+
             // Load performance data
             const performanceResponse = await fetch('/api/performance?days=7');
             const performance = await performanceResponse.json();
             this.updatePerformanceChart(performance);
-            
+
         } catch (error) {
             console.error('Error loading initial data:', error);
         }
@@ -181,7 +181,7 @@ class TradingDashboard {
                 const div = document.createElement('div');
                 div.className = 'form-check';
                 div.innerHTML = `
-                    <input class="form-check-input" type="checkbox" id="metric_${key}" 
+                    <input class="form-check-input" type="checkbox" id="metric_${key}"
                            value="${key}" ${metric.enabled ? 'checked' : ''}>
                     <label class="form-check-label" for="metric_${key}">
                         ${key.replace(/_/g, ' ').toUpperCase()}
@@ -195,7 +195,7 @@ class TradingDashboard {
     async saveConfiguration() {
         const form = document.getElementById('configForm');
         const formData = new FormData(form);
-        
+
         const config = {
             update_interval: parseInt(formData.get('updateInterval')),
             metrics: {}
@@ -332,7 +332,7 @@ class TradingDashboard {
                 return value.toString();
         }
     }
-    
+
     formatCurrency(value) {
         if (typeof value !== 'number') return '$0.00';
         return this.currencyFormatter.format(value);
@@ -365,7 +365,7 @@ class TradingDashboard {
             tbody.innerHTML = '<tr><td colspan="6" class="text-center">No active positions</td></tr>';
             return;
         }
-        
+
         tbody.innerHTML = positions.map(position => {
             const unrealizedPnl = typeof position.unrealized_pnl === 'number' ? position.unrealized_pnl : 0.0;
             const quantity = typeof position.quantity === 'number' ? position.quantity : 0;
@@ -474,7 +474,7 @@ class TradingDashboard {
     toggleConfigPanel() {
         const panel = document.getElementById('configPanel');
         const overlay = document.getElementById('overlay');
-        
+
         panel.classList.toggle('show');
         overlay.classList.toggle('show');
     }
@@ -496,9 +496,9 @@ class TradingDashboard {
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
         toast.textContent = message;
-        
+
         document.body.appendChild(toast);
-        
+
         // Auto remove after 5 seconds
         setTimeout(() => {
             toast.remove();
@@ -531,15 +531,15 @@ const toastStyles = `
         z-index: 1100;
         animation: slideIn 0.3s ease;
     }
-    
+
     .toast-success {
         background: var(--success-color);
     }
-    
+
     .toast-error {
         background: var(--danger-color);
     }
-    
+
     @keyframes slideIn {
         from { transform: translateX(100%); opacity: 0; }
         to { transform: translateX(0); opacity: 1; }
@@ -549,4 +549,4 @@ const toastStyles = `
 // Add styles to head
 const styleSheet = document.createElement('style');
 styleSheet.textContent = toastStyles;
-document.head.appendChild(styleSheet); 
+document.head.appendChild(styleSheet);

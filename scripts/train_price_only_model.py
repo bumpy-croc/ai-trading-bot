@@ -12,6 +12,7 @@ Notes:
 - Exports ONNX with input shape (1, seq_len, 5) and a single scalar output.
 - Saves minimal metadata JSON alongside the ONNX.
 """
+
 import argparse
 import json
 import sys
@@ -188,7 +189,7 @@ def train_model(df: pd.DataFrame, seq_len: int, epochs: int = 10, lr: float = 1e
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
-        print(f"Epoch {epoch+1}/{epochs} | Loss: {np.mean(losses):.6f} | Batches: {len(dl)}")
+        print(f"Epoch {epoch + 1}/{epochs} | Loss: {np.mean(losses):.6f} | Batches: {len(dl)}")
     return model.cpu()
 
 

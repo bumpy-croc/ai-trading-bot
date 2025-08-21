@@ -93,6 +93,21 @@ atb db verify
 atb tests heartbeat
 ```
 
+8) Development setup
+
+```bash
+# Install pre-commit hooks for code quality
+python scripts/setup_pre_commit.py
+
+# Or manually:
+python3 -m pip install pre-commit
+pre-commit install
+
+# Run linting manually
+ruff check . --fix
+ruff format .
+```
+
 ---
 
 ## Project structure
@@ -193,5 +208,5 @@ Sentiment data (SentiCrypt) and ML training are supported. Pretrained models liv
 
 ## Disclaimer
 
-This project is for educational purposes only. Trading cryptocurrencies involves significant risk. Use paper trading, test thoroughly, and never risk funds you cannot afford to lose. 
+This project is for educational purposes only. Trading cryptocurrencies involves significant risk. Use paper trading, test thoroughly, and never risk funds you cannot afford to lose.
 <!-- chore: trigger CI test -->

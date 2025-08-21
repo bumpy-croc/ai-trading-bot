@@ -30,7 +30,7 @@ if railway status &> /dev/null; then
 else
     log "🔗 Setting up Railway project..."
     read -p "Create new project or link existing? (new/link): " CHOICE
-    
+
     if [ "$CHOICE" = "new" ]; then
         read -p "Enter project name: " PROJECT_NAME
         if [ -z "$PROJECT_NAME" ]; then

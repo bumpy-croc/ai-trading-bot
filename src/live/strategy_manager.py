@@ -71,8 +71,8 @@ class StrategyManager:
             from strategies.bear import BearStrategy
 
             self.strategy_registry["bear"] = BearStrategy
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Bear strategy not available: {e}")
 
         # Version history
         self.version_history: dict[str, StrategyVersion] = {}

@@ -96,4 +96,4 @@ ENV PGDATA=/var/lib/postgresql/data
 EXPOSE 5432 5000
 
 # Start supervisor to manage PostgreSQL, dashboard, and the application
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

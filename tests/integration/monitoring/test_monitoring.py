@@ -30,11 +30,11 @@ class TestMonitoringDashboard:
 
     def test_dashboard_initialization(self):
         """Test dashboard initialization with default settings"""
-        with patch("src.dashboards.monitoring.dashboard.DatabaseManager") as mock_db, patch(
-            "src.data_providers.binance_provider.BinanceProvider"
-        ) as mock_binance, patch(
-            "src.data_providers.cached_data_provider.CachedDataProvider"
-        ) as mock_cache:
+        with (
+            patch("src.dashboards.monitoring.dashboard.DatabaseManager") as mock_db,
+            patch("src.data_providers.binance_provider.BinanceProvider") as mock_binance,
+            patch("src.data_providers.cached_data_provider.CachedDataProvider") as mock_cache,
+        ):
             # Mock successful initialization
             mock_binance.return_value = Mock()
             mock_cache.return_value = Mock()
@@ -51,9 +51,10 @@ class TestMonitoringDashboard:
 
     def test_dashboard_initialization_with_offline_mode(self):
         """Test dashboard initialization when Binance is unavailable"""
-        with patch("src.dashboards.monitoring.dashboard.DatabaseManager") as mock_db, patch(
-            "src.dashboards.monitoring.dashboard.BinanceProvider"
-        ) as mock_binance:
+        with (
+            patch("src.dashboards.monitoring.dashboard.DatabaseManager") as mock_db,
+            patch("src.dashboards.monitoring.dashboard.BinanceProvider") as mock_binance,
+        ):
             # Mock Binance failure
             mock_binance.side_effect = Exception("Connection failed")
             mock_db.return_value = Mock()
@@ -66,9 +67,11 @@ class TestMonitoringDashboard:
 
     def test_dashboard_configuration(self):
         """Test dashboard configuration management"""
-        with patch("src.dashboards.monitoring.dashboard.DatabaseManager"), patch(
-            "src.data_providers.binance_provider.BinanceProvider"
-        ), patch("src.data_providers.cached_data_provider.CachedDataProvider"):
+        with (
+            patch("src.dashboards.monitoring.dashboard.DatabaseManager"),
+            patch("src.data_providers.binance_provider.BinanceProvider"),
+            patch("src.data_providers.cached_data_provider.CachedDataProvider"),
+        ):
             dashboard = MonitoringDashboard()
 
             # Test default configuration
@@ -93,9 +96,11 @@ class TestMonitoringDashboard:
     @pytest.mark.monitoring
     def test_metrics_collection(self):
         """Test metrics collection functionality"""
-        with patch("src.dashboards.monitoring.dashboard.DatabaseManager"), patch(
-            "src.data_providers.binance_provider.BinanceProvider"
-        ), patch("src.data_providers.cached_data_provider.CachedDataProvider"):
+        with (
+            patch("src.dashboards.monitoring.dashboard.DatabaseManager"),
+            patch("src.data_providers.binance_provider.BinanceProvider"),
+            patch("src.data_providers.cached_data_provider.CachedDataProvider"),
+        ):
             dashboard = MonitoringDashboard()
 
             # Mock database responses
@@ -109,9 +114,11 @@ class TestMonitoringDashboard:
 
     def test_api_endpoints(self):
         """Test API endpoints for dashboard"""
-        with patch("src.dashboards.monitoring.dashboard.DatabaseManager"), patch(
-            "src.data_providers.binance_provider.BinanceProvider"
-        ), patch("src.data_providers.cached_data_provider.CachedDataProvider"):
+        with (
+            patch("src.dashboards.monitoring.dashboard.DatabaseManager"),
+            patch("src.data_providers.binance_provider.BinanceProvider"),
+            patch("src.data_providers.cached_data_provider.CachedDataProvider"),
+        ):
             dashboard = MonitoringDashboard()
             client = dashboard.app.test_client()
 
@@ -127,9 +134,11 @@ class TestMonitoringDashboard:
 
     def test_system_health_monitoring(self):
         """Test system health monitoring functionality"""
-        with patch("src.dashboards.monitoring.dashboard.DatabaseManager"), patch(
-            "src.data_providers.binance_provider.BinanceProvider"
-        ), patch("src.data_providers.cached_data_provider.CachedDataProvider"):
+        with (
+            patch("src.dashboards.monitoring.dashboard.DatabaseManager"),
+            patch("src.data_providers.binance_provider.BinanceProvider"),
+            patch("src.data_providers.cached_data_provider.CachedDataProvider"),
+        ):
             dashboard = MonitoringDashboard()
 
             # Mock data for health checks
@@ -160,8 +169,10 @@ class TestMonitoringIntegration:
 
     def test_dashboard_with_real_database(self):
         """Integration test with real database (mocked)"""
-        with patch("src.dashboards.monitoring.dashboard.DatabaseManager"), patch(
-            "src.data_providers.binance_provider.BinanceProvider"
-        ), patch("src.data_providers.cached_data_provider.CachedDataProvider"):
+        with (
+            patch("src.dashboards.monitoring.dashboard.DatabaseManager"),
+            patch("src.data_providers.binance_provider.BinanceProvider"),
+            patch("src.data_providers.cached_data_provider.CachedDataProvider"),
+        ):
             dashboard = MonitoringDashboard()
             assert dashboard.db_manager is not None

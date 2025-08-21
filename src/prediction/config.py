@@ -77,7 +77,8 @@ class PredictionConfig:
             ),
             model_registry_path=config.get(
                 "MODEL_REGISTRY_PATH", default=DEFAULT_MODEL_REGISTRY_PATH
-            ),
+            )
+            or DEFAULT_MODEL_REGISTRY_PATH,
             enable_sentiment=config.get_bool("ENABLE_SENTIMENT", default=DEFAULT_ENABLE_SENTIMENT),
             enable_market_microstructure=config.get_bool(
                 "ENABLE_MARKET_MICROSTRUCTURE", default=DEFAULT_ENABLE_MARKET_MICROSTRUCTURE
@@ -93,7 +94,8 @@ class PredictionConfig:
                 "DIRECTION_THRESHOLD", default=DEFAULT_DIRECTION_THRESHOLD
             ),
             enable_ensemble=config.get_bool("ENABLE_ENSEMBLE", default=DEFAULT_ENABLE_ENSEMBLE),
-            ensemble_method=config.get("ENSEMBLE_METHOD", default=DEFAULT_ENSEMBLE_METHOD),
+            ensemble_method=config.get("ENSEMBLE_METHOD", default=DEFAULT_ENSEMBLE_METHOD)
+            or DEFAULT_ENSEMBLE_METHOD,
             enable_regime_aware_confidence=config.get_bool(
                 "ENABLE_REGIME_AWARE_CONFIDENCE", default=DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE
             ),

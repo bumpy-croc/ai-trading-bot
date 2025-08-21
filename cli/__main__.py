@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
-from typing import Optional
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -10,7 +8,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # Import and register command groups
-    from cli.commands import dashboards, live, live_health, backtest, optimizer, data, db, train, tests, scripts as scripts_cmd
+    from cli.commands import (
+        backtest,
+        dashboards,
+        data,
+        db,
+        live,
+        live_health,
+        optimizer,
+        tests,
+        train,
+    )
+    from cli.commands import scripts as scripts_cmd
 
     dashboards.register(subparsers)
     live.register(subparsers)
@@ -26,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     ns = parser.parse_args(argv)
 
@@ -40,5 +49,3 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
