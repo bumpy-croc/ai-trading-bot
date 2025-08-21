@@ -8,12 +8,12 @@ from pathlib import Path
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
-        from config.constants import DEFAULT_INITIAL_BALANCE
-        from database.manager import DatabaseManager
         from optimizer.analyzer import PerformanceAnalyzer
         from optimizer.runner import ExperimentRunner
         from optimizer.schemas import ExperimentConfig, ParameterSet
         from optimizer.validator import StatisticalValidator, ValidationConfig
+
+        from database.manager import DatabaseManager
 
         end = datetime.now()
         start = end - timedelta(days=ns.days)
@@ -156,7 +156,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--output", default="artifacts/optimizer_report.json")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-validate", action="store_true")
-    p.add_argument("--persist", action="store_true", help="Persist cycle to database when available")
+    p.add_argument(
+        "--persist", action="store_true", help="Persist cycle to database when available"
+    )
     p.set_defaults(func=_handle)
-
-

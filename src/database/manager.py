@@ -7,10 +7,11 @@ PostgreSQL database manager for handling all database operations
 import logging
 import math
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Generator
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, create_engine, text  # type: ignore
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # type: ignore

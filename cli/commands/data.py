@@ -3,13 +3,11 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Optional
 
 import ccxt
 import pandas as pd
 
 from utils.symbol_factory import SymbolFactory
-from cli.core.forward import forward_to_module_main
 
 
 def _download(ns: argparse.Namespace) -> int:
@@ -38,7 +36,9 @@ def _download(ns: argparse.Namespace) -> int:
         if not all_ohlcv:
             print("No data fetched for the given parameters.")
             return 1
-        df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df = pd.DataFrame(
+            all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("timestamp", inplace=True)
         out_dir = Path(ns.output_dir)
@@ -59,6 +59,7 @@ def _download(ns: argparse.Namespace) -> int:
 
 def _prefill(ns: argparse.Namespace) -> int:
     from datetime import datetime
+
     from config.paths import get_cache_dir
     from data_providers.binance_provider import BinanceProvider
     from data_providers.cached_data_provider import CachedDataProvider
@@ -99,7 +100,9 @@ def _prefill(ns: argparse.Namespace) -> int:
     symbols = _normalize_symbols(ns.symbols)
     timeframes = [tf.strip() for tf in ns.timeframes]
     cache_dir = ns.cache_dir or str(get_cache_dir())
-    provider = CachedDataProvider(BinanceProvider(), cache_dir=cache_dir, cache_ttl_hours=ns.cache_ttl_hours)
+    provider = CachedDataProvider(
+        BinanceProvider(), cache_dir=cache_dir, cache_ttl_hours=ns.cache_ttl_hours
+    )
     print(
         f"Prefilling cache dir={cache_dir} symbols={symbols} timeframes={timeframes} range={start.date()}..{end.date()}"
     )
@@ -121,12 +124,12 @@ def _prefill(ns: argparse.Namespace) -> int:
 
 
 def _cache_manager(ns: argparse.Namespace) -> int:
+    import pickle
+    from datetime import datetime
+
     from config.paths import get_cache_dir
     from data_providers.binance_provider import BinanceProvider
     from data_providers.cached_data_provider import CachedDataProvider
-    import os
-    import pickle
-    from datetime import datetime
 
     def _format_size(num):
         units = ["B", "KB", "MB", "GB"]
@@ -173,16 +176,22 @@ def _cache_manager(ns: argparse.Namespace) -> int:
                         data = pickle.load(f)
                     data_info = ""
                     if hasattr(data, "shape"):
-                        data_info = f" - {getattr(data, 'shape')[0]} rows"
+                        data_info = f" - {data.shape[0]} rows"
                     if hasattr(data, "index") and len(getattr(data, "index", [])) > 0:
                         start_date = data.index.min().strftime("%Y-%m-%d")
                         end_date = data.index.max().strftime("%Y-%m-%d")
                         data_info += f" ({start_date} to {end_date})"
-                    print(f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')}{data_info}")
+                    print(
+                        f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')}{data_info}"
+                    )
                 except Exception as e:
-                    print(f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')} - Error reading: {e}")
+                    print(
+                        f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')} - Error reading: {e}"
+                    )
             else:
-                print(f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')}")
+                print(
+                    f"{info['name'][:20]:<20} {_format_size(info['size']):<8} {info['modified'].strftime('%Y-%m-%d %H:%M')}"
+                )
         return 0
     if cmd == "clear":
         if not os.path.exists(cache_dir):
@@ -244,42 +253,46 @@ def _cache_manager(ns: argparse.Namespace) -> int:
 
 def _populate_dummy(ns: argparse.Namespace) -> int:
     # Inline minimal port of DummyDataPopulator main
-    from database.manager import DatabaseManager
-    from database.models import PositionSide, TradeSource
-    import logging, random
+    import logging
+    import random
     from datetime import datetime, timedelta
 
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    from database.manager import DatabaseManager
+    from database.models import PositionSide, TradeSource
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
 
     if not ns.confirm:
-        response = input(f"This will populate the database with {ns.trades} trades and related data. Continue? (y/N): ")
-        if response.lower() != 'y':
+        response = input(
+            f"This will populate the database with {ns.trades} trades and related data. Continue? (y/N): "
+        )
+        if response.lower() != "y":
             print("Operation cancelled.")
             return 0
 
     try:
         db = DatabaseManager(ns.database_url)
-        symbols = ['BTCUSDT', 'ETHUSDT']
-        strategies = ['MlBasic', 'BullStrategy', 'BearStrategy', 'TestStrategy']
-        timeframes = ['1h', '4h', '1d']
+        symbols = ["BTCUSDT", "ETHUSDT"]
+        strategies = ["MlBasic", "BullStrategy", "BearStrategy", "TestStrategy"]
+        timeframes = ["1h", "4h", "1d"]
         base_balance = 10000.0
 
         def _price(sym):
-            ranges = {'BTCUSDT': (25000, 65000), 'ETHUSDT': (1500, 4000)}
+            ranges = {"BTCUSDT": (25000, 65000), "ETHUSDT": (1500, 4000)}
             lo, hi = ranges.get(sym, (10, 100))
             return random.uniform(lo, hi)
 
         # sessions
         session_ids = []
-        for i in range(2):
+        for _i in range(2):
             sid = db.create_trading_session(
                 strategy_name=random.choice(strategies),
                 symbol=random.choice(symbols),
                 timeframe=random.choice(timeframes),
                 mode=random.choice([TradeSource.LIVE, TradeSource.BACKTEST, TradeSource.PAPER]),
                 initial_balance=base_balance,
-                strategy_config={}
+                strategy_config={},
             )
             session_ids.append(sid)
 
@@ -288,13 +301,19 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
             sid = random.choice(session_ids)
             sym = random.choice(symbols)
             side = random.choice([PositionSide.LONG, PositionSide.SHORT])
-            entry_time = datetime.utcnow() - timedelta(days=random.randint(1, 10), hours=random.randint(0, 23))
+            entry_time = datetime.utcnow() - timedelta(
+                days=random.randint(1, 10), hours=random.randint(0, 23)
+            )
             exit_time = entry_time + timedelta(hours=random.randint(1, 24))
             entry_price = _price(sym)
             exit_price = _price(sym)
             size = random.uniform(0.01, 0.1)
             quantity = (base_balance * size) / entry_price
-            pnl = (exit_price - entry_price) * quantity if side == PositionSide.LONG else (entry_price - exit_price) * quantity
+            pnl = (
+                (exit_price - entry_price) * quantity
+                if side == PositionSide.LONG
+                else (entry_price - exit_price) * quantity
+            )
             db.log_trade(
                 session_id=sid,
                 symbol=sym,
@@ -306,13 +325,15 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
                 entry_time=entry_time,
                 exit_time=exit_time,
                 pnl=pnl,
-                exit_reason=random.choice(['take_profit', 'stop_loss', 'manual_close', 'time_exit']),
+                exit_reason=random.choice(
+                    ["take_profit", "stop_loss", "manual_close", "time_exit"]
+                ),
                 strategy_name=random.choice(strategies),
                 confidence_score=random.uniform(0.3, 0.95),
                 order_id=f"order_{i}_{random.randint(1000, 9999)}",
                 stop_loss=entry_price * 0.95,
                 take_profit=entry_price * 1.05,
-                strategy_config={}
+                strategy_config={},
             )
 
         print("✅ Database population completed successfully!")
@@ -347,7 +368,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_prefill.set_defaults(func=_prefill)
 
     p_cache = sub.add_parser("cache-manager", help="Cache manager")
-    p_cache.add_argument("subcmd", choices=["info", "list", "clear", "clear-old"], help="Cache action")
+    p_cache.add_argument(
+        "subcmd", choices=["info", "list", "clear", "clear-old"], help="Cache action"
+    )
     p_cache.add_argument("--cache-dir", default=None)
     p_cache.add_argument("--detailed", action="store_true")
     p_cache.add_argument("--force", action="store_true")
@@ -359,5 +382,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_dummy.add_argument("--database-url", type=str, default=None)
     p_dummy.add_argument("--confirm", action="store_true")
     p_dummy.set_defaults(func=_populate_dummy)
-
-

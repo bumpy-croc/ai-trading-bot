@@ -66,7 +66,9 @@ def _verify(_ns: argparse.Namespace) -> int:
         return 0
     except Exception as e:
         print(f"❌ Database verification failed: {e}")
-        print("\nTroubleshooting:\n  1. Ensure DATABASE_URL environment variable is set\n  2. Verify PostgreSQL database is running and accessible\n  3. Check that DATABASE_URL starts with 'postgresql://'\n  4. For Railway: ensure PostgreSQL service is deployed")
+        print(
+            "\nTroubleshooting:\n  1. Ensure DATABASE_URL environment variable is set\n  2. Verify PostgreSQL database is running and accessible\n  3. Check that DATABASE_URL starts with 'postgresql://'\n  4. For Railway: ensure PostgreSQL service is deployed"
+        )
         return 1
 
 
@@ -127,7 +129,11 @@ def _setup_railway(ns: argparse.Namespace) -> int:
             print("📊 Environment Check:")
             railway_project = config.get("RAILWAY_PROJECT_ID")
             database_url = config.get("DATABASE_URL")
-            print(f"✅ Railway Project ID: {railway_project}" if railway_project else "⚠️  Not running on Railway (RAILWAY_PROJECT_ID not found)")
+            print(
+                f"✅ Railway Project ID: {railway_project}"
+                if railway_project
+                else "⚠️  Not running on Railway (RAILWAY_PROJECT_ID not found)"
+            )
             if not database_url:
                 print("❌ DATABASE_URL not found")
                 return 1
@@ -185,7 +191,9 @@ def _setup_railway(ns: argparse.Namespace) -> int:
     # Default: print instructions
     print("🚀 Railway PostgreSQL Database Setup")
     print("=" * 60)
-    print("\n📋 Step-by-Step Instructions:\n... (see docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md)")
+    print(
+        "\n📋 Step-by-Step Instructions:\n... (see docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md)"
+    )
     return 0
 
 
@@ -194,12 +202,18 @@ def _reset_railway(ns: argparse.Namespace) -> int:
     from psycopg2 import sql
 
     env = ns.env
-    db_url = os.environ.get("RAILWAY_STAGING_DATABASE_URL" if env == "staging" else "RAILWAY_PRODUCTION_DATABASE_URL")
+    db_url = os.environ.get(
+        "RAILWAY_STAGING_DATABASE_URL" if env == "staging" else "RAILWAY_PRODUCTION_DATABASE_URL"
+    )
     if not db_url:
-        print(f"Database URL for {env} not set. Please set the {'RAILWAY_STAGING_DATABASE_URL' if env == 'staging' else 'RAILWAY_PRODUCTION_DATABASE_URL'} environment variable.")
+        print(
+            f"Database URL for {env} not set. Please set the {'RAILWAY_STAGING_DATABASE_URL' if env == 'staging' else 'RAILWAY_PRODUCTION_DATABASE_URL'} environment variable."
+        )
         return 1
     if env == "production" and not ns.yes:
-        confirm = input("Are you sure you want to reset the PRODUCTION database? Type 'YES' to continue: ")
+        confirm = input(
+            "Are you sure you want to reset the PRODUCTION database? Type 'YES' to continue: "
+        )
         if confirm != "YES":
             print("Aborted.")
             return 0
@@ -237,7 +251,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_backup = sub.add_parser("backup", help="Backup database")
     p_backup.add_argument("--backup-dir", default=os.getenv("BACKUP_DIR", "./backups"))
-    p_backup.add_argument("--retention", type=int, default=int(os.getenv("BACKUP_RETENTION_DAYS", 7)))
+    p_backup.add_argument(
+        "--retention", type=int, default=int(os.getenv("BACKUP_RETENTION_DAYS", 7))
+    )
     p_backup.set_defaults(func=_backup)
 
     p_reset = sub.add_parser("reset-railway", help="Reset Railway database")
@@ -249,5 +265,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_setup.add_argument("--verify", action="store_true")
     p_setup.add_argument("--check-local", action="store_true")
     p_setup.set_defaults(func=_setup_railway)
-
-

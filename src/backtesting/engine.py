@@ -4,21 +4,34 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-import pandas as pd
-
+import pandas as pd  # type: ignore
+from pandas import DataFrame  # type: ignore
 from performance.metrics import cash_pnl
 from regime.detector import RegimeDetector
-from risk.risk_manager import RiskManager, RiskParameters
-from strategies.base import BaseStrategy
-from config.config_manager import get_config
+from sqlalchemy.exc import SQLAlchemyError
+
+from backtesting.models import Trade as CompletedTrade
 from backtesting.utils import (
     compute_performance_metrics,
-    extract_indicators,
-    extract_ml_predictions,
-    extract_sentiment_data,
 )
+from backtesting.utils import (
+    extract_indicators as util_extract_indicators,
+)
+from backtesting.utils import (
+    extract_ml_predictions as util_extract_ml,
+)
+from backtesting.utils import (
+    extract_sentiment_data as util_extract_sentiment,
+)
+from config.config_manager import get_config
+from config.constants import DEFAULT_INITIAL_BALANCE
+from data_providers.data_provider import DataProvider
+from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
+from risk.risk_manager import RiskManager
+from strategies.base import BaseStrategy
+from position_management.time_exits import TimeExitPolicy
 
 logger = logging.getLogger(__name__)
 
