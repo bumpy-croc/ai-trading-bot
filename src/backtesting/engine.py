@@ -306,10 +306,13 @@ class Backtester:
                     hit_time_limit = False
                     if self.enable_time_limit_exit:
                         if self.time_exit_policy is not None:
-                            should_exit, _reason = self.time_exit_policy.check_time_exit_conditions(
-                                self.current_trade.entry_time, current_time
-                            )
-                            hit_time_limit = should_exit
+                            try:
+                                should_exit, _ = self.time_exit_policy.check_time_exit_conditions(
+                                    self.current_trade.entry_time, current_time
+                                )
+                                hit_time_limit = should_exit
+                            except Exception:
+                                hit_time_limit = False
                         else:
                             hit_time_limit = (
                                 (current_time - self.current_trade.entry_time).total_seconds() > 86400

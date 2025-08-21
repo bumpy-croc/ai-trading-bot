@@ -35,6 +35,13 @@ from live.strategy_manager import StrategyManager
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
 from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
+from config.constants import (
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_WEEKEND_FLAT,
+    DEFAULT_MARKET_TIMEZONE,
+    DEFAULT_TIME_RESTRICTIONS,
+)
 
 from .account_sync import AccountSynchronizer
 
@@ -265,8 +272,36 @@ class LiveTradingEngine:
         self.max_consecutive_errors = max_consecutive_errors
         self.error_cooldown = 300  # 5 minutes
 
-        # Time exit policy
+        # Time exit policy (construct from overrides if not provided)
         self.time_exit_policy = time_exit_policy
+        if self.time_exit_policy is None:
+            overrides = None
+            try:
+                overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, "get_risk_overrides") else None
+            except Exception:
+                overrides = None
+            time_cfg = None
+            if overrides and isinstance(overrides, dict):
+                time_cfg = overrides.get("time_exits")
+            if not time_cfg and self.risk_manager and getattr(self.risk_manager, "params", None):
+                time_cfg = getattr(self.risk_manager.params, "time_exits", None)
+            try:
+                if time_cfg:
+                    tr = time_cfg.get("time_restrictions") or DEFAULT_TIME_RESTRICTIONS
+                    restrictions = TimeRestrictions(
+                        no_overnight=bool(tr.get("no_overnight", False)),
+                        no_weekend=bool(tr.get("no_weekend", False)),
+                        trading_hours_only=bool(tr.get("trading_hours_only", False)),
+                    )
+                    self.time_exit_policy = TimeExitPolicy(
+                        max_holding_hours=time_cfg.get("max_holding_hours", DEFAULT_MAX_HOLDING_HOURS),
+                        end_of_day_flat=time_cfg.get("end_of_day_flat", DEFAULT_END_OF_DAY_FLAT),
+                        weekend_flat=time_cfg.get("weekend_flat", DEFAULT_WEEKEND_FLAT),
+                        market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
+                        time_restrictions=restrictions,
+                    )
+            except Exception:
+                pass
 
         # Threading
         self.main_thread = None
@@ -319,6 +354,20 @@ class LiveTradingEngine:
         # Create new trading session in database if none exists
         if self.trading_session_id is None:
             mode = TradeSource.LIVE if self.enable_live_trading else TradeSource.PAPER
+            # Prepare time-exit session config for persistence
+            tx_cfg = None
+            if self.time_exit_policy:
+                tx_cfg = {
+                    "max_holding_hours": self.time_exit_policy.max_holding_hours,
+                    "end_of_day_flat": self.time_exit_policy.end_of_day_flat,
+                    "weekend_flat": self.time_exit_policy.weekend_flat,
+                    "time_restrictions": {
+                        "no_overnight": self.time_exit_policy.time_restrictions.no_overnight,
+                        "no_weekend": self.time_exit_policy.time_restrictions.no_weekend,
+                        "trading_hours_only": self.time_exit_policy.time_restrictions.trading_hours_only,
+                    },
+                }
+
             self.trading_session_id = self.db_manager.create_trading_session(
                 strategy_name=self.strategy.__class__.__name__,
                 symbol=symbol,
@@ -326,6 +375,8 @@ class LiveTradingEngine:
                 mode=mode,
                 initial_balance=self.current_balance,  # Use current balance (might be recovered)
                 strategy_config=getattr(self.strategy, "config", {}),
+                time_exit_config=tx_cfg,
+                market_timezone=(self.time_exit_policy.market_timezone if self.time_exit_policy else None),
             )
 
             # Initialize balance tracking
