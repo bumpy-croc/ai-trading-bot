@@ -371,6 +371,19 @@ class MlAdaptive(BaseStrategy):
         else:  # short
             return price * (1 + self.stop_loss_pct)
 
+    def get_risk_overrides(self) -> dict:
+        """Provide per-strategy overrides, including trailing stop example."""
+        return {
+            # Keep sizing defaults; trailing stop overrides below
+            "trailing_stop": {
+                "activation_threshold": 0.015,  # 1.5%
+                "trailing_distance_pct": 0.005,  # 0.5%
+                # Use breakeven config matching defaults but explicit for clarity
+                "breakeven_threshold": 0.02,  # 2.0%
+                "breakeven_buffer": 0.001,  # 0.1%
+            }
+        }
+
     def _load_model(self):
         """Load or reload the ONNX model"""
         try:

@@ -423,3 +423,60 @@ DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01
 DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 ```
+
+## Trailing Stops and Breakeven
+
+Trailing stops automatically tighten risk as price moves in your favor, and can optionally move the stop to breakeven once a profit threshold is reached.
+
+- Activation: Starts trailing once sized PnL crosses `activation_threshold` (decimal, e.g., 0.015 = 1.5%).
+- Distance: Choose percentage (`trailing_distance_pct`) or ATR-based (`trailing_distance_atr_mult`). ATR-based takes precedence when ATR is available.
+- Breakeven: When `breakeven_threshold` is reached, stop moves to entry ± `breakeven_buffer` (above for long, below for short).
+- Monotonic tightening: Stops never move against the trade.
+
+### Defaults
+
+The following defaults are available in `src/config/constants.py`:
+
+- `DEFAULT_TRAILING_ACTIVATION_THRESHOLD = 0.015`
+- `DEFAULT_TRAILING_DISTANCE_PCT = 0.005`
+- `DEFAULT_TRAILING_DISTANCE_ATR_MULT = 1.5`
+- `DEFAULT_BREAKEVEN_THRESHOLD = 0.02`
+- `DEFAULT_BREAKEVEN_BUFFER = 0.001`
+
+These map to fields on `RiskParameters` for project-wide defaults.
+
+### Per-Strategy Overrides
+
+Strategies can override trailing parameters via `get_risk_overrides()`:
+
+```python
+class MyStrategy(BaseStrategy):
+    def get_risk_overrides(self):
+        return {
+            'trailing_stop': {
+                'activation_threshold': 0.015,  # 1.5%
+                'trailing_distance_pct': 0.005,  # 0.5%
+                # or 'trailing_distance_atr_mult': 1.5,
+                'breakeven_threshold': 0.02,     # 2.0%
+                'breakeven_buffer': 0.001,       # 0.1%
+            }
+        }
+```
+
+### Engine and Backtester Integration
+
+- Live engine applies trailing updates before exit checks each loop and persists changes to `positions.trailing_stop_price`, `positions.trailing_stop_activated`, `positions.breakeven_triggered`.
+- Backtester updates the in-memory `ActiveTrade.stop_loss` before evaluating exits to simulate live behavior.
+
+### Database Schema
+
+Migration `0004_trailing_stops` adds:
+- `positions.trailing_stop_activated` (bool)
+- `positions.trailing_stop_price` (numeric)
+- `positions.breakeven_triggered` (bool)
+
+Run with Alembic:
+
+```bash
+alembic upgrade head
+```

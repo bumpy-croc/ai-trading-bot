@@ -38,7 +38,8 @@ from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConf
 from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
-from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
+from position_management.time_exits import TimeExitPolicy, TimeRestrictions
+from position_management.trailing_stops import TrailingStopPolicy
 from config.constants import (
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_END_OF_DAY_FLAT,
@@ -78,6 +79,10 @@ class Position:
     take_profit: float | None = None
     unrealized_pnl: float = 0.0
     order_id: str | None = None
+    # Trailing stop runtime state (not persisted here; persisted via db_manager)
+    trailing_stop_activated: bool = False
+    breakeven_triggered: bool = False
+    trailing_stop_price: float | None = None
 
 
 @dataclass
@@ -150,6 +155,8 @@ class LiveTradingEngine:
         enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
         dynamic_risk_config: DynamicRiskConfig | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
+        # Trailing stops
+        trailing_stop_policy: TrailingStopPolicy | None = None,
     ):
         """
         Initialize the live trading engine.
@@ -181,6 +188,9 @@ class LiveTradingEngine:
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
         self.risk_manager = RiskManager(risk_parameters)
+        
+        # Trailing stop policy
+        self.trailing_stop_policy = trailing_stop_policy or self._build_trailing_policy()
         
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -694,6 +704,11 @@ class LiveTradingEngine:
                 )
                 # Update position PnL
                 self._update_position_pnl(current_price)
+                # Apply trailing stop adjustments before exit checks
+                try:
+                    self._update_trailing_stops(df, current_index, float(current_price))
+                except Exception as e:
+                    logger.debug(f"Trailing stop update failed: {e}")
                 # Check exit conditions for existing positions
                 self._check_exit_conditions(df, current_index, current_price)
                 # Check entry conditions if not at maximum positions
@@ -1124,6 +1139,9 @@ class LiveTradingEngine:
                     take_profit=take_profit,
                     quantity=position_value / price,  # Calculate actual quantity
                     session_id=self.trading_session_id,
+                    trailing_stop_activated=False,
+                    trailing_stop_price=None,
+                    breakeven_triggered=False,
                 )
                 self.position_db_ids[order_id] = position_db_id
             else:
@@ -1748,3 +1766,98 @@ class LiveTradingEngine:
             logger.error("❌ Model update initiation failed")
 
         return success
+
+    def _build_trailing_policy(self) -> TrailingStopPolicy | None:
+        """Construct trailing policy from risk parameters and strategy overrides if available."""
+        try:
+            overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, "get_risk_overrides") else None
+        except Exception:
+            overrides = None
+        cfg = None
+        if overrides and isinstance(overrides, dict):
+            cfg = overrides.get("trailing_stop")
+        params = getattr(self.risk_manager, "params", None)
+        if cfg or params:
+            activation = (cfg.get("activation_threshold") if cfg else None) or (
+                params.trailing_activation_threshold if params else None
+            )
+            dist_pct = (cfg.get("trailing_distance_pct") if cfg else None)
+            atr_mult = (cfg.get("trailing_distance_atr_mult") if cfg else None)
+            # Fallback to params trailing_atr_multiplier if not provided via overrides
+            if atr_mult is None and params is not None:
+                atr_mult = params.trailing_atr_multiplier
+            be_thr = (cfg.get("breakeven_threshold") if cfg else None) or (
+                params.breakeven_threshold if params else None
+            )
+            be_buf = (cfg.get("breakeven_buffer") if cfg else None) or (
+                params.breakeven_buffer if params else None
+            )
+            if activation and (dist_pct or atr_mult or (params and (params.trailing_distance_pct or params.trailing_atr_multiplier))):
+                return TrailingStopPolicy(
+                    activation_threshold=float(activation),
+                    trailing_distance_pct=float(dist_pct) if dist_pct is not None else (float(params.trailing_distance_pct) if params and params.trailing_distance_pct is not None else None),
+                    atr_multiplier=float(atr_mult) if atr_mult is not None else None,
+                    breakeven_threshold=float(be_thr) if be_thr is not None else 0.02,
+                    breakeven_buffer=float(be_buf) if be_buf is not None else 0.001,
+                )
+        return None
+
+    def _update_trailing_stops(self, df: pd.DataFrame, current_index: int, current_price: float) -> None:
+        """Apply trailing stop policy to open positions and persist any changes."""
+        if not self.trailing_stop_policy or not self.positions:
+            return
+        # Determine ATR if available
+        atr_value = None
+        try:
+            if "atr" in df.columns and current_index < len(df):
+                val = df["atr"].iloc[current_index]
+                atr_value = float(val) if val is not None and not pd.isna(val) else None
+        except Exception:
+            atr_value = None
+
+        for pos in list(self.positions.values()):
+            side_str = pos.side.value if hasattr(pos.side, "value") else str(pos.side).lower()
+            existing_sl = pos.stop_loss
+            new_stop, act, be = self.trailing_stop_policy.update_trailing_stop(
+                side=side_str,
+                entry_price=float(pos.entry_price),
+                current_price=float(current_price),
+                existing_stop=float(existing_sl) if existing_sl is not None else None,
+                position_fraction=float(pos.size),
+                atr=atr_value,
+                trailing_activated=bool(pos.trailing_stop_activated),
+                breakeven_triggered=bool(pos.breakeven_triggered),
+            )
+            changed = False
+            if new_stop is not None and (existing_sl is None or (side_str == "long" and new_stop > float(existing_sl)) or (side_str == "short" and new_stop < float(existing_sl))):
+                pos.stop_loss = new_stop
+                pos.trailing_stop_price = new_stop
+                changed = True
+            if act != pos.trailing_stop_activated or be != pos.breakeven_triggered:
+                pos.trailing_stop_activated = act
+                pos.breakeven_triggered = be
+                changed = True or changed
+
+            if changed:
+                # Persist to database if known
+                try:
+                    position_db_id = self.position_db_ids.get(pos.order_id) if pos.order_id else None
+                    if position_db_id is not None:
+                        self.db_manager.update_position(
+                            position_id=position_db_id,
+                            stop_loss=pos.stop_loss,
+                            trailing_stop_activated=pos.trailing_stop_activated,
+                            trailing_stop_price=pos.trailing_stop_price,
+                            breakeven_triggered=pos.breakeven_triggered,
+                        )
+                except Exception:
+                    pass
+                # Log change
+                try:
+                    logger.info(
+                        f"Trailing stop updated for {pos.symbol} {side_str}: SL={pos.stop_loss:.4f} (activated={pos.trailing_stop_activated}, BE={pos.breakeven_triggered})"
+                    )
+                except Exception:
+                    logger.info(
+                        f"Trailing stop updated for {pos.symbol} {side_str}: activated={pos.trailing_stop_activated}, BE={pos.breakeven_triggered}"
+                    )

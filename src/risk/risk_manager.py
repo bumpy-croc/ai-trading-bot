@@ -4,6 +4,13 @@ from typing import Any, Optional
 import pandas as pd
 
 from src.indicators.technical import calculate_atr
+from src.config.constants import (
+    DEFAULT_TRAILING_ACTIVATION_THRESHOLD,
+    DEFAULT_TRAILING_DISTANCE_PCT,
+    DEFAULT_TRAILING_DISTANCE_ATR_MULT,
+    DEFAULT_BREAKEVEN_THRESHOLD,
+    DEFAULT_BREAKEVEN_BUFFER,
+)
 
 
 @dataclass
@@ -21,6 +28,12 @@ class RiskParameters:
     atr_period: int = 14
     # Time exit config (optional; strategies may override)
     time_exits: Optional[dict] = None
+    # Trailing stop config (engine/backtester may override via strategy.get_risk_overrides())
+    trailing_activation_threshold: float = DEFAULT_TRAILING_ACTIVATION_THRESHOLD
+    trailing_distance_pct: Optional[float] = DEFAULT_TRAILING_DISTANCE_PCT
+    trailing_atr_multiplier: Optional[float] = DEFAULT_TRAILING_DISTANCE_ATR_MULT
+    breakeven_threshold: float = DEFAULT_BREAKEVEN_THRESHOLD
+    breakeven_buffer: float = DEFAULT_BREAKEVEN_BUFFER
 
     def __post_init__(self):
         """Validate risk parameters after initialization"""

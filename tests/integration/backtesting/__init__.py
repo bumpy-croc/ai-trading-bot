@@ -1,0 +1,1 @@
+# Mark package to avoid test module import collisions

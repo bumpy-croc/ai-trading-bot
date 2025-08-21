@@ -160,6 +160,9 @@ class Position(Base):
     stop_loss = Column(Numeric(18, 8))
     take_profit = Column(Numeric(18, 8))
     trailing_stop = Column(Boolean, default=False)
+    trailing_stop_activated = Column(Boolean, default=False)
+    trailing_stop_price = Column(Numeric(18, 8))
+    breakeven_triggered = Column(Boolean, default=False)
 
     # Timestamps
     entry_time = Column(DateTime, nullable=False, index=True)

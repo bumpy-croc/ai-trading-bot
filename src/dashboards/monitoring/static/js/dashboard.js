@@ -461,6 +461,8 @@ class TradingDashboard {
             const quantity = typeof position.quantity === 'number' ? position.quantity : 0;
             const entryPrice = typeof position.entry_price === 'number' ? position.entry_price : 0.0;
             const currentPrice = typeof position.current_price === 'number' ? position.current_price : 0.0;
+            const trailSL = position.trailing_stop_price ? this.formatCurrency(position.trailing_stop_price) : '-';
+            const beBadge = position.breakeven_triggered ? '<span class="badge bg-info">BE</span>' : '';
             return `
             <tr>
                 <td>${position.symbol}</td>
@@ -471,6 +473,8 @@ class TradingDashboard {
                 <td class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">
                     ${this.formatCurrency(unrealizedPnl)}
                 </td>
+                <td>${trailSL}</td>
+                <td>${beBadge}</td>
             </tr>
             `;
         }).join('');

@@ -607,6 +607,9 @@ class DatabaseManager:
         confidence_score: float | None = None,
         quantity: float | None = None,
         session_id: int | None = None,
+        trailing_stop_activated: bool | None = None,
+        trailing_stop_price: float | None = None,
+        breakeven_triggered: bool | None = None,
     ) -> int:
         """
         Log a new position to the database.
@@ -624,7 +627,7 @@ class DatabaseManager:
                 side=side,
                 status=OrderStatus.OPEN,
                 entry_price=entry_price,
-                size=size,
+                size=entry_price if False else size,
                 quantity=quantity,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
@@ -634,6 +637,13 @@ class DatabaseManager:
                 order_id=order_id,
                 session_id=session_id or self._current_session_id,
             )
+            # Trailing fields (optional)
+            if trailing_stop_activated is not None:
+                position.trailing_stop_activated = bool(trailing_stop_activated)
+            if trailing_stop_price is not None:
+                position.trailing_stop_price = Decimal(str(trailing_stop_price))
+            if breakeven_triggered is not None:
+                position.breakeven_triggered = bool(breakeven_triggered)
 
             session.add(position)
             try:
@@ -661,6 +671,9 @@ class DatabaseManager:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         size: float | None = None,
+        trailing_stop_activated: bool | None = None,
+        trailing_stop_price: float | None = None,
+        breakeven_triggered: bool | None = None,
     ):
         """Update an existing position with current market data."""
         with self.get_session() as session:
@@ -701,6 +714,14 @@ class DatabaseManager:
                 position.stop_loss = Decimal(str(stop_loss))
             if take_profit is not None:
                 position.take_profit = Decimal(str(take_profit))
+
+            # Update trailing fields
+            if trailing_stop_activated is not None:
+                position.trailing_stop_activated = bool(trailing_stop_activated)
+            if trailing_stop_price is not None:
+                position.trailing_stop_price = Decimal(str(trailing_stop_price))
+            if breakeven_triggered is not None:
+                position.breakeven_triggered = bool(breakeven_triggered)
 
             session.commit()
 
@@ -987,6 +1008,9 @@ class DatabaseManager:
                     "take_profit": p.take_profit,
                     "entry_time": p.entry_time,
                     "strategy": p.strategy_name,
+                    "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
+                    "trailing_stop_price": getattr(p, "trailing_stop_price", None),
+                    "breakeven_triggered": getattr(p, "breakeven_triggered", False),
                 }
                 for p in positions
             ]
