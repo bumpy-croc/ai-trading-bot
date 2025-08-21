@@ -338,6 +338,38 @@ class MonitoringDashboard:
             except Exception as e:
                 return jsonify({"items": [], "error": str(e)}), 200
 
+        @self.app.route("/api/correlation/matrix")
+        def get_correlation_matrix():
+            """Return recent correlation matrix entries (flattened)."""
+            try:
+                rows = self.db_manager.execute_query(
+                    """
+                    SELECT symbol_pair, correlation_value, p_value, sample_size, last_updated, window_days
+                    FROM correlation_matrix
+                    ORDER BY last_updated DESC
+                    LIMIT 200
+                    """
+                )
+                return jsonify({"items": rows})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
+
+        @self.app.route("/api/correlation/exposures")
+        def get_portfolio_exposures():
+            """Return latest portfolio exposure per correlation group."""
+            try:
+                rows = self.db_manager.execute_query(
+                    """
+                    SELECT correlation_group, total_exposure, position_count, symbols, last_updated
+                    FROM portfolio_exposures
+                    ORDER BY last_updated DESC
+                    LIMIT 100
+                    """
+                )
+                return jsonify({"items": rows})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
+
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""
 

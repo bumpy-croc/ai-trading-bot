@@ -39,6 +39,7 @@ from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
 from position_management.time_exits import TimeExitPolicy
+from position_management.correlation_engine import CorrelationEngine, CorrelationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,17 @@ class Backtester:
 
         # Risk manager (parity with live engine)
         self.risk_manager = RiskManager(risk_parameters)
+        # Correlation engine (for correlation-aware backtests)
+        try:
+            corr_cfg = CorrelationConfig(
+                correlation_window_days=self.risk_manager.params.correlation_window_days,
+                correlation_threshold=self.risk_manager.params.correlation_threshold,
+                max_correlated_exposure=self.risk_manager.params.max_correlated_exposure,
+                correlation_update_frequency_hours=self.risk_manager.params.correlation_update_frequency_hours,
+            )
+            self.correlation_engine = CorrelationEngine(config=corr_cfg)
+        except Exception:
+            self.correlation_engine = None
         # Regime detector (always available for analytics/tests)
         try:
             self.regime_detector = RegimeDetector()
@@ -583,6 +595,42 @@ class Backtester:
                     except Exception:
                         overrides = None
                     if overrides and overrides.get("position_sizer"):
+                        # Build correlation context if available
+                        correlation_ctx = None
+                        try:
+                            if self.correlation_engine is not None:
+                                # Use available df as candidate series and fetch for other open symbols
+                                symbols_to_check = set([symbol]) | set(
+                                    t.symbol for t in self.positions
+                                ) if hasattr(self, "positions") and self.positions else set([symbol])
+                                price_series: dict[str, pd.Series] = {str(symbol): df["close"].copy()}
+                                end_ts = df.index[-1] if len(df) > 0 else None
+                                start_ts = end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days) if end_ts is not None else None
+                                for sym in symbols_to_check:
+                                    s = str(sym)
+                                    if s in price_series:
+                                        continue
+                                    try:
+                                        if start_ts is not None and end_ts is not None:
+                                            hist = self.data_provider.get_historical_data(
+                                                s,
+                                                timeframe=timeframe,
+                                                start=start_ts.to_pydatetime(),
+                                                end=end_ts.to_pydatetime(),
+                                            )
+                                            if not hist.empty and "close" in hist:
+                                                price_series[s] = hist["close"]
+                                    except Exception:
+                                        continue
+                                corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
+                                correlation_ctx = {
+                                    "engine": self.correlation_engine,
+                                    "candidate_symbol": symbol,
+                                    "corr_matrix": corr_matrix,
+                                    "max_exposure_override": overrides.get("correlation_control", {}).get("max_correlated_exposure") if overrides else None,
+                                }
+                        except Exception:
+                            correlation_ctx = None
                         size_fraction = self.risk_manager.calculate_position_fraction(
                             df=df,
                             index=i,
@@ -590,6 +638,7 @@ class Backtester:
                             price=current_price,
                             indicators=self._extract_indicators(df, i),
                             strategy_overrides=overrides,
+                            correlation_ctx=correlation_ctx,
                         )
                     else:
                         size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
