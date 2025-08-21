@@ -539,3 +539,78 @@ class PredictionPerformance(Base):
     )
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DynamicPerformanceMetrics(Base):
+    """Dynamic performance metrics for adaptive risk management"""
+
+    __tablename__ = "dynamic_performance_metrics"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    
+    # Rolling performance metrics
+    rolling_win_rate = Column(Numeric(18, 8))
+    rolling_sharpe_ratio = Column(Numeric(18, 8))
+    current_drawdown = Column(Numeric(18, 8))
+    volatility_30d = Column(Numeric(18, 8))
+    consecutive_losses = Column(Integer, default=0)
+    consecutive_wins = Column(Integer, default=0)
+    
+    # Risk adjustment factor applied
+    risk_adjustment_factor = Column(Numeric(18, 8), default=1.0)
+    
+    # Additional performance indicators
+    profit_factor = Column(Numeric(18, 8))
+    expectancy = Column(Numeric(18, 8))
+    avg_trade_duration_hours = Column(Numeric(18, 8))
+    
+    # Session reference
+    session_id = Column(Integer, ForeignKey("trading_sessions.id"), nullable=False)
+    
+    __table_args__ = (
+        Index("idx_dynamic_perf_timestamp", "timestamp"),
+        Index("idx_dynamic_perf_session", "session_id"),
+    )
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RiskAdjustment(Base):
+    """Risk parameter adjustments tracking"""
+
+    __tablename__ = "risk_adjustments"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    
+    # Adjustment type and trigger
+    adjustment_type = Column(String(50), nullable=False)  # 'drawdown', 'performance', 'volatility'
+    trigger_reason = Column(String(200))  # Detailed reason for adjustment
+    
+    # Original and adjusted values
+    parameter_name = Column(String(100), nullable=False)  # e.g., 'position_size_factor', 'stop_loss_multiplier'
+    original_value = Column(Numeric(18, 8), nullable=False)
+    adjusted_value = Column(Numeric(18, 8), nullable=False)
+    adjustment_factor = Column(Numeric(18, 8), nullable=False)
+    
+    # Context for the adjustment
+    current_drawdown = Column(Numeric(18, 8))
+    performance_score = Column(Numeric(18, 8))
+    volatility_level = Column(Numeric(18, 8))
+    
+    # Duration and effectiveness
+    duration_minutes = Column(Integer)  # How long the adjustment was active
+    trades_during_adjustment = Column(Integer, default=0)
+    pnl_during_adjustment = Column(Numeric(18, 8))
+    
+    # Session reference
+    session_id = Column(Integer, ForeignKey("trading_sessions.id"), nullable=False)
+    
+    __table_args__ = (
+        Index("idx_risk_adj_timestamp", "timestamp"),
+        Index("idx_risk_adj_type", "adjustment_type"),
+        Index("idx_risk_adj_session", "session_id"),
+    )
+
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -1,0 +1,1 @@
+"""Test initialization for position_management module"""

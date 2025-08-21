@@ -33,6 +33,9 @@ from data_providers.data_provider import DataProvider
 from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
+from performance.metrics import cash_pnl
+from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
+from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
 from position_management.time_exits import TimeExitPolicy
@@ -83,6 +86,9 @@ class Backtester:
         legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
         enable_engine_risk_exits: bool = False,  # Enforce engine-level SL/TP exits (off to preserve baseline)
         time_exit_policy: TimeExitPolicy | None = None,
+        # Dynamic risk management
+        enable_dynamic_risk: bool = False,  # Disabled by default for backtesting to preserve historical results
+        dynamic_risk_config: Optional[DynamicRiskConfig] = None,
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -93,6 +99,18 @@ class Backtester:
         self.peak_balance = initial_balance
         self.trades: list[dict] = []
         self.current_trade: Optional[ActiveTrade] = None
+        self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
+
+        # Dynamic risk management
+        self.enable_dynamic_risk = enable_dynamic_risk
+        self.dynamic_risk_manager = None
+        self.session_id = None  # Will be set when database is available
+        if enable_dynamic_risk:
+            config = dynamic_risk_config or DynamicRiskConfig()
+            # Merge strategy overrides with base config
+            final_config = self._merge_dynamic_risk_config(config, strategy)
+            # Initialize without db_manager for now - will be set later if database logging is enabled
+            self.dynamic_risk_manager = DynamicRiskManager(final_config, db_manager=None)
 
         # Feature flags for parity tuning
         self.enable_short_trading = enable_short_trading
@@ -173,6 +191,87 @@ class Backtester:
 
                     self.db_manager = DummyDBManager()
 
+    def _merge_dynamic_risk_config(self, base_config: DynamicRiskConfig, strategy) -> DynamicRiskConfig:
+        """Merge strategy risk overrides with base dynamic risk configuration"""
+        try:
+            # Get strategy risk overrides
+            strategy_overrides = strategy.get_risk_overrides() if strategy else None
+            if not strategy_overrides or 'dynamic_risk' not in strategy_overrides:
+                return base_config
+                
+            dynamic_overrides = strategy_overrides['dynamic_risk']
+            
+            # Create a new config with merged values
+            merged_config = DynamicRiskConfig(
+                enabled=dynamic_overrides.get('enabled', base_config.enabled),
+                performance_window_days=dynamic_overrides.get('performance_window_days', base_config.performance_window_days),
+                drawdown_thresholds=dynamic_overrides.get('drawdown_thresholds', base_config.drawdown_thresholds),
+                risk_reduction_factors=dynamic_overrides.get('risk_reduction_factors', base_config.risk_reduction_factors),
+                recovery_thresholds=dynamic_overrides.get('recovery_thresholds', base_config.recovery_thresholds),
+                volatility_adjustment_enabled=dynamic_overrides.get('volatility_adjustment_enabled', base_config.volatility_adjustment_enabled),
+                volatility_window_days=dynamic_overrides.get('volatility_window_days', base_config.volatility_window_days),
+                high_volatility_threshold=dynamic_overrides.get('high_volatility_threshold', base_config.high_volatility_threshold),
+                low_volatility_threshold=dynamic_overrides.get('low_volatility_threshold', base_config.low_volatility_threshold),
+                volatility_risk_multipliers=dynamic_overrides.get('volatility_risk_multipliers', base_config.volatility_risk_multipliers)
+            )
+            
+            # Note: Using print since logger might not be available yet during initialization
+            print(f"Merged strategy dynamic risk overrides from {strategy.__class__.__name__}")
+            return merged_config
+            
+        except Exception as e:
+            print(f"Failed to merge strategy dynamic risk overrides: {e}")
+            return base_config
+
+    def _get_dynamic_risk_adjusted_size(self, original_size: float, current_time: datetime) -> float:
+        """Apply dynamic risk adjustments to position size in backtesting"""
+        if not self.dynamic_risk_manager:
+            return original_size
+            
+        try:
+            # Calculate dynamic risk adjustments
+            adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
+                current_balance=self.balance,
+                peak_balance=self.peak_balance,
+                session_id=self.trading_session_id
+            )
+            
+            # Apply position size adjustment
+            adjusted_size = original_size * adjustments.position_size_factor
+            
+            # Log significant adjustments for analysis
+            if abs(adjustments.position_size_factor - 1.0) > 0.1:  # >10% change
+                logger.debug(
+                    f"Dynamic risk adjustment at {current_time}: "
+                    f"size factor={adjustments.position_size_factor:.2f}, "
+                    f"reason={adjustments.primary_reason}"
+                )
+                
+                # Track adjustment for backtest results
+                self.dynamic_risk_adjustments.append({
+                    'timestamp': current_time,
+                    'position_size_factor': adjustments.position_size_factor,
+                    'stop_loss_tightening': adjustments.stop_loss_tightening,
+                    'daily_risk_factor': adjustments.daily_risk_factor,
+                    'primary_reason': adjustments.primary_reason,
+                    'current_drawdown': adjustments.adjustment_details.get('current_drawdown'),
+                    'balance': self.balance,
+                    'peak_balance': self.peak_balance,
+                    'original_size': original_size,
+                    'adjusted_size': adjusted_size
+                })
+            
+            return adjusted_size
+            
+        except Exception as e:
+            logger.warning(f"Failed to apply dynamic risk adjustment: {e}")
+            return original_size
+
+    def _update_peak_balance(self):
+        """Update peak balance for drawdown tracking"""
+        if self.balance > self.peak_balance:
+            self.peak_balance = self.balance
+
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
     ) -> dict:
@@ -193,6 +292,10 @@ class Backtester:
                 # Set session ID on strategy for logging
                 if hasattr(self.strategy, "session_id"):
                     self.strategy.session_id = self.trading_session_id
+
+                # Update dynamic risk manager with database connection
+                if self.enable_dynamic_risk and self.dynamic_risk_manager and self.db_manager:
+                    self.dynamic_risk_manager.db_manager = self.db_manager
 
             # Fetch price data
             df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
@@ -391,6 +494,9 @@ class Backtester:
                         # Update balance
                         self.balance += trade_pnl_cash
 
+                        # Update peak balance for drawdown tracking
+                        self._update_peak_balance()
+
                         # Update metrics
                         total_trades += 1
                         if trade_pnl_cash > 0:
@@ -487,6 +593,12 @@ class Backtester:
                         )
                     else:
                         size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+
+                    # Apply dynamic risk adjustments
+                    if size_fraction > 0 and self.enable_dynamic_risk:
+                        size_fraction = self._get_dynamic_risk_adjusted_size(
+                            size_fraction, current_time
+                        )
 
                     # Log entry decision
                     if self.log_to_database and self.db_manager:
@@ -609,6 +721,12 @@ class Backtester:
                         )
                     else:
                         size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+
+                    # Apply dynamic risk adjustments
+                    if size_fraction > 0 and self.enable_dynamic_risk:
+                        size_fraction = self._get_dynamic_risk_adjusted_size(
+                            size_fraction, current_time
+                        )
 
                     if self.log_to_database and self.db_manager:
                         indicators = self._extract_indicators(df, i)
@@ -819,11 +937,54 @@ class Backtester:
                     "mape_pct": mape,
                     "brier_score_direction": brier,
                 },
+                "dynamic_risk_adjustments": self.dynamic_risk_adjustments if self.enable_dynamic_risk else [],
+                "dynamic_risk_summary": self._summarize_dynamic_risk_adjustments() if self.enable_dynamic_risk else None,
             }
 
         except Exception as e:
             logger.error(f"Error running backtest: {str(e)}")
             raise
+
+    def _summarize_dynamic_risk_adjustments(self) -> dict:
+        """Summarize dynamic risk adjustments for backtest results"""
+        if not self.dynamic_risk_adjustments:
+            return {
+                "total_adjustments": 0,
+                "adjustment_frequency": 0.0,
+                "average_factor": 1.0,
+                "most_common_reason": None,
+                "max_reduction": 0.0,
+                "time_under_adjustment": 0.0
+            }
+        
+        total_adjustments = len(self.dynamic_risk_adjustments)
+        factors = [adj['position_size_factor'] for adj in self.dynamic_risk_adjustments]
+        reasons = [adj['primary_reason'] for adj in self.dynamic_risk_adjustments]
+        
+        # Count reason frequencies
+        from collections import Counter
+        reason_counts = Counter(reasons)
+        most_common_reason = reason_counts.most_common(1)[0][0] if reason_counts else None
+        
+        # Calculate statistics
+        average_factor = sum(factors) / len(factors) if factors else 1.0
+        max_reduction = 1.0 - min(factors) if factors else 0.0
+        
+        # Estimate time under adjustment (simplified)
+        if len(self.dynamic_risk_adjustments) > 1:
+            time_under_adjustment = len(self.dynamic_risk_adjustments) / 100.0  # Rough estimate
+        else:
+            time_under_adjustment = 0.0
+        
+        return {
+            "total_adjustments": total_adjustments,
+            "adjustment_frequency": total_adjustments / 100.0,  # Rough frequency
+            "average_factor": average_factor,
+            "most_common_reason": most_common_reason,
+            "max_reduction": max_reduction,
+            "time_under_adjustment": time_under_adjustment,
+            "reason_breakdown": dict(reason_counts)
+        }
 
     # --------------------
     # Modularized helpers
