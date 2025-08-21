@@ -41,3 +41,4 @@ pre-commit==3.7.0
 ruff==0.5.7
 black==24.8.0
 mypy==1.11.1
+bandit==1.7.9
