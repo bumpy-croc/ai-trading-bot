@@ -9,6 +9,8 @@ import pandas as pd
 from src.backtesting.engine import Backtester
 from src.position_management.dynamic_risk import DynamicRiskConfig
 
+pytestmark = pytest.mark.integration
+
 
 class MockStrategy:
     """Mock strategy for testing"""
@@ -23,6 +25,10 @@ class MockStrategy:
     
     def calculate_indicators(self, df):
         return df
+    
+    def get_risk_overrides(self):
+        """Required for dynamic risk configuration"""
+        return {}
 
 
 class MockDataProvider:
@@ -32,8 +38,8 @@ class MockDataProvider:
         return pd.DataFrame()
 
 
-class TestBacktestingDynamicRisk:
-    """Test dynamic risk management in backtesting"""
+class TestBacktestingDynamicRiskIntegration:
+    """Integration tests for dynamic risk management in backtesting"""
     
     def test_backtester_with_dynamic_risk_disabled(self):
         """Test backtester creation with dynamic risk disabled"""
