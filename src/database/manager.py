@@ -7,10 +7,11 @@ PostgreSQL database manager for handling all database operations
 import logging
 import math
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Generator
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, create_engine, text  # type: ignore
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # type: ignore
@@ -268,7 +269,8 @@ class DatabaseManager:
                     if hasattr(self.engine.pool, nm):
                         val = getattr(self.engine.pool, nm)
                         return val() if callable(val) else val
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get pool attribute {nm}: {e}")
                 pass
             return default
 
@@ -569,7 +571,7 @@ class DatabaseManager:
                 # Handle duplicate order_id by adding a unique suffix and retrying once
                 if "order_id" in str(dup).lower():
                     session.rollback()
-                    trade.order_id = f"{order_id}_{int(datetime.utcnow().timestamp()*1000)}"
+                    trade.order_id = f"{order_id}_{int(datetime.utcnow().timestamp() * 1000)}"
                     session.add(trade)
                     session.commit()
                 else:
@@ -633,7 +635,7 @@ class DatabaseManager:
             except IntegrityError as dup:
                 if "order_id" in str(dup).lower():
                     session.rollback()
-                    position.order_id = f"{order_id}_{int(datetime.utcnow().timestamp()*1000)}"
+                    position.order_id = f"{order_id}_{int(datetime.utcnow().timestamp() * 1000)}"
                     session.add(position)
                     session.commit()
                 else:

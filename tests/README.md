@@ -27,4 +27,4 @@ python tests/run_tests.py --coverage
 
 ## Notes
 - Uses PostgreSQL Testcontainers for database tests
-- See `pytest.ini` and `tests/run_tests.py` for configuration and options 
+- See `pytest.ini` and `tests/run_tests.py` for configuration and options

@@ -19,4 +19,4 @@ Features:
 Security:
 - Scripts download pinned commits
 - Non-root execution where possible
-- Logged operations for audit 
+- Logged operations for audit

@@ -247,7 +247,7 @@ class TestPerformanceBenchmark:
 
         print(f"Total Duration: {total_duration:.2f} seconds")
         print(f"Total Tests: {total_tests}")
-        print(f"Overall Rate: {total_tests/total_duration:.1f} tests/second")
+        print(f"Overall Rate: {total_tests / total_duration:.1f} tests/second")
         print()
 
         print("Individual Results:")

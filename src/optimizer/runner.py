@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -31,7 +32,9 @@ class _FixtureProvider(DataProvider):
         df.set_index("timestamp", inplace=True)
         return df
 
-    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None) -> pd.DataFrame:  # type: ignore[override]
+    def get_historical_data(
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
+    ) -> pd.DataFrame:  # type: ignore[override]
         if self.df.empty:
             return self.df
         end = end or pd.Timestamp.now()
@@ -95,7 +98,9 @@ class _RandomWalkProvider(DataProvider):
         )
         return df
 
-    def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None) -> pd.DataFrame:  # type: ignore[override]
+    def get_historical_data(
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
+    ) -> pd.DataFrame:  # type: ignore[override]
         end = end or pd.Timestamp.now()
         return self.df.loc[
             (self.df.index >= pd.Timestamp(start)) & (self.df.index <= pd.Timestamp(end))
@@ -116,6 +121,9 @@ class _RandomWalkProvider(DataProvider):
 
 class ExperimentRunner:
     """Runs backtests for given experiment configurations."""
+
+    def __init__(self):
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     def _load_provider(
         self,
@@ -162,8 +170,9 @@ class ExperimentRunner:
                     if hasattr(strategy, attr):
                         try:
                             setattr(strategy, attr, value)
-                        except Exception:
+                        except Exception as e:
                             # Ignore invalid attribute assignments to keep runner robust
+                            self.logger.debug(f"Failed to set attribute {attr}={value}: {e}")
                             pass
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:

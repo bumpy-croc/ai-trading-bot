@@ -22,8 +22,8 @@ A short, plain-language reference for understanding the decisions made in this t
 
 Our bot ingests multiple data flavours; combining them tends to outperform any single source.
 
-1. **Price Action (OHLCV)**  
-   • Raw candles: Open, High, Low, Close, Volume.  
+1. **Price Action (OHLCV)**
+   • Raw candles: Open, High, Low, Close, Volume.
    • Feeds technical indicators & ML features.
 
 2. **Technical Indicators** – mathematical summaries of price/volume patterns.
@@ -35,17 +35,17 @@ Our bot ingests multiple data flavours; combining them tends to outperform any s
    - **Volume-based**: OBV, VWAP – confirm strength.
 
 3. **Sentiment Data** – crowd mood signals.
-   - Source: SentiCrypt API (scores ‑1 → +1 every 2 h).  
+   - Source: SentiCrypt API (scores ‑1 → +1 every 2 h).
    - Derived features: sentiment momentum, volatility, extremes, moving averages.
 
 4. **Machine-Learning Models**
    - **Feature Engineering**: stack indicators + sentiment + macro signals.
-   - **Algorithms**: Gradient Boosting, LSTM/CNN, ensembles.  
+   - **Algorithms**: Gradient Boosting, LSTM/CNN, ensembles.
    - **ONNX exports** for fast inference inside strategies.
    - Goal: Predict *direction* or *probability* of price move > threshold.
 
 5. **Meta-Signals**
-   - **Correlation / Cointegration** with other assets.  
+   - **Correlation / Cointegration** with other assets.
    - **Seasonality / Time-of-Day** patterns.
 
 > Better accuracy emerges from diverse, de-correlated inputs (the “wisdom of data crowds”).

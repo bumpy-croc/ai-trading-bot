@@ -102,4 +102,4 @@ ENVIRONMENT=staging python scripts/test_secrets_access.py
 
 ## Conclusion
 
-This configuration system provides enterprise-grade secret management while maintaining simplicity for local development. It's a significant security improvement that doesn't compromise developer experience. 
+This configuration system provides enterprise-grade secret management while maintaining simplicity for local development. It's a significant security improvement that doesn't compromise developer experience.

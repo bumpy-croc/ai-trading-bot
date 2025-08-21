@@ -92,8 +92,8 @@ future we will enable continuous PITR exports.
 
 A restore drill is performed **quarterly**:
 
-1. A random backup from the past 90 days is restored into a sandbox DB.  
-2. Integration tests (`tests/run_tests.py all`) are executed against it.  
+1. A random backup from the past 90 days is restored into a sandbox DB.
+2. Integration tests (`tests/run_tests.py all`) are executed against it.
 3. Results are logged in the audit wiki.
 
 ---

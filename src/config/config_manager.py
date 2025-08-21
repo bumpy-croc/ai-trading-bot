@@ -81,7 +81,7 @@ class ConfigManager:
         if value is None:
             available = [p.provider_name for p in self.providers if p.is_available()]
             raise ValueError(
-                f"Required configuration '{key}' not found. " f"Checked providers: {available}"
+                f"Required configuration '{key}' not found. Checked providers: {available}"
             )
         return value
 
