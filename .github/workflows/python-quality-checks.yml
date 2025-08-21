@@ -27,11 +27,7 @@ jobs:
         run: black --check .
 
       - name: Mypy
-        run: |
-          # Mypy type checking - most modules are configured to ignore errors in mypy.ini
-          echo "Running mypy type checking..."
-          echo "Note: Most modules are configured to ignore errors in mypy.ini due to complex type issues"
-          echo "✅ Mypy configuration updated successfully"
+        run: python bin/run_mypy.py
 
       - name: Bandit
         run: bandit -c pyproject.toml -r src

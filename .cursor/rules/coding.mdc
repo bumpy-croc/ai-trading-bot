@@ -87,6 +87,7 @@
 - **Style Guide:** Adhere to the Google Python Style Guide.
 - **Docstrings:** Use Google Style Docstrings.
 - Use `tqdm` whenever I ask to add a progress bar.
+- Run ruff, mypy and bandit after editing files and fix any linting, type and security issues.
 
 ### 4.5. JavaScript
 - **Style Guide:** Adhere to the Airbnb JavaScript Style Guide.
@@ -95,17 +96,6 @@
 ### 4.6. TypeScript
 - **Style Guide:** Adhere to the TypeScript Deep Dive Guide.
 - **Docstrings:** Use TSDoc.
-
-### 4.7. C#
-- **Style Guide:** Follow Microsoft's C# Coding Conventions.
-- **Documentation Comments:** Use XML Documentation Comments for public APIs (e.g., `/// <summary>… </summary>`).
-
-### 4.8. C++
-- **Style Guide:** Consider guidelines from the ISO C++ Core Guidelines or Google C++ Style Guide. Project-specific styles will take precedence if provided.
-- **Documentation Comments:** Use Doxygen-style comments (`/** … */` or `/// …`) if not specified otherwise.
-
-### 4.9. PowerShell
-- **String Concatenation:** When concatenating variables within strings, especially if variable values might contain special characters (e.g., `:`, `(`), use the `-f` format operator for safety. Example: `"{0}: {1}" -f $var1, $var2` instead of `"$var1: $var2"`.
 
 ### 4.10. Documentation
 - Don't create excess documentation. When you do, it should live in the `docs` folder.
