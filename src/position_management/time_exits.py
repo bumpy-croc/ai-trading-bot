@@ -106,7 +106,18 @@ class MarketSessionDef:
                         next_day = candidate
                         found = True
                         break
+                max_iterations = 7  # There are only 7 days in a week
+                iterations = 0
+                while iterations < max_iterations:
+                    candidate = next_day + timedelta(days=advance)
+                    if candidate.isoweekday() in self.days_of_week:
+                        next_day = candidate
+                        break
                     advance += 1
+                    iterations += 1
+                else:
+                    # If we didn't find a valid day, raise an error or return None
+                    raise ValueError("No valid session day found within 7 days. Check days_of_week configuration.")
                 if not found:
                     raise ValueError("No valid session day found within MAX_ADVANCE_DAYS")
             close_today = next_day.replace(
