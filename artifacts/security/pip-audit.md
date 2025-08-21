@@ -1,7 +1,7 @@
 # Dependency Security Audit Report
 
-**Date:** 2025-01-20  
-**Tool:** pip-audit  
+**Date:** 2025-01-20
+**Tool:** pip-audit
 **Status:** ⚠️ 6 vulnerabilities found in 5 packages
 
 ## Summary
@@ -17,7 +17,7 @@ The security audit identified **6 known vulnerabilities** across **5 packages** 
 - **Description:** Sensitive data leakage in TfidfVectorizer - tokens stored in `stop_words_` attribute may contain sensitive information like passwords or keys
 
 ### 2. requests (2.31.0)
-- **Vulnerabilities:** 
+- **Vulnerabilities:**
   - **GHSA-9wx4-h78v-vm56 / CVE-2024-35195**
     - Fix Version: 2.32.0
     - Description: Certificate verification bypass in Session objects

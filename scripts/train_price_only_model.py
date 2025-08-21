@@ -189,7 +189,7 @@ def train_model(df: pd.DataFrame, seq_len: int, epochs: int = 10, lr: float = 1e
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
-        print(f"Epoch {epoch+1}/{epochs} | Loss: {np.mean(losses):.6f} | Batches: {len(dl)}")
+        print(f"Epoch {epoch + 1}/{epochs} | Loss: {np.mean(losses):.6f} | Batches: {len(dl)}")
     return model.cpu()
 
 

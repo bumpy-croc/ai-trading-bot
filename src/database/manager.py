@@ -570,7 +570,7 @@ class DatabaseManager:
                 # Handle duplicate order_id by adding a unique suffix and retrying once
                 if "order_id" in str(dup).lower():
                     session.rollback()
-                    trade.order_id = f"{order_id}_{int(datetime.utcnow().timestamp()*1000)}"
+                    trade.order_id = f"{order_id}_{int(datetime.utcnow().timestamp() * 1000)}"
                     session.add(trade)
                     session.commit()
                 else:
@@ -634,7 +634,7 @@ class DatabaseManager:
             except IntegrityError as dup:
                 if "order_id" in str(dup).lower():
                     session.rollback()
-                    position.order_id = f"{order_id}_{int(datetime.utcnow().timestamp()*1000)}"
+                    position.order_id = f"{order_id}_{int(datetime.utcnow().timestamp() * 1000)}"
                     session.add(position)
                     session.commit()
                 else:
