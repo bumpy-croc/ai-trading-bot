@@ -1,0 +1,67 @@
+name: Nightly Copilot Docs Agent
+
+on:
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC nightly
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-copilot-docs-agent
+  cancel-in-progress: false
+
+jobs:
+  launch-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      COPILOT_ASSIGNEE: ${{ vars.COPILOT_ASSIGNEE || 'copilot' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine date
+        id: vars
+        shell: bash
+        run: |
+          echo "date=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Build Copilot agent prompt
+        run: |
+          DATE="${{ steps.vars.outputs.date }}"
+          {
+            echo "# Copilot Background Agent Task"
+            echo
+            echo "Please scan the entire repository and ensure all documentation is up to date."
+            echo
+            echo "## Scope"
+            echo "- Review all docs in \`docs/\` and README files across \`src/\` modules"
+            echo "- Fix outdated content, broken links, and TODO/FIXME items"
+            echo "- Align examples and setup instructions with current codebase"
+            echo
+            echo "## Constraints"
+            echo "- Maintain documentation style and structure"
+            echo "- Do not change runtime behavior or code semantics"
+            echo
+            echo "## Deliverables"
+            echo "- Open a PR with all documentation updates"
+            echo "- PR body should summarize changes and impacted files"
+            echo
+            echo "## Acceptance Criteria"
+            echo "- No broken links; module READMEs present where appropriate"
+            echo "- Examples run against current code; instructions accurate"
+          } > copilot_task.md
+
+      - name: Create issue for Copilot agent
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: "docs: nightly Copilot agent - documentation refresh (${{ steps.vars.outputs.date }})"
+          content-filepath: copilot_task.md
+          labels: documentation, automated, copilot, background-agent
+          assignees: ${{ env.COPILOT_ASSIGNEE }}
