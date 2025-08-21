@@ -371,6 +371,8 @@ class DatabaseManager:
         initial_balance: float,
         strategy_config: dict | None = None,
         session_name: str | None = None,
+        time_exit_config: dict | None = None,
+        market_timezone: str | None = None,
     ) -> int:
         """
         Create a new trading session.
@@ -398,6 +400,8 @@ class DatabaseManager:
                 initial_balance=initial_balance,
                 strategy_config=strategy_config,
                 start_time=datetime.utcnow(),
+                time_exit_config=time_exit_config,
+                market_timezone=market_timezone,
             )
 
             session.add(trading_session)

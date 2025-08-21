@@ -81,6 +81,8 @@ class MockDatabaseManager:
         initial_balance: float,
         strategy_config: Optional[dict] = None,
         mode: str = "backtest",
+        time_exit_config: Optional[dict] = None,
+        market_timezone: Optional[str] = None,
     ) -> int:
         """Create a new trading session"""
         session_id = self._get_next_id()
@@ -100,6 +102,8 @@ class MockDatabaseManager:
             "total_trades": 0,
             "winning_trades": 0,
             "total_pnl": 0.0,
+            "time_exit_config": time_exit_config,
+            "market_timezone": market_timezone,
         }
 
         return session_id
