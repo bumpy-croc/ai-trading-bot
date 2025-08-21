@@ -4,9 +4,10 @@ Technical indicator feature extractor.
 This module provides technical analysis features for prediction.
 """
 
+from typing import Optional
+
 import numpy as np
 import pandas as pd
-from typing import Optional
 from indicators.technical import (
     calculate_atr,
     calculate_bollinger_bands,

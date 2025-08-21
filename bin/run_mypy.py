@@ -4,18 +4,17 @@ Script to run mypy on all Python files in the src directory.
 This handles the project structure issues that prevent direct mypy usage.
 """
 
-import subprocess
-import sys
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
-from pathlib import Path
 
 
 def find_python_files(directory: str) -> list[str]:
     """Find all Python files in the given directory recursively."""
     python_files = []
-    for root, dirs, files in os.walk(directory):
+    for root, _dirs, files in os.walk(directory):
         for file in files:
             if file.endswith(".py"):
                 python_files.append(os.path.join(root, file))

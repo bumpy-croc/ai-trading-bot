@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -121,6 +122,9 @@ class _RandomWalkProvider(DataProvider):
 class ExperimentRunner:
     """Runs backtests for given experiment configurations."""
 
+    def __init__(self):
+        self.logger = logging.getLogger(self.__class__.__name__)
+
     def _load_provider(
         self,
         name: str,
@@ -168,7 +172,7 @@ class ExperimentRunner:
                             setattr(strategy, attr, value)
                         except Exception as e:
                             # Ignore invalid attribute assignments to keep runner robust
-                            logger.debug(f"Failed to set attribute {attr}={value}: {e}")
+                            self.logger.debug(f"Failed to set attribute {attr}={value}: {e}")
                             pass
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:

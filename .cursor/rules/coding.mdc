@@ -87,7 +87,7 @@
 - **Style Guide:** Adhere to the Google Python Style Guide.
 - **Docstrings:** Use Google Style Docstrings.
 - Use `tqdm` whenever I ask to add a progress bar.
-- Run ruff, mypy and bandit after editing files and fix any linting, type and security issues.
+- **Critical: Run ruff, black, mypy and bandit after editing files and fix any linting, formatting, type and security issues.**
 
 ### 4.5. JavaScript
 - **Style Guide:** Adhere to the Airbnb JavaScript Style Guide.
