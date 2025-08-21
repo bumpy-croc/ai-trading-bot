@@ -11,8 +11,8 @@ from src.live.trading_engine import LiveTradingEngine
 from src.backtesting.engine import Backtester
 
 
-class TestStrategy(BaseStrategy):
-    """Test strategy with dynamic risk overrides"""
+class TestStrategyForOverrides(BaseStrategy):
+    """Test strategy with dynamic risk overrides - not collected by pytest"""
     
     def __init__(self, name="test_strategy", overrides=None):
         super().__init__(name)
@@ -22,10 +22,31 @@ class TestStrategy(BaseStrategy):
         return 0, {}
 
     def calculate_indicators(self, df):
+        """Required abstract method implementation"""
         return df
 
     def get_risk_overrides(self):
         return self._overrides
+
+    def calculate_position_size(self, df, index, balance):
+        """Required abstract method implementation"""
+        return 0.01 * balance / 100  # Simple 1% of balance
+
+    def calculate_stop_loss(self, df, index, price, side="long"):
+        """Required abstract method implementation"""
+        return price * 0.98 if side == "long" else price * 1.02
+
+    def check_entry_conditions(self, df, index):
+        """Required abstract method implementation"""
+        return True
+
+    def check_exit_conditions(self, df, index, entry_price):
+        """Required abstract method implementation"""
+        return False
+
+    def get_parameters(self):
+        """Required abstract method implementation"""
+        return {}
 
 
 class TestStrategyOverrides:
@@ -45,7 +66,7 @@ class TestStrategyOverrides:
             }
         }
         
-        strategy = TestStrategy("aggressive_strategy", overrides)
+        strategy = TestStrategyForOverrides("aggressive_strategy", overrides)
         
         # Test the override method
         risk_overrides = strategy.get_risk_overrides()
@@ -66,7 +87,7 @@ class TestStrategyOverrides:
                 'performance_window_days': 20
             }
         }
-        strategy = TestStrategy("test_strategy", overrides)
+        strategy = TestStrategyForOverrides("test_strategy", overrides)
         
         # Create base config
         base_config = DynamicRiskConfig(
@@ -101,7 +122,7 @@ class TestStrategyOverrides:
                 'high_volatility_threshold': 0.04  # Higher threshold
             }
         }
-        strategy = TestStrategy("conservative_strategy", overrides)
+        strategy = TestStrategyForOverrides("conservative_strategy", overrides)
         
         # Create base config
         base_config = DynamicRiskConfig(
@@ -132,7 +153,7 @@ class TestStrategyOverrides:
             'position_sizer': 'fixed_fraction',
             'base_fraction': 0.03
         }
-        strategy = TestStrategy("normal_strategy", overrides)
+        strategy = TestStrategyForOverrides("normal_strategy", overrides)
         
         base_config = DynamicRiskConfig()
         
@@ -150,7 +171,7 @@ class TestStrategyOverrides:
 
     def test_strategy_empty_risk_overrides(self):
         """Test strategy with empty risk overrides"""
-        strategy = TestStrategy("empty_strategy", {})
+        strategy = TestStrategyForOverrides("empty_strategy", {})
         
         base_config = DynamicRiskConfig(
             drawdown_thresholds=[0.05, 0.10],
@@ -178,7 +199,7 @@ class TestStrategyOverrides:
                 'invalid_field': True  # Unknown field
             }
         }
-        strategy = TestStrategy("invalid_strategy", overrides)
+        strategy = TestStrategyForOverrides("invalid_strategy", overrides)
         
         base_config = DynamicRiskConfig()
         
@@ -205,7 +226,7 @@ class TestStrategyOverrides:
                 'recovery_thresholds': [0.02]
             }
         }
-        strategy = TestStrategy("validated_strategy", overrides)
+        strategy = TestStrategyForOverrides("validated_strategy", overrides)
         
         # Extract the dynamic risk config
         dynamic_overrides = overrides['dynamic_risk']
@@ -240,7 +261,7 @@ class TestStrategyOverrides:
             }
         }
         
-        strategy = TestStrategy("advanced_strategy", overrides)
+        strategy = TestStrategyForOverrides("advanced_strategy", overrides)
         
         # Verify all overrides are accessible
         risk_config = strategy.get_risk_overrides()['dynamic_risk']
@@ -259,7 +280,7 @@ class TestStrategyOverrides:
                 'enabled': False
             }
         }
-        strategy = TestStrategy("no_dynamic_risk_strategy", overrides)
+        strategy = TestStrategyForOverrides("no_dynamic_risk_strategy", overrides)
         
         base_config = DynamicRiskConfig(enabled=True)  # Base has it enabled
         

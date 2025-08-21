@@ -410,7 +410,7 @@ class TestDataRetrieval(TestDatabaseManager):
         mock_query.all.return_value = [mock_trade]
         mock_postgresql_db._mock_session.query.return_value = mock_query
 
-        metrics = mock_postgresql_db.get_performance_metrics()
+        metrics = mock_postgresql_db.get_performance_metrics(session_id=1)
 
         assert isinstance(metrics, dict)
         assert "total_trades" in metrics
