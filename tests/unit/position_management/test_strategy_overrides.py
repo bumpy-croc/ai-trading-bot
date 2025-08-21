@@ -49,26 +49,6 @@ class TestStrategyForOverrides(BaseStrategy):
     def get_risk_overrides(self):
         return self._overrides
 
-    def calculate_position_size(self, df, index, balance):
-        """Required abstract method implementation"""
-        return 0.01 * balance / 100  # Simple 1% of balance
-
-    def calculate_stop_loss(self, df, index, price, side="long"):
-        """Required abstract method implementation"""
-        return price * 0.98 if side == "long" else price * 1.02
-
-    def check_entry_conditions(self, df, index):
-        """Required abstract method implementation"""
-        return True
-
-    def check_exit_conditions(self, df, index, entry_price):
-        """Required abstract method implementation"""
-        return False
-
-    def get_parameters(self):
-        """Required abstract method implementation"""
-        return {}
-
 
 class TestStrategyOverrides:
     """Test per-strategy dynamic risk override functionality"""
