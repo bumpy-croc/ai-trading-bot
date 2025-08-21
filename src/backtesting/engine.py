@@ -229,7 +229,7 @@ class Backtester:
             adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
                 current_balance=self.balance,
                 peak_balance=self.peak_balance,
-                session_id=getattr(self, 'trading_session_id', None)
+                session_id=self.trading_session_id
             )
             
             # Apply position size adjustment
