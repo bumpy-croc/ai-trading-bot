@@ -10,6 +10,7 @@ import random
 import time
 from datetime import datetime, timedelta
 from typing import Optional
+from random import SystemRandom
 
 from config.constants import DEFAULT_INITIAL_BALANCE
 from database.manager import DatabaseManager
@@ -31,6 +32,7 @@ class DemoDataGenerator:
 
         # Initialise DatabaseManager (creates tables via SQLAlchemy models).
         self.db_manager = DatabaseManager(db_url)
+        self.system_random = SystemRandom()
 
         # Grab a raw psycopg2 connection for fast bulk inserts – this avoids
         # going through the ORM for every synthetic row while still using
@@ -118,7 +120,7 @@ class DemoDataGenerator:
 
         # Create trading session
         strategies = ["ml_basic"]
-        strategy = random.choice(strategies)  # nosec B311
+        strategy = self.system_random.choice(strategies)
 
         cursor.execute(
             """
@@ -149,7 +151,7 @@ class DemoDataGenerator:
         # Generate hourly snapshots and random trades
         while current_time < end_time:
             # Maybe generate a trade (20% chance per hour)
-            if random.random() < 0.2:  # nosec B311
+            if self.system_random.random() < 0.2:
                 trade_data = self.generate_trade(current_time, session_id)
                 current_balance += trade_data["pnl"]
                 trade_count += 1
@@ -158,7 +160,7 @@ class DemoDataGenerator:
 
             # Generate account snapshot
             # Add some volatility to balance
-            balance_change = random.uniform(-50, 50)  # nosec B311
+            balance_change = self.system_random.uniform(-50, 50)
             snapshot_balance = max(current_balance + balance_change, 100)  # Don't go below $100
 
             cursor.execute(
@@ -206,15 +208,15 @@ class DemoDataGenerator:
         cursor = self.connection.cursor()
 
         # Random trade parameters
-        side = random.choice(["long", "short"])  # nosec B311
-        entry_price = random.uniform(40000, 70000)  # nosec B311
-        quantity = random.uniform(0.001, 0.01)  # nosec B311
+        side = self.system_random.choice(["long", "short"])
+        entry_price = self.system_random.uniform(40000, 70000)
+        quantity = self.system_random.uniform(0.001, 0.01)
 
         # Exit after 1-12 hours
-        exit_time = entry_time + timedelta(hours=random.uniform(1, 12))  # nosec B311
+        exit_time = entry_time + timedelta(hours=self.system_random.uniform(1, 12))
 
         # Generate realistic price movement
-        price_change_pct = random.uniform(-0.05, 0.05)  # nosec B311
+        price_change_pct = self.system_random.uniform(-0.05, 0.05)
         exit_price = entry_price * (1 + price_change_pct)
 
         # Calculate P&L
@@ -227,10 +229,10 @@ class DemoDataGenerator:
         pnl -= abs(pnl) * 0.001  # 0.1% fee
 
         exit_reasons = ["Strategy signal", "Stop loss", "Take profit", "Time limit"]
-        exit_reason = random.choice(exit_reasons)  # nosec B311
+        exit_reason = self.system_random.choice(exit_reasons)
 
         # Insert position
-        order_id = f"demo_{int(time.time())}_{random.randint(1000, 9999)}"  # nosec B311
+        order_id = f"demo_{int(time.time())}_{self.system_random.randint(1000, 9999)}"
         cursor.execute(
             """
         INSERT INTO positions
@@ -278,12 +280,12 @@ class DemoDataGenerator:
         cursor = self.connection.cursor()
 
         for _ in range(count):
-            side = random.choice(["long", "short"])  # nosec B311
-            entry_price = random.uniform(40000, 70000)  # nosec B311
-            quantity = random.uniform(0.001, 0.01)  # nosec B311
-            entry_time = datetime.now() - timedelta(hours=random.uniform(1, 6))  # nosec B311
+            side = self.system_random.choice(["long", "short"])
+            entry_price = self.system_random.uniform(40000, 70000)
+            quantity = self.system_random.uniform(0.001, 0.01)
+            entry_time = datetime.now() - timedelta(hours=self.system_random.uniform(1, 6))
 
-            order_id = f"active_{int(time.time())}_{random.randint(1000, 9999)}"  # nosec B311
+            order_id = f"active_{int(time.time())}_{self.system_random.randint(1000, 9999)}"
 
             cursor.execute(
                 """
@@ -302,9 +304,9 @@ class DemoDataGenerator:
         components = ["TradingEngine", "DataProvider", "Strategy", "RiskManager"]
 
         # Generate some events
-        for _ in range(random.randint(5, 15)):  # nosec B311
-            event_type = random.choice(event_types)  # nosec B311
-            component = random.choice(components)  # nosec B311
+        for _ in range(self.system_random.randint(5, 15)):
+            event_type = self.system_random.choice(event_types)
+            component = self.system_random.choice(components)
 
             if event_type == "ERROR":
                 messages = [
@@ -328,10 +330,10 @@ class DemoDataGenerator:
                     "Data update completed",
                 ]
 
-            message = random.choice(messages)  # nosec B311
+            message = self.system_random.choice(messages)
             timestamp = datetime.now() - timedelta(
-                hours=random.uniform(0, duration_hours)
-            )  # nosec B311
+                hours=self.system_random.uniform(0, duration_hours)
+            )
 
             cursor.execute(
                 """
@@ -354,7 +356,7 @@ class DemoDataGenerator:
 
         if result:
             latest_id, current_balance = result
-            new_balance = current_balance + random.uniform(-10, 20)  # nosec B311
+            new_balance = current_balance + self.system_random.uniform(-10, 20)
 
             cursor.execute(
                 """
@@ -365,7 +367,7 @@ class DemoDataGenerator:
             )
 
         # Maybe generate a new trade (5% chance)
-        if random.random() < 0.05:  # nosec B311
+        if self.system_random.random() < 0.05:
             cursor.execute("SELECT id FROM trading_sessions ORDER BY start_time DESC LIMIT 1")
             session_result = cursor.fetchone()
             if session_result:
