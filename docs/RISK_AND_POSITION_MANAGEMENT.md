@@ -423,3 +423,36 @@ DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01
 DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 ```
+
+## MFE/MAE Tracking
+
+The system tracks Maximum Favorable Excursion (MFE) and Maximum Adverse Excursion (MAE) for active positions and completed trades.
+
+- MFE: Largest unrealized profit reached before exit (stored as decimal fraction; e.g., 0.05 = +5%).
+- MAE: Largest unrealized loss reached before exit (decimal fraction; negative values for losses).
+
+Implementation details:
+- Live engine updates rolling MFE/MAE each loop via `position_management.MFEMAETracker` and persists to `positions`.
+- On close, final MFE/MAE are written to `trades`.
+- Backtester tracks MFE/MAE per active trade and records final metrics in `Backtester.trades` and DB (when enabled).
+
+Database schema additions:
+- `positions`: `mfe`, `mae`, `mfe_price`, `mae_price`, `mfe_time`, `mae_time`.
+- `trades`: `mfe`, `mae`, `mfe_price`, `mae_price`, `mfe_time`, `mae_time`.
+
+Configuration defaults (in `src/config/constants.py`):
+- `DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS = 60`
+- `DEFAULT_MFE_MAE_PRECISION_DECIMALS = 8`
+- `DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"`
+
+Usage examples:
+```python
+from src.position_management.mfe_mae_tracker import MFEMAETracker
+tracker = MFEMAETracker()
+tracker.update_position_metrics(position_id, entry_price, current_price, side, fraction, now)
+metrics = tracker.get_position_metrics(position_id)
+```
+
+Best practices:
+- Use MFE/MAE ratios (MFE / abs(MAE)) to evaluate exit efficiency.
+- Consider MAE-based protective exits and MFE-based trailing take-profits.

@@ -73,7 +73,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     env:
-      COPILOT_AGENT_ASSIGNEE: copilot-coding-agent
+      COPILOT_AGENT_ASSIGNEE: copilot
     steps:
       - name: Request Copilot agent to fix on PR branch
         if: ${{ needs.test.result == 'failure' }}

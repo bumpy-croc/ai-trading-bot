@@ -1,10 +1,10 @@
 """Integration tests for dynamic risk management in live trading engine"""
 
-import pytest
 from datetime import datetime
-from unittest.mock import Mock, MagicMock
+from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from src.live.trading_engine import LiveTradingEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager

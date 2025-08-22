@@ -15,8 +15,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from config import get_config
-from utils.symbol_factory import SymbolFactory
+from src.config import get_config
+from src.utils.symbol_factory import SymbolFactory
 
 from .data_provider import DataProvider
 from .exchange_interface import (

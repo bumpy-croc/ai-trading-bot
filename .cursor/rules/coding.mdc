@@ -82,7 +82,7 @@ alwaysApply: true
 ### 4.3. Dependency Management
 - **Declaration:** Clearly state any new external libraries or dependencies introduced.
 - **Installation:** Provide the command for installation (e.g., `pip install <package>`, `npm install <package>`).
-- **Import Statements:** Ensure all necessary `import` / `using` / `#include` statements are present for the code to compile/run.
+- **Import Statements:** Ensure all necessary `import` / `using` / `#include` statements are present for the code to compile/run. Prefer absolute imports. Don't omit any part of the path from the project root.
 - **Versioning:**
 	- If a specific version isn't provided for a new dependency, aim for the latest stable version compatible with the project context.
 	- Verify this version using a web search if necessary and possible.

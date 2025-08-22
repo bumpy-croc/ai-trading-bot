@@ -73,6 +73,8 @@ class PositionDict(TypedDict):
     stop_loss: float | None
     take_profit: float | None
     order_id: str | None
+    mfe: float | None
+    mae: float | None
 
 
 class TradeDict(TypedDict):
@@ -1369,12 +1371,13 @@ class MonitoringDashboard:
                                 else None
                             ),
                             "order_id": pos.get("order_id"),
+                            "mfe": self._safe_float(pos.get("mfe")) if pos.get("mfe") is not None else 0.0,
+                            "mae": self._safe_float(pos.get("mae")) if pos.get("mae") is not None else 0.0,
                         }
                     )
                 )
 
             return positions
-
         except Exception as e:
             logger.error(f"Error getting current positions: {e}")
             return []
