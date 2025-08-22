@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Optional
 from unittest.mock import Mock
 
-from database.models import EventType, TradeSide
+from database.models import EventType, PositionSide
 
 
 class MockDatabaseManager:
@@ -83,6 +83,7 @@ class MockDatabaseManager:
         mode: str = "backtest",
         time_exit_config: Optional[dict] = None,
         market_timezone: Optional[str] = None,
+        **kwargs: Any,
     ) -> int:
         """Create a new trading session"""
         session_id = self._get_next_id()
@@ -131,7 +132,7 @@ class MockDatabaseManager:
     def log_trade(
         self,
         symbol: str,
-        side: TradeSide,
+        side: Any,
         entry_price: float,
         exit_price: float,
         size: float,
@@ -145,6 +146,7 @@ class MockDatabaseManager:
         fees: float = 0.0,
         slippage: float = 0.0,
         session_id: Optional[int] = None,
+        **kwargs: Any,
     ) -> int:
         """Log a completed trade"""
         trade_id = self._get_next_id()
@@ -166,6 +168,13 @@ class MockDatabaseManager:
             "fees": fees,
             "slippage": slippage,
             "session_id": session_id or self._current_session_id,
+            # Optional MFE/MAE fields if provided
+            "mfe": kwargs.get("mfe"),
+            "mae": kwargs.get("mae"),
+            "mfe_price": kwargs.get("mfe_price"),
+            "mae_price": kwargs.get("mae_price"),
+            "mfe_time": kwargs.get("mfe_time"),
+            "mae_time": kwargs.get("mae_time"),
         }
 
         return trade_id
@@ -173,7 +182,7 @@ class MockDatabaseManager:
     def log_position(
         self,
         symbol: str,
-        side: TradeSide,
+        side: Any,
         entry_price: float,
         size: float,
         strategy_name: str,
@@ -183,6 +192,7 @@ class MockDatabaseManager:
         confidence_score: Optional[float] = None,
         quantity: Optional[float] = None,
         session_id: Optional[int] = None,
+        **kwargs: Any,
     ) -> int:
         """Log a new position"""
         position_id = self._get_next_id()
@@ -202,6 +212,13 @@ class MockDatabaseManager:
             "status": Any,
             "entry_time": datetime.now(),
             "session_id": session_id or self._current_session_id,
+            # Rolling MFE/MAE fields (optional)
+            "mfe": kwargs.get("mfe"),
+            "mae": kwargs.get("mae"),
+            "mfe_price": kwargs.get("mfe_price"),
+            "mae_price": kwargs.get("mae_price"),
+            "mfe_time": kwargs.get("mfe_time"),
+            "mae_time": kwargs.get("mae_time"),
         }
 
         return position_id
@@ -214,6 +231,7 @@ class MockDatabaseManager:
         take_profit: Optional[float] = None,
         status: Optional[Any] = None,
         notes: Optional[str] = None,
+        **kwargs: Any,
     ):
         """Update an existing position"""
         if position_id in self._positions:
@@ -228,46 +246,56 @@ class MockDatabaseManager:
                 position["status"] = status
             if notes is not None:
                 position["notes"] = notes
+            # Optional extended fields
+            for k in ("mfe", "mae", "mfe_price", "mae_price", "mfe_time", "mae_time", "unrealized_pnl", "unrealized_pnl_percent", "size"):
+                if k in kwargs and kwargs[k] is not None:
+                    position[k] = kwargs[k]
             position["last_updated"] = datetime.now()
 
     def close_position(
         self,
         position_id: int,
         exit_price: Optional[float] = None,
-        exit_reason: Optional[str] = None,
+        exit_time: Optional[datetime] = None,
         pnl: Optional[float] = None,
+        exit_reason: Optional[str] = None,
     ) -> bool:
         """Close a position"""
         if position_id in self._positions:
             position = self._positions[position_id]
             position["status"] = Any
-            position["exit_time"] = datetime.now()
+            position["exit_time"] = exit_time or datetime.now()
             if exit_price is not None:
                 position["exit_price"] = exit_price
-            if exit_reason is not None:
-                position["exit_reason"] = exit_reason
             if pnl is not None:
                 position["pnl"] = pnl
+            if exit_reason is not None:
+                position["exit_reason"] = exit_reason
             return True
         return False
 
     def log_event(
         self,
-        event_type: EventType,
-        description: str,
+        event_type: EventType | str,
+        description: Optional[str] = None,
         metadata: Optional[dict] = None,
         severity: str = "info",
         session_id: Optional[int] = None,
+        **kwargs: Any,
     ) -> int:
         """Log an event"""
         event_id = self._get_next_id()
+
+        # Support DatabaseManager-style parameters
+        message = kwargs.get("message", description or "")
+        details = kwargs.get("details", metadata)
 
         self._events[event_id] = {
             "id": event_id,
             "timestamp": datetime.now(),
             "event_type": event_type,
-            "description": description,
-            "metadata": json.dumps(metadata or {}),
+            "description": message,
+            "metadata": json.dumps(details or {}),
             "severity": severity,
             "session_id": session_id or self._current_session_id,
         }
@@ -284,6 +312,7 @@ class MockDatabaseManager:
         unrealized_pnl: float = 0.0,
         realized_pnl: float = 0.0,
         session_id: Optional[int] = None,
+        **kwargs: Any,
     ):
         """Log account snapshot"""
         snapshot = {
@@ -298,6 +327,31 @@ class MockDatabaseManager:
             "session_id": session_id or self._current_session_id,
         }
         self._account_snapshots.append(snapshot)
+
+    # Simple balance API for compatibility
+    def update_balance(
+        self,
+        new_balance: float,
+        update_reason: str,
+        updated_by: str,
+        session_id: Optional[int] = None,
+        **kwargs: Any,
+    ) -> bool:
+        self.log_account_snapshot(
+            balance=new_balance,
+            equity=new_balance,
+            realized_pnl=kwargs.get("realized_pnl", 0.0),
+            unrealized_pnl=kwargs.get("unrealized_pnl", 0.0),
+            session_id=session_id or self._current_session_id,
+        )
+        return True
+
+    def get_current_balance(self, session_id: Optional[int] = None) -> float:
+        sess = session_id or self._current_session_id
+        for snap in reversed(self._account_snapshots):
+            if snap.get("session_id") == sess:
+                return float(snap.get("balance", 0.0))
+        return 0.0
 
     def log_strategy_execution(
         self,
