@@ -7,7 +7,7 @@ from src.prediction.engine import PredictionEngine, PredictionResult
 
 
 def _make_small_ohlcv(n: int = 130) -> pd.DataFrame:
-    idx = pd.date_range("2024-01-01", periods=n, freq="H")
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
     base = 100.0
     rng = np.random.default_rng(42)
     close = base + rng.normal(0, 0.5, size=n).cumsum()

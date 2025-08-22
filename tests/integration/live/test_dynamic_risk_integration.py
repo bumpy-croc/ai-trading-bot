@@ -52,7 +52,7 @@ class MockDataProvider:
     """Mock data provider for testing"""
     def get_historical_data(self, symbol, timeframe, start, end):
         # Return sample data for live trading tests
-        dates = pd.date_range(start=datetime.now(), periods=100, freq='1H')
+        dates = pd.date_range(start=datetime.now(), periods=100, freq='1h')
         return pd.DataFrame({
             'open': [100.0] * 100,
             'high': [105.0] * 100,
