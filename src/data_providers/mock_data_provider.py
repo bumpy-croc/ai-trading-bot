@@ -12,8 +12,8 @@ _TIMEFRAME_TO_FREQ = {
     "5m": "5T",
     "15m": "15T",
     "30m": "30T",
-    "1h": "H",
-    "4h": "4H",
+    "1h": "h",
+    "4h": "4h",
     "1d": "D",
 }
 
@@ -40,7 +40,7 @@ class MockDataProvider(DataProvider):
 
     def _ensure_data(self, start: datetime, end: datetime | None, timeframe: str) -> pd.DataFrame:
         """Create synthetic data covering [start, end] if not already available."""
-        freq = _TIMEFRAME_TO_FREQ.get(timeframe, "H")
+        freq = _TIMEFRAME_TO_FREQ.get(timeframe, "h")
         if end is None:
             end = datetime.now()
         index = pd.date_range(start=start, end=end, freq=freq)
@@ -98,15 +98,15 @@ class MockDataProvider(DataProvider):
 
     def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
         # Append one new candle by rolling forward the random walk
-        freq = _TIMEFRAME_TO_FREQ.get(timeframe, "H")
+        freq = _TIMEFRAME_TO_FREQ.get(timeframe, "h")
         if self.data is None or len(self.data) == 0:
             return self.get_live_data(symbol, timeframe, limit=1)
         last_idx = self.data.index[-1]
         if freq.endswith("T"):
             minutes = int(freq.replace("T", "")) if freq != "T" else 1
             next_idx = last_idx + timedelta(minutes=minutes)
-        elif freq.endswith("H"):
-            hours = int(freq.replace("H", "")) if freq != "H" else 1
+        elif freq.endswith("h"):
+            hours = int(freq.replace("h", "")) if freq != "h" else 1
             next_idx = last_idx + timedelta(hours=hours)
         elif freq == "D":
             next_idx = last_idx + timedelta(days=1)

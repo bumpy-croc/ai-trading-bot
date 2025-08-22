@@ -151,7 +151,6 @@ jobs:
     - name: Run integration tests (with DB & external providers)
       env:
         DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
-        ENABLE_INTEGRATION_TESTS: '1'
       run: |
         echo "=== Starting integration tests ==="
         echo "PYTHONPATH=$PYTHONPATH"

@@ -21,7 +21,7 @@ def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, 
 
     Uses file-based sqlite to survive across threads and engine internals.
     """
-    from live.trading_engine import LiveTradingEngine, PositionSide
+    from src.live.trading_engine import LiveTradingEngine, PositionSide
 
     # Minimal data feed
     idx = pd.date_range(datetime.utcnow(), periods=10, freq="1min")

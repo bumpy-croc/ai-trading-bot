@@ -630,8 +630,8 @@ class LiveTradingEngine:
                     if position.order_id in self.positions:
                         del self.positions[position.order_id]
 
-        # Wait for main thread to finish
-        if self.main_thread and self.main_thread.is_alive():
+        # Wait for main thread to finish (avoid joining current thread)
+        if self.main_thread and self.main_thread.is_alive() and self.main_thread != threading.current_thread():
             self.main_thread.join(timeout=30)
 
         # Print final statistics

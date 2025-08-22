@@ -8,7 +8,7 @@ from src.position_management.time_exits import MarketSessionDef, TimeExitPolicy
 from src.strategies.ml_basic import MlBasic
 
 
-@pytest.mark.skip(reason="Live integration smoke - requires exchange provider; kept for CI opt-in")
+
 def test_live_engine_accepts_time_exit_policy_unique_name():
     strategy = MlBasic()
     dp = BinanceProvider()

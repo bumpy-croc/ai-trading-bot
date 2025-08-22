@@ -23,8 +23,6 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run optimizer (fixture provider)
-        env:
-          ENABLE_INTEGRATION_TESTS: '0'
         run: |
           python scripts/run_optimizer.py \
             --strategy ml_basic \

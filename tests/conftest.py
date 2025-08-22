@@ -38,15 +38,10 @@ except ImportError as e:
 # ---------- Database setup for tests ----------
 # Avoid import-time heavy setup. Use a session-scoped autouse fixture to configure
 # an in-memory DB for unit tests, or start a Postgres container / use external DB
-# for integration runs when ENABLE_INTEGRATION_TESTS=1.
-
-
-def _is_integration_enabled() -> bool:
-    return os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def maybe_setup_database():
+def maybe_setup_database(pytestconfig):
     """Configure test database per run mode.
 
     - Unit/default: ensure lightweight in-memory SQLite via DATABASE_URL default.
@@ -54,12 +49,21 @@ def maybe_setup_database():
       otherwise start a Postgres testcontainer, export its URL, and stop it at teardown.
       Also run schema reset before tests.
     """
-    if not _is_integration_enabled():
+    # Decide DB based on whether integration tests are selected this session
+    try:
+        has_integration = bool(
+            pytestconfig.stash.get(("integration", "selected"), False)
+        )
+    except Exception:
+        has_integration = bool(getattr(pytestconfig, "_has_integration_selected", False))
+
+    if not has_integration:
+        # * Unit/default path: fast, in-memory SQLite and no heavy setup
         os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
         yield
         return
 
-    # Check if we're in GitHub Actions with PostgreSQL service
+    # Check if we're in GitHub Actions with PostgreSQL service for integration path
     is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
     started_container = None
@@ -89,8 +93,11 @@ def maybe_setup_database():
                 print("[Database Setup] Falling back to SQLite for local testing")
                 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
                 print("[Database Setup] ✅ Using SQLite in-memory database")
+    else:
+        # DATABASE_URL is already set, use it
+        print("[Database Setup] Using existing DATABASE_URL")
 
-    # Reset DB schema/content before tests
+    # Reset DB schema/content before integration tests
     print("\n[pytest] Running database reset before integration tests...")
     db_reset_start = time.time()
 
@@ -125,18 +132,35 @@ def maybe_setup_database():
 
 
 def pytest_collection_modifyitems(config, items):  # noqa: D401
-    """Skip integration tests unless explicitly enabled via env.
+    """Auto-mark integration and unit tests and record if any are selected.
 
-    This prevents accidental DB/network usage on local/unit runs.
+    - Any test under tests/integration is marked as `integration`.
+    - Any test under tests/unit is marked as `unit`.
+    - A flag is stored indicating whether any integration tests are part of this run.
     """
-    if _is_integration_enabled():
-        return
-    skip_integration = pytest.mark.skip(
-        reason="integration tests disabled; set ENABLE_INTEGRATION_TESTS=1"
-    )
+    has_integration = False
     for item in items:
-        if any(marker.name == "integration" for marker in item.iter_markers()):
-            item.add_marker(skip_integration)
+        try:
+            node_path = str(item.fspath)
+        except Exception:
+            node_path = item.nodeid
+
+        if "/tests/integration/" in node_path or node_path.startswith("tests/integration/"):
+            # Ensure the integration marker is present
+            item.add_marker(pytest.mark.integration)
+
+        if "/tests/unit/" in node_path or node_path.startswith("tests/unit/"):
+            # Ensure the unit marker is present
+            item.add_marker(pytest.mark.unit)
+
+        if any(m.name == "integration" for m in item.iter_markers()):
+            has_integration = True
+
+    # Stash the presence of integration tests for session-scoped fixtures
+    try:
+        config.stash[("integration", "selected")] = has_integration
+    except Exception:
+        setattr(config, "_has_integration_selected", has_integration)
 
 
 @pytest.fixture
