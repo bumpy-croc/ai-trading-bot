@@ -7,8 +7,8 @@ existing ConfigManager system to load prediction engine settings.
 
 from dataclasses import dataclass, field
 
-from config.config_manager import get_config
-from config.constants import (
+from src.config.config_manager import get_config
+from src.config.constants import (
     DEFAULT_CONFIDENCE_SCALE_FACTOR,
     DEFAULT_DIRECTION_THRESHOLD,
     DEFAULT_ENABLE_ENSEMBLE,

@@ -46,7 +46,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from strategies.base import BaseStrategy
+from src.strategies.base import BaseStrategy
 
 pytestmark = pytest.mark.unit
 

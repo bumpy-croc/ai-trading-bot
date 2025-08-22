@@ -11,11 +11,11 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
-from backtesting.engine import Backtester
-from live.strategy_manager import StrategyManager
-from live.trading_engine import LiveTradingEngine
-from risk.risk_manager import RiskManager, RiskParameters
-from strategies.ml_basic import MlBasic
+from src.backtesting.engine import Backtester
+from src.live.strategy_manager import StrategyManager
+from src.live.trading_engine import LiveTradingEngine
+from src.risk.risk_manager import RiskManager, RiskParameters
+from src.strategies.ml_basic import MlBasic
 
 pytestmark = pytest.mark.integration
 

@@ -9,7 +9,7 @@ select = ["E","F","I","B","UP"]
 ignore = ["E203","E501","E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["config","data_providers","database","live","monitoring","prediction","risk","strategies","utils","backtesting"]
+known-first-party = ["src","config","data_providers","database","live","monitoring","prediction","risk","strategies","utils","backtesting"]
 
 [build-system]
 requires = ["setuptools>=67", "wheel"]

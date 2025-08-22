@@ -6,8 +6,8 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from utils.logging_config import configure_logging
-from utils.symbol_factory import SymbolFactory
+from src.utils.logging_config import configure_logging
+from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

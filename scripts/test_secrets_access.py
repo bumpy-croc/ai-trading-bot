@@ -7,7 +7,7 @@ Used to ensure proper environment variable setup
 import os
 import sys
 
-from config.config_manager import get_config
+from src.config.config_manager import get_config
 
 
 def test_environment_config():

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Tuple
 
 from src.performance.metrics import Side, pnl_percent
 
@@ -11,10 +10,10 @@ from src.performance.metrics import Side, pnl_percent
 class MFEMetrics:
     mfe: float = 0.0  # decimal fraction relative to entry (sized if fraction provided)
     mae: float = 0.0
-    mfe_price: Optional[float] = None
-    mae_price: Optional[float] = None
-    mfe_time: Optional[datetime] = None
-    mae_time: Optional[datetime] = None
+    mfe_price: float | None = None
+    mae_price: float | None = None
+    mfe_time: datetime | None = None
+    mae_time: datetime | None = None
 
 
 class MFEMAETracker:
@@ -37,7 +36,7 @@ class MFEMAETracker:
         side: str | Side,
         position_fraction: float = 1.0,
         as_sized: bool = True,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Return current excursion (mfe_candidate, mae_candidate) as decimal fractions.
 
         If `as_sized` is True, returns sized PnL fractions using `position_fraction`.

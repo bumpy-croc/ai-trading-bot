@@ -7,7 +7,7 @@ from pathlib import Path
 import ccxt
 import pandas as pd
 
-from utils.symbol_factory import SymbolFactory
+from src.utils.symbol_factory import SymbolFactory
 
 
 def _download(ns: argparse.Namespace) -> int:

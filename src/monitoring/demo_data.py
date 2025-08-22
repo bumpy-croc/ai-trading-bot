@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from random import SystemRandom
 from typing import Optional
 
-from config.constants import DEFAULT_INITIAL_BALANCE
-from database.manager import DatabaseManager
+from src.config.constants import DEFAULT_INITIAL_BALANCE
+from src.database.manager import DatabaseManager
 
 
 class DemoDataGenerator:

@@ -2,8 +2,8 @@ from datetime import datetime
 
 import pandas as pd
 
-from backtesting.engine import Backtester
-from strategies.ml_basic import MlBasic
+from src.backtesting.engine import Backtester
+from src.strategies.ml_basic import MlBasic
 
 
 class DummyProvider:

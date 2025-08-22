@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime
 import time
+from datetime import datetime
 
 import pandas as pd
 import pytest
-
 
 pytestmark = pytest.mark.integration
 
@@ -49,8 +48,10 @@ def test_concurrent_open_close_with_database(tmp_path, mock_strategy, mock_data_
 
     t1 = threading.Thread(target=open_positions)
     t2 = threading.Thread(target=close_some)
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
     # Database should have at least as many trades as closed positions
     db = engine.db_manager

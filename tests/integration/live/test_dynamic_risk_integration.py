@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from live.trading_engine import LiveTradingEngine
-from position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
-from risk.risk_manager import RiskParameters
+from src.live.trading_engine import LiveTradingEngine
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.risk.risk_manager import RiskParameters
 
 pytestmark = pytest.mark.integration
 

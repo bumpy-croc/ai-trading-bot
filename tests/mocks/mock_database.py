@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Optional
 from unittest.mock import Mock
 
-from database.models import EventType, PositionSide
+from src.database.models import EventType
 
 
 class MockDatabaseManager:

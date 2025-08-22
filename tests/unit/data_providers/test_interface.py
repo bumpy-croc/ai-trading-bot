@@ -1,6 +1,6 @@
 import pytest
 
-from data_providers.data_provider import DataProvider
+from src.data_providers.data_provider import DataProvider
 
 pytestmark = pytest.mark.unit
 

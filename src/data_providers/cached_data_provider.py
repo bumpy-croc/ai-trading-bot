@@ -7,9 +7,8 @@ from typing import Optional
 
 import pandas as pd
 
-from config.paths import get_cache_dir
-
-from .data_provider import DataProvider
+from src.config.paths import get_cache_dir
+from src.data_providers.data_provider import DataProvider
 
 logger = logging.getLogger(__name__)
 

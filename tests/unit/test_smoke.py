@@ -20,9 +20,9 @@ from unittest.mock import Mock
 import pytest
 
 # Core imports
-from backtesting.engine import Backtester
-from data_providers.data_provider import DataProvider
-from strategies.ml_basic import MlBasic
+from src.backtesting.engine import Backtester
+from src.data_providers.data_provider import DataProvider
+from src.strategies.ml_basic import MlBasic
 
 # We mark the test as a smoke test to allow easy selection or deselection when running PyTest.
 pytestmark = [
@@ -33,6 +33,7 @@ pytestmark = [
 
 
 @pytest.mark.timeout(300)  # Give the backtest up to 5 minutes
+@pytest.mark.slow
 def test_ml_basic_backtest_2024_smoke(btcusdt_1h_2023_2024):
     """Run MlBasic backtest and validate 2024 annual return."""
     # Use a lightweight mocked DataProvider that returns cached candles.

@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import pandas as pd
 import pytest
 
-from data_providers.coinbase_provider import CoinbaseProvider
+from src.data_providers.coinbase_provider import CoinbaseProvider
 
 pytestmark = pytest.mark.unit
 

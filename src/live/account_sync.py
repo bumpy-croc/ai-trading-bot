@@ -11,15 +11,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from data_providers.exchange_interface import (
+from src.data_providers.exchange_interface import (
     AccountBalance,
     ExchangeInterface,
     Order,
     Position,
 )
-from data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
-from database.manager import DatabaseManager
-from database.models import PositionSide, TradeSource
+from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
+from src.database.manager import DatabaseManager
+from src.database.models import PositionSide, TradeSource
 
 logger = logging.getLogger(__name__)
 

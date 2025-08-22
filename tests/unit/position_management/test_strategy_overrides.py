@@ -222,7 +222,7 @@ class TestStrategyOverrides:
                 'recovery_thresholds': [0.02]
             }
         }
-        strategy = TestStrategyForOverrides("validated_strategy", overrides)
+        TestStrategyForOverrides("validated_strategy", overrides)
         
         # Extract the dynamic risk config
         dynamic_overrides = overrides['dynamic_risk']
