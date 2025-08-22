@@ -17,10 +17,15 @@ alwaysApply: true
 - Type hints for public APIs; avoid `Any` where possible.
 - Early returns; handle edge cases first.
 
-### Testing
-- Add tests for new code; keep fast by default.
-- Use fixtures; mock network/IO.
-- Run `python tests/run_tests.py unit` locally; aim for green before PRs.
+# Testing
+
+## Unit Tests
+- Add unit tests for new code; keep fast by default.
+- Use fixtures; mock database/network/IO.
+- Run `python tests/run_tests.py unit  -m "not slow"` locally; aim for green before PRs.
+
+## Integration Tests
+- Add integration tests for database/network/IO
 
 ### Code Quality
 - Run linting checks before finishing any job: `ruff check . --fix`
