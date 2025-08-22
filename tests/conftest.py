@@ -132,9 +132,10 @@ def maybe_setup_database(pytestconfig):
 
 
 def pytest_collection_modifyitems(config, items):  # noqa: D401
-    """Auto-mark integration tests and record if any are selected.
+    """Auto-mark integration and unit tests and record if any are selected.
 
     - Any test under tests/integration is marked as `integration`.
+    - Any test under tests/unit is marked as `unit`.
     - A flag is stored indicating whether any integration tests are part of this run.
     """
     has_integration = False
@@ -147,6 +148,10 @@ def pytest_collection_modifyitems(config, items):  # noqa: D401
         if "/tests/integration/" in node_path or node_path.startswith("tests/integration/"):
             # Ensure the integration marker is present
             item.add_marker(pytest.mark.integration)
+
+        if "/tests/unit/" in node_path or node_path.startswith("tests/unit/"):
+            # Ensure the unit marker is present
+            item.add_marker(pytest.mark.unit)
 
         if any(m.name == "integration" for m in item.iter_markers()):
             has_integration = True
