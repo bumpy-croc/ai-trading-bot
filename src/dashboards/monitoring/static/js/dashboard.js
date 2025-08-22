@@ -5,6 +5,8 @@ class TradingDashboard {
         this.updateInterval = 5000; // 5 seconds instead of 1 hour
         this.chart = null;
         this.lastMetrics = {};
+        this.positionsTableColumnCount = 8; // Number of columns in positions table
+        this.tradesTableColumnCount = 6; // Number of columns in trades table
         this.currencyFormatter = new Intl.NumberFormat('en-US', {
             style: 'currency',
             currency: 'USD',
@@ -452,7 +454,7 @@ class TradingDashboard {
         if (!tbody) return;
 
         if (!positions || positions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-center">No active positions</td></tr>';
+            tbody.innerHTML = `<tr><td colspan="${this.positionsTableColumnCount}" class="text-center">No active positions</td></tr>`;
             return;
         }
 
@@ -485,7 +487,7 @@ class TradingDashboard {
         if (!tbody) return;
 
         if (!trades || trades.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No recent trades</td></tr>';
+            tbody.innerHTML = `<tr><td colspan="${this.tradesTableColumnCount}" class="text-center">No recent trades</td></tr>`;
             return;
         }
 
