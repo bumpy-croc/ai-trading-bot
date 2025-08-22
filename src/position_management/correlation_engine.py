@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 
@@ -37,12 +37,12 @@ class CorrelationEngine:
 
 	def __init__(self, config: CorrelationConfig | None = None):
 		self.config = config or CorrelationConfig()
-		self._last_update_at: Optional[datetime] = None
-		self._last_matrix: Optional[pd.DataFrame] = None
+		self._last_update_at: datetime | None = None
+		self._last_matrix: pd.DataFrame | None = None
 		# Lightweight memoization to avoid expensive recomputation on each call
-		self._last_signature: Optional[Tuple[Tuple[str, ...], Optional[pd.Timestamp], int]] = None
+		self._last_signature: tuple[tuple[str, ...], pd.Timestamp | None, int] | None = None
 
-	def should_update(self, now: Optional[datetime] = None) -> bool:
+	def should_update(self, now: datetime | None = None) -> bool:
 		now = now or datetime.utcnow()
 		if self._last_update_at is None:
 			return True
@@ -50,8 +50,8 @@ class CorrelationEngine:
 
 	def calculate_position_correlations(
 		self,
-		price_series_by_symbol: Dict[str, pd.Series],
-		now: Optional[datetime] = None,
+		price_series_by_symbol: dict[str, pd.Series],
+		now: datetime | None = None,
 	) -> pd.DataFrame:
 		"""Compute rolling Pearson correlation on aligned close-price series.
 		
@@ -72,8 +72,8 @@ class CorrelationEngine:
 			return pd.DataFrame()
 		start_time = end_time - timedelta(days=self.config.correlation_window_days)
 
-		aligned: List[pd.Series] = []
-		cols: List[str] = []
+		aligned: list[pd.Series] = []
+		cols: list[str] = []
 		for symbol, series in price_series_by_symbol.items():
 			if series is None or series.empty:
 				continue
@@ -91,7 +91,7 @@ class CorrelationEngine:
 			return pd.DataFrame()
 
 		# Memoization guard: if we recently computed the same window/signature, return cached matrix
-		signature: Tuple[Tuple[str, ...], Optional[pd.Timestamp], int] = (
+		signature: tuple[tuple[str, ...], pd.Timestamp | None, int] = (
 			tuple(sorted(prices.columns)),
 			prices.index[-1] if not prices.empty else None,
 			prices.shape[0],
@@ -111,7 +111,7 @@ class CorrelationEngine:
 		self._last_signature = signature
 		return corr
 
-	def get_correlation_groups(self, corr_matrix: pd.DataFrame | None = None) -> List[List[str]]:
+	def get_correlation_groups(self, corr_matrix: pd.DataFrame | None = None) -> list[list[str]]:
 		"""Group symbols where pairwise correlation >= threshold using union-find style clustering."""
 		corr = corr_matrix if corr_matrix is not None else self._last_matrix
 		if corr is None or corr.empty:
@@ -140,7 +140,7 @@ class CorrelationEngine:
 				if pd.notna(val) and val >= thr:
 					union(a, b)
 
-		groups: Dict[str, List[str]] = {}
+		groups: dict[str, list[str]] = {}
 		for s in symbols:
 			root = find(s)
 			groups.setdefault(root, []).append(s)
@@ -149,14 +149,14 @@ class CorrelationEngine:
 
 	def get_correlated_exposure(
 		self,
-		positions: Dict[str, Dict[str, Any]],
-		groups: List[List[str]],
-	) -> Dict[Tuple[str, ...], float]:
+		positions: dict[str, dict[str, Any]],
+		groups: list[list[str]],
+	) -> dict[tuple[str, ...], float]:
 		"""Aggregate exposure per correlation group.
 		positions: mapping symbol -> { 'size': fraction }
 		Returns mapping group(tuple(symbols)) -> total_exposure(float)
 		"""
-		exposures: Dict[Tuple[str, ...], float] = {}
+		exposures: dict[tuple[str, ...], float] = {}
 		for group in groups:
 			total = 0.0
 			for sym in group:
@@ -168,11 +168,11 @@ class CorrelationEngine:
 
 	def compute_size_reduction_factor(
 		self,
-		positions: Dict[str, Dict[str, Any]],
+		positions: dict[str, dict[str, Any]],
 		corr_matrix: pd.DataFrame | None,
 		candidate_symbol: str,
 		candidate_fraction: float,
-		max_exposure_override: Optional[float] = None,
+		max_exposure_override: float | None = None,
 	) -> float:
 		"""Return factor in [0,1] to reduce candidate_fraction if group exposure exceeds max.
 		- Find candidate's correlated group
@@ -211,18 +211,18 @@ class CorrelationEngine:
 class CorrelationGroupManager:
 	"""Manages named correlation groups and exposures for reporting/enforcement."""
 
-	def __init__(self, group_definitions: Optional[Dict[str, List[str]]] = None):
+	def __init__(self, group_definitions: dict[str, list[str]] | None = None):
 		self.group_definitions = group_definitions or {}
 
-	def set_groups(self, group_definitions: Dict[str, List[str]]) -> None:
+	def set_groups(self, group_definitions: dict[str, list[str]]) -> None:
 		self.group_definitions = group_definitions or {}
 
-	def calculate_group_exposures(self, positions: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+	def calculate_group_exposures(self, positions: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
 		"""Return mapping group_name -> { total_exposure, position_count, symbols }"""
-		out: Dict[str, Dict[str, Any]] = {}
+		out: dict[str, dict[str, Any]] = {}
 		for name, symbols in self.group_definitions.items():
 			total = 0.0
-			present: List[str] = []
+			present: list[str] = []
 			for s in symbols:
 				if s in positions:
 					present.append(s)
