@@ -126,13 +126,9 @@ class DatabaseManager:
                 "poolclass": StaticPool if url.endswith(":memory:") else None,
             }
             engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
+            # * Keep plain in-memory SQLite with StaticPool so tests share a single
+            #   connection-backed memory DB per engine without creating filesystem entries.
             effective_url = url
-            if url.endswith(":memory:"):
-                import threading
-
-                dbname = f"unit_test_db_{os.getpid()}_{threading.get_ident()}"
-                effective_url = f"sqlite:///file:{dbname}?mode=memory&cache=shared"
-                engine_kwargs["connect_args"]["uri"] = True
             return effective_url, engine_kwargs
 
         # Create engine with appropriate configuration per backend
