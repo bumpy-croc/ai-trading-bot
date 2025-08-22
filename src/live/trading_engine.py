@@ -20,6 +20,7 @@ from src.config.constants import (
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_ERROR_COOLDOWN,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
@@ -317,6 +318,7 @@ class LiveTradingEngine:
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
         self.consecutive_errors = 0
+        self.error_cooldown = DEFAULT_ERROR_COOLDOWN
 
         # Time exit policy (construct from overrides if not provided)
         self.time_exit_policy = time_exit_policy
