@@ -243,7 +243,7 @@ class RiskManager:
                         fraction = max(0.0, fraction * factor)
         except Exception:
             # Fail-safe: never raise from correlation logic
-            pass
+            logging.exception("Exception in correlation-based size reduction logic")
         return max(0.0, min(self.params.max_position_size, fraction))
 
     def compute_sl_tp(
