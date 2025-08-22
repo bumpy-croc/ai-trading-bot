@@ -48,9 +48,12 @@ DEFAULT_SHARPE_RATIO_THRESHOLD = 0.5
 DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 
 # Strategy/Engine integration flags
-DEFAULT_USE_PREDICTION_ENGINE = False
+DEFAULT_USE_PREDICTION_ENGINE = False  # MVP: disabled
 
-# Time Exits Defaults
+# Error Handling Constants
+DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
+
+# Trading Engine Constants
 DEFAULT_MAX_HOLDING_HOURS = 24
 DEFAULT_END_OF_DAY_FLAT = False
 DEFAULT_WEEKEND_FLAT = False

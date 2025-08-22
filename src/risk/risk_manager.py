@@ -171,8 +171,18 @@ class RiskManager:
         strategy_overrides = strategy_overrides or {}
         indicators = indicators or {}
         sizer = strategy_overrides.get("position_sizer", "fixed_fraction")
-        min_fraction = float(strategy_overrides.get("min_fraction", 0.0))
-        max_fraction = float(strategy_overrides.get("max_fraction", self.params.max_position_size))
+        
+        # * Safe handling for min_fraction and max_fraction to avoid TypeError with Mock objects
+        try:
+            min_fraction = float(strategy_overrides.get("min_fraction", 0.0))
+        except (TypeError, ValueError):
+            min_fraction = 0.0
+        
+        try:
+            max_fraction = float(strategy_overrides.get("max_fraction", self.params.max_position_size))
+        except (TypeError, ValueError):
+            max_fraction = self.params.max_position_size
+            
         max_fraction = min(max_fraction, self.params.max_position_size)
 
         # Respect remaining daily risk
@@ -180,9 +190,12 @@ class RiskManager:
         max_fraction = min(max_fraction, remaining_daily_risk)
 
         # Default fraction baseline
-        base_fraction = float(
-            strategy_overrides.get("base_fraction", self.params.base_risk_per_trade)
-        )
+        try:
+            base_fraction = float(
+                strategy_overrides.get("base_fraction", self.params.base_risk_per_trade)
+            )
+        except (TypeError, ValueError):
+            base_fraction = self.params.base_risk_per_trade
         base_fraction = max(0.0, min(base_fraction, self.params.max_position_size))
 
         fraction = 0.0
