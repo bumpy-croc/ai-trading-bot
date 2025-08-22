@@ -18,11 +18,11 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
-from sqlalchemy import Time
 
 
 # Portable JSON that chooses JSONB on PostgreSQL and JSON elsewhere (e.g., SQLite)

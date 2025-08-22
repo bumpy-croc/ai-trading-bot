@@ -1,13 +1,13 @@
 """Unit tests for dynamic risk management"""
 
+from unittest.mock import Mock
+
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock
 
 from src.position_management.dynamic_risk import (
-    DynamicRiskManager,
     DynamicRiskConfig,
-    RiskAdjustments
+    DynamicRiskManager,
+    RiskAdjustments,
 )
 from src.risk.risk_manager import RiskParameters
 

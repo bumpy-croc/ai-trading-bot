@@ -1,11 +1,9 @@
-import time
-from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine
 from src.data_providers.mock_data_provider import MockDataProvider
+from src.live.trading_engine import LiveTradingEngine
 from src.strategies.base import BaseStrategy
 
 

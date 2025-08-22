@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta, time
+from datetime import time
 
 import pandas as pd
 
 from src.backtesting.engine import Backtester
-from src.position_management.time_exits import TimeExitPolicy, MarketSessionDef
+from src.position_management.time_exits import MarketSessionDef, TimeExitPolicy
 from src.strategies.ml_basic import MlBasic
 
 

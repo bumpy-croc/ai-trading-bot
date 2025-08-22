@@ -1,5 +1,6 @@
-import pytest
 from datetime import datetime
+
+import pytest
 
 from src.position_management.mfe_mae_tracker import MFEMAETracker
 

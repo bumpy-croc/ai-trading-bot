@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 import pandas as pd
+
 from src.backtesting.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.strategies.base import BaseStrategy

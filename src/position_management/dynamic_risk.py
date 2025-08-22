@@ -1,10 +1,10 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any, TYPE_CHECKING
-import logging
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 if TYPE_CHECKING:
 	from src.database.manager import DatabaseManager

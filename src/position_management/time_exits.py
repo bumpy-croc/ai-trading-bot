@@ -8,9 +8,10 @@ market-session and timezone awareness.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
-from typing import Optional, Sequence
+from typing import Optional
 
 try:
     # Python 3.9+
