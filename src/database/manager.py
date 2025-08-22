@@ -94,7 +94,7 @@ class DatabaseManager:
                     "Please set DATABASE_URL in your environment or Railway configuration."
                 )
 
-        # Accept SQLite strictly for unit tests (fast path), controlled by ENABLE_INTEGRATION_TESTS
+        # Accept SQLite strictly for unit tests (fast path)
         is_sqlite = self.database_url.startswith("sqlite:")
         is_postgres = self.database_url.startswith("postgresql")
 
@@ -105,14 +105,13 @@ class DatabaseManager:
                 f"got: {self.database_url[:20]}..."
             )
 
-        # Guard SQLite usage behind the integration flag to avoid accidental use in production
-        run_integration = os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
+        # Guard SQLite usage in CI to avoid accidental use in production
         is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
         # Allow SQLite for local integration testing when PostgreSQL is not available
-        if is_sqlite and run_integration and is_github_actions:
+        if is_sqlite and is_github_actions:
             raise ValueError(
-                "SQLite URL provided while integration tests are enabled in CI. Use a PostgreSQL DATABASE_URL."
+                "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
             )
 
         # Helper for creating a SQLite engine config
@@ -153,8 +152,8 @@ class DatabaseManager:
             )
 
         except Exception as e:
-            # If we're attempting Postgres but not in integration mode, fall back to SQLite for unit tests
-            if is_postgres and not run_integration:
+            # If we're attempting Postgres but it fails, fall back to SQLite for unit tests
+            if is_postgres:
                 logger.warning(
                     "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
                     e,

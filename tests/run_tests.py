@@ -289,30 +289,22 @@ def run_integration_tests(pytest_args=None):
     """Run integration tests"""
     print_header("Running Integration Tests")
 
-    # Set environment variable to enable integration test mode (PostgreSQL containers)
-    original_env = os.environ.get("ENABLE_INTEGRATION_TESTS", "0")
-    os.environ["ENABLE_INTEGRATION_TESTS"] = "1"
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-m",
+        "integration",
+        "-v",
+        "--tb=short",
+        # No parallelization for integration tests - they need sequential DB access
+    ]
 
-    try:
-        cmd = [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-m",
-            "integration",
-            "-v",
-            "--tb=short",
-            # No parallelization for integration tests - they need sequential DB access
-        ]
+    # * Add any additional pytest arguments
+    if pytest_args:
+        cmd.extend(pytest_args)
 
-        # * Add any additional pytest arguments
-        if pytest_args:
-            cmd.extend(pytest_args)
-
-        return run_command(cmd, "Integration Tests")
-    finally:
-        # Restore original environment
-        os.environ["ENABLE_INTEGRATION_TESTS"] = original_env
+    return run_command(cmd, "Integration Tests")
 
 
 def run_coverage_analysis():

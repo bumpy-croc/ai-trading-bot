@@ -197,13 +197,12 @@ class TestPerformanceBenchmark:
         )
         benchmarks.append(unit_result)
 
-        # 5. Database setup benchmark (if integration tests enabled)
-        if os.getenv("ENABLE_INTEGRATION_TESTS") == "1":
-            integration_result = self.run_test_command(
-                [sys.executable, "-m", "pytest", "-m", "integration", "-v", "--tb=short", "-q"],
-                "Integration Tests",
-            )
-            benchmarks.append(integration_result)
+        # 5. Database setup benchmark (integration tests)
+        integration_result = self.run_test_command(
+            [sys.executable, "-m", "pytest", "-m", "integration", "-v", "--tb=short", "-q"],
+            "Integration Tests",
+        )
+        benchmarks.append(integration_result)
 
         # Save results
         self.baseline_data["benchmarks"].extend(benchmarks)
