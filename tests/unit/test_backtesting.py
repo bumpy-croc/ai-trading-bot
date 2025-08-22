@@ -16,10 +16,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtesting.engine import Backtester
-from live.trading_engine import Trade
-from risk.risk_manager import RiskParameters
-from strategies.ml_basic import MlBasic
+from src.backtesting.engine import Backtester
+from src.live.trading_engine import Trade
+from src.risk.risk_manager import RiskParameters
+from src.strategies.ml_basic import MlBasic
 
 
 class TestBacktesterInitialization:

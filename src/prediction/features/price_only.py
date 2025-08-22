@@ -7,7 +7,7 @@ This module provides basic price-based features without technical indicators.
 import numpy as np
 import pandas as pd
 
-from config.constants import DEFAULT_NORMALIZATION_WINDOW
+from src.config.constants import DEFAULT_NORMALIZATION_WINDOW
 
 from .base import FeatureExtractor
 

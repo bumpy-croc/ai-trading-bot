@@ -226,9 +226,11 @@ def run_critical_tests():
     return run_command(cmd, "Critical Tests (Live Trading + Risk Management)")
 
 
-def run_unit_tests():
+def run_unit_tests(pytest_args=None):
     """Run all unit tests"""
     print_header("Running Unit Tests")
+    # * Hint code under test to treat this run as unit tests (used by DB manager)
+    os.environ["TEST_TYPE"] = "unit"
 
     # Check if running in CI environment
     ci_indicators = [
@@ -275,36 +277,39 @@ def run_unit_tests():
         )
         print_warning("CI environment detected - skipping heaviest tests to prevent timeouts")
 
+    # * Add any additional pytest arguments
+    if pytest_args:
+        cmd.extend(pytest_args)
+
     print(f"DEBUG: Final command: {' '.join(cmd)}")
     print(f"DEBUG: About to execute command at {time.strftime('%H:%M:%S')}")
 
     return run_command(cmd, "Unit Tests")
 
 
-def run_integration_tests():
+def run_integration_tests(pytest_args=None):
     """Run integration tests"""
     print_header("Running Integration Tests")
 
-    # Set environment variable to enable integration test mode (PostgreSQL containers)
-    original_env = os.environ.get("ENABLE_INTEGRATION_TESTS", "0")
-    os.environ["ENABLE_INTEGRATION_TESTS"] = "1"
+    # * Hint code under test to treat this run as integration tests (used by DB manager)
+    os.environ["TEST_TYPE"] = "integration"
 
-    try:
-        cmd = [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-m",
-            "integration",
-            "-v",
-            "--tb=short",
-            # No parallelization for integration tests - they need sequential DB access
-        ]
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-m",
+        "integration",
+        "-v",
+        "--tb=short",
+        # No parallelization for integration tests - they need sequential DB access
+    ]
 
-        return run_command(cmd, "Integration Tests")
-    finally:
-        # Restore original environment
-        os.environ["ENABLE_INTEGRATION_TESTS"] = original_env
+    # * Add any additional pytest arguments
+    if pytest_args:
+        cmd.extend(pytest_args)
+
+    return run_command(cmd, "Integration Tests")
 
 
 def run_coverage_analysis():
@@ -585,6 +590,13 @@ Examples:
         help="Force interactive mode (ignore command line args)",
     )
 
+    # * Allow passing through additional pytest arguments
+    parser.add_argument(
+        "--pytest-args",
+        nargs=argparse.REMAINDER,
+        help="Additional arguments to pass to pytest (use --pytest-args before pytest options)",
+    )
+
     return parser.parse_args()
 
 
@@ -651,13 +663,13 @@ def interactive_mode():
     return command
 
 
-def run_all_tests(coverage=False, verbose=False, quiet=False):
+def run_all_tests(coverage=False, verbose=False, quiet=False, pytest_args=None):
     """Run the full test suite (all tests in the tests/ directory)."""
     print_header("Running All Tests")
 
     # Run unit tests first (these can run in parallel)
     print_subheader("Phase 1: Unit Tests")
-    unit_success = run_unit_tests()
+    unit_success = run_unit_tests(pytest_args=pytest_args)
 
     if not unit_success:
         print_error("Unit tests failed. Stopping before integration tests.")
@@ -665,7 +677,7 @@ def run_all_tests(coverage=False, verbose=False, quiet=False):
 
     # Run integration tests (these need sequential execution)
     print_subheader("Phase 2: Integration Tests")
-    integration_success = run_integration_tests()
+    integration_success = run_integration_tests(pytest_args=pytest_args)
 
     return unit_success and integration_success
 
@@ -714,9 +726,9 @@ def main():
     elif command == "critical":
         success = run_critical_tests()
     elif command == "unit":
-        success = run_unit_tests()
+        success = run_unit_tests(pytest_args=args.pytest_args)
     elif command == "integration":
-        success = run_integration_tests()
+        success = run_integration_tests(pytest_args=args.pytest_args)
     elif command == "database":
         success = run_database_tests()
     elif command == "coverage":
@@ -730,7 +742,7 @@ def main():
     elif command == "benchmark":
         success = run_performance_benchmark()
     elif command == "all":
-        success = run_all_tests(coverage=args.coverage, verbose=args.verbose, quiet=args.quiet)
+        success = run_all_tests(coverage=args.coverage, verbose=args.verbose, quiet=args.quiet, pytest_args=args.pytest_args)
     elif command == "validate":
         success = validate_test_environment()
     elif command and command.endswith(".py"):

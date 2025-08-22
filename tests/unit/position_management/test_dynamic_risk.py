@@ -1,13 +1,13 @@
 """Unit tests for dynamic risk management"""
 
+from unittest.mock import Mock
+
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock
 
 from src.position_management.dynamic_risk import (
-    DynamicRiskManager,
     DynamicRiskConfig,
-    RiskAdjustments
+    DynamicRiskManager,
+    RiskAdjustments,
 )
 from src.risk.risk_manager import RiskParameters
 
@@ -246,7 +246,7 @@ class TestDynamicRiskManager:
             "profit_factor": 1.5
         }
         
-        adjustments = self.manager.calculate_dynamic_risk_adjustments(
+        self.manager.calculate_dynamic_risk_adjustments(
             current_balance=10000,
             peak_balance=10000,
             session_id=1

@@ -7,9 +7,8 @@ Create Date: 2025-08-21 00:00:00.000000
 
 from __future__ import annotations
 
-from alembic import op  # type: ignore
 import sqlalchemy as sa  # type: ignore
-
+from alembic import op  # type: ignore
 
 # revision identifiers, used by Alembic.
 revision = "0004_time_exits"

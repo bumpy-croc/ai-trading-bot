@@ -1,11 +1,11 @@
 from datetime import datetime
-from unittest.mock import Mock
 
 import pandas as pd
 import pytest
 
 pytestmark = pytest.mark.integration
 
+<<<<<<< HEAD
 # Conditional imports to allow running without full live trading implementation
 try:
     from live.trading_engine import LiveTradingEngine, Position, PositionSide
@@ -54,9 +54,11 @@ except ImportError:
             self.order_id = order_id
 
     PositionSide = Mock()
+=======
+from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
+>>>>>>> origin/develop
 
 
-@pytest.mark.skipif(not LIVE_TRADING_AVAILABLE, reason="Live trading components not available")
 class TestLiveTradingEngine:
     def test_engine_initialization(self, mock_strategy, mock_data_provider):
         engine = LiveTradingEngine(

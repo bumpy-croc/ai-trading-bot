@@ -7,7 +7,7 @@ from src.trading.shared.sentiment import apply_live_sentiment, merge_historical_
 
 class DummySentimentProvider:
     def get_historical_sentiment(self, symbol, start, end):
-        idx = pd.date_range(start=start, periods=3, freq="H")
+        idx = pd.date_range(start=start, periods=3, freq="h")
         return pd.DataFrame({"sentiment_score": [0.1, 0.2, 0.3]}, index=idx)
 
     def aggregate_sentiment(self, df, window):
@@ -19,7 +19,7 @@ class DummySentimentProvider:
 
 def test_merge_historical_sentiment():
     start = datetime(2024, 1, 1)
-    idx = pd.date_range(start=start, periods=5, freq="H")
+    idx = pd.date_range(start=start, periods=5, freq="h")
     df = pd.DataFrame(
         {"open": [1] * 5, "high": [1] * 5, "low": [1] * 5, "close": [1] * 5, "volume": [1] * 5},
         index=idx,
@@ -34,7 +34,7 @@ def test_merge_historical_sentiment():
 
 def test_apply_live_sentiment_adds_freshness():
     now = datetime.now()
-    idx = pd.date_range(end=now, periods=10, freq="H")
+    idx = pd.date_range(end=now, periods=10, freq="h")
     df = pd.DataFrame(
         {
             "open": [1] * 10,

@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from config.paths import get_project_root
+from src.config.paths import get_project_root
 
 _DEFAULT_FLAGS_FILENAME = "feature_flags.json"
 
