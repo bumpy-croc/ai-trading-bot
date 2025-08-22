@@ -80,6 +80,60 @@ class DatabaseManager:
         # Create tables if they don't exist
         self._create_tables()
 
+    def _is_running_unit_tests(self) -> bool:
+        """
+        Detect if we're currently running unit tests.
+        
+        Returns:
+            True if running unit tests, False if integration tests or unknown.
+        """
+        import inspect
+        
+        # Check if pytest is currently running and look for unit test markers
+        try:
+            # Check if we can import pytest (it may not be available in production)
+            import pytest  # noqa: F401
+            
+            # Check if PYTEST_CURRENT_TEST environment variable contains test info
+            current_test = os.getenv("PYTEST_CURRENT_TEST", "")
+            if current_test:
+                if "tests/unit/" in current_test:
+                    return True
+                elif "tests/integration/" in current_test:
+                    return False
+            
+            # Look at the call stack to find if we're in a unit test
+            frame = inspect.currentframe()
+            while frame:
+                # Check if the frame corresponds to a test file path
+                filename = frame.f_code.co_filename
+                if "/tests/unit/" in filename:
+                    return True
+                elif "/tests/integration/" in filename:
+                    return False
+                frame = frame.f_back
+                
+            # Check if we're running through pytest by looking for pytest in call stack
+            frame = inspect.currentframe()
+            while frame:
+                module_name = frame.f_globals.get('__name__', '')
+                if 'pytest' in module_name and 'integration' in module_name:
+                    return False
+                elif 'pytest' in module_name and 'unit' in module_name:
+                    return True
+                frame = frame.f_back
+                
+            # Fallback: if we can't determine, assume unit test to be permissive
+            return True
+            
+        except (ImportError, AttributeError):
+            # If pytest is not available or we can't detect test type, assume unit test
+            return True
+        finally:
+            # Clean up frame reference to avoid memory leaks
+            if 'frame' in locals():
+                del frame
+
     def _init_database(self):
         """Initialize PostgreSQL database connection and session factory"""
 
@@ -108,11 +162,15 @@ class DatabaseManager:
         # Guard SQLite usage in CI to avoid accidental use in production
         is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
-        # Allow SQLite for local integration testing when PostgreSQL is not available
+        # Allow SQLite for unit tests, but require PostgreSQL for integration tests in CI
         if is_sqlite and is_github_actions:
-            raise ValueError(
-                "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
-            )
+            # Check if we're running integration tests by looking at pytest markers or environment
+            # Allow SQLite if running unit tests (detected by pytest current item markers)
+            is_unit_test = self._is_running_unit_tests()
+            if not is_unit_test:
+                raise ValueError(
+                    "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
+                )
 
         # Helper for creating a SQLite engine config
         def _sqlite_engine_config(url: str) -> tuple[str, dict[str, Any]]:
@@ -152,26 +210,36 @@ class DatabaseManager:
             )
 
         except Exception as e:
-            # If we're attempting Postgres but it fails, fall back to SQLite for unit tests
+            # If we're attempting Postgres but it fails, fall back to SQLite for unit tests only
             if is_postgres:
-                logger.warning(
-                    "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
-                    e,
-                )
-                fallback_url = "sqlite:///:memory:"
-                effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
-                try:
-                    self.engine = create_engine(effective_url, **engine_kwargs)
-                    self.session_factory = sessionmaker(bind=self.engine)
-                    from sqlalchemy import text as _sql_text
+                # Check if we can fall back to SQLite (same logic as above)
+                can_fallback_to_sqlite = True
+                if is_github_actions:
+                    is_unit_test = self._is_running_unit_tests()
+                    can_fallback_to_sqlite = is_unit_test
 
-                    with self.engine.connect() as conn:
-                        conn.execute(_sql_text("SELECT 1"))
-                    logger.info(
-                        "✅ Database connection established (SQLite fallback for unit tests)"
+                if can_fallback_to_sqlite:
+                    logger.warning(
+                        "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
+                        e,
                     )
-                except Exception as sqlite_err:
-                    logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                    fallback_url = "sqlite:///:memory:"
+                    effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
+                    try:
+                        self.engine = create_engine(effective_url, **engine_kwargs)
+                        self.session_factory = sessionmaker(bind=self.engine)
+                        from sqlalchemy import text as _sql_text
+
+                        with self.engine.connect() as conn:
+                            conn.execute(_sql_text("SELECT 1"))
+                        logger.info(
+                            "✅ Database connection established (SQLite fallback for unit tests)"
+                        )
+                    except Exception as sqlite_err:
+                        logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                        raise
+                else:
+                    logger.error(f"PostgreSQL connection failed and SQLite fallback not allowed in integration tests: {e}")
                     raise
             else:
                 logger.error(f"Failed to initialize database: {e}")

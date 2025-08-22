@@ -11,7 +11,6 @@ pytestmark = pytest.mark.unit
 def test_correlation_models_crud(monkeypatch):
 	# Force SQLite fallback by giving an invalid Postgres URL and disabling integration
 	monkeypatch.setenv("DATABASE_URL", "postgresql://invalid")
-	monkeypatch.setenv("ENABLE_INTEGRATION_TESTS", "0")
 	# Instantiate manager (will fallback to SQLite in-memory)
 	db = DatabaseManager(database_url="postgresql://invalid")
 	# Create tables explicitly for SQLite
