@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # 
 from sqlalchemy.orm import Session, sessionmaker  # type: ignore
 from sqlalchemy.pool import QueuePool  # type: ignore
 
-from config.config_manager import get_config
+from src.config.config_manager import get_config
 
 from .models import (
     AccountBalance,

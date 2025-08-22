@@ -10,34 +10,34 @@ from typing import Any, Optional
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
-from performance.metrics import cash_pnl
-from position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
-from position_management.mfe_mae_tracker import MFEMAETracker
-from position_management.time_exits import TimeExitPolicy
-from regime.detector import RegimeDetector
+from src.performance.metrics import cash_pnl
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.position_management.time_exits import TimeExitPolicy
+from src.regime.detector import RegimeDetector
 from sqlalchemy.exc import SQLAlchemyError
 
-from backtesting.models import Trade as CompletedTrade
-from backtesting.utils import (
+from src.backtesting.models import Trade as CompletedTrade
+from src.backtesting.utils import (
     compute_performance_metrics,
 )
-from backtesting.utils import (
+from src.backtesting.utils import (
     extract_indicators as util_extract_indicators,
 )
-from backtesting.utils import (
+from src.backtesting.utils import (
     extract_ml_predictions as util_extract_ml,
 )
-from backtesting.utils import (
+from src.backtesting.utils import (
     extract_sentiment_data as util_extract_sentiment,
 )
-from config.config_manager import get_config
-from config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_MFE_MAE_PRECISION_DECIMALS
-from data_providers.data_provider import DataProvider
-from data_providers.sentiment_provider import SentimentDataProvider
-from database.manager import DatabaseManager
-from database.models import TradeSource
-from risk.risk_manager import RiskManager
-from strategies.base import BaseStrategy
+from src.config.config_manager import get_config
+from src.config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_MFE_MAE_PRECISION_DECIMALS
+from src.data_providers.data_provider import DataProvider
+from src.data_providers.sentiment_provider import SentimentDataProvider
+from src.database.manager import DatabaseManager
+from src.database.models import TradeSource
+from src.risk.risk_manager import RiskManager
+from src.strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
