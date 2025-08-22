@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 from performance.metrics import Side, pnl_percent
@@ -884,7 +884,7 @@ class LiveTradingEngine:
 
         return df
 
-    def _build_correlation_context(self, symbol: str, df: pd.DataFrame, overrides: Optional[dict]) -> Optional[dict]:
+    def _build_correlation_context(self, symbol: str, df: pd.DataFrame, overrides: dict | None) -> dict | None:
         """
         Build correlation context dict for risk manager sizing, including corr matrix and optional exposure override.
         Returns None if correlation engine is unavailable or an error occurs.
