@@ -721,18 +721,13 @@ class LiveTradingEngine:
                 )
                 # Update position PnL
                 self._update_position_pnl(current_price)
-<<<<<<< HEAD
-                # Apply trailing stop adjustments before exit checks
+                # Apply trailing stop adjustments and update MFE/MAE before exit checks
                 try:
                     self._update_trailing_stops(df, current_index, float(current_price))
                 except Exception as e:
                     logger.debug(f"Trailing stop update failed: {e}")
-=======
-
                 # Update rolling MFE/MAE per position and persist lightweight updates
                 self._update_positions_mfe_mae(current_price)
-
->>>>>>> origin/develop
                 # Check exit conditions for existing positions
                 self._check_exit_conditions(df, current_index, current_price)
                 # Check entry conditions if not at maximum positions

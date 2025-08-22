@@ -5,7 +5,6 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-<<<<<<< HEAD
 # Conditional imports to allow running without full live trading implementation
 try:
     from live.trading_engine import LiveTradingEngine, Position, PositionSide
@@ -54,9 +53,7 @@ except ImportError:
             self.order_id = order_id
 
     PositionSide = Mock()
-=======
-from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
->>>>>>> origin/develop
+
 
 
 class TestLiveTradingEngine:
