@@ -212,13 +212,10 @@ class DatabaseManager:
         except Exception as e:
             # If we're attempting Postgres but it fails, fall back to SQLite for unit tests only
             if is_postgres:
-                # Check if we can fall back to SQLite (same logic as above)
-                can_fallback_to_sqlite = True
-                if is_github_actions:
-                    is_unit_test = self._is_running_unit_tests()
-                    can_fallback_to_sqlite = is_unit_test
-
-                if can_fallback_to_sqlite:
+                # Integration tests must always use PostgreSQL - no fallback allowed
+                is_unit_test = self._is_running_unit_tests()
+                
+                if is_unit_test:
                     logger.warning(
                         "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
                         e,
@@ -239,7 +236,12 @@ class DatabaseManager:
                         logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
                         raise
                 else:
-                    logger.error(f"PostgreSQL connection failed and SQLite fallback not allowed in integration tests: {e}")
+                    # Integration tests require PostgreSQL in ALL environments (local, CI, production)
+                    logger.error(
+                        f"PostgreSQL connection failed for integration test. "
+                        f"Integration tests require a working PostgreSQL database to test end-to-end behavior. "
+                        f"Error: {e}"
+                    )
                     raise
             else:
                 logger.error(f"Failed to initialize database: {e}")
