@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
-	from src.database.manager import DatabaseManager
-	
-from src.risk.risk_manager import RiskParameters
+	from database.manager import DatabaseManager
+
+from risk.risk_manager import RiskParameters
 
 logger = logging.getLogger(__name__)
 
