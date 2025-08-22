@@ -1322,6 +1322,9 @@ class LiveTradingEngine:
                     
                     self.db_manager.close_position(
                         position_id=position_db_id,
+                        exit_price=current_price,
+                        exit_time=datetime.now(),
+                        pnl=pnl,
                     )
                     del self.position_db_ids[position.order_id]
 

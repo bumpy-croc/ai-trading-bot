@@ -748,8 +748,14 @@ class DatabaseManager:
 
             session.commit()
 
-    def close_position(self, position_id: int) -> bool:
-        """Mark a position as closed."""
+    def close_position(
+        self, 
+        position_id: int, 
+        exit_price: float | None = None, 
+        exit_time: datetime | None = None, 
+        pnl: float | None = None
+    ) -> bool:
+        """Mark a position as closed with optional exit details."""
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
@@ -757,7 +763,14 @@ class DatabaseManager:
                 return False
 
             position.status = OrderStatus.FILLED
-            position.last_update = datetime.utcnow()
+            position.last_update = exit_time or datetime.utcnow()
+            
+            # Update position with exit details if provided
+            if exit_price is not None:
+                position.current_price = exit_price
+            if pnl is not None:
+                position.unrealized_pnl = pnl
+                
             session.commit()
 
             logger.info(f"Closed position #{position_id}")
