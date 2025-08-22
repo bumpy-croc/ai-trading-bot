@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
+
+# Ensure project root and src are in sys.path for absolute imports
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+SRC_PATH = PROJECT_ROOT / "src"
+if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
+    sys.path.insert(1, str(SRC_PATH))
 
 import ccxt
 import pandas as pd
@@ -60,9 +69,9 @@ def _download(ns: argparse.Namespace) -> int:
 def _prefill(ns: argparse.Namespace) -> int:
     from datetime import datetime
 
-    from config.paths import get_cache_dir
-    from data_providers.binance_provider import BinanceProvider
-    from data_providers.cached_data_provider import CachedDataProvider
+    from src.config.paths import get_cache_dir
+    from src.data_providers.binance_provider import BinanceProvider
+    from src.data_providers.cached_data_provider import CachedDataProvider
 
     def _normalize_symbols(raw):
         normalized = []
@@ -127,9 +136,9 @@ def _cache_manager(ns: argparse.Namespace) -> int:
     import pickle
     from datetime import datetime
 
-    from config.paths import get_cache_dir
-    from data_providers.binance_provider import BinanceProvider
-    from data_providers.cached_data_provider import CachedDataProvider
+    from src.config.paths import get_cache_dir
+    from src.data_providers.binance_provider import BinanceProvider
+    from src.data_providers.cached_data_provider import CachedDataProvider
 
     def _format_size(num):
         units = ["B", "KB", "MB", "GB"]
@@ -257,8 +266,8 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
     import random
     from datetime import datetime, timedelta
 
-    from database.manager import DatabaseManager
-    from database.models import PositionSide, TradeSource
+    from src.database.manager import DatabaseManager
+    from src.database.models import PositionSide, TradeSource
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
