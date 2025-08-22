@@ -41,7 +41,7 @@ class CorrelationEngine:
 		self._last_matrix: pd.DataFrame | None = None
 
 	def should_update(self, now: datetime | None = None) -> bool:
-		now = now or datetime.utcnow()
+		now = now or datetime.now(timezone.utc)
 		if self._last_update_at is None:
 			return True
 		return now - self._last_update_at >= timedelta(hours=self.config.correlation_update_frequency_hours)
