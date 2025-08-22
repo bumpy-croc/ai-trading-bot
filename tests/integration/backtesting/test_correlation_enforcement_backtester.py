@@ -1,8 +1,9 @@
-import pandas as pd
-import numpy as np
-import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock
+
+import numpy as np
+import pandas as pd
+import pytest
 
 from src.backtesting.engine import Backtester
 from src.risk.risk_manager import RiskParameters

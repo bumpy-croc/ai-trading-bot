@@ -10,11 +10,7 @@ from typing import Any, Optional
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
-from src.performance.metrics import cash_pnl
-from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
-from src.position_management.mfe_mae_tracker import MFEMAETracker
-from src.position_management.time_exits import TimeExitPolicy
-from src.regime.detector import RegimeDetector
+from position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.backtesting.models import Trade as CompletedTrade
@@ -36,9 +32,13 @@ from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
+from src.performance.metrics import cash_pnl
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.position_management.time_exits import TimeExitPolicy
+from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import BaseStrategy
-from position_management.correlation_engine import CorrelationEngine, CorrelationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -633,9 +633,13 @@ class Backtester:
                         try:
                             if self.correlation_engine is not None:
                                 # Use available df as candidate series and fetch for other open symbols
-                                symbols_to_check = set([symbol]) | set(
-                                    t.symbol for t in self.positions
-                                ) if hasattr(self, "positions") and self.positions else set([symbol])
+                                # Gather candidate + any open symbols tracked by risk manager
+                                symbols_to_check = (
+                                    set([str(symbol)])
+                                    | set(map(str, getattr(self.risk_manager, "positions", {}).keys()))
+                                    if getattr(self.risk_manager, "positions", None)
+                                    else set([str(symbol)])
+                                )
                                 price_series: dict[str, pd.Series] = {str(symbol): df["close"].copy()}
                                 end_ts = df.index[-1] if len(df) > 0 else None
                                 start_ts = end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days) if end_ts is not None else None

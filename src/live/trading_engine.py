@@ -14,6 +14,7 @@ from typing import Any
 
 import pandas as pd
 from performance.metrics import Side, pnl_percent
+from position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from position_management.mfe_mae_tracker import MFEMAETracker
 from position_management.time_exits import TimeExitPolicy, TimeRestrictions
@@ -45,7 +46,6 @@ from database.models import TradeSource
 from live.strategy_manager import StrategyManager
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
-from position_management.correlation_engine import CorrelationEngine, CorrelationConfig
 
 from .account_sync import AccountSynchronizer
 

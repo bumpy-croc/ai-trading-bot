@@ -1,8 +1,9 @@
-import pytest
 from datetime import datetime
 
-from src.database.models import Base, CorrelationMatrix, PortfolioExposure
+import pytest
+
 from src.database.manager import DatabaseManager
+from src.database.models import Base, CorrelationMatrix, PortfolioExposure
 
 pytestmark = pytest.mark.unit
 

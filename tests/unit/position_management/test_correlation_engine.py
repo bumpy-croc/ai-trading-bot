@@ -1,8 +1,8 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import pytest
 
-from src.position_management.correlation_engine import CorrelationEngine, CorrelationConfig
+from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 
 pytestmark = pytest.mark.unit
 
