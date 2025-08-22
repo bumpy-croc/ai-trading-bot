@@ -122,6 +122,23 @@ jobs:
           sleep 2
         done
     
+    - name: Set up database schema
+      env:
+        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
+      run: |
+        echo "=== Setting up database schema ==="
+        python -c "
+        from src.database.manager import DatabaseManager
+        from src.database.models import Base
+        try:
+            db = DatabaseManager()
+            Base.metadata.create_all(db.engine)
+            print('✅ Database schema created successfully')
+        except Exception as e:
+            print(f'❌ Failed to create database schema: {e}')
+            raise
+        "
+    
     - name: Run integration tests (with DB & external providers)
       env:
         DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
