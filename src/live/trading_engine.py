@@ -1311,6 +1311,19 @@ class LiveTradingEngine:
                 # Close position in database if it exists
                 if position.order_id in self.position_db_ids:
                     position_db_id = self.position_db_ids[position.order_id]
+                    
+                    # Update position with final MFE/MAE metrics before closing
+                    if metrics:
+                        self.db_manager.update_position(
+                            position_id=position_db_id,
+                            mfe=metrics.mfe,
+                            mae=metrics.mae,
+                            mfe_price=metrics.mfe_price,
+                            mae_price=metrics.mae_price,
+                            mfe_time=metrics.mfe_time,
+                            mae_time=metrics.mae_time,
+                        )
+                    
                     self.db_manager.close_position(
                         position_id=position_db_id,
                     )
