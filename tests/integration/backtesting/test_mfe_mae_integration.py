@@ -39,8 +39,10 @@ def test_backtester_records_mfe_mae(monkeypatch):
     bt = Backtester(strategy=strategy, data_provider=provider, log_to_database=False)
     result = bt.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)
 
-    # Expect at least one trade with MFE/MAE keys
+    # Expect at least one trade with MFE/MAE attributes
     assert isinstance(bt.trades, list)
     assert len(bt.trades) >= 1
     t = bt.trades[0]
-    assert "mfe" in t and "mae" in t
+    assert hasattr(t, 'mfe') and hasattr(t, 'mae')
+    assert t.mfe is not None
+    assert t.mae is not None

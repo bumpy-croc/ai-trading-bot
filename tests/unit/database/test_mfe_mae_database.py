@@ -31,7 +31,6 @@ def test_log_position_with_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memor
     assert float(positions[0]["mae"]) == pytest.approx(-0.01)
 
 
-def test_update_position_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memory:"):
 def test_update_position_mfe_mae():
     db = DatabaseManager("sqlite:///:memory:")
     session_id = db.create_trading_session(
@@ -66,7 +65,6 @@ def test_update_position_mfe_mae():
     assert float(positions[0]["mae"]) == pytest.approx(-0.005)
 
 
-def test_log_trade_with_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memory:"):
 def test_log_trade_with_mfe_mae():
     db = DatabaseManager("sqlite:///:memory:")
     session_id = db.create_trading_session(
