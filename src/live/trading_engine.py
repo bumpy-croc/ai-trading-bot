@@ -301,6 +301,7 @@ class LiveTradingEngine:
         self.completed_trades: list[Trade] = []
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
+        self.timeframe: str | None = None  # Will be set when trading starts
 
         # Performance tracking
         self.total_trades = 0
@@ -479,6 +480,7 @@ class LiveTradingEngine:
             return
 
         self.is_running = True
+        self.timeframe = timeframe  # Store the trading timeframe
         logger.info(f"🚀 Starting live trading for {symbol} on {timeframe} timeframe")
         logger.info(f"Initial balance: ${self.current_balance:,.2f}")
         logger.info(f"Max position size: {self.max_position_size * 100:.1f}% of balance")
@@ -912,9 +914,11 @@ class LiveTradingEngine:
                     continue
                 try:
                     if start_ts is not None and end_ts is not None:
+                        # Use the strategy's actual trading timeframe instead of hardcoding "1h"
+                        trading_timeframe = self.timeframe or "1h"  # Fallback to "1h" if not set
                         hist = self.data_provider.get_historical_data(
                             s,
-                            timeframe="1h",
+                            timeframe=trading_timeframe,
                             start=start_ts.to_pydatetime(),
                             end=end_ts.to_pydatetime(),
                         )
