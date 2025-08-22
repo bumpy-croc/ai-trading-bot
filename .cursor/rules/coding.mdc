@@ -230,5 +230,10 @@ When I ask you to review a pull request:
 
 - If available prefer the GitHub MCP server for interacting with GitHub
 - If GitHub MCP server not available, use the Github CLI. Authenticate with the GITHUB_TOKEN env variable.
+
+## PR Reviews
 - Investigate unresolved existing comments and address the feedback where appropriate. If you disagree with a comment, say so and why instead of making the change.
 - Review the pull request like you were a senior software engineer. Add a github review (via mcp or the cli `gh pr review` command) with your comments, and summarize the changes requested for me before implementing anything.
+
+## PR Creation
+- When you create a new PR, add a concise markdown description, with proper heading, describing the background, overview of the issue and what was achieved
