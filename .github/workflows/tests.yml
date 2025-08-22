@@ -173,7 +173,7 @@ jobs:
     if: ${{ always() && (needs.unit-tests.result == 'failure' || needs.integration-tests.result == 'failure') }}
     runs-on: ubuntu-latest
     env:
-      COPILOT_AGENT_ASSIGNEE: copilot
+      COPILOT_AGENT_ASSIGNEE: "@copilot"
     steps:
       - name: Request Copilot agent to fix on PR branch
         uses: actions/github-script@v7
