@@ -172,16 +172,16 @@ class RiskManager:
         indicators = indicators or {}
         sizer = strategy_overrides.get("position_sizer", "fixed_fraction")
         
-        # * Safe handling for min_fraction and max_fraction to avoid TypeError with Mock objects
+        # * Handle Mock objects in tests by converting to float safely
         try:
             min_fraction = float(strategy_overrides.get("min_fraction", 0.0))
         except (TypeError, ValueError):
             min_fraction = 0.0
-        
+            
         try:
             max_fraction = float(strategy_overrides.get("max_fraction", self.params.max_position_size))
         except (TypeError, ValueError):
-            max_fraction = self.params.max_position_size
+            max_fraction = float(self.params.max_position_size)
             
         max_fraction = min(max_fraction, self.params.max_position_size)
 
@@ -195,7 +195,7 @@ class RiskManager:
                 strategy_overrides.get("base_fraction", self.params.base_risk_per_trade)
             )
         except (TypeError, ValueError):
-            base_fraction = self.params.base_risk_per_trade
+            base_fraction = float(self.params.base_risk_per_trade)
         base_fraction = max(0.0, min(base_fraction, self.params.max_position_size))
 
         fraction = 0.0
