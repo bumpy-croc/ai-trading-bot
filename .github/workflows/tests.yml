@@ -156,7 +156,7 @@ jobs:
         echo "=== Starting integration tests ==="
         echo "PYTHONPATH=$PYTHONPATH"
         python tests/run_tests.py integration -q \
-          --junitxml=junit-integration.xml
+          --pytest-args --junitxml=junit-integration.xml
     
     - name: Upload integration test reports
       if: always()
