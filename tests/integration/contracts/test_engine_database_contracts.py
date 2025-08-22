@@ -46,6 +46,12 @@ def _is_signature_compatible(real_sig: inspect.Signature, mock_sig: inspect.Sign
         "log_account_snapshot",
         "update_balance",
         "get_current_balance",
+        # Commonly used helpers
+        "update_balance",
+        "get_current_balance",
+        "log_position",
+        "log_event",
+        "log_account_snapshot",
     ],
 )
 def test_mock_and_real_database_signatures_are_compatible(method_name: str):

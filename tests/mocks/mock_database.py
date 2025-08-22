@@ -109,7 +109,7 @@ class MockDatabaseManager:
 
         return session_id
 
-    def end_trading_session(self, session_id: Optional[int] = None):
+    def end_trading_session(self, session_id: Optional[int] = None, final_balance: Optional[float] = None):
         """End a trading session"""
         if session_id is None:
             session_id = self._current_session_id
@@ -117,6 +117,8 @@ class MockDatabaseManager:
         if session_id and session_id in self._sessions:
             session = self._sessions[session_id]
             session["end_time"] = datetime.now()
+            if final_balance is not None:
+                session["final_balance"] = final_balance
 
             # Calculate session stats
             session_trades = [t for t in self._trades.values() if t.get("session_id") == session_id]
