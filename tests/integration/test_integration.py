@@ -301,7 +301,7 @@ class TestComponentInteractions:
         assert data is not None
 
         # 2. Position opening (if strategy allows)
-        from live.trading_engine import PositionSide
+        from src.live.trading_engine import PositionSide
 
         initial_position_count = len(engine.positions)
         engine._open_position("BTCUSDT", PositionSide.LONG, 0.1, 50000)
@@ -470,7 +470,7 @@ class TestProductionReadiness:
         )
 
         # Add some mock positions
-        from live.trading_engine import Position, PositionSide
+        from src.live.trading_engine import Position, PositionSide
 
         position = Position(
             symbol="BTCUSDT",

@@ -6,56 +6,9 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-# Conditional imports to allow running without full live trading implementation
-try:
-    from live.trading_engine import LiveTradingEngine, Position, PositionSide
-
-    LIVE_TRADING_AVAILABLE = True
-except ImportError:
-    LIVE_TRADING_AVAILABLE = False
-
-    class LiveTradingEngine:  # minimal mock
-        def __init__(
-            self,
-            strategy=None,
-            data_provider=None,
-            initial_balance=10000,
-            enable_live_trading=False,
-            **kwargs,
-        ):
-            self.strategy = strategy
-            self.data_provider = data_provider
-            self.initial_balance = initial_balance
-            self.current_balance = initial_balance
-            self.enable_live_trading = enable_live_trading
-            self.is_running = False
-            self.positions = {}
-            self.completed_trades = []
-
-    class Position:
-        def __init__(
-            self,
-            symbol=None,
-            side=None,
-            size=None,
-            entry_price=None,
-            entry_time=None,
-            stop_loss=None,
-            order_id=None,
-            **kwargs,
-        ):
-            self.symbol = symbol
-            self.side = side
-            self.size = size
-            self.entry_price = entry_price
-            self.entry_time = entry_time
-            self.stop_loss = stop_loss
-            self.order_id = order_id
-
-    PositionSide = Mock()
+from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
 
 
-@pytest.mark.skipif(not LIVE_TRADING_AVAILABLE, reason="Live trading components not available")
 class TestLiveTradingEngine:
     def test_engine_initialization(self, mock_strategy, mock_data_provider):
         engine = LiveTradingEngine(
