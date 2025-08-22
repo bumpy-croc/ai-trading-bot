@@ -4,9 +4,9 @@ from unittest.mock import patch
 
 import pytest
 
-from config.config_manager import ConfigManager
-from config.providers.dotenv_provider import DotEnvProvider
-from config.providers.env_provider import EnvVarProvider
+from src.config.config_manager import ConfigManager
+from src.config.providers.dotenv_provider import DotEnvProvider
+from src.config.providers.env_provider import EnvVarProvider
 
 pytestmark = pytest.mark.unit
 

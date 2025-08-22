@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from backtesting.utils import (
+from src.backtesting.utils import (
     compute_performance_metrics,
     extract_indicators,
     extract_ml_predictions,

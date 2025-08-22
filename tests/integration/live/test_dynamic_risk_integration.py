@@ -132,8 +132,8 @@ class TestLiveTradingDynamicRiskIntegration:
         )
         
         # Initialize the database manager and dynamic risk manager manually for testing
-        from src.database.database_manager import DatabaseManager
-        engine.db_manager = DatabaseManager(":memory:")  # Use in-memory DB for testing
+        from database.manager import DatabaseManager
+        engine.db_manager = DatabaseManager()  # Use default test container DB
         final_config = engine._merge_dynamic_risk_config(config)
         engine.dynamic_risk_manager = DynamicRiskManager(
             config=final_config,
@@ -204,8 +204,8 @@ class TestLiveTradingDynamicRiskIntegration:
         )
         
         # Manually initialize dynamic risk manager
-        from src.database.database_manager import DatabaseManager
-        engine.db_manager = DatabaseManager(":memory:")
+        from database.manager import DatabaseManager
+        engine.db_manager = DatabaseManager()
         final_config = engine._merge_dynamic_risk_config(config)
         engine.dynamic_risk_manager = DynamicRiskManager(
             config=final_config,
@@ -260,16 +260,15 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             
             enable_dynamic_risk=True,
-            dynamic_risk_config=config,
-            log_to_database=True
+            dynamic_risk_config=config
         )
         
         # Replace database manager with mock
         engine.db_manager = mock_db
         
         # Manually initialize dynamic risk manager
-        from src.database.database_manager import DatabaseManager
-        engine.db_manager = DatabaseManager(":memory:")
+        from database.manager import DatabaseManager
+        engine.db_manager = DatabaseManager()
         final_config = engine._merge_dynamic_risk_config(config)
         engine.dynamic_risk_manager = DynamicRiskManager(
             config=final_config,
@@ -293,8 +292,7 @@ class TestLiveTradingDynamicRiskIntegration:
             enabled=True,
             drawdown_thresholds=[0.03, 0.07],  # Custom thresholds
             risk_reduction_factors=[0.9, 0.5],  # Custom factors
-            volatility_adjustment_enabled=False,
-            performance_window_trades=5  # Smaller window for testing
+            volatility_adjustment_enabled=False
         )
         
         engine = LiveTradingEngine(
@@ -308,8 +306,8 @@ class TestLiveTradingDynamicRiskIntegration:
         )
         
         # Manually initialize dynamic risk manager
-        from src.database.database_manager import DatabaseManager
-        engine.db_manager = DatabaseManager(":memory:")
+        from database.manager import DatabaseManager
+        engine.db_manager = DatabaseManager()
         final_config = engine._merge_dynamic_risk_config(config)
         engine.dynamic_risk_manager = DynamicRiskManager(
             config=final_config,

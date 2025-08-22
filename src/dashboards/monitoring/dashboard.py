@@ -96,7 +96,7 @@ class MonitoringDashboard:
 
     def __init__(self, db_url: str | None = None, update_interval: int = 3600):
         self.app = Flask(__name__, template_folder="templates", static_folder="static")
-        from utils.secrets import get_secret_key
+        from src.utils.secrets import get_secret_key
 
         self.app.config["SECRET_KEY"] = get_secret_key()
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)

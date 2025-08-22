@@ -1,6 +1,6 @@
 import pytest
 
-from live.strategy_manager import StrategyManager
+from src.live.strategy_manager import StrategyManager
 
 pytestmark = pytest.mark.integration
 

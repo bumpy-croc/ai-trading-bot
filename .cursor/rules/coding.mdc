@@ -17,10 +17,15 @@ alwaysApply: true
 - Type hints for public APIs; avoid `Any` where possible.
 - Early returns; handle edge cases first.
 
-### Testing
-- Add tests for new code; keep fast by default.
-- Use fixtures; mock network/IO.
-- Run `python tests/run_tests.py unit` locally; aim for green before PRs.
+# Testing
+
+## Unit Tests
+- Add unit tests for new code; keep fast by default.
+- Use fixtures; mock database/network/IO.
+- Run `python tests/run_tests.py unit  -m "not slow"` locally; aim for green before PRs.
+
+## Integration Tests
+- Add integration tests for database/network/IO
 
 ### Code Quality
 - Run linting checks before finishing any job: `ruff check . --fix`
@@ -230,5 +235,10 @@ When I ask you to review a pull request:
 
 - If available prefer the GitHub MCP server for interacting with GitHub
 - If GitHub MCP server not available, use the Github CLI. Authenticate with the GITHUB_TOKEN env variable.
+
+## PR Reviews
 - Investigate unresolved existing comments and address the feedback where appropriate. If you disagree with a comment, say so and why instead of making the change.
 - Review the pull request like you were a senior software engineer. Add a github review (via mcp or the cli `gh pr review` command) with your comments, and summarize the changes requested for me before implementing anything.
+
+## PR Creation
+- When you create a new PR, add a concise markdown description, with proper heading, describing the background, overview of the issue and what was achieved

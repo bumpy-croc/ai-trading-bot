@@ -12,8 +12,8 @@ from datetime import datetime, timedelta
 # Add src to path for imports
 sys.path.insert(0, "src")
 
-from database.manager import DatabaseManager
-from database.models import (
+from src.database.manager import DatabaseManager
+from src.database.models import (
     EventType,
     PredictionPerformance,
     Trade,

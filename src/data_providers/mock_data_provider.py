@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from data_providers.data_provider import DataProvider
+from src.data_providers.data_provider import DataProvider
 
 _TIMEFRAME_TO_FREQ = {
     "1m": "T",

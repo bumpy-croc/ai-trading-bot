@@ -37,9 +37,9 @@ except Exception:  # pragma: no cover
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.extend([str(ROOT), str(ROOT / "src")])
 
-from data_providers import BinanceDataProvider  # noqa: E402
-from data_providers.coinbase_provider import CoinbaseProvider  # noqa: E402
-from prediction.features.price_only import PriceOnlyFeatureExtractor  # noqa: E402
+from src.data_providers import BinanceDataProvider  # noqa: E402
+from src.data_providers.coinbase_provider import CoinbaseProvider  # noqa: E402
+from src.prediction.features.price_only import PriceOnlyFeatureExtractor  # noqa: E402
 
 
 class PriceOnlySequenceDataset(Dataset):

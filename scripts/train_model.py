@@ -39,7 +39,7 @@ from src.utils.symbol_factory import SymbolFactory
 
 # Import sentiment provider
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from data_providers.senticrypt_provider import SentiCryptProvider
+from src.data_providers.senticrypt_provider import SentiCryptProvider
 
 # Get project root directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

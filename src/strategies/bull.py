@@ -6,6 +6,7 @@ This strategy is designed for bull market conditions.
 
 import numpy as np
 import pandas as pd
+
 from src.indicators.technical import (
     calculate_atr,
     calculate_bollinger_bands,

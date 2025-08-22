@@ -1,14 +1,14 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
-	from src.database.manager import DatabaseManager
-	
+	from database.manager import DatabaseManager
+
 from src.risk.risk_manager import RiskParameters
 
 logger = logging.getLogger(__name__)
@@ -23,18 +23,18 @@ class DynamicRiskConfig:
 	performance_window_days: int = 30
 	
 	# Drawdown thresholds and adjustments
-	drawdown_thresholds: List[float] = None  # [0.05, 0.10, 0.15] = [5%, 10%, 15%]
-	risk_reduction_factors: List[float] = None  # [0.8, 0.6, 0.4] = reduction at each threshold
+	drawdown_thresholds: list[float] = None  # [0.05, 0.10, 0.15] = [5%, 10%, 15%]
+	risk_reduction_factors: list[float] = None  # [0.8, 0.6, 0.4] = reduction at each threshold
 	
 	# Recovery thresholds
-	recovery_thresholds: List[float] = None  # [0.02, 0.05] = [2%, 5%] positive returns
+	recovery_thresholds: list[float] = None  # [0.02, 0.05] = [2%, 5%] positive returns
 	
 	# Volatility adjustments
 	volatility_adjustment_enabled: bool = True
 	volatility_window_days: int = 30
 	high_volatility_threshold: float = 0.03  # 3% daily volatility threshold
 	low_volatility_threshold: float = 0.01   # 1% daily volatility threshold
-	volatility_risk_multipliers: Tuple[float, float] = (0.7, 1.3)  # (high_vol, low_vol)
+	volatility_risk_multipliers: tuple[float, float] = (0.7, 1.3)  # (high_vol, low_vol)
 	
 	def __post_init__(self):
 		"""Set defaults and validate configuration"""
@@ -66,7 +66,7 @@ class RiskAdjustments:
 	
 	# Metadata
 	primary_reason: str = "normal"
-	adjustment_details: Dict[str, Any] = None
+	adjustment_details: dict[str, Any] = None
 	
 	def __post_init__(self):
 		if self.adjustment_details is None:
@@ -90,7 +90,7 @@ class DynamicRiskManager:
 		self.db_manager = db_manager
 		
 		# Cache for performance calculations
-		self._performance_cache: Dict[str, Any] = {}
+		self._performance_cache: dict[str, Any] = {}
 		self._cache_timestamp = None
 		self._cache_ttl_seconds = 300  # 5 minutes
 		
@@ -212,7 +212,7 @@ class DynamicRiskManager:
 			return 0.0
 		return max(0.0, (peak_balance - current_balance) / peak_balance)
 	
-	def _get_performance_metrics(self, session_id: Optional[int]) -> Dict[str, Any]:
+	def _get_performance_metrics(self, session_id: Optional[int]) -> dict[str, Any]:
 		"""Get cached performance metrics or calculate new ones"""
 		now = datetime.utcnow()
 		
@@ -309,7 +309,7 @@ class DynamicRiskManager:
 			primary_reason=reason
 		)
 	
-	def _calculate_performance_adjustment(self, performance_metrics: Dict[str, Any]) -> RiskAdjustments:
+	def _calculate_performance_adjustment(self, performance_metrics: dict[str, Any]) -> RiskAdjustments:
 		"""Calculate adjustments based on recent performance"""
 		win_rate = performance_metrics.get("win_rate", 0.5)
 		profit_factor = performance_metrics.get("profit_factor", 1.0)
@@ -339,7 +339,7 @@ class DynamicRiskManager:
 		else:
 			return RiskAdjustments(primary_reason="normal_performance")
 	
-	def _calculate_volatility_adjustment(self, performance_metrics: Dict[str, Any]) -> RiskAdjustments:
+	def _calculate_volatility_adjustment(self, performance_metrics: dict[str, Any]) -> RiskAdjustments:
 		"""Calculate adjustments based on market volatility"""
 		if not self.config.volatility_adjustment_enabled:
 			return RiskAdjustments(primary_reason="volatility_disabled")

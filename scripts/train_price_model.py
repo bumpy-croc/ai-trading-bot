@@ -34,7 +34,7 @@ from torch.utils.data import DataLoader, Dataset
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.extend([str(ROOT), str(ROOT / "src")])
 
-from data_providers import BinanceDataProvider  # noqa: E402
+from src.data_providers import BinanceDataProvider  # noqa: E402
 
 # ----------------------- Dataset ------------------------------------------- #
 

@@ -55,7 +55,8 @@ def test_live_engine_records_mfe_mae():
         enable_live_trading=False,
         log_trades=True,
         account_snapshot_interval=0,  # disable snapshots for speed
-        database_url="sqlite:///:memory:",
+        # Use default PostgreSQL test container via DatabaseManager
+        database_url=None,
         enable_dynamic_risk=False,
         enable_hot_swapping=False,
     )

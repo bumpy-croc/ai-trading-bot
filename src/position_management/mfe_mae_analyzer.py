@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass
@@ -11,12 +10,12 @@ class TradeMFERecord:
     strategy_name: str
     mfe: float
     mae: float
-    mfe_time: Optional[datetime]
-    mae_time: Optional[datetime]
+    mfe_time: datetime | None
+    mae_time: datetime | None
 
 
 class MFEMAEAnalyzer:
-    def calculate_avg_mfe_mae_by_strategy(self, trades: Iterable[dict], strategy_name: Optional[str] = None) -> dict:
+    def calculate_avg_mfe_mae_by_strategy(self, trades: Iterable[dict], strategy_name: str | None = None) -> dict:
         records = [t for t in trades if (strategy_name is None or t.get("strategy") == strategy_name)]
         if not records:
             return {"avg_mfe": 0.0, "avg_mae": 0.0}

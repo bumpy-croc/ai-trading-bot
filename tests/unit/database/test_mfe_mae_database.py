@@ -15,7 +15,7 @@ def test_log_position_with_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memor
         mode=TradeSource.BACKTEST,
         initial_balance=1000.0,
     )
-    pos_id = db.log_position(
+    db.log_position(
         symbol="BTCUSDT",
         side="long",
         entry_price=100.0,
@@ -75,7 +75,7 @@ def test_log_trade_with_mfe_mae():
         mode=TradeSource.BACKTEST,
         initial_balance=1000.0,
     )
-    trade_id = db.log_trade(
+    db.log_trade(
         symbol="BTCUSDT",
         side="long",
         entry_price=100.0,

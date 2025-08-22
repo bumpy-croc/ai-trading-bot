@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
-from typing import Optional
 
 try:
     # Python 3.9+
@@ -31,9 +30,9 @@ class MarketSessionDef:
 
     name: str
     timezone: str = "UTC"
-    open_time: Optional[time] = None
-    close_time: Optional[time] = None
-    days_of_week: Optional[Sequence[int]] = None  # 1=Mon .. 7=Sun
+    open_time: time | None = None
+    close_time: time | None = None
+    days_of_week: Sequence[int] | None = None  # 1=Mon .. 7=Sun
     is_24h: bool = False
 
     def is_open_at(self, dt_utc: datetime) -> bool:
@@ -51,7 +50,7 @@ class MarketSessionDef:
         local_t = local_dt.time()
         return self.open_time <= local_t <= self.close_time
 
-    def next_close_after(self, dt_utc: datetime) -> Optional[datetime]:
+    def next_close_after(self, dt_utc: datetime) -> datetime | None:
         # Return None when we cannot determine a close time
         if self.is_24h:
             return None
@@ -111,12 +110,12 @@ class TimeRestrictions:
 
 @dataclass
 class TimeExitPolicy:
-    max_holding_hours: Optional[int] = None
+    max_holding_hours: int | None = None
     end_of_day_flat: bool = False
     weekend_flat: bool = False
     market_timezone: str = "UTC"
     time_restrictions: TimeRestrictions = field(default_factory=TimeRestrictions)
-    market_session: Optional[MarketSessionDef] = None
+    market_session: MarketSessionDef | None = None
 
     def _as_utc(self, dt: datetime) -> datetime:
         # Normalize any naive datetime to UTC; assume already-UTC if tz-aware
@@ -167,7 +166,7 @@ class TimeExitPolicy:
 
         return False, None
 
-    def get_next_exit_time(self, entry_time: datetime, now_time: datetime) -> Optional[datetime]:
+    def get_next_exit_time(self, entry_time: datetime, now_time: datetime) -> datetime | None:
         """Return the next scheduled exit time (UTC) based on policy, if any.
         """
         # Preserve naivety if both inputs are naive

@@ -13,14 +13,8 @@ from enum import Enum
 from typing import Any
 
 import pandas as pd
-from performance.metrics import Side, pnl_percent
-from position_management.correlation_engine import CorrelationConfig, CorrelationEngine
-from position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
-from position_management.mfe_mae_tracker import MFEMAETracker
-from position_management.time_exits import TimeExitPolicy, TimeRestrictions
-from regime.detector import RegimeDetector
 
-from config.constants import (
+from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
@@ -37,15 +31,21 @@ from config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
-from data_providers.binance_provider import BinanceProvider
-from data_providers.coinbase_provider import CoinbaseProvider
-from data_providers.data_provider import DataProvider
-from data_providers.sentiment_provider import SentimentDataProvider
-from database.manager import DatabaseManager
-from database.models import TradeSource
-from live.strategy_manager import StrategyManager
-from risk.risk_manager import RiskManager, RiskParameters
-from strategies.base import BaseStrategy
+from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.coinbase_provider import CoinbaseProvider
+from src.data_providers.data_provider import DataProvider
+from src.data_providers.sentiment_provider import SentimentDataProvider
+from src.database.manager import DatabaseManager
+from src.database.models import TradeSource
+from src.live.strategy_manager import StrategyManager
+from src.performance.metrics import Side, pnl_percent
+from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
+from src.regime.detector import RegimeDetector
+from src.risk.risk_manager import RiskManager, RiskParameters
+from src.strategies.base import BaseStrategy
 
 from .account_sync import AccountSynchronizer
 
@@ -1301,10 +1301,25 @@ class LiveTradingEngine:
     def _close_position(self, position: Position, reason: str):
         """Close a position and update balance"""
         try:
-            current_price = self.data_provider.get_current_price(position.symbol)
+            current_price_raw = self.data_provider.get_current_price(position.symbol)
+            try:
+                current_price = float(current_price_raw)
+            except Exception:
+                current_price = None
             if not current_price:
-                logger.error(f"Could not get current price for {position.symbol}")
-                return
+                # Fallback: try latest data frame
+                try:
+                    df = self._get_latest_data(position.symbol, "1m")
+                    if df is not None and not df.empty and "close" in df.columns:
+                        current_price = float(df["close"].iloc[-1])
+                except Exception:
+                    current_price = None
+            if not current_price:
+                # As a last resort use entry price to allow cleanup and logging
+                logger.warning(
+                    f"Falling back to entry price for {position.symbol} during close; live price unavailable"
+                )
+                current_price = float(position.entry_price)
 
             # Calculate P&L
             if position.side == PositionSide.LONG:
@@ -1336,7 +1351,6 @@ class LiveTradingEngine:
                 exit_time=datetime.now(),
                 pnl=pnl,
                 exit_reason=reason,
-                order_id=position.order_id,
             )
 
             # Update statistics
@@ -1412,6 +1426,14 @@ class LiveTradingEngine:
 
         except Exception as e:
             logger.error(f"Failed to close position {position.order_id}: {e}", exc_info=True)
+            # Ensure local cleanup so engine/shutdown does not leave dangling positions
+            try:
+                if position.order_id in self.positions:
+                    del self.positions[position.order_id]
+                self.mfe_mae_tracker.clear(position.order_id)
+            except Exception:
+                # Best-effort cleanup; ignore secondary errors
+                pass
 
     def _check_stop_loss(self, position: Position, current_price: float) -> bool:
         """Check if stop loss should be triggered"""

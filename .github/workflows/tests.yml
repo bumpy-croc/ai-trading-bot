@@ -1,8 +1,9 @@
-name: Unit Tests
+name: Tests
 
 on:
-  pull_request
- 
+  pull_request:
+  workflow_dispatch:  # Allow manual trigger
+
 permissions:
   contents: read
   issues: write
@@ -10,38 +11,66 @@ permissions:
   actions: write
 
 jobs:
-  test:
+  # Shared setup job to install dependencies once
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      id: cache-deps
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+  # Unit tests - split into 4 parallel jobs
+  unit-tests:
+    needs: setup
     strategy:
       matrix:
         split-index: [1, 2, 3, 4]
-        python-version: [3.11]
       fail-fast: false  # Continue running other groups if one fails
-
+    
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       ACTIONS_STEP_DEBUG: true
       ACTIONS_RUNNER_DEBUG: true
       PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
+    
+    - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.11'
         cache: 'pip'
-
+    
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-
-    - name: Run split ${{ matrix.split-index }} of 4
+    
+    - name: Run unit tests (split ${{ matrix.split-index }} of 4)
       run: |
-        echo "=== Starting split: ${{ matrix.split-index }}/4 ==="
+        echo "=== Starting unit tests split: ${{ matrix.split-index }}/4 ==="
         echo "PYTHONPATH=$PYTHONPATH"
         python -m pytest \
           -v \
@@ -56,27 +85,97 @@ jobs:
           --cov=src \
           --cov-report=term-missing \
           --cov-report=xml \
-          --junitxml=junit-${{ matrix.split-index }}.xml
-
-    - name: Upload test reports (split ${{ matrix.split-index }})
+          --junitxml=junit-unit-${{ matrix.split-index }}.xml
+    
+    - name: Upload unit test reports (split ${{ matrix.split-index }})
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-reports-${{ matrix.split-index }}
+        name: unit-test-reports-${{ matrix.split-index }}
         path: |
-          junit-${{ matrix.split-index }}.xml
+          junit-unit-${{ matrix.split-index }}.xml
           coverage.xml
         retention-days: 7
 
+  # Integration tests - run in parallel with unit tests
+  integration-tests:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: trading_bot
+          POSTGRES_PASSWORD: dev_password_123
+          POSTGRES_DB: trading_bot
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading_bot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Wait for PostgreSQL
+      run: |
+        until pg_isready -h localhost -p 5432 -U trading_bot; do
+          echo "Waiting for PostgreSQL..."
+          sleep 2
+        done
+    
+    - name: Run integration tests (with DB & external providers)
+      env:
+        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
+        ENABLE_INTEGRATION_TESTS: '1'
+      run: |
+        echo "=== Starting integration tests ==="
+        echo "PYTHONPATH=$PYTHONPATH"
+        python tests/run_tests.py integration -q \
+          --pytest-args --junitxml=junit-integration.xml
+    
+    - name: Upload integration test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-reports
+        path: |
+          junit-integration.xml
+        retention-days: 7
+
+  # Autofix agent - triggers on any test failure
   autofix_agent:
-    needs: test
-    if: ${{ always() }}
+    needs: [unit-tests, integration-tests]
+    if: ${{ always() && (needs.unit-tests.result == 'failure' || needs.integration-tests.result == 'failure') }}
     runs-on: ubuntu-latest
     env:
-      COPILOT_AGENT_ASSIGNEE: copilot
+      COPILOT_AGENT_ASSIGNEE: "@copilot"
     steps:
       - name: Request Copilot agent to fix on PR branch
-        if: ${{ needs.test.result == 'failure' }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -97,14 +196,24 @@ jobs:
 
             const runId = process.env.GITHUB_RUN_ID;
             const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
-            const title = `Auto-fix CI on PR #${pr.number} (commit to ${pr.head.ref})`;
+            
+            // Determine which tests failed
+            const unitFailed = '${{ needs.unit-tests.result }}' === 'failure';
+            const integrationFailed = '${{ needs.integration-tests.result }}' === 'failure';
+            const failureTypes = [];
+            if (unitFailed) failureTypes.push('unit');
+            if (integrationFailed) failureTypes.push('integration');
+            const failureString = failureTypes.join(' and ');
+            
+            const title = `Auto-fix CI ${failureString} test failures on PR #${pr.number} (commit to ${pr.head.ref})`;
 
             const instructions = (canPush
               ? `
-              Please fix failing tests by committing directly to the PR branch:
+              Please fix failing ${failureString} tests by committing directly to the PR branch:
               - PR: #${pr.number} (${pr.title})
               - Branch: ${pr.head.repo.full_name}:${pr.head.ref}
               - CI run: ${runUrl}
+              - Failed tests: ${failureString}
               Requirements:
               - Reproduce failures, implement minimal fixes, update/add tests if needed.
               - Push commits to the existing branch (do NOT open a new PR).
@@ -114,6 +223,7 @@ jobs:
               The PR head branch is not writable (fork without maintainer edits). Open a new PR with fixes:
               - PR: #${pr.number} (${pr.title})
               - CI run: ${runUrl}
+              - Failed tests: ${failureString}
               `.trim()
             );
 
@@ -125,7 +235,7 @@ jobs:
               const issueNum = search.data.items[0].number;
               await github.rest.issues.createComment({
                 owner, repo, issue_number: issueNum,
-                body: `CI failed again. Latest run: ${runUrl}`
+                body: `CI failed again (${failureString} tests). Latest run: ${runUrl}`
               });
               core.info(`Updated existing issue #${issueNum}`);
               return;

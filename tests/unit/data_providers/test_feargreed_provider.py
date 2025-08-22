@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from data_providers.feargreed_provider import FearGreedProvider
+from src.data_providers.feargreed_provider import FearGreedProvider
 
 pytestmark = pytest.mark.unit
 

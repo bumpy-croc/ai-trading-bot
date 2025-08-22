@@ -12,7 +12,7 @@ from typing import Optional
 import pandas as pd
 import requests
 
-from utils.symbol_factory import SymbolFactory
+from src.utils.symbol_factory import SymbolFactory
 
 from .sentiment_provider import SentimentDataProvider
 
