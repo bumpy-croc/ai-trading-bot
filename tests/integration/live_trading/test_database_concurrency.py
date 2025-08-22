@@ -26,7 +26,6 @@ def test_concurrent_open_close_with_database(tmp_path, mock_strategy, mock_data_
         enable_live_trading=False,
         initial_balance=1000.0,
         check_interval=0.01,
-        database_url=f"sqlite:///{tmp_path}/concurrency.db",
         log_trades=True,
     )
 
