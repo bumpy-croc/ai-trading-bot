@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 
 @dataclass
@@ -14,12 +13,12 @@ class TrailingStopPolicy:
     """
 
     activation_threshold: float = 0.015  # 1.5% sized PnL to start trailing
-    trailing_distance_pct: Optional[float] = 0.005  # 0.5% trail distance
-    atr_multiplier: Optional[float] = None  # e.g., 1.5 * ATR
-    breakeven_threshold: Optional[float] = None  # if None, breakeven is disabled
+    trailing_distance_pct: float | None = 0.005  # 0.5% trail distance
+    atr_multiplier: float | None = None  # e.g., 1.5 * ATR
+    breakeven_threshold: float | None = None  # if None, breakeven is disabled
     breakeven_buffer: float = 0.001  # 0.1% above breakeven for long (below for short)
 
-    def compute_distance(self, price: float, atr: Optional[float]) -> Optional[float]:
+    def compute_distance(self, price: float, atr: float | None) -> float | None:
         if atr is not None and atr > 0 and self.atr_multiplier is not None and self.atr_multiplier > 0:
             return float(atr) * float(self.atr_multiplier)
         if self.trailing_distance_pct is not None and self.trailing_distance_pct > 0:
@@ -38,12 +37,12 @@ class TrailingStopPolicy:
         side: str,
         entry_price: float,
         current_price: float,
-        existing_stop: Optional[float],
+        existing_stop: float | None,
         position_fraction: float,
-        atr: Optional[float] = None,
+        atr: float | None = None,
         trailing_activated: bool = False,
         breakeven_triggered: bool = False,
-    ) -> Tuple[Optional[float], bool, bool]:
+    ) -> tuple[float | None, bool, bool]:
         """Return (new_stop, trailing_activated, breakeven_triggered).
 
         - Never loosens the stop against the trade.
@@ -70,7 +69,7 @@ class TrailingStopPolicy:
         ):
             breakeven_triggered = True
 
-        new_stop: Optional[float] = existing_stop
+        new_stop: float | None = existing_stop
 
         # If breakeven triggered, compute breakeven stop with buffer
         if breakeven_triggered and self.breakeven_threshold is not None and self.breakeven_threshold > 0:

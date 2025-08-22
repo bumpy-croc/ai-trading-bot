@@ -1,8 +1,6 @@
-import math
 import pytest
 
 from src.position_management.trailing_stops import TrailingStopPolicy
-
 
 pytestmark = pytest.mark.unit
 

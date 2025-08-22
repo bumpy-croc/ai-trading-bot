@@ -29,6 +29,8 @@ from src.config.constants import (
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
+    DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
 )
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
@@ -42,6 +44,7 @@ from src.position_management.correlation_engine import CorrelationConfig, Correl
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
+from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.base import BaseStrategy
