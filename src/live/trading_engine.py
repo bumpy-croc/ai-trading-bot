@@ -14,6 +14,9 @@ from typing import Any
 
 import pandas as pd
 from performance.metrics import Side, pnl_percent
+from position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from position_management.mfe_mae_tracker import MFEMAETracker
+from position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from regime.detector import RegimeDetector
 
 from config.constants import (
@@ -21,10 +24,17 @@ from config.constants import (
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
+    DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_INITIAL_BALANCE,
+    DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
+    DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
 )
 from data_providers.binance_provider import BinanceProvider
 from data_providers.coinbase_provider import CoinbaseProvider
@@ -33,22 +43,8 @@ from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
 from live.strategy_manager import StrategyManager
-from performance.metrics import Side, pnl_percent
-from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
-from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
-from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
-from config.constants import (
-    DEFAULT_MAX_HOLDING_HOURS,
-    DEFAULT_END_OF_DAY_FLAT,
-    DEFAULT_WEEKEND_FLAT,
-    DEFAULT_MARKET_TIMEZONE,
-    DEFAULT_TIME_RESTRICTIONS,
-)
-from position_management.mfe_mae_tracker import MFEMAETracker
-from config.constants import DEFAULT_MFE_MAE_PRECISION_DECIMALS
-from config.constants import DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS
 
 from .account_sync import AccountSynchronizer
 
@@ -889,7 +885,7 @@ class LiveTradingEngine:
         now = datetime.utcnow()
         for order_id, position in self.positions.items():
             # fraction is position.size (fraction of balance)
-            metrics = self.mfe_mae_tracker.update_position_metrics(
+            self.mfe_mae_tracker.update_position_metrics(
                 position_key=order_id,
                 entry_price=float(position.entry_price),
                 current_price=float(current_price),
@@ -907,7 +903,7 @@ class LiveTradingEngine:
         if not should_persist:
             return
         self._last_mfe_mae_persist = now
-        for order_id, position in self.positions.items():
+        for order_id, _position in self.positions.items():
             db_id = self.position_db_ids.get(order_id)
             if db_id is not None:
                 try:
