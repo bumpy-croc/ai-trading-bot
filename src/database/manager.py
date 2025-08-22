@@ -81,58 +81,42 @@ class DatabaseManager:
         self._create_tables()
 
     def _is_running_unit_tests(self) -> bool:
-        """
-        Detect if we're currently running unit tests.
-        
+        """Determine whether the current pytest run executes unit tests.
+
+        Detection order (no call stack inspection):
+        1) Explicit environment flags:
+           - TEST_TYPE = "unit" | "integration"
+           - PYTEST_TEST_TYPE = alias of TEST_TYPE
+           - RUNNING_INTEGRATION_TESTS = 1/true/yes → integration
+        2) PYTEST_CURRENT_TEST path hint containing "tests/unit/" or "tests/integration/".
+        3) Conservative default: treat as integration (return False) to avoid SQLite fallback.
+
         Returns:
-            True if running unit tests, False if integration tests or unknown.
+            True if running unit tests; False for integration tests or when undetermined.
         """
-        import inspect
-        
-        # Check if pytest is currently running and look for unit test markers
-        try:
-            # Check if we can import pytest (it may not be available in production)
-            import pytest  # noqa: F401
-            
-            # Check if PYTEST_CURRENT_TEST environment variable contains test info
-            current_test = os.getenv("PYTEST_CURRENT_TEST", "")
-            if current_test:
-                if "tests/unit/" in current_test:
-                    return True
-                elif "tests/integration/" in current_test:
-                    return False
-            
-            # Look at the call stack to find if we're in a unit test
-            frame = inspect.currentframe()
-            while frame:
-                # Check if the frame corresponds to a test file path
-                filename = frame.f_code.co_filename
-                if "/tests/unit/" in filename:
-                    return True
-                elif "/tests/integration/" in filename:
-                    return False
-                frame = frame.f_back
-                
-            # Check if we're running through pytest by looking for pytest in call stack
-            frame = inspect.currentframe()
-            while frame:
-                module_name = frame.f_globals.get('__name__', '')
-                if 'pytest' in module_name and 'integration' in module_name:
-                    return False
-                elif 'pytest' in module_name and 'unit' in module_name:
-                    return True
-                frame = frame.f_back
-                
-            # Fallback: if we can't determine, assume unit test to be permissive
-            return True
-            
-        except (ImportError, AttributeError):
-            # If pytest is not available or we can't detect test type, assume unit test
-            return True
-        finally:
-            # Clean up frame reference to avoid memory leaks
-            if 'frame' in locals():
-                del frame
+        # * Honor explicit environment flags first
+        explicit_type = os.getenv("TEST_TYPE") or os.getenv("PYTEST_TEST_TYPE")
+        if explicit_type:
+            lowered = explicit_type.strip().lower()
+            if lowered.startswith("unit"):
+                return True
+            if lowered.startswith("integration"):
+                return False
+
+        running_integration = os.getenv("RUNNING_INTEGRATION_TESTS", "").strip().lower()
+        if running_integration in {"1", "true", "yes", "on"}:
+            return False
+
+        # * Use pytest-provided hint about the current test item path
+        current_test = os.getenv("PYTEST_CURRENT_TEST", "")
+        if current_test:
+            if "tests/integration/" in current_test or "/tests/integration/" in current_test:
+                return False
+            if "tests/unit/" in current_test or "/tests/unit/" in current_test:
+                return True
+
+        # * Conservative default: treat as integration to avoid accidental SQLite fallback
+        return False
 
     def _init_database(self):
         """Initialize PostgreSQL database connection and session factory"""

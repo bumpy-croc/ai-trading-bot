@@ -23,6 +23,7 @@ jobs:
       ACTIONS_STEP_DEBUG: true
       ACTIONS_RUNNER_DEBUG: true
       PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+      TEST_TYPE: unit
     
     steps:
     - name: Checkout code
@@ -75,6 +76,7 @@ jobs:
     timeout-minutes: 60
     env:
       PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+      TEST_TYPE: integration
     
     services:
       postgres:

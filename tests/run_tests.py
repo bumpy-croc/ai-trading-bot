@@ -229,6 +229,8 @@ def run_critical_tests():
 def run_unit_tests(pytest_args=None):
     """Run all unit tests"""
     print_header("Running Unit Tests")
+    # * Hint code under test to treat this run as unit tests (used by DB manager)
+    os.environ["TEST_TYPE"] = "unit"
 
     # Check if running in CI environment
     ci_indicators = [
@@ -288,6 +290,9 @@ def run_unit_tests(pytest_args=None):
 def run_integration_tests(pytest_args=None):
     """Run integration tests"""
     print_header("Running Integration Tests")
+
+    # * Hint code under test to treat this run as integration tests (used by DB manager)
+    os.environ["TEST_TYPE"] = "integration"
 
     cmd = [
         sys.executable,
