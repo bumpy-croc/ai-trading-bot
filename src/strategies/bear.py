@@ -12,7 +12,6 @@ from src.indicators.technical import (
     calculate_macd,
     calculate_rsi,
 )
-
 from src.strategies.base import BaseStrategy
 
 

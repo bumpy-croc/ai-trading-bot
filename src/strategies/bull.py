@@ -14,7 +14,6 @@ from src.indicators.technical import (
     calculate_moving_averages,
     calculate_rsi,
 )
-
 from src.strategies.base import BaseStrategy
 
 
