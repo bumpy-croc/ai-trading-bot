@@ -572,14 +572,13 @@ class Backtester:
                                 exit_reason=exit_reason,
                                 stop_loss=self.current_trade.stop_loss,
                                 take_profit=self.current_trade.take_profit,
-                            ).__dict__ | {
-                                "mfe": (metrics.mfe if metrics else 0.0),
-                                "mae": (metrics.mae if metrics else 0.0),
-                                "mfe_price": (metrics.mfe_price if metrics else None),
-                                "mae_price": (metrics.mae_price if metrics else None),
-                                "mfe_time": (metrics.mfe_time if metrics else None),
-                                "mae_time": (metrics.mae_time if metrics else None),
-                            }
+                                mfe=metrics.mfe if metrics else 0.0,
+                                mae=metrics.mae if metrics else 0.0,
+                                mfe_price=metrics.mfe_price if metrics else None,
+                                mae_price=metrics.mae_price if metrics else None,
+                                mfe_time=metrics.mfe_time if metrics else None,
+                                mae_time=metrics.mae_time if metrics else None,
+                            )
                         )
 
                         # Clear tracker for next trade
