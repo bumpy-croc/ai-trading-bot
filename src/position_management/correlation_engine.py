@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -156,11 +156,13 @@ class CorrelationEngine:
 		corr_matrix: pd.DataFrame | None,
 		candidate_symbol: str,
 		candidate_fraction: float,
+		max_correlated_exposure: Optional[float] = None,
 	) -> float:
 		"""Return factor in [0,1] to reduce candidate_fraction if group exposure exceeds max.
 		- Find candidate's correlated group
 		- Compute projected exposure with candidate included
 		- If projected > max_correlated_exposure, scale down proportionally
+		- max_correlated_exposure: optional override for maximum allowed exposure
 		"""
 		if not candidate_symbol or candidate_fraction <= 0:
 			return 1.0
@@ -171,7 +173,7 @@ class CorrelationEngine:
 		affected_groups = [g for g in groups if candidate_symbol in g]
 		if not affected_groups:
 			return 1.0
-		max_allowed = float(self.config.max_correlated_exposure)
+		max_allowed = float(max_correlated_exposure) if max_correlated_exposure is not None else float(self.config.max_correlated_exposure)
 		factor = 1.0
 		for g in affected_groups:
 			current = 0.0

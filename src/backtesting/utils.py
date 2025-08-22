@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+
 from src.performance.metrics import (
     cagr as perf_cagr,
 )

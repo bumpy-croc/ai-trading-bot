@@ -3,13 +3,13 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from src.indicators.technical import calculate_atr
 from src.config.constants import (
     DEFAULT_CORRELATION_THRESHOLD,
-    DEFAULT_CORRELATION_WINDOW_DAYS,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
+    DEFAULT_CORRELATION_WINDOW_DAYS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
 )
+from src.indicators.technical import calculate_atr
 
 
 @dataclass
@@ -225,28 +225,22 @@ class RiskManager:
                 corr_matrix = correlation_ctx.get("corr_matrix")
                 max_exposure_override = correlation_ctx.get("max_exposure_override")
                 if engine is not None and candidate_symbol:
-                    # Optionally override max exposure for this calculation
-                    original_max = getattr(engine.config, "max_correlated_exposure", None)
-                    if isinstance(max_exposure_override, (int, float)) and max_exposure_override > 0:
-                        try:
-                            engine.config.max_correlated_exposure = float(max_exposure_override)
-                        except Exception:
-                            pass
                     positions = self.positions
-                    factor = float(engine.compute_size_reduction_factor(
-                        positions=positions,
-                        corr_matrix=corr_matrix,
-                        candidate_symbol=str(candidate_symbol),
-                        candidate_fraction=float(fraction),
-                    ))
+                    factor = float(
+                        engine.compute_size_reduction_factor(
+                            positions=positions,
+                            corr_matrix=corr_matrix,
+                            candidate_symbol=str(candidate_symbol),
+                            candidate_fraction=float(fraction),
+                            max_correlated_exposure=(
+                                float(max_exposure_override)
+                                if isinstance(max_exposure_override, (int, float)) and max_exposure_override > 0
+                                else None
+                            ),
+                        )
+                    )
                     if factor < 1.0:
                         fraction = max(0.0, fraction * factor)
-                    # Restore engine config if overridden
-                    if original_max is not None and max_exposure_override is not None:
-                        try:
-                            engine.config.max_correlated_exposure = original_max
-                        except Exception:
-                            pass
         except Exception:
             # Fail-safe: never raise from correlation logic
             pass

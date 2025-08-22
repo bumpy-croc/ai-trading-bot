@@ -1,6 +1,7 @@
 from datetime import datetime
 
 import pytest
+
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
 

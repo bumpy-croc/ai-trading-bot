@@ -1,9 +1,9 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import pytest
 
+from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.risk.risk_manager import RiskManager, RiskParameters
-from src.position_management.correlation_engine import CorrelationEngine, CorrelationConfig
 
 pytestmark = pytest.mark.unit
 
