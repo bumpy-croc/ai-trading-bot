@@ -6,7 +6,7 @@ This strategy is designed for bull market conditions.
 
 import numpy as np
 import pandas as pd
-from indicators.technical import (
+from src.indicators.technical import (
     calculate_atr,
     calculate_bollinger_bands,
     calculate_macd,
@@ -14,7 +14,7 @@ from indicators.technical import (
     calculate_rsi,
 )
 
-from strategies.base import BaseStrategy
+from src.strategies.base import BaseStrategy
 
 
 class Bull(BaseStrategy):

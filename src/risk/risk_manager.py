@@ -225,40 +225,22 @@ class RiskManager:
                 corr_matrix = correlation_ctx.get("corr_matrix")
                 max_exposure_override = correlation_ctx.get("max_exposure_override")
                 if engine is not None and candidate_symbol:
-                    # Optionally override max exposure for this calculation
-                    original_attr_present = hasattr(engine.config, "max_correlated_exposure")
-                    original_value = getattr(engine.config, "max_correlated_exposure", None)
-                    did_override = False
-                    if isinstance(max_exposure_override, (int, float)) and float(max_exposure_override) > 0:
-                        try:
-                            engine.config.max_correlated_exposure = float(max_exposure_override)
-                            did_override = True
-                        except Exception:
-                            did_override = False
                     positions = self.positions
-                    try:
-                        factor = float(engine.compute_size_reduction_factor(
+                    factor = float(
+                        engine.compute_size_reduction_factor(
                             positions=positions,
                             corr_matrix=corr_matrix,
                             candidate_symbol=str(candidate_symbol),
                             candidate_fraction=float(fraction),
-                        ))
-                        if factor < 1.0:
-                            fraction = max(0.0, fraction * factor)
-                    finally:
-                        # Restore engine config to its original state only if we actually overrode it
-                        if did_override:
-                            try:
-                                if original_attr_present:
-                                    # Restore to the exact original value (may be None)
-                                    engine.config.max_correlated_exposure = original_value
-                                else:
-                                    # Remove the attribute if it did not exist before
-                                    if hasattr(engine.config, "max_correlated_exposure"):
-                                        delattr(engine.config, "max_correlated_exposure")
-                            except Exception:
-                                # Fail-safe: never raise from restoration
-                                pass
+                            max_correlated_exposure=(
+                                float(max_exposure_override)
+                                if isinstance(max_exposure_override, (int, float)) and max_exposure_override > 0
+                                else None
+                            ),
+                        )
+                    )
+                    if factor < 1.0:
+                        fraction = max(0.0, fraction * factor)
         except Exception:
             # Fail-safe: never raise from correlation logic
             pass

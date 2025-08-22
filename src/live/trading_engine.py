@@ -735,43 +735,7 @@ class LiveTradingEngine:
                                 overrides = None
                             indicators = self._extract_indicators(df, current_index)
                             # Correlation context for short entries
-                            short_correlation_ctx = None
-                            try:
-                                if self.correlation_engine is not None:
-                                    symbols_to_check = set([symbol]) | set(p.symbol for p in self.positions.values())
-                                    price_series: dict[str, pd.Series] = {}
-                                    end_ts = df.index[-1] if len(df) > 0 else None
-                                    start_ts = end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days) if end_ts is not None else None
-                                    if symbol:
-                                        try:
-                                            price_series[str(symbol)] = df["close"].copy()
-                                        except Exception:
-                                            pass
-                                    for sym in symbols_to_check:
-                                        s = str(sym)
-                                        if s in price_series:
-                                            continue
-                                        try:
-                                            if start_ts is not None and end_ts is not None:
-                                                hist = self.data_provider.get_historical_data(
-                                                    s,
-                                                    timeframe="1h",
-                                                    start=start_ts.to_pydatetime(),
-                                                    end=end_ts.to_pydatetime(),
-                                                )
-                                                if not hist.empty and "close" in hist:
-                                                    price_series[s] = hist["close"]
-                                        except Exception:
-                                            continue
-                                    corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
-                                    short_correlation_ctx = {
-                                        "engine": self.correlation_engine,
-                                        "candidate_symbol": symbol,
-                                        "corr_matrix": corr_matrix,
-                                        "max_exposure_override": overrides.get("correlation_control", {}).get("max_correlated_exposure") if overrides else None,
-                                    }
-                            except Exception:
-                                short_correlation_ctx = None
+                            short_correlation_ctx = self._build_correlation_context(symbol, df, overrides)
                             if overrides and overrides.get("position_sizer"):
                                 short_fraction = self.risk_manager.calculate_position_fraction(
                                     df=df,
@@ -919,6 +883,54 @@ class LiveTradingEngine:
             logger.error(f"Failed to add sentiment data: {e}", exc_info=True)
 
         return df
+
+    def _build_correlation_context(self, symbol: str, df: pd.DataFrame, overrides: dict | None) -> dict | None:
+        """
+        Build correlation context dict for risk manager sizing, including corr matrix and optional exposure override.
+        Returns None if correlation engine is unavailable or an error occurs.
+        """
+        try:
+            if self.correlation_engine is None:
+                return None
+            # Build price series for candidate + currently open symbols
+            symbols_to_check = set([symbol]) | set(p.symbol for p in self.positions.values())
+            price_series: dict[str, pd.Series] = {}
+            end_ts = df.index[-1] if len(df) > 0 else None
+            start_ts = (
+                end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days)
+                if end_ts is not None
+                else None
+            )
+            if symbol:
+                try:
+                    price_series[str(symbol)] = df["close"].copy()
+                except Exception:
+                    pass
+            for sym in symbols_to_check:
+                s = str(sym)
+                if s in price_series:
+                    continue
+                try:
+                    if start_ts is not None and end_ts is not None:
+                        hist = self.data_provider.get_historical_data(
+                            s,
+                            timeframe="1h",
+                            start=start_ts.to_pydatetime(),
+                            end=end_ts.to_pydatetime(),
+                        )
+                        if not hist.empty and "close" in hist:
+                            price_series[s] = hist["close"]
+                except Exception:
+                    continue
+            corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
+            return {
+                "engine": self.correlation_engine,
+                "candidate_symbol": symbol,
+                "corr_matrix": corr_matrix,
+                "max_exposure_override": overrides.get("correlation_control", {}).get("max_correlated_exposure") if overrides else None,
+            }
+        except Exception:
+            return None
 
     def _update_position_pnl(self, current_price: float):
         """Update unrealized PnL for all positions"""
@@ -1087,47 +1099,7 @@ class LiveTradingEngine:
             except Exception:
                 overrides = None
             # Build correlation context if engine available
-            correlation_ctx = None
-            try:
-                if self.correlation_engine is not None:
-                    # Build price series for currently open symbols + candidate
-                    symbols_to_check = set([symbol]) | set(p.symbol for p in self.positions.values())
-                    price_series: dict[str, pd.Series] = {}
-                    end_ts = df.index[-1] if len(df) > 0 else None
-                    start_ts = end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days) if end_ts is not None else None
-                    # Use available df for candidate if it matches symbol
-                    if symbol:
-                        try:
-                            price_series[str(symbol)] = df["close"].copy()
-                        except Exception:
-                            pass
-                    # Fetch historical for other open symbols if needed
-                    for sym in symbols_to_check:
-                        s = str(sym)
-                        if s in price_series:
-                            continue
-                        try:
-                            # Use provider to get historical window for other symbols
-                            if start_ts is not None and end_ts is not None:
-                                hist = self.data_provider.get_historical_data(
-                                    s,
-                                    timeframe="1h",
-                                    start=start_ts.to_pydatetime(),
-                                    end=end_ts.to_pydatetime(),
-                                )
-                                if not hist.empty and "close" in hist:
-                                    price_series[s] = hist["close"]
-                        except Exception:
-                            continue
-                    corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
-                    correlation_ctx = {
-                        "engine": self.correlation_engine,
-                        "candidate_symbol": symbol,
-                        "corr_matrix": corr_matrix,
-                        "max_exposure_override": overrides.get("correlation_control", {}).get("max_correlated_exposure") if overrides else None,
-                    }
-            except Exception:
-                correlation_ctx = None
+            correlation_ctx = self._build_correlation_context(symbol, df, overrides)
             if overrides and overrides.get("position_sizer"):
                 fraction = self.risk_manager.calculate_position_fraction(
                     df=df,

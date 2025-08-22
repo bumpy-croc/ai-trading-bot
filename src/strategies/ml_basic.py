@@ -25,13 +25,13 @@ import numpy as np
 import onnxruntime as ort
 import pandas as pd
 
-from config import get_config
-from config.constants import DEFAULT_USE_PREDICTION_ENGINE
-from prediction import PredictionConfig, PredictionEngine
-from prediction.features.pipeline import FeaturePipeline
-from prediction.features.price_only import PriceOnlyFeatureExtractor
-from prediction.features.technical import TechnicalFeatureExtractor
-from strategies.base import BaseStrategy
+from src.config.config_manager import get_config
+from src.config.constants import DEFAULT_USE_PREDICTION_ENGINE
+from src.prediction import PredictionConfig, PredictionEngine
+from src.prediction.features.pipeline import FeaturePipeline
+from src.prediction.features.price_only import PriceOnlyFeatureExtractor
+from src.prediction.features.technical import TechnicalFeatureExtractor
+from src.strategies.base import BaseStrategy
 
 
 class MlBasic(BaseStrategy):
