@@ -224,6 +224,7 @@ class RiskManager:
                 engine = correlation_ctx.get("engine")
                 candidate_symbol = correlation_ctx.get("candidate_symbol")
                 corr_matrix = correlation_ctx.get("corr_matrix")
+                max_exposure_override = correlation_ctx.get("max_exposure_override")
                 if engine is not None and candidate_symbol:
                     positions = self.positions
                     factor = float(
@@ -232,6 +233,7 @@ class RiskManager:
                             corr_matrix=corr_matrix,
                             candidate_symbol=str(candidate_symbol),
                             candidate_fraction=float(fraction),
+                            max_exposure_override=max_exposure_override,
                         )
                     )
                     if factor < 1.0:

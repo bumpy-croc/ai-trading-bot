@@ -172,11 +172,19 @@ class CorrelationEngine:
 		corr_matrix: pd.DataFrame | None,
 		candidate_symbol: str,
 		candidate_fraction: float,
+		max_exposure_override: Optional[float] = None,
 	) -> float:
 		"""Return factor in [0,1] to reduce candidate_fraction if group exposure exceeds max.
 		- Find candidate's correlated group
 		- Compute projected exposure with candidate included
 		- If projected > max_correlated_exposure, scale down proportionally
+		
+		Args:
+			positions: Current positions dict
+			corr_matrix: Correlation matrix
+			candidate_symbol: Symbol for new position
+			candidate_fraction: Fraction to allocate to new position
+			max_exposure_override: Override for max_correlated_exposure (from strategy)
 		"""
 		if not candidate_symbol or candidate_fraction <= 0:
 			return 1.0
@@ -187,7 +195,8 @@ class CorrelationEngine:
 		affected_groups = [g for g in groups if candidate_symbol in g]
 		if not affected_groups:
 			return 1.0
-		max_allowed = float(self.config.max_correlated_exposure)
+		# Use override if provided, otherwise use config default
+		max_allowed = float(max_exposure_override if max_exposure_override is not None else self.config.max_correlated_exposure)
 		factor = 1.0
 		for g in affected_groups:
 			current = 0.0

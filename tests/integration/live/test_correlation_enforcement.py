@@ -39,7 +39,7 @@ class DummyStrategy(BaseStrategy):
 
 
 def _df(prices):
-	idx = pd.date_range("2024-01-01", periods=len(prices), freq="H")
+	idx = pd.date_range("2024-01-01", periods=len(prices), freq="h")
 	return pd.DataFrame({"open": prices, "high": prices, "low": prices, "close": prices, "volume": np.ones(len(prices))}, index=idx)
 
 
