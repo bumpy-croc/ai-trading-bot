@@ -17,6 +17,7 @@ import os
 from datetime import datetime
 from unittest.mock import Mock
 
+import pandas as pd
 import pytest
 
 # Core imports
@@ -111,3 +112,59 @@ def test_ml_basic_engine_parity_short_slice(btcusdt_1h_2023_2024):
     assert np.nanmedian(rel_err) <= 0.002  # 0.2% median relative error
     assert np.nanmax(rel_err) <= 0.02  # 2% worst-case relative error
     assert direction_agreement >= 0.9
+
+
+@pytest.mark.fast
+@pytest.mark.mock_only
+def test_ml_basic_backtest_jan_2024_fast(btcusdt_1h_2023_2024):
+    """Run MlBasic backtest for Jan 2024 only with 1h candles and compare returns.
+
+    Ensures the backtester operates on a single month slice and that
+    the reported total return matches the computed yearly return for 2024
+    within the same run (consistency check). Uses 1h timeframe exclusively.
+    """
+    # * Stabilize engine behavior and enforce inference path
+    os.environ["USE_PREDICTION_ENGINE"] = "1"
+    os.environ["ENGINE_BATCH_INFERENCE"] = "0"
+
+    # * Mocked provider that respects start/end and enforces 1h timeframe
+    data_provider: DataProvider = Mock(spec=DataProvider)
+
+    def _get_historical_data(symbol, timeframe, start, end):  # noqa: D401
+        # * Enforce 1h timeframe to match model training resolution
+        assert timeframe == "1h", "Timeframe must be 1h for MlBasic tests"
+        df_all = btcusdt_1h_2023_2024
+        start_ts = pd.Timestamp(start)
+        end_ts = pd.Timestamp(end)
+        df_slice = df_all.loc[(df_all.index >= start_ts) & (df_all.index <= end_ts)]
+        return df_slice
+
+    data_provider.get_historical_data.side_effect = _get_historical_data
+
+    # Pre-compute the slice for live data and sanity checks
+    jan_start = datetime(2024, 1, 1)
+    jan_end = datetime(2024, 1, 31, 23, 59, 59)
+    jan_df = btcusdt_1h_2023_2024.loc["2024-01-01":"2024-01-31"]
+    # * Sanity: ~744 hourly candles in Jan (allowing for minor gaps)
+    assert len(jan_df) > 600, "Unexpected candle count for Jan 2024 1h data"
+
+    data_provider.get_live_data.return_value = jan_df.tail(1)
+
+    strategy = MlBasic()
+    backtester = Backtester(
+        strategy=strategy,
+        data_provider=data_provider,
+        initial_balance=10_000,
+        log_to_database=False,
+    )
+
+    results = backtester.run("BTCUSDT", "1h", jan_start, jan_end)
+
+    # * Hardcoded expected Jan 2024 total return (1h candles, engine on, batch off)
+    expected_jan_total_return = -4.38077772
+    actual = results["total_return"]
+    # Allow for very small numerical drift
+    tolerance = 0.02
+    assert abs(actual - expected_jan_total_return) <= tolerance, (
+        f"Jan 2024 total return {actual:.8f}% != expected {expected_jan_total_return:.8f}%"
+    )
