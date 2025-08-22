@@ -32,7 +32,8 @@ def test_log_position_with_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memor
 
 
 def test_update_position_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memory:"):
-    db = DatabaseManager(sqlite_memory_db_url)
+def test_update_position_mfe_mae():
+    db = DatabaseManager("sqlite:///:memory:")
     session_id = db.create_trading_session(
         strategy_name="TestStrategy",
         symbol="BTCUSDT",
@@ -66,7 +67,8 @@ def test_update_position_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memory:
 
 
 def test_log_trade_with_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memory:"):
-    db = DatabaseManager(sqlite_memory_db_url)
+def test_log_trade_with_mfe_mae():
+    db = DatabaseManager("sqlite:///:memory:")
     session_id = db.create_trading_session(
         strategy_name="TestStrategy",
         symbol="BTCUSDT",
