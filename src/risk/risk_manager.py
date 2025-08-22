@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -223,7 +224,6 @@ class RiskManager:
                 engine = correlation_ctx.get("engine")
                 candidate_symbol = correlation_ctx.get("candidate_symbol")
                 corr_matrix = correlation_ctx.get("corr_matrix")
-                max_exposure_override = correlation_ctx.get("max_exposure_override")
                 if engine is not None and candidate_symbol:
                     positions = self.positions
                     factor = float(
@@ -232,11 +232,6 @@ class RiskManager:
                             corr_matrix=corr_matrix,
                             candidate_symbol=str(candidate_symbol),
                             candidate_fraction=float(fraction),
-                            max_correlated_exposure=(
-                                float(max_exposure_override)
-                                if isinstance(max_exposure_override, (int, float)) and max_exposure_override > 0
-                                else None
-                            ),
                         )
                     )
                     if factor < 1.0:
