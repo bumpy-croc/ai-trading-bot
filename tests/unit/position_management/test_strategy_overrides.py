@@ -2,14 +2,14 @@
 Test per-strategy dynamic risk override functionality.
 """
 
-import pytest
-import pandas as pd
 from unittest.mock import Mock
 
-from src.strategies.base import BaseStrategy
-from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
-from src.live.trading_engine import LiveTradingEngine
+import pandas as pd
+
 from src.backtesting.engine import Backtester
+from src.live.trading_engine import LiveTradingEngine
+from src.position_management.dynamic_risk import DynamicRiskConfig
+from src.strategies.base import BaseStrategy
 
 
 class TestStrategyForOverrides(BaseStrategy):
@@ -103,7 +103,6 @@ class TestStrategyOverrides:
         engine.strategy = strategy
         
         # Use the merge method from LiveTradingEngine
-        from src.live.trading_engine import LiveTradingEngine
         merged_config = LiveTradingEngine._merge_dynamic_risk_config(engine, base_config)
         
         # Verify that strategy overrides were applied
@@ -137,7 +136,6 @@ class TestStrategyOverrides:
         backtester = Mock()
         
         # Use the merge method from Backtester
-        from src.backtesting.engine import Backtester
         merged_config = Backtester._merge_dynamic_risk_config(backtester, base_config, strategy)
         
         # Verify that strategy overrides were applied
@@ -162,7 +160,6 @@ class TestStrategyOverrides:
         engine = Mock()
         engine.strategy = strategy
         
-        from src.live.trading_engine import LiveTradingEngine
         merged_config = LiveTradingEngine._merge_dynamic_risk_config(engine, base_config)
         
         # Should return the base config unchanged
@@ -183,7 +180,6 @@ class TestStrategyOverrides:
         engine = Mock()
         engine.strategy = strategy
         
-        from src.live.trading_engine import LiveTradingEngine
         merged_config = LiveTradingEngine._merge_dynamic_risk_config(engine, base_config)
         
         # Should return the base config unchanged
@@ -208,7 +204,6 @@ class TestStrategyOverrides:
         engine = Mock()
         engine.strategy = strategy
         
-        from src.live.trading_engine import LiveTradingEngine
         
         # Should not raise exception, should fall back to base config
         merged_config = LiveTradingEngine._merge_dynamic_risk_config(engine, base_config)
@@ -289,7 +284,6 @@ class TestStrategyOverrides:
         engine = Mock()
         engine.strategy = strategy
         
-        from src.live.trading_engine import LiveTradingEngine
         merged_config = LiveTradingEngine._merge_dynamic_risk_config(engine, base_config)
         
         # Strategy should have disabled dynamic risk

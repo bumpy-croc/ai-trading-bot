@@ -14,6 +14,9 @@ from typing import Any
 
 import pandas as pd
 from performance.metrics import Side, pnl_percent
+from position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from position_management.mfe_mae_tracker import MFEMAETracker
+from position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from regime.detector import RegimeDetector
 
 from config.constants import (
@@ -21,10 +24,17 @@ from config.constants import (
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
+    DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_INITIAL_BALANCE,
+    DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
+    DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
 )
 from data_providers.binance_provider import BinanceProvider
 from data_providers.coinbase_provider import CoinbaseProvider
@@ -33,20 +43,9 @@ from data_providers.sentiment_provider import SentimentDataProvider
 from database.manager import DatabaseManager
 from database.models import TradeSource
 from live.strategy_manager import StrategyManager
-from performance.metrics import Side, pnl_percent
-from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
-from position_management.correlation_engine import CorrelationEngine, CorrelationConfig
-from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager, RiskParameters
 from strategies.base import BaseStrategy
-from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
-from config.constants import (
-    DEFAULT_MAX_HOLDING_HOURS,
-    DEFAULT_END_OF_DAY_FLAT,
-    DEFAULT_WEEKEND_FLAT,
-    DEFAULT_MARKET_TIMEZONE,
-    DEFAULT_TIME_RESTRICTIONS,
-)
+from position_management.correlation_engine import CorrelationEngine, CorrelationConfig
 
 from .account_sync import AccountSynchronizer
 
@@ -309,6 +308,10 @@ class LiveTradingEngine:
         self.total_pnl = 0.0
         self.peak_balance = initial_balance
         self.max_drawdown = 0.0
+
+        # MFE/MAE tracker
+        self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
+        self._last_mfe_mae_persist: datetime | None = None
 
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
@@ -707,6 +710,10 @@ class LiveTradingEngine:
                 )
                 # Update position PnL
                 self._update_position_pnl(current_price)
+
+                # Update rolling MFE/MAE per position and persist lightweight updates
+                self._update_positions_mfe_mae(current_price)
+
                 # Check exit conditions for existing positions
                 self._check_exit_conditions(df, current_index, current_price)
                 # Check entry conditions if not at maximum positions
@@ -924,6 +931,49 @@ class LiveTradingEngine:
                 position.unrealized_pnl = pnl_percent(
                     position.entry_price, current_price, Side.SHORT, position.size
                 )
+
+    def _update_positions_mfe_mae(self, current_price: float):
+        """Compute and persist rolling MFE/MAE for active positions."""
+        now = datetime.utcnow()
+        for order_id, position in self.positions.items():
+            # fraction is position.size (fraction of balance)
+            self.mfe_mae_tracker.update_position_metrics(
+                position_key=order_id,
+                entry_price=float(position.entry_price),
+                current_price=float(current_price),
+                side=position.side.value,
+                position_fraction=float(position.size),
+                current_time=now,
+            )
+        # Throttle DB persistence to avoid overhead
+        should_persist = False
+        if self._last_mfe_mae_persist is None:
+            should_persist = True
+        else:
+            delta = (now - self._last_mfe_mae_persist).total_seconds()
+            should_persist = delta >= float(DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS)
+        if not should_persist:
+            return
+        self._last_mfe_mae_persist = now
+        for order_id, _position in self.positions.items():
+            db_id = self.position_db_ids.get(order_id)
+            if db_id is not None:
+                try:
+                    m = self.mfe_mae_tracker.get_position_metrics(order_id)
+                    if not m:
+                        continue
+                    self.db_manager.update_position(
+                        position_id=db_id,
+                        current_price=float(current_price),
+                        mfe=float(m.mfe),
+                        mae=float(m.mae),
+                        mfe_price=float(m.mfe_price) if m.mfe_price is not None else None,
+                        mae_price=float(m.mae_price) if m.mae_price is not None else None,
+                        mfe_time=m.mfe_time,
+                        mae_time=m.mae_time,
+                    )
+                except Exception as e:
+                    logger.debug(f"MFE/MAE DB update failed for {order_id}: {e}")
 
     def _check_exit_conditions(self, df: pd.DataFrame, current_index: int, current_price: float):
         """Check if any positions should be closed"""
@@ -1206,6 +1256,9 @@ class LiveTradingEngine:
 
             self.positions[order_id] = position
 
+            # Initialize MFE/MAE cache for this position
+            self.mfe_mae_tracker.clear(order_id)  # ensure fresh state
+
             # Log position to database
             if self.trading_session_id is not None:
                 position_db_id = self.db_manager.log_position(
@@ -1297,6 +1350,9 @@ class LiveTradingEngine:
             if self.current_balance > self.peak_balance:
                 self.peak_balance = self.current_balance
 
+            # Fetch final MFE/MAE metrics for this position
+            metrics = self.mfe_mae_tracker.get_position_metrics(position.order_id)
+
             # Create trade record
             trade = Trade(
                 symbol=position.symbol,
@@ -1335,16 +1391,35 @@ class LiveTradingEngine:
                     entry_time=position.entry_time,
                     exit_time=datetime.now(),
                     session_id=self.trading_session_id,
+                    mfe=(metrics.mfe if metrics else None),
+                    mae=(metrics.mae if metrics else None),
+                    mfe_price=(metrics.mfe_price if metrics else None),
+                    mae_price=(metrics.mae_price if metrics else None),
+                    mfe_time=(metrics.mfe_time if metrics else None),
+                    mae_time=(metrics.mae_time if metrics else None),
                 )
 
                 # Close position in database if it exists
                 if position.order_id in self.position_db_ids:
                     position_db_id = self.position_db_ids[position.order_id]
+                    
+                    # Update position with final MFE/MAE metrics before closing
+                    if metrics:
+                        self.db_manager.update_position(
+                            position_id=position_db_id,
+                            mfe=metrics.mfe,
+                            mae=metrics.mae,
+                            mfe_price=metrics.mfe_price,
+                            mae_price=metrics.mae_price,
+                            mfe_time=metrics.mfe_time,
+                            mae_time=metrics.mae_time,
+                        )
+                    
                     self.db_manager.close_position(
                         position_id=position_db_id,
                         exit_price=current_price,
                         exit_time=datetime.now(),
-                        pnl=pnl
+                        pnl=pnl,
                     )
                     del self.position_db_ids[position.order_id]
 
@@ -1352,9 +1427,10 @@ class LiveTradingEngine:
             if self.enable_live_trading:
                 self._close_order(position.symbol, position.order_id)
 
-            # Remove from active positions
+            # Remove from active positions and tracker cache
             if position.order_id in self.positions:
                 del self.positions[position.order_id]
+            self.mfe_mae_tracker.clear(position.order_id)
 
             logger.info(
                 f"📈 Closed {position.side.value} position for {position.symbol}: "

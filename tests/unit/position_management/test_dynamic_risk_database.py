@@ -2,12 +2,13 @@
 Test database persistence functionality for dynamic risk management.
 """
 
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
+import pytest
+
 from src.database.manager import DatabaseManager
-from src.position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 
 
 class TestDynamicRiskDatabase:
