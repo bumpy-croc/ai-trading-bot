@@ -25,7 +25,7 @@ import numpy as np
 import onnxruntime as ort
 import pandas as pd
 
-from src.config import get_config
+from src.config.config_manager import get_config
 from src.config.constants import DEFAULT_USE_PREDICTION_ENGINE
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline

@@ -24,7 +24,6 @@ def test_engine_survives_update_position_failure(mock_strategy, mock_data_provid
         enable_live_trading=False,
         initial_balance=1000.0,
         check_interval=0.01,
-        database_url=f"sqlite:///{tmp_path}/errors.db",
         log_trades=True,
     )
 
@@ -60,7 +59,6 @@ def test_engine_survives_log_trade_and_close_position_failure(mock_strategy, moc
         enable_live_trading=False,
         initial_balance=1000.0,
         check_interval=0.01,
-        database_url=f"sqlite:///{tmp_path}/errors2.db",
         log_trades=True,
     )
 

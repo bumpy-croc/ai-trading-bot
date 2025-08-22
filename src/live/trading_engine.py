@@ -20,6 +20,7 @@ from src.config.constants import (
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_ERROR_COOLDOWN,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
@@ -39,6 +40,7 @@ from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
 from src.live.strategy_manager import StrategyManager
 from src.performance.metrics import Side, pnl_percent
+from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
@@ -206,6 +208,18 @@ class LiveTradingEngine:
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
 
+        # Correlation engine setup
+        try:
+            corr_cfg = CorrelationConfig(
+                correlation_window_days=self.risk_manager.params.correlation_window_days,
+                correlation_threshold=self.risk_manager.params.correlation_threshold,
+                max_correlated_exposure=self.risk_manager.params.max_correlated_exposure,
+                correlation_update_frequency_hours=self.risk_manager.params.correlation_update_frequency_hours,
+            )
+            self.correlation_engine = CorrelationEngine(config=corr_cfg)
+        except Exception:
+            self.correlation_engine = None
+
         # Initialize database manager
         try:
             self.db_manager = DatabaseManager(database_url)
@@ -288,6 +302,7 @@ class LiveTradingEngine:
         self.completed_trades: list[Trade] = []
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
+        self.timeframe: str | None = None  # Will be set when trading starts
 
         # Performance tracking
         self.total_trades = 0
@@ -303,6 +318,7 @@ class LiveTradingEngine:
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
         self.consecutive_errors = 0
+        self.error_cooldown = DEFAULT_ERROR_COOLDOWN
 
         # Time exit policy (construct from overrides if not provided)
         self.time_exit_policy = time_exit_policy
@@ -466,6 +482,7 @@ class LiveTradingEngine:
             return
 
         self.is_running = True
+        self.timeframe = timeframe  # Store the trading timeframe
         logger.info(f"🚀 Starting live trading for {symbol} on {timeframe} timeframe")
         logger.info(f"Initial balance: ${self.current_balance:,.2f}")
         logger.info(f"Max position size: {self.max_position_size * 100:.1f}% of balance")
@@ -721,6 +738,8 @@ class LiveTradingEngine:
                             except Exception:
                                 overrides = None
                             indicators = self._extract_indicators(df, current_index)
+                            # Correlation context for short entries
+                            short_correlation_ctx = self._build_correlation_context(symbol, df, overrides)
                             if overrides and overrides.get("position_sizer"):
                                 short_fraction = self.risk_manager.calculate_position_fraction(
                                     df=df,
@@ -729,6 +748,7 @@ class LiveTradingEngine:
                                     price=current_price,
                                     indicators=indicators,
                                     strategy_overrides=overrides,
+                                    correlation_ctx=short_correlation_ctx,
                                 )
                                 short_fraction = min(short_fraction, self.max_position_size)
                                 short_position_size = short_fraction
@@ -867,6 +887,56 @@ class LiveTradingEngine:
             logger.error(f"Failed to add sentiment data: {e}", exc_info=True)
 
         return df
+
+    def _build_correlation_context(self, symbol: str, df: pd.DataFrame, overrides: dict | None) -> dict | None:
+        """
+        Build correlation context dict for risk manager sizing, including corr matrix and optional exposure override.
+        Returns None if correlation engine is unavailable or an error occurs.
+        """
+        try:
+            if self.correlation_engine is None:
+                return None
+            # Build price series for candidate + currently open symbols
+            symbols_to_check = set([symbol]) | set(p.symbol for p in self.positions.values())
+            price_series: dict[str, pd.Series] = {}
+            end_ts = df.index[-1] if len(df) > 0 else None
+            start_ts = (
+                end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days)
+                if end_ts is not None
+                else None
+            )
+            if symbol:
+                try:
+                    price_series[str(symbol)] = df["close"].copy()
+                except Exception:
+                    pass
+            for sym in symbols_to_check:
+                s = str(sym)
+                if s in price_series:
+                    continue
+                try:
+                    if start_ts is not None and end_ts is not None:
+                        # Use the strategy's actual trading timeframe instead of hardcoding "1h"
+                        trading_timeframe = self.timeframe or "1h"  # Fallback to "1h" if not set
+                        hist = self.data_provider.get_historical_data(
+                            s,
+                            timeframe=trading_timeframe,
+                            start=start_ts.to_pydatetime(),
+                            end=end_ts.to_pydatetime(),
+                        )
+                        if not hist.empty and "close" in hist:
+                            price_series[s] = hist["close"]
+                except Exception:
+                    continue
+            corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
+            return {
+                "engine": self.correlation_engine,
+                "candidate_symbol": symbol,
+                "corr_matrix": corr_matrix,
+                "max_exposure_override": overrides.get("correlation_control", {}).get("max_correlated_exposure") if overrides else None,
+            }
+        except Exception:
+            return None
 
     def _update_position_pnl(self, current_price: float):
         """Update unrealized PnL for all positions"""
@@ -1034,6 +1104,8 @@ class LiveTradingEngine:
                 )
             except Exception:
                 overrides = None
+            # Build correlation context if engine available
+            correlation_ctx = self._build_correlation_context(symbol, df, overrides)
             if overrides and overrides.get("position_sizer"):
                 fraction = self.risk_manager.calculate_position_fraction(
                     df=df,
@@ -1042,6 +1114,7 @@ class LiveTradingEngine:
                     price=current_price,
                     indicators=indicators,
                     strategy_overrides=overrides,
+                    correlation_ctx=correlation_ctx,
                 )
                 # Enforce engine-level cap
                 fraction = min(fraction, self.max_position_size)

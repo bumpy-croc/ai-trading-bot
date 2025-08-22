@@ -6,41 +6,12 @@ on:
 
 permissions:
   contents: read
-  issues: write
   pull-requests: read
-  actions: write
+  actions: read
 
 jobs:
-  # Shared setup job to install dependencies once
-  setup:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: 'pip'
-    
-    - name: Cache dependencies
-      uses: actions/cache@v3
-      id: cache-deps
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
   # Unit tests - split into 4 parallel jobs
   unit-tests:
-    needs: setup
     strategy:
       matrix:
         split-index: [1, 2, 3, 4]
@@ -52,6 +23,7 @@ jobs:
       ACTIONS_STEP_DEBUG: true
       ACTIONS_RUNNER_DEBUG: true
       PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+      TEST_TYPE: unit
     
     steps:
     - name: Checkout code
@@ -62,6 +34,7 @@ jobs:
       with:
         python-version: '3.11'
         cache: 'pip'
+        cache-dependency-path: requirements.txt
     
     - name: Install Python dependencies
       run: |
@@ -99,11 +72,11 @@ jobs:
 
   # Integration tests - run in parallel with unit tests
   integration-tests:
-    needs: setup
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+      TEST_TYPE: integration
     
     services:
       postgres:
@@ -130,16 +103,17 @@ jobs:
       with:
         python-version: '3.11'
         cache: 'pip'
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y postgresql-client
+        cache-dependency-path: requirements.txt
     
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
     
     - name: Wait for PostgreSQL
       run: |
@@ -147,6 +121,23 @@ jobs:
           echo "Waiting for PostgreSQL..."
           sleep 2
         done
+    
+    - name: Set up database schema
+      env:
+        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
+      run: |
+        echo "=== Setting up database schema ==="
+        python -c "
+        from src.database.manager import DatabaseManager
+        from src.database.models import Base
+        try:
+            db = DatabaseManager()
+            Base.metadata.create_all(db.engine)
+            print('✅ Database schema created successfully')
+        except Exception as e:
+            print(f'❌ Failed to create database schema: {e}')
+            raise
+        "
     
     - name: Run integration tests (with DB & external providers)
       env:
@@ -171,94 +162,117 @@ jobs:
     needs: [unit-tests, integration-tests]
     if: ${{ always() && (needs.unit-tests.result == 'failure' || needs.integration-tests.result == 'failure') }}
     runs-on: ubuntu-latest
-    env:
-      COPILOT_AGENT_ASSIGNEE: "@copilot"
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    
     steps:
-      - name: Request Copilot agent to fix on PR branch
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.ref }}
 
-            const prPayload = context.payload.pull_request;
-            if (!prPayload) {
-              core.info('No pull_request payload available; nothing to do.');
-              return;
-            }
-            const prNumber = prPayload.number;
+    - name: Analyze Test Failures
+      id: analyze-failures
+      run: |
+        echo "=== Analyzing test failures ==="
+        
+        # Determine which tests failed
+        UNIT_FAILED="${{ needs.unit-tests.result }}"
+        INTEGRATION_FAILED="${{ needs.integration-tests.result }}"
+        
+        FAILURE_TYPES=()
+        if [[ "$UNIT_FAILED" == "failure" ]]; then
+          FAILURE_TYPES+=("unit")
+        fi
+        if [[ "$INTEGRATION_FAILED" == "failure" ]]; then
+          FAILURE_TYPES+=("integration")
+        fi
+        
+        FAILURE_STRING=$(IFS=" and "; echo "${FAILURE_TYPES[*]}")
+        
+        echo "Failed test types: $FAILURE_STRING"
+        echo "failure_string=$FAILURE_STRING" >> $GITHUB_OUTPUT
+        
+        # Get PR information if available
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+          echo "pr_branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+        else
+          echo "pr_number=" >> $GITHUB_OUTPUT
+          echo "pr_title=" >> $GITHUB_OUTPUT
+          echo "pr_branch=" >> $GITHUB_OUTPUT
+        fi
 
-            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+    - name: Launch Cursor Background Agent
+      run: |
+        echo "=== Launching Cursor Background Agent for Test Failures ==="
+        echo "Failed tests: ${{ steps.analyze-failures.outputs.failure_string }}"
+        echo "PR: ${{ steps.analyze-failures.outputs.pr_number }}"
+        echo "Branch: ${{ steps.analyze-failures.outputs.pr_branch }}"
+        
+        # Get the run URL for context
+        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        
+        # Construct detailed prompt for fixing test failures
+        cat > prompt.txt << EOF
+        CI tests have failed and require immediate attention and fixes.
 
-            const sameRepo = pr.head.repo.full_name === `${owner}/${repo}`;
-            const canModifyFork = !!pr.maintainer_can_modify;
-            const canPush = sameRepo || canModifyFork;
+        Repository: ${{ github.repository }}
+        Branch: ${{ steps.analyze-failures.outputs.pr_branch }}
+        PR: ${{ steps.analyze-failures.outputs.pr_number }}
+        PR Title: ${{ steps.analyze-failures.outputs.pr_title }}
+        Failed Tests: ${{ steps.analyze-failures.outputs.failure_string }} tests
+        CI Run: $RUN_URL
 
-            const runId = process.env.GITHUB_RUN_ID;
-            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
-            
-            // Determine which tests failed
-            const unitFailed = '${{ needs.unit-tests.result }}' === 'failure';
-            const integrationFailed = '${{ needs.integration-tests.result }}' === 'failure';
-            const failureTypes = [];
-            if (unitFailed) failureTypes.push('unit');
-            if (integrationFailed) failureTypes.push('integration');
-            const failureString = failureTypes.join(' and ');
-            
-            const title = `Auto-fix CI ${failureString} test failures on PR #${pr.number} (commit to ${pr.head.ref})`;
+        Please analyze the failing tests and fix them:
 
-            const instructions = (canPush
-              ? `
-              Please fix failing ${failureString} tests by committing directly to the PR branch:
-              - PR: #${pr.number} (${pr.title})
-              - Branch: ${pr.head.repo.full_name}:${pr.head.ref}
-              - CI run: ${runUrl}
-              - Failed tests: ${failureString}
-              Requirements:
-              - Reproduce failures, implement minimal fixes, update/add tests if needed.
-              - Push commits to the existing branch (do NOT open a new PR).
-              - Keep changes focused and explain the fix in a short commit message.
-              `.trim()
-              : `
-              The PR head branch is not writable (fork without maintainer edits). Open a new PR with fixes:
-              - PR: #${pr.number} (${pr.title})
-              - CI run: ${runUrl}
-              - Failed tests: ${failureString}
-              `.trim()
-            );
+        1. **Investigate the failures:** 
+           - Download and examine the test artifacts/logs from the CI run
+           - Identify the root causes of the ${{ steps.analyze-failures.outputs.failure_string }} test failures
+           
+        2. **Implement fixes:**
+           - Make minimal, targeted fixes to resolve the test failures
+           - Ensure fixes follow the project's coding standards and patterns
+           - Add or update tests if necessary to prevent regression
+           
+        3. **Commit and push:**
+           - Commit your changes directly to the PR branch: ${{ steps.analyze-failures.outputs.pr_branch }}
+           - Use clear, descriptive commit messages explaining what was fixed
+           - Do NOT create a new PR - push to the existing branch
+           
+        4. **Verify:**
+           - Ensure your fixes address the specific test failures mentioned
+           - Follow the project's testing guidelines and code quality standards
 
-            // De-dupe: look for an open issue with ai:autofix mentioning this PR
-            const search = await github.rest.search.issuesAndPullRequests({
-              q: `repo:${owner}/${repo} is:issue is:open label:ai:autofix in:title "PR #${pr.number}"`
-            });
-            if (search.data.items.length > 0) {
-              const issueNum = search.data.items[0].number;
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: issueNum,
-                body: `CI failed again (${failureString} tests). Latest run: ${runUrl}`
-              });
-              core.info(`Updated existing issue #${issueNum}`);
-              return;
-            }
+        Context: This is an automated fix request triggered by CI test failures. Focus on getting the tests passing while maintaining code quality and following existing patterns in the codebase.
+        EOF
 
-            // Ensure labels exist
-            const desiredLabels = ['ai:autofix','ci-failure'];
-            for (const name of desiredLabels) {
-              try {
-                await github.rest.issues.getLabel({ owner, repo, name });
-              } catch (err) {
-                if (err.status === 404) {
-                  await github.rest.issues.createLabel({ owner, repo, name, color: '0E8A16' });
-                } else {
-                  core.warning(`Label check failed for ${name}: ${err.message}`);
-                }
-              }
-            }
+        echo "=== Sending to Cursor Background Agent ==="
 
-            const issue = await github.rest.issues.create({
-              owner, repo,
-              title,
-              body: `${instructions}\n\nRun ID: ${runId}`,
-              labels: ['ai:autofix','ci-failure'],
-              assignees: [process.env.COPILOT_AGENT_ASSIGNEE],
-            });
-            core.info(`Created issue #${issue.data.number}`);
+        # Launch Cursor background agent
+        curl -X POST "https://api.cursor.com/v0/agents" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
+          -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ steps.analyze-failures.outputs.pr_branch }}\" } }"
+
+        echo ""
+        echo "=== Cursor Background Agent Launched ==="
+        echo "The agent will analyze the test failures and implement fixes."
+        echo "Check the PR branch for any commits made by the agent."
+
+        # Cleanup temporary files
+        rm -f prompt.txt
+
+    - name: Log Failure Details
+      run: |
+        echo "=== Test Failure Summary ==="
+        echo "Repository: ${{ github.repository }}"
+        echo "Branch: ${{ steps.analyze-failures.outputs.pr_branch }}"
+        echo "PR: ${{ steps.analyze-failures.outputs.pr_number }}"
+        echo "Failed tests: ${{ steps.analyze-failures.outputs.failure_string }}"
+        echo "CI run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        echo "Cursor agent launched successfully"

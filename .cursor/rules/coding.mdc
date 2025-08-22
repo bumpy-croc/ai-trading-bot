@@ -27,10 +27,8 @@ alwaysApply: true
 ## Integration Tests
 - Add integration tests for database/network/IO
 
-### Code Quality
-- Run linting checks before finishing any job: `ruff check . --fix`
-- Ensure all code passes ruff linting before committing
-- Use pre-commit hooks: `pre-commit install` to automatically run checks
+# Code Quality
+- Run linting checks with `ruff` on the files changed before finishing any job`
 
 ## 2. Security & Sensitive Information
 

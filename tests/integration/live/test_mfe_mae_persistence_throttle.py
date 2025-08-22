@@ -26,7 +26,6 @@ def test_mfe_mae_throttle_prevents_rapid_db_updates(mock_strategy, mock_data_pro
         enable_live_trading=False,
         initial_balance=1000.0,
         check_interval=0.01,
-        database_url=f"sqlite:///{tmp_path}/throttle.db",
         log_trades=True,
     )
 

@@ -80,6 +80,44 @@ class DatabaseManager:
         # Create tables if they don't exist
         self._create_tables()
 
+    def _is_running_unit_tests(self) -> bool:
+        """Determine whether the current pytest run executes unit tests.
+
+        Detection order (no call stack inspection):
+        1) Explicit environment flags:
+           - TEST_TYPE = "unit" | "integration"
+           - PYTEST_TEST_TYPE = alias of TEST_TYPE
+           - RUNNING_INTEGRATION_TESTS = 1/true/yes → integration
+        2) PYTEST_CURRENT_TEST path hint containing "tests/unit/" or "tests/integration/".
+        3) Conservative default: treat as integration (return False) to avoid SQLite fallback.
+
+        Returns:
+            True if running unit tests; False for integration tests or when undetermined.
+        """
+        # * Honor explicit environment flags first
+        explicit_type = os.getenv("TEST_TYPE") or os.getenv("PYTEST_TEST_TYPE")
+        if explicit_type:
+            lowered = explicit_type.strip().lower()
+            if lowered.startswith("unit"):
+                return True
+            if lowered.startswith("integration"):
+                return False
+
+        running_integration = os.getenv("RUNNING_INTEGRATION_TESTS", "").strip().lower()
+        if running_integration in {"1", "true", "yes", "on"}:
+            return False
+
+        # * Use pytest-provided hint about the current test item path
+        current_test = os.getenv("PYTEST_CURRENT_TEST", "")
+        if current_test:
+            if "tests/integration/" in current_test or "/tests/integration/" in current_test:
+                return False
+            if "tests/unit/" in current_test or "/tests/unit/" in current_test:
+                return True
+
+        # * Conservative default: treat as integration to avoid accidental SQLite fallback
+        return False
+
     def _init_database(self):
         """Initialize PostgreSQL database connection and session factory"""
 
@@ -108,11 +146,15 @@ class DatabaseManager:
         # Guard SQLite usage in CI to avoid accidental use in production
         is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
-        # Allow SQLite for local integration testing when PostgreSQL is not available
+        # Allow SQLite for unit tests, but require PostgreSQL for integration tests in CI
         if is_sqlite and is_github_actions:
-            raise ValueError(
-                "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
-            )
+            # Check if we're running integration tests by looking at pytest markers or environment
+            # Allow SQLite if running unit tests (detected by pytest current item markers)
+            is_unit_test = self._is_running_unit_tests()
+            if not is_unit_test:
+                raise ValueError(
+                    "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
+                )
 
         # Helper for creating a SQLite engine config
         def _sqlite_engine_config(url: str) -> tuple[str, dict[str, Any]]:
@@ -152,26 +194,38 @@ class DatabaseManager:
             )
 
         except Exception as e:
-            # If we're attempting Postgres but it fails, fall back to SQLite for unit tests
+            # If we're attempting Postgres but it fails, fall back to SQLite for unit tests only
             if is_postgres:
-                logger.warning(
-                    "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
-                    e,
-                )
-                fallback_url = "sqlite:///:memory:"
-                effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
-                try:
-                    self.engine = create_engine(effective_url, **engine_kwargs)
-                    self.session_factory = sessionmaker(bind=self.engine)
-                    from sqlalchemy import text as _sql_text
-
-                    with self.engine.connect() as conn:
-                        conn.execute(_sql_text("SELECT 1"))
-                    logger.info(
-                        "✅ Database connection established (SQLite fallback for unit tests)"
+                # Integration tests must always use PostgreSQL - no fallback allowed
+                is_unit_test = self._is_running_unit_tests()
+                
+                if is_unit_test:
+                    logger.warning(
+                        "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
+                        e,
                     )
-                except Exception as sqlite_err:
-                    logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                    fallback_url = "sqlite:///:memory:"
+                    effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
+                    try:
+                        self.engine = create_engine(effective_url, **engine_kwargs)
+                        self.session_factory = sessionmaker(bind=self.engine)
+                        from sqlalchemy import text as _sql_text
+
+                        with self.engine.connect() as conn:
+                            conn.execute(_sql_text("SELECT 1"))
+                        logger.info(
+                            "✅ Database connection established (SQLite fallback for unit tests)"
+                        )
+                    except Exception as sqlite_err:
+                        logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                        raise
+                else:
+                    # Integration tests require PostgreSQL in ALL environments (local, CI, production)
+                    logger.error(
+                        f"PostgreSQL connection failed for integration test. "
+                        f"Integration tests require a working PostgreSQL database to test end-to-end behavior. "
+                        f"Error: {e}"
+                    )
                     raise
             else:
                 logger.error(f"Failed to initialize database: {e}")

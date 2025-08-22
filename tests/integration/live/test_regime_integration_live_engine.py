@@ -47,7 +47,6 @@ def test_live_engine_regime_annotation(monkeypatch):
         max_consecutive_errors=2,
         enable_hot_swapping=False,
         account_snapshot_interval=0,
-        database_url="sqlite:///:memory:",
     )
     # Run only a few steps to pass through loop and annotate
     engine._trading_loop(symbol="BTCUSDT", timeframe="1h", max_steps=2)

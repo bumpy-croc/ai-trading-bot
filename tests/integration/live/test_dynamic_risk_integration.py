@@ -88,7 +88,6 @@ class TestLiveTradingDynamicRiskIntegration:
             strategy=MockStrategy(),
             data_provider=MockDataProvider(),
             enable_dynamic_risk=False,
-            database_url="sqlite:///:memory:"
         )
         
         assert engine.enable_dynamic_risk is False
@@ -107,7 +106,6 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
-            database_url="sqlite:///:memory:"
         )
         
         assert engine.enable_dynamic_risk is True
@@ -128,7 +126,6 @@ class TestLiveTradingDynamicRiskIntegration:
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
             initial_balance=10000,
-            database_url="sqlite:///:memory:"
         )
         
         # Initialize the database manager and dynamic risk manager manually for testing
@@ -174,7 +171,6 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             enable_dynamic_risk=True,
             dynamic_risk_config=default_config,
-            database_url="sqlite:///:memory:"
         )
         
         # Test config merging
@@ -200,7 +196,6 @@ class TestLiveTradingDynamicRiskIntegration:
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
             initial_balance=10000,
-            database_url="sqlite:///:memory:"
         )
         
         # Manually initialize dynamic risk manager
@@ -228,7 +223,6 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             
             enable_dynamic_risk=True,
-            database_url="sqlite:///:memory:"
         )
         
         # Break the dynamic risk manager
@@ -302,7 +296,6 @@ class TestLiveTradingDynamicRiskIntegration:
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
             initial_balance=10000,
-            database_url="sqlite:///:memory:"
         )
         
         # Manually initialize dynamic risk manager
@@ -330,7 +323,6 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             
             initial_balance=10000,
-            database_url="sqlite:///:memory:"
         )
         
         # Initial state

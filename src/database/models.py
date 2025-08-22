@@ -630,3 +630,34 @@ class RiskAdjustment(Base):
     )
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CorrelationMatrix(Base):
+    """Stores pairwise correlation values for symbol pairs."""
+
+    __tablename__ = "correlation_matrix"
+
+    id = Column(Integer, primary_key=True)
+    symbol_pair = Column(String(50), index=True)  # e.g., "BTCUSDT-ETHUSDT" (sorted order)
+    correlation_value = Column(Numeric(18, 8))
+    p_value = Column(Numeric(18, 8))  # Optional statistical significance if computed
+    sample_size = Column(Integer)
+    last_updated = Column(DateTime)
+    window_days = Column(Integer)
+
+    __table_args__ = (
+        Index("idx_corr_pair_updated", "symbol_pair", "last_updated"),
+    )
+
+
+class PortfolioExposure(Base):
+    """Aggregated exposure per correlation group for portfolio-level limits."""
+
+    __tablename__ = "portfolio_exposures"
+
+    id = Column(Integer, primary_key=True)
+    correlation_group = Column(String(100), index=True)
+    total_exposure = Column(Numeric(18, 8))
+    position_count = Column(Integer)
+    symbols = Column(JSONType)  # List of symbols in group
+    last_updated = Column(DateTime)
