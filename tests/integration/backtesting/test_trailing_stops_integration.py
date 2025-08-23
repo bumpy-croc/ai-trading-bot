@@ -26,6 +26,18 @@ class DummyProvider(DataProvider):
         }, index=idx)
         return df
 
+    def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
+        """Return empty dataframe for live data (not used in backtesting)"""
+        return pd.DataFrame()
+
+    def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        """Return empty dataframe for live data updates (not used in backtesting)"""
+        return pd.DataFrame()
+
+    def get_current_price(self, symbol: str) -> float:
+        """Return a dummy current price"""
+        return 100.0
+
 
 def test_backtester_applies_trailing_stops():
     strategy = MlAdaptive()

@@ -239,7 +239,7 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
     position = Position(
         symbol="BTCUSDT",
         side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
-        size=0.1,
+        size=1.0,  # Use full position size so 1% price move = 1% sized PnL
         entry_price=100.0,
         entry_time=datetime.now(),
         stop_loss=99.0,
