@@ -56,7 +56,7 @@ except ImportError:
     PositionSide = Mock()
 
 
-@pytest.mark.skipif(not LIVE_TRADING_AVAILABLE, reason="Live trading components not available")
+
 class TestLiveTradingEngine:
     def test_engine_initialization(self, mock_strategy, mock_data_provider):
         engine = LiveTradingEngine(
@@ -239,7 +239,7 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
     position = Position(
         symbol="BTCUSDT",
         side=PositionSide.LONG,
-        size=0.1,
+        size=1.0,  # Use full position size so 1% price move = 1% sized PnL
         entry_price=100.0,
         entry_time=datetime.now(),
         stop_loss=99.0,

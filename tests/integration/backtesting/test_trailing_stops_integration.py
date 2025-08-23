@@ -1,13 +1,12 @@
-import pytest
 from datetime import datetime
 
 import pandas as pd
+import pytest
 
 from src.backtesting.engine import Backtester
 from src.data_providers.data_provider import DataProvider
-from src.strategies.ml_adaptive import MlAdaptive
 from src.position_management.trailing_stops import TrailingStopPolicy
-
+from src.strategies.ml_adaptive import MlAdaptive
 
 pytestmark = pytest.mark.integration
 
@@ -26,6 +25,18 @@ class DummyProvider(DataProvider):
             "atr": [1.0] * 10,
         }, index=idx)
         return df
+
+    def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
+        """Return empty dataframe for live data (not used in backtesting)"""
+        return pd.DataFrame()
+
+    def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        """Return empty dataframe for live data updates (not used in backtesting)"""
+        return pd.DataFrame()
+
+    def get_current_price(self, symbol: str) -> float:
+        """Return a dummy current price"""
+        return 100.0
 
 
 def test_backtester_applies_trailing_stops():

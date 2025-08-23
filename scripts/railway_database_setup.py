@@ -10,8 +10,8 @@ import sys
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from config.config_manager import get_config
-from database.manager import DatabaseManager
+from src.config.config_manager import get_config
+from src.database.manager import DatabaseManager
 
 
 def print_setup_instructions():

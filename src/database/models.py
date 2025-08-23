@@ -18,11 +18,11 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
-from sqlalchemy import Time
 
 
 # Portable JSON that chooses JSONB on PostgreSQL and JSON elsewhere (e.g., SQLite)
@@ -126,6 +126,14 @@ class Trade(Base):
     exchange = Column(String(50), default="binance")
     timeframe = Column(String(10))
 
+    # MFE/MAE for completed trades (percent decimals, e.g., 0.05 = +5%)
+    mfe = Column(Numeric(18, 8), default=0.0)
+    mae = Column(Numeric(18, 8), default=0.0)
+    mfe_price = Column(Numeric(18, 8))
+    mae_price = Column(Numeric(18, 8))
+    mfe_time = Column(DateTime)
+    mae_time = Column(DateTime)
+
     # Relationships
     position_id = Column(Integer, ForeignKey("positions.id"))
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
@@ -172,6 +180,14 @@ class Position(Base):
     current_price = Column(Numeric(18, 8))
     unrealized_pnl = Column(Numeric(18, 8), default=0.0)
     unrealized_pnl_percent = Column(Numeric(18, 8), default=0.0)
+
+    # Rolling MFE/MAE for active positions (percent decimals)
+    mfe = Column(Numeric(18, 8), default=0.0)
+    mae = Column(Numeric(18, 8), default=0.0)
+    mfe_price = Column(Numeric(18, 8))
+    mae_price = Column(Numeric(18, 8))
+    mfe_time = Column(DateTime)
+    mae_time = Column(DateTime)
 
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
@@ -617,3 +633,34 @@ class RiskAdjustment(Base):
     )
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CorrelationMatrix(Base):
+    """Stores pairwise correlation values for symbol pairs."""
+
+    __tablename__ = "correlation_matrix"
+
+    id = Column(Integer, primary_key=True)
+    symbol_pair = Column(String(50), index=True)  # e.g., "BTCUSDT-ETHUSDT" (sorted order)
+    correlation_value = Column(Numeric(18, 8))
+    p_value = Column(Numeric(18, 8))  # Optional statistical significance if computed
+    sample_size = Column(Integer)
+    last_updated = Column(DateTime)
+    window_days = Column(Integer)
+
+    __table_args__ = (
+        Index("idx_corr_pair_updated", "symbol_pair", "last_updated"),
+    )
+
+
+class PortfolioExposure(Base):
+    """Aggregated exposure per correlation group for portfolio-level limits."""
+
+    __tablename__ = "portfolio_exposures"
+
+    id = Column(Integer, primary_key=True)
+    correlation_group = Column(String(100), index=True)
+    total_exposure = Column(Numeric(18, 8))
+    position_count = Column(Integer)
+    symbols = Column(JSONType)  # List of symbols in group
+    last_updated = Column(DateTime)

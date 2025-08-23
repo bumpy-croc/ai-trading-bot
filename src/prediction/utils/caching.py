@@ -16,7 +16,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from config.constants import DEFAULT_FEATURE_CACHE_TTL
+from src.config.constants import DEFAULT_FEATURE_CACHE_TTL
 
 
 @dataclass

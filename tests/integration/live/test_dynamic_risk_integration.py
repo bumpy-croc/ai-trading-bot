@@ -1,10 +1,10 @@
 """Integration tests for dynamic risk management in live trading engine"""
 
-import pytest
 from datetime import datetime
-from unittest.mock import Mock, MagicMock
+from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from src.live.trading_engine import LiveTradingEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
@@ -52,7 +52,7 @@ class MockDataProvider:
     """Mock data provider for testing"""
     def get_historical_data(self, symbol, timeframe, start, end):
         # Return sample data for live trading tests
-        dates = pd.date_range(start=datetime.now(), periods=100, freq='1H')
+        dates = pd.date_range(start=datetime.now(), periods=100, freq='1h')
         return pd.DataFrame({
             'open': [100.0] * 100,
             'high': [105.0] * 100,
@@ -88,7 +88,6 @@ class TestLiveTradingDynamicRiskIntegration:
             strategy=MockStrategy(),
             data_provider=MockDataProvider(),
             enable_dynamic_risk=False,
-            database_url="sqlite:///:memory:"
         )
         
         assert engine.enable_dynamic_risk is False
@@ -107,7 +106,6 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
-            database_url="sqlite:///:memory:"
         )
         
         assert engine.enable_dynamic_risk is True
@@ -128,12 +126,11 @@ class TestLiveTradingDynamicRiskIntegration:
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
             initial_balance=10000,
-            database_url="sqlite:///:memory:"
         )
         
         # Initialize the database manager and dynamic risk manager manually for testing
-        from src.database.database_manager import DatabaseManager
-        engine.db_manager = DatabaseManager(":memory:")  # Use in-memory DB for testing
+        from database.manager import DatabaseManager
+        engine.db_manager = DatabaseManager()  # Use default test container DB
         final_config = engine._merge_dynamic_risk_config(config)
         engine.dynamic_risk_manager = DynamicRiskManager(
             config=final_config,
@@ -174,7 +171,6 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             enable_dynamic_risk=True,
             dynamic_risk_config=default_config,
-            database_url="sqlite:///:memory:"
         )
         
         # Test config merging
@@ -200,12 +196,11 @@ class TestLiveTradingDynamicRiskIntegration:
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
             initial_balance=10000,
-            database_url="sqlite:///:memory:"
         )
         
         # Manually initialize dynamic risk manager
-        from src.database.database_manager import DatabaseManager
-        engine.db_manager = DatabaseManager(":memory:")
+        from database.manager import DatabaseManager
+        engine.db_manager = DatabaseManager()
         final_config = engine._merge_dynamic_risk_config(config)
         engine.dynamic_risk_manager = DynamicRiskManager(
             config=final_config,
@@ -228,7 +223,6 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             
             enable_dynamic_risk=True,
-            database_url="sqlite:///:memory:"
         )
         
         # Break the dynamic risk manager
@@ -260,16 +254,15 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             
             enable_dynamic_risk=True,
-            dynamic_risk_config=config,
-            log_to_database=True
+            dynamic_risk_config=config
         )
         
         # Replace database manager with mock
         engine.db_manager = mock_db
         
         # Manually initialize dynamic risk manager
-        from src.database.database_manager import DatabaseManager
-        engine.db_manager = DatabaseManager(":memory:")
+        from database.manager import DatabaseManager
+        engine.db_manager = DatabaseManager()
         final_config = engine._merge_dynamic_risk_config(config)
         engine.dynamic_risk_manager = DynamicRiskManager(
             config=final_config,
@@ -293,8 +286,7 @@ class TestLiveTradingDynamicRiskIntegration:
             enabled=True,
             drawdown_thresholds=[0.03, 0.07],  # Custom thresholds
             risk_reduction_factors=[0.9, 0.5],  # Custom factors
-            volatility_adjustment_enabled=False,
-            performance_window_trades=5  # Smaller window for testing
+            volatility_adjustment_enabled=False
         )
         
         engine = LiveTradingEngine(
@@ -304,12 +296,11 @@ class TestLiveTradingDynamicRiskIntegration:
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
             initial_balance=10000,
-            database_url="sqlite:///:memory:"
         )
         
         # Manually initialize dynamic risk manager
-        from src.database.database_manager import DatabaseManager
-        engine.db_manager = DatabaseManager(":memory:")
+        from database.manager import DatabaseManager
+        engine.db_manager = DatabaseManager()
         final_config = engine._merge_dynamic_risk_config(config)
         engine.dynamic_risk_manager = DynamicRiskManager(
             config=final_config,
@@ -332,7 +323,6 @@ class TestLiveTradingDynamicRiskIntegration:
             data_provider=MockDataProvider(),
             
             initial_balance=10000,
-            database_url="sqlite:///:memory:"
         )
         
         # Initial state

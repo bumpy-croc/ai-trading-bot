@@ -1,10 +1,9 @@
 """Integration tests for dynamic risk management in backtesting"""
 
-import pytest
 from datetime import datetime
-from unittest.mock import Mock
 
 import pandas as pd
+import pytest
 
 from src.backtesting.engine import Backtester
 from src.position_management.dynamic_risk import DynamicRiskConfig

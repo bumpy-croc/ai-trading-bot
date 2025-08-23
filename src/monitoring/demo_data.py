@@ -6,14 +6,13 @@ Generates sample trading data for testing the dashboard when no real
 trading data is available.
 """
 
-import random
 import time
 from datetime import datetime, timedelta
-from typing import Optional
 from random import SystemRandom
+from typing import Optional
 
-from config.constants import DEFAULT_INITIAL_BALANCE
-from database.manager import DatabaseManager
+from src.config.constants import DEFAULT_INITIAL_BALANCE
+from src.database.manager import DatabaseManager
 
 
 class DemoDataGenerator:

@@ -7,7 +7,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 try:
-    from live.trading_engine import LiveTradingEngine, PositionSide
+    from src.live.trading_engine import LiveTradingEngine, PositionSide
 
     LIVE_TRADING_AVAILABLE = True
 except ImportError:

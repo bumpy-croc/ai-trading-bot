@@ -1,10 +1,8 @@
 from datetime import datetime, time, timedelta
 
-import pytest
-
 from src.position_management.time_exits import (
-    TimeExitPolicy,
     MarketSessionDef,
+    TimeExitPolicy,
     TimeRestrictions,
 )
 

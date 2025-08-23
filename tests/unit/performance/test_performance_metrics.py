@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 import pytest
-from performance.metrics import (
+
+from src.performance.metrics import (
     Side,
     cagr,
     cash_pnl,
