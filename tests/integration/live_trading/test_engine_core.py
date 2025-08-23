@@ -91,7 +91,7 @@ class TestLiveTradingEngine:
         if hasattr(engine, "_open_position"):
             engine._open_position(
                 symbol="BTCUSDT",
-                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+                side=PositionSide.LONG,
                 size=0.1,
                 price=50000,
                 stop_loss=49000,
@@ -115,7 +115,7 @@ class TestLiveTradingEngine:
         if hasattr(Position, "__init__"):
             position = Position(
                 symbol="BTCUSDT",
-                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+                side=PositionSide.LONG,
                 size=0.1,
                 entry_price=50000,
                 entry_time=datetime.now(),
@@ -136,7 +136,7 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+            side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
@@ -152,7 +152,7 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+            side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
@@ -174,7 +174,7 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         long_position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+            side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
@@ -194,7 +194,7 @@ class TestLiveTradingEngine:
         if hasattr(engine, "_open_position"):
             engine._open_position(
                 symbol="BTCUSDT",
-                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+                side=PositionSide.LONG,
                 size=0.5,
                 price=50000,
             )
@@ -238,7 +238,7 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
     # Open a position
     position = Position(
         symbol="BTCUSDT",
-        side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+        side=PositionSide.LONG,
         size=0.1,
         entry_price=100.0,
         entry_time=datetime.now(),

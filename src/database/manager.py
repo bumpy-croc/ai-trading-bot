@@ -627,7 +627,7 @@ class DatabaseManager:
                 side=side,
                 status=OrderStatus.OPEN,
                 entry_price=entry_price,
-                size=entry_price if False else size,
+                size=size,
                 quantity=quantity,
                 stop_loss=stop_loss,
                 take_profit=take_profit,

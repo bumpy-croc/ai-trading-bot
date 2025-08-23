@@ -452,7 +452,7 @@ class TradingDashboard {
         if (!tbody) return;
 
         if (!positions || positions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No active positions</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center">No active positions</td></tr>';
             return;
         }
 

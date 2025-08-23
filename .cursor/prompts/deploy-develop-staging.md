@@ -1,1 +1,1 @@
-Create a PR to merge develop into staging. Write a concise summary of the changes.
+Deploy the develop stage into staging and production. The branches should look the same, with the same history.
