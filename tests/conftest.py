@@ -160,7 +160,7 @@ def pytest_collection_modifyitems(config, items):  # noqa: D401
     try:
         config.stash[("integration", "selected")] = has_integration
     except Exception:
-        setattr(config, "_has_integration_selected", has_integration)
+        config._has_integration_selected = has_integration
 
 
 @pytest.fixture

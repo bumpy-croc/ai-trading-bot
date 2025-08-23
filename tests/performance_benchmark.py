@@ -7,7 +7,6 @@ It provides baseline metrics and helps identify performance regressions.
 """
 
 import json
-import os
 import statistics
 import subprocess
 import sys

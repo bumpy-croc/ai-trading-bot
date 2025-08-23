@@ -3,7 +3,93 @@ from __future__ import annotations
 import logging
 import logging.config
 import os
+import re
 from typing import Any
+
+
+class SensitiveDataFilter(logging.Filter):
+    """
+    Redacts sensitive tokens (API keys, secrets) from log messages.
+
+    Applies best-effort redaction on both plain strings and simple mapping args.
+    """
+
+    _REDACT = "***"
+
+    # Matches key=value or key: value pairs (case-insensitive) for common sensitive keys
+    _KV_PATTERN = re.compile(
+        r"(?i)\b(api[_-]?key|api[_-]?secret|secret|token|password|pass|auth|bearer|session)[^=:\s]*\s*([=:])\s*([^\s,;]+)"
+    )
+    # Matches JSON-style "key": "value" for the same keys
+    _JSON_PATTERN = re.compile(
+        r"(?i)\"(api[_-]?key|api[_-]?secret|secret|token|password|pass|auth|bearer|session)\"\s*:\s*\"([^\"]+)\""
+    )
+
+    _SENSITIVE_KEYS = {
+        "api_key",
+        "apikey",
+        "api-secret",
+        "api_secret",
+        "secret",
+        "token",
+        "password",
+        "pass",
+        "auth",
+        "bearer",
+        "session",
+    }
+
+    @classmethod
+    def _redact_text(cls, text: str) -> str:
+        text = cls._KV_PATTERN.sub(lambda m: f"{m.group(1)}{m.group(2)} {cls._REDACT}", text)
+        text = cls._JSON_PATTERN.sub(lambda m: f'"{m.group(1)}": "{cls._REDACT}"', text)
+        return text
+
+    @classmethod
+    def _redact_mapping(cls, mapping: dict[str, Any]) -> dict[str, Any]:
+        redacted: dict[str, Any] = {}
+        for k, v in mapping.items():
+            if isinstance(k, str) and k.lower() in cls._SENSITIVE_KEYS:
+                redacted[k] = cls._REDACT
+            elif isinstance(v, str):
+                redacted[k] = cls._redact_text(v)
+            else:
+                redacted[k] = v
+        return redacted
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        try:
+            if isinstance(record.msg, str):
+                record.msg = self._redact_text(record.msg)
+            # Best-effort redaction of mapping/tuple args
+            if isinstance(record.args, dict):
+                record.args = self._redact_mapping(record.args)
+            elif isinstance(record.args, (list, tuple)):
+                sanitized = []
+                for a in record.args:  # type: ignore[assignment]
+                    if isinstance(a, str):
+                        sanitized.append(self._redact_text(a))
+                    else:
+                        sanitized.append(a)
+                record.args = tuple(sanitized)
+        except Exception:
+            # Never fail logging because of filter errors
+            return True
+        return True
+
+
+class NamespacePrefixFilter(logging.Filter):
+    """Prefixes logger names with 'atb.' for consistent namespacing."""
+
+    _PREFIX = "atb."
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        try:
+            if record.name and not record.name.startswith(self._PREFIX):
+                record.name = f"{self._PREFIX}{record.name}"
+        except Exception:
+            return True
+        return True
 
 
 def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
@@ -20,6 +106,10 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
     return {
         "version": 1,
         "disable_existing_loggers": False,
+        "filters": {
+            "redact": {"()": "src.utils.logging_config.SensitiveDataFilter"},
+            "ns": {"()": "src.utils.logging_config.NamespacePrefixFilter"},
+        },
         "formatters": {
             "default": formatter,
         },
@@ -28,7 +118,15 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
                 "class": "logging.StreamHandler",
                 "formatter": "default",
                 "level": level,
+                "filters": ["redact", "ns"],
             }
+        },
+        "loggers": {
+            # Reduce noise from chatty libraries while allowing overrides via env
+            "sqlalchemy.engine": {"level": os.getenv("LOG_SQLALCHEMY_LEVEL", "WARNING"), "propagate": True},
+            "urllib3": {"level": os.getenv("LOG_URLLIB3_LEVEL", "WARNING"), "propagate": True},
+            "binance": {"level": os.getenv("LOG_BINANCE_LEVEL", "WARNING"), "propagate": True},
+            "ccxt": {"level": os.getenv("LOG_CCXT_LEVEL", "WARNING"), "propagate": True},
         },
         "root": {"handlers": ["console"], "level": level},
     }

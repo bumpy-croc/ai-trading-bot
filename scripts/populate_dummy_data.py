@@ -19,10 +19,11 @@ from src.database.models import (
     Trade,
     TradeSource,
 )
+from src.utils.logging_config import configure_logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = logging.getLogger("atb.populate_dummy")
 
 
 class DummyDataPopulator:

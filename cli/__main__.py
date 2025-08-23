@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 
+from src.utils.logging_config import configure_logging
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI Trading Bot unified CLI")
@@ -36,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_logging()
     parser = build_parser()
     ns = parser.parse_args(argv)
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import ccxt
 import pandas as pd
 
+from src.utils.logging_config import configure_logging
 from src.utils.symbol_factory import SymbolFactory
 
 
@@ -118,8 +119,7 @@ def _prefill(ns: argparse.Namespace) -> int:
                             f"Cached {symbol} {tf} {y_start.year}: {len(df)} candles from {df.index.min()} to {df.index.max()}"
                         )
                 except Exception as e:
-                    print(f"Error caching {symbol} {tf} {y_start.year}: {e}")
-    print("Done.")
+                    print(f"{symbol} {tf} {y_start.year}: error {e}")
     return 0
 
 
@@ -260,8 +260,8 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
     from database.manager import DatabaseManager
     from database.models import PositionSide, TradeSource
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    logger = logging.getLogger(__name__)
+    configure_logging()
+    logger = logging.getLogger("atb.data")
 
     if not ns.confirm:
         response = input(
@@ -339,7 +339,7 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
         print("✅ Database population completed successfully!")
         return 0
     except Exception as e:
-        logger = logging.getLogger(__name__)
+        logger = logging.getLogger("atb.data")
         logger.error(f"Failed to populate database: {e}")
         return 1
 
@@ -358,13 +358,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_dl.set_defaults(func=_download)
 
     p_prefill = sub.add_parser("prefill-cache", help="Prefill Binance cache for symbols/timeframes")
-    p_prefill.add_argument("--symbols", nargs="+", default=["BTCUSDT"])
-    p_prefill.add_argument("--timeframes", nargs="+", default=["1h"])
-    p_prefill.add_argument("--years", type=int, default=8)
-    p_prefill.add_argument("--start", type=str, default=None)
-    p_prefill.add_argument("--end", type=str, default=None)
-    p_prefill.add_argument("--cache-ttl-hours", type=int, default=24)
-    p_prefill.add_argument("--cache-dir", type=str, default=None)
+    p_prefill.add_argument("--symbols", nargs="+", required=True)
+    p_prefill.add_argument("--timeframes", nargs="+", required=True)
+    p_prefill.add_argument("--start")
+    p_prefill.add_argument("--end")
+    p_prefill.add_argument("--years", type=int, default=3)
+    p_prefill.add_argument("--cache_dir")
+    p_prefill.add_argument("--cache_ttl_hours", type=int, default=24)
     p_prefill.set_defaults(func=_prefill)
 
     p_cache = sub.add_parser("cache-manager", help="Cache manager")
@@ -377,8 +377,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_cache.add_argument("--hours", type=int, default=24)
     p_cache.set_defaults(func=_cache_manager)
 
-    p_dummy = sub.add_parser("populate-dummy", help="Populate dummy data into DB")
-    p_dummy.add_argument("--trades", type=int, default=100)
-    p_dummy.add_argument("--database-url", type=str, default=None)
+    p_dummy = sub.add_parser("populate-dummy", help="Populate DB with dummy data")
+    p_dummy.add_argument("--trades", type=int, default=50)
+    p_dummy.add_argument("--database_url")
     p_dummy.add_argument("--confirm", action="store_true")
     p_dummy.set_defaults(func=_populate_dummy)
