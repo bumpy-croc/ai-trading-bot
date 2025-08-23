@@ -5,7 +5,7 @@ class TradingDashboard {
         this.updateInterval = 5000; // 5 seconds instead of 1 hour
         this.chart = null;
         this.lastMetrics = {};
-        this.positionsTableColumnCount = 10; // Number of columns in positions table
+        this.positionsTableColumnCount = 8; // Number of columns in positions table
         this.tradesTableColumnCount = 6; // Number of columns in trades table
         this.currencyFormatter = new Intl.NumberFormat('en-US', {
             style: 'currency',
@@ -465,8 +465,6 @@ class TradingDashboard {
             const currentPrice = typeof position.current_price === 'number' ? position.current_price : 0.0;
             const trailSL = position.trailing_stop_price ? this.formatCurrency(position.trailing_stop_price) : '-';
             const beBadge = position.breakeven_triggered ? '<span class="badge bg-info">BE</span>' : '';
-            const mfe = typeof position.mfe === 'number' ? position.mfe : 0.0;
-            const mae = typeof position.mae === 'number' ? position.mae : 0.0;
             return `
             <tr>
                 <td>${position.symbol}</td>
@@ -479,8 +477,6 @@ class TradingDashboard {
                 </td>
                 <td>${trailSL}</td>
                 <td>${beBadge}</td>
-                <td class="${mfe >= 0 ? 'text-success' : 'text-muted'}">${(mfe * 100).toFixed(2)}%</td>
-                <td class="${mae <= 0 ? 'text-danger' : 'text-muted'}">${(mae * 100).toFixed(2)}%</td>
             </tr>
             `;
         }).join('');
