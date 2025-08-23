@@ -73,6 +73,9 @@ class PositionDict(TypedDict):
     stop_loss: float | None
     take_profit: float | None
     order_id: str | None
+    trailing_stop_activated: bool | None
+    trailing_stop_price: float | None
+    breakeven_triggered: bool | None
     mfe: float | None
     mae: float | None
 
@@ -1403,6 +1406,13 @@ class MonitoringDashboard:
                                 else None
                             ),
                             "order_id": pos.get("order_id"),
+                            "trailing_stop_activated": bool(pos.get("trailing_stop_activated", False)),
+                            "trailing_stop_price": (
+                                self._safe_float(pos.get("trailing_stop_price"))
+                                if pos.get("trailing_stop_price") is not None
+                                else None
+                            ),
+                            "breakeven_triggered": bool(pos.get("breakeven_triggered", False)),
                             "mfe": self._safe_float(pos.get("mfe")) if pos.get("mfe") is not None else 0.0,
                             "mae": self._safe_float(pos.get("mae")) if pos.get("mae") is not None else 0.0,
                         }

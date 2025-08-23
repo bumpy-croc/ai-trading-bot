@@ -5,10 +5,15 @@ from typing import Any, Optional
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_BREAKEVEN_BUFFER,
+    DEFAULT_BREAKEVEN_THRESHOLD,
     DEFAULT_CORRELATION_THRESHOLD,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
+    DEFAULT_TRAILING_ACTIVATION_THRESHOLD,
+    DEFAULT_TRAILING_DISTANCE_ATR_MULT,
+    DEFAULT_TRAILING_DISTANCE_PCT,
 )
 from src.indicators.technical import calculate_atr
 
@@ -28,6 +33,12 @@ class RiskParameters:
     atr_period: int = 14
     # Time exit config (optional; strategies may override)
     time_exits: Optional[dict] = None
+    # Trailing stop config (engine/backtester may override via strategy.get_risk_overrides())
+    trailing_activation_threshold: float = DEFAULT_TRAILING_ACTIVATION_THRESHOLD
+    trailing_distance_pct: Optional[float] = DEFAULT_TRAILING_DISTANCE_PCT
+    trailing_atr_multiplier: Optional[float] = DEFAULT_TRAILING_DISTANCE_ATR_MULT
+    breakeven_threshold: float = DEFAULT_BREAKEVEN_THRESHOLD
+    breakeven_buffer: float = DEFAULT_BREAKEVEN_BUFFER
     # Correlation control configuration (used by correlation engine/integration)
     correlation_window_days: int = DEFAULT_CORRELATION_WINDOW_DAYS
     correlation_threshold: float = DEFAULT_CORRELATION_THRESHOLD

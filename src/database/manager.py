@@ -668,6 +668,9 @@ class DatabaseManager:
         confidence_score: float | None = None,
         quantity: float | None = None,
         session_id: int | None = None,
+        trailing_stop_activated: bool | None = None,
+        trailing_stop_price: float | None = None,
+        breakeven_triggered: bool | None = None,
         mfe: float | None = None,
         mae: float | None = None,
         mfe_price: float | None = None,
@@ -707,6 +710,13 @@ class DatabaseManager:
                 mfe_time=mfe_time,
                 mae_time=mae_time,
             )
+            # Trailing fields (optional)
+            if trailing_stop_activated is not None:
+                position.trailing_stop_activated = bool(trailing_stop_activated)
+            if trailing_stop_price is not None:
+                position.trailing_stop_price = Decimal(str(trailing_stop_price))
+            if breakeven_triggered is not None:
+                position.breakeven_triggered = bool(breakeven_triggered)
 
             session.add(position)
             try:
@@ -734,6 +744,9 @@ class DatabaseManager:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         size: float | None = None,
+        trailing_stop_activated: bool | None = None,
+        trailing_stop_price: float | None = None,
+        breakeven_triggered: bool | None = None,
         mfe: float | None = None,
         mae: float | None = None,
         mfe_price: float | None = None,
@@ -780,6 +793,14 @@ class DatabaseManager:
                 position.stop_loss = Decimal(str(stop_loss))
             if take_profit is not None:
                 position.take_profit = Decimal(str(take_profit))
+
+            # Update trailing fields
+            if trailing_stop_activated is not None:
+                position.trailing_stop_activated = bool(trailing_stop_activated)
+            if trailing_stop_price is not None:
+                position.trailing_stop_price = Decimal(str(trailing_stop_price))
+            if breakeven_triggered is not None:
+                position.breakeven_triggered = bool(breakeven_triggered)
 
             # Update MFE/MAE if provided (stored as decimals without percentage scaling)
             if mfe is not None:
@@ -1093,6 +1114,9 @@ class DatabaseManager:
                     "take_profit": p.take_profit,
                     "entry_time": p.entry_time,
                     "strategy": p.strategy_name,
+                    "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
+                    "trailing_stop_price": getattr(p, "trailing_stop_price", None),
+                    "breakeven_triggered": getattr(p, "breakeven_triggered", False),
                     "mfe": p.mfe,
                     "mae": p.mae,
                     "mfe_price": p.mfe_price,

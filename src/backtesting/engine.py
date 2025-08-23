@@ -36,6 +36,7 @@ from src.position_management.correlation_engine import CorrelationConfig, Correl
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
 from src.position_management.time_exits import TimeExitPolicy
+from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import BaseStrategy
@@ -66,6 +67,10 @@ class ActiveTrade:
         self.exit_price: Optional[float] = None
         self.exit_time: Optional[datetime] = None
         self.exit_reason: Optional[str] = None
+        # Trailing state
+        self.trailing_stop_activated: bool = False
+        self.breakeven_triggered: bool = False
+        self.trailing_stop_price: Optional[float] = None
 
 
 class Backtester:
@@ -89,6 +94,8 @@ class Backtester:
         # Dynamic risk management
         enable_dynamic_risk: bool = False,  # Disabled by default for backtesting to preserve historical results
         dynamic_risk_config: Optional[DynamicRiskConfig] = None,
+        # Trailing stops
+        trailing_stop_policy: Optional[TrailingStopPolicy] = None,
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -100,6 +107,7 @@ class Backtester:
         self.trades: list[dict] = []
         self.current_trade: Optional[ActiveTrade] = None
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
+        self.trailing_stop_policy = trailing_stop_policy
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -192,18 +200,9 @@ class Backtester:
                         self.strategy.set_database_manager(self.db_manager)
                 except (SQLAlchemyError, ValueError) as sqlite_err:
                     logger.warning(
-                        f"Fallback SQLite initialization failed ({sqlite_err}). Disabling database logging."
+                        f"Fallback SQLite database connection also failed: {sqlite_err}. Proceeding without DB logging."
                     )
-                    self.log_to_database = False
-
-                    class DummyDBManager:
-                        def __getattr__(self, _):
-                            def _noop(*args, **kwargs):
-                                return None
-
-                            return _noop
-
-                    self.db_manager = DummyDBManager()
+                    self.db_manager = None
 
     def _merge_dynamic_risk_config(self, base_config: DynamicRiskConfig, strategy) -> DynamicRiskConfig:
         """Merge strategy risk overrides with base dynamic risk configuration"""
@@ -403,6 +402,58 @@ class Backtester:
 
                 # Check for exit if in position
                 if self.current_trade is not None:
+                    # Apply trailing stop before evaluating exits
+                    if self.trailing_stop_policy is not None:
+                        # Determine ATR if present
+                        atr_val = None
+                        try:
+                            if "atr" in df.columns:
+                                v = df["atr"].iloc[i]
+                                atr_val = float(v) if v is not None and not pd.isna(v) else None
+                        except Exception:
+                            atr_val = None
+                        new_sl, act, be = self.trailing_stop_policy.update_trailing_stop(
+                            side=self.current_trade.side,
+                            entry_price=float(self.current_trade.entry_price),
+                            current_price=float(current_price),
+                            existing_stop=float(self.current_trade.stop_loss) if self.current_trade.stop_loss is not None else None,
+                            position_fraction=float(self.current_trade.size),
+                            atr=atr_val,
+                            trailing_activated=bool(self.current_trade.trailing_stop_activated),
+                            breakeven_triggered=bool(self.current_trade.breakeven_triggered),
+                        )
+                        changed = False
+                        if new_sl is not None and (
+                            self.current_trade.stop_loss is None
+                            or (self.current_trade.side == "long" and new_sl > float(self.current_trade.stop_loss))
+                            or (self.current_trade.side != "long" and new_sl < float(self.current_trade.stop_loss))
+                        ):
+                            self.current_trade.stop_loss = new_sl
+                            self.current_trade.trailing_stop_price = new_sl
+                            changed = True
+                        if act != self.current_trade.trailing_stop_activated or be != self.current_trade.breakeven_triggered:
+                            self.current_trade.trailing_stop_activated = act
+                            self.current_trade.breakeven_triggered = be
+                            changed = True or changed
+                        if changed and self.log_to_database and self.db_manager:
+                            try:
+                                self.db_manager.log_strategy_execution(
+                                    strategy_name=self.strategy.__class__.__name__,
+                                    symbol=symbol,
+                                    signal_type="risk_adjustment",
+                                    action_taken="trailing_stop_update",
+                                    price=current_price,
+                                    timeframe=timeframe,
+                                    reasons=[
+                                        f"sl_updated={self.current_trade.stop_loss}",
+                                        f"activated={self.current_trade.trailing_stop_activated}",
+                                        f"breakeven={self.current_trade.breakeven_triggered}",
+                                    ],
+                                    session_id=self.trading_session_id,
+                                )
+                            except Exception:
+                                pass
+
                     exit_signal = self.strategy.check_exit_conditions(
                         df, i, self.current_trade.entry_price
                     )
