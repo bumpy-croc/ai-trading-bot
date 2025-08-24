@@ -363,11 +363,16 @@ class MlAdaptive(BaseStrategy):
 
     def get_risk_overrides(self) -> Optional[dict[str, Any]]:
         """
-        Provide risk management overrides including partial operations configuration.
+        Provide risk management overrides including partial operations and trailing stop configuration.
         
         This strategy uses conservative partial exits and scale-ins:
         - Take 25% profit at 3% gain, 25% at 6% gain, 50% at 10% gain
         - Scale in 25% at 2% gain, 25% at 5% gain (max 2 scale-ins)
+        
+        And conservative trailing stops:
+        - Activate at 1.5% profit
+        - 0.5% trailing distance
+        - Breakeven at 2% profit
         """
         return {
             "partial_operations": {
@@ -376,6 +381,12 @@ class MlAdaptive(BaseStrategy):
                 "scale_in_thresholds": [0.02, 0.05],  # 2%, 5%
                 "scale_in_sizes": [0.25, 0.25],       # 25%, 25%
                 "max_scale_ins": 2,
+            },
+            "trailing_stop": {
+                "activation_threshold": 0.015,  # 1.5%
+                "trailing_distance_pct": 0.005,  # 0.5%
+                "breakeven_threshold": 0.02,  # 2.0%
+                "breakeven_buffer": 0.001,  # 0.1%
             }
         }
 
@@ -388,19 +399,6 @@ class MlAdaptive(BaseStrategy):
             return price * (1 - self.stop_loss_pct)
         else:  # short
             return price * (1 + self.stop_loss_pct)
-
-    def get_risk_overrides(self) -> dict:
-        """Provide per-strategy overrides, including trailing stop example."""
-        return {
-            # Keep sizing defaults; trailing stop overrides below
-            "trailing_stop": {
-                "activation_threshold": 0.015,  # 1.5%
-                "trailing_distance_pct": 0.005,  # 0.5%
-                # Use breakeven config matching defaults but explicit for clarity
-                "breakeven_threshold": 0.02,  # 2.0%
-                "breakeven_buffer": 0.001,  # 0.1%
-            }
-        }
 
     def _load_model(self):
         """Load or reload the ONNX model"""
