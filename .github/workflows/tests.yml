@@ -231,39 +231,8 @@ jobs:
               # Extract failure details from JUnit XML
               FAILURE_REPORT+="\n\n=== UNIT TESTS SPLIT $i/4 FAILURES ===\n"
               
-              # Use python to parse XML and extract failure details
-              python3 -c "
-import xml.etree.ElementTree as ET
-import sys
-
-try:
-    tree = ET.parse('test-artifacts/unit-test-reports-$i/junit-unit-$i.xml')
-    root = tree.getroot()
-    
-    failures = []
-    for testcase in root.findall('.//testcase'):
-        failure = testcase.find('failure')
-        if failure is not None:
-            classname = testcase.get('classname', 'Unknown')
-            name = testcase.get('name', 'Unknown')
-            message = failure.get('message', 'No message')
-            details = failure.text or 'No details'
-            
-            failures.append(f'Test: {classname}.{name}')
-            failures.append(f'Message: {message}')
-            failures.append(f'Details: {details[:500]}...' if len(details) > 500 else f'Details: {details}')
-            failures.append('---')
-    
-    if failures:
-        print('\\n'.join(failures))
-    else:
-        print('No detailed failure information found in XML')
-        
-except Exception as e:
-    print(f'Error parsing XML: {e}')
-    # Fallback: just show the file exists
-    print('Unit test split $i failed - check artifacts for details')
-" >> failure_details.txt
+              # Use the dedicated Python script to parse XML and extract failure details
+              python3 scripts/parse_junit_failures.py "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" >> failure_details.txt
               
               FAILURE_REPORT+="$(cat failure_details.txt)\n"
               rm -f failure_details.txt
@@ -280,38 +249,8 @@ except Exception as e:
             
             FAILURE_REPORT+="\n\n=== INTEGRATION TESTS FAILURES ===\n"
             
-            # Extract failure details from JUnit XML
-            python3 -c "
-import xml.etree.ElementTree as ET
-import sys
-
-try:
-    tree = ET.parse('test-artifacts/integration-test-reports/junit-integration.xml')
-    root = tree.getroot()
-    
-    failures = []
-    for testcase in root.findall('.//testcase'):
-        failure = testcase.find('failure')
-        if failure is not None:
-            classname = testcase.get('classname', 'Unknown')
-            name = testcase.get('name', 'Unknown')
-            message = failure.get('message', 'No message')
-            details = failure.text or 'No details'
-            
-            failures.append(f'Test: {classname}.{name}')
-            failures.append(f'Message: {message}')
-            failures.append(f'Details: {details[:500]}...' if len(details) > 500 else f'Details: {details}')
-            failures.append('---')
-    
-    if failures:
-        print('\\n'.join(failures))
-    else:
-        print('No detailed failure information found in XML')
-        
-except Exception as e:
-    print(f'Error parsing XML: {e}')
-    print('Integration tests failed - check artifacts for details')
-" >> integration_failure_details.txt
+            # Extract failure details from JUnit XML using the dedicated script
+            python3 scripts/parse_junit_failures.py "test-artifacts/integration-test-reports/junit-integration.xml" >> integration_failure_details.txt
             
             FAILURE_REPORT+="$(cat integration_failure_details.txt)\n"
             rm -f integration_failure_details.txt
