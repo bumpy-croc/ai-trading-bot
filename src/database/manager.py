@@ -28,6 +28,8 @@ from .models import (
     EventType,
     OptimizationCycle,
     OrderStatus,
+    PartialOperationType,
+    PartialTrade,
     PerformanceMetrics,
     Position,
     PositionSide,
@@ -80,6 +82,44 @@ class DatabaseManager:
         # Create tables if they don't exist
         self._create_tables()
 
+    def _is_running_unit_tests(self) -> bool:
+        """Determine whether the current pytest run executes unit tests.
+
+        Detection order (no call stack inspection):
+        1) Explicit environment flags:
+           - TEST_TYPE = "unit" | "integration"
+           - PYTEST_TEST_TYPE = alias of TEST_TYPE
+           - RUNNING_INTEGRATION_TESTS = 1/true/yes → integration
+        2) PYTEST_CURRENT_TEST path hint containing "tests/unit/" or "tests/integration/".
+        3) Conservative default: treat as integration (return False) to avoid SQLite fallback.
+
+        Returns:
+            True if running unit tests; False for integration tests or when undetermined.
+        """
+        # * Honor explicit environment flags first
+        explicit_type = os.getenv("TEST_TYPE") or os.getenv("PYTEST_TEST_TYPE")
+        if explicit_type:
+            lowered = explicit_type.strip().lower()
+            if lowered.startswith("unit"):
+                return True
+            if lowered.startswith("integration"):
+                return False
+
+        running_integration = os.getenv("RUNNING_INTEGRATION_TESTS", "").strip().lower()
+        if running_integration in {"1", "true", "yes", "on"}:
+            return False
+
+        # * Use pytest-provided hint about the current test item path
+        current_test = os.getenv("PYTEST_CURRENT_TEST", "")
+        if current_test:
+            if "tests/integration/" in current_test or "/tests/integration/" in current_test:
+                return False
+            if "tests/unit/" in current_test or "/tests/unit/" in current_test:
+                return True
+
+        # * Conservative default: treat as integration to avoid accidental SQLite fallback
+        return False
+
     def _init_database(self):
         """Initialize PostgreSQL database connection and session factory"""
 
@@ -108,11 +148,15 @@ class DatabaseManager:
         # Guard SQLite usage in CI to avoid accidental use in production
         is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
-        # Allow SQLite for local integration testing when PostgreSQL is not available
+        # Allow SQLite for unit tests, but require PostgreSQL for integration tests in CI
         if is_sqlite and is_github_actions:
-            raise ValueError(
-                "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
-            )
+            # Check if we're running integration tests by looking at pytest markers or environment
+            # Allow SQLite if running unit tests (detected by pytest current item markers)
+            is_unit_test = self._is_running_unit_tests()
+            if not is_unit_test:
+                raise ValueError(
+                    "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
+                )
 
         # Helper for creating a SQLite engine config
         def _sqlite_engine_config(url: str) -> tuple[str, dict[str, Any]]:
@@ -152,26 +196,38 @@ class DatabaseManager:
             )
 
         except Exception as e:
-            # If we're attempting Postgres but it fails, fall back to SQLite for unit tests
+            # If we're attempting Postgres but it fails, fall back to SQLite for unit tests only
             if is_postgres:
-                logger.warning(
-                    "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
-                    e,
-                )
-                fallback_url = "sqlite:///:memory:"
-                effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
-                try:
-                    self.engine = create_engine(effective_url, **engine_kwargs)
-                    self.session_factory = sessionmaker(bind=self.engine)
-                    from sqlalchemy import text as _sql_text
-
-                    with self.engine.connect() as conn:
-                        conn.execute(_sql_text("SELECT 1"))
-                    logger.info(
-                        "✅ Database connection established (SQLite fallback for unit tests)"
+                # Integration tests must always use PostgreSQL - no fallback allowed
+                is_unit_test = self._is_running_unit_tests()
+                
+                if is_unit_test:
+                    logger.warning(
+                        "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
+                        e,
                     )
-                except Exception as sqlite_err:
-                    logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                    fallback_url = "sqlite:///:memory:"
+                    effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
+                    try:
+                        self.engine = create_engine(effective_url, **engine_kwargs)
+                        self.session_factory = sessionmaker(bind=self.engine)
+                        from sqlalchemy import text as _sql_text
+
+                        with self.engine.connect() as conn:
+                            conn.execute(_sql_text("SELECT 1"))
+                        logger.info(
+                            "✅ Database connection established (SQLite fallback for unit tests)"
+                        )
+                    except Exception as sqlite_err:
+                        logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                        raise
+                else:
+                    # Integration tests require PostgreSQL in ALL environments (local, CI, production)
+                    logger.error(
+                        f"PostgreSQL connection failed for integration test. "
+                        f"Integration tests require a working PostgreSQL database to test end-to-end behavior. "
+                        f"Error: {e}"
+                    )
                     raise
             else:
                 logger.error(f"Failed to initialize database: {e}")
@@ -614,6 +670,9 @@ class DatabaseManager:
         confidence_score: float | None = None,
         quantity: float | None = None,
         session_id: int | None = None,
+        trailing_stop_activated: bool | None = None,
+        trailing_stop_price: float | None = None,
+        breakeven_triggered: bool | None = None,
         mfe: float | None = None,
         mae: float | None = None,
         mfe_price: float | None = None,
@@ -653,6 +712,13 @@ class DatabaseManager:
                 mfe_time=mfe_time,
                 mae_time=mae_time,
             )
+            # Trailing fields (optional)
+            if trailing_stop_activated is not None:
+                position.trailing_stop_activated = bool(trailing_stop_activated)
+            if trailing_stop_price is not None:
+                position.trailing_stop_price = Decimal(str(trailing_stop_price))
+            if breakeven_triggered is not None:
+                position.breakeven_triggered = bool(breakeven_triggered)
 
             session.add(position)
             try:
@@ -680,6 +746,15 @@ class DatabaseManager:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         size: float | None = None,
+        original_size: float | None = None,
+        current_size: float | None = None,
+        partial_exits_taken: int | None = None,
+        scale_ins_taken: int | None = None,
+        last_partial_exit_price: float | None = None,
+        last_scale_in_price: float | None = None,
+        trailing_stop_activated: bool | None = None,
+        trailing_stop_price: float | None = None,
+        breakeven_triggered: bool | None = None,
         mfe: float | None = None,
         mae: float | None = None,
         mfe_price: float | None = None,
@@ -698,6 +773,18 @@ class DatabaseManager:
                 position.current_price = Decimal(str(current_price))
             if size is not None:
                 position.size = Decimal(str(size))
+            if original_size is not None:
+                position.original_size = Decimal(str(original_size))
+            if current_size is not None:
+                position.current_size = Decimal(str(current_size))
+            if partial_exits_taken is not None:
+                position.partial_exits_taken = int(partial_exits_taken)
+            if scale_ins_taken is not None:
+                position.scale_ins_taken = int(scale_ins_taken)
+            if last_partial_exit_price is not None:
+                position.last_partial_exit_price = Decimal(str(last_partial_exit_price))
+            if last_scale_in_price is not None:
+                position.last_scale_in_price = Decimal(str(last_scale_in_price))
             position.last_update = datetime.utcnow()
 
             # Calculate unrealized P&L if not provided - with division by zero protection
@@ -726,6 +813,14 @@ class DatabaseManager:
                 position.stop_loss = Decimal(str(stop_loss))
             if take_profit is not None:
                 position.take_profit = Decimal(str(take_profit))
+
+            # Update trailing fields
+            if trailing_stop_activated is not None:
+                position.trailing_stop_activated = bool(trailing_stop_activated)
+            if trailing_stop_price is not None:
+                position.trailing_stop_price = Decimal(str(trailing_stop_price))
+            if breakeven_triggered is not None:
+                position.breakeven_triggered = bool(breakeven_triggered)
 
             # Update MFE/MAE if provided (stored as decimals without percentage scaling)
             if mfe is not None:
@@ -1039,6 +1134,9 @@ class DatabaseManager:
                     "take_profit": p.take_profit,
                     "entry_time": p.entry_time,
                     "strategy": p.strategy_name,
+                    "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
+                    "trailing_stop_price": getattr(p, "trailing_stop_price", None),
+                    "breakeven_triggered": getattr(p, "breakeven_triggered", False),
                     "mfe": p.mfe,
                     "mae": p.mae,
                     "mfe_price": p.mfe_price,
@@ -1112,13 +1210,13 @@ class DatabaseManager:
             if not trades:
                 return {
                     "total_trades": 0,
-                    "win_rate": 0,
-                    "total_pnl": 0,
-                    "avg_win": 0,
-                    "avg_loss": 0,
-                    "profit_factor": 0,
-                    "sharpe_ratio": 0,
-                    "max_drawdown": 0,
+                    "win_rate": 0.0,
+                    "total_pnl": 0.0,
+                    "avg_win": 0.0,
+                    "avg_loss": 0.0,
+                    "profit_factor": 0.0,
+                    "sharpe_ratio": 0.0,
+                    "max_drawdown": 0.0,
                 }
 
             # Calculate metrics with division by zero protection
@@ -1165,7 +1263,7 @@ class DatabaseManager:
             if not isinstance(account_history, (list, tuple)):
                 account_history = []
 
-            max_drawdown = 0
+            max_drawdown = 0.0
             if account_history:
                 peak_balance = account_history[0].balance
                 for record in account_history:
@@ -1654,4 +1752,284 @@ class DatabaseManager:
             logger.error(f"Failed to log risk adjustment: {e}")
             raise
 
+    def get_dynamic_risk_performance_metrics(
+        self,
+        session_id: int,
+        start_date: datetime = None,
+        end_date: datetime = None
+    ) -> dict[str, Any]:
+        """
+        Get recent performance metrics for dynamic risk calculation.
+        
+        Args:
+            session_id: Trading session ID
+            start_date: Start date for metrics calculation (defaults to 30 days ago)
+            end_date: End date for metrics calculation (defaults to now)
+            
+        Returns:
+            Dictionary containing calculated performance metrics
+        """
+        try:
+            if end_date is None:
+                end_date = datetime.utcnow()
+            if start_date is None:
+                start_date = end_date - timedelta(days=30)
+                
+            with self.get_session() as session:
+                # Get trades in the specified period
+                trades = (
+                    session.query(Trade)
+                    .filter(Trade.session_id == session_id)
+                    .filter(Trade.exit_time >= start_date)
+                    .filter(Trade.exit_time <= end_date)
+                    .filter(Trade.pnl.isnot(None))
+                    .all()
+                )
+                
+                if not trades:
+                    return {
+                        "total_trades": 0,
+                        "win_rate": 0.0,
+                        "profit_factor": 0.0,
+                        "sharpe_ratio": 0.0,
+                        "expectancy": 0.0,
+                        "avg_trade_duration_hours": 0.0,
+                        "consecutive_losses": 0,
+                        "consecutive_wins": 0,
+                        "max_drawdown": 0.0,
+                        "gross_profit": 0.0,
+                        "gross_loss": 0.0,
+                        "total_pnl": 0.0
+                    }
+                
+                # Calculate basic metrics
+                total_trades = len(trades)
+                winning_trades = [t for t in trades if float(t.pnl) > 0]
+                losing_trades = [t for t in trades if float(t.pnl) < 0]
+                
+                win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0.0
+                
+                gross_profit = sum(float(t.pnl) for t in winning_trades)
+                gross_loss = abs(sum(float(t.pnl) for t in losing_trades))
+                
+                profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf') if gross_profit > 0 else 1.0
+                if profit_factor == float('inf'):
+                    profit_factor = 10.0  # Cap at reasonable value
+                    
+                # Calculate expectancy
+                total_pnl = sum(float(t.pnl) for t in trades)
+                expectancy = total_pnl / total_trades if total_trades > 0 else 0.0
+                
+                # Calculate average trade duration
+                durations = []
+                for trade in trades:
+                    if trade.entry_time and trade.exit_time:
+                        duration = (trade.exit_time - trade.entry_time).total_seconds() / 3600
+                        durations.append(duration)
+                        
+                avg_trade_duration_hours = sum(durations) / len(durations) if durations else 0.0
+                
+                # Calculate consecutive streaks (from most recent trades)
+                consecutive_wins = 0
+                consecutive_losses = 0
+                
+                # Sort by exit time descending to get most recent first
+                recent_trades = sorted(trades, key=lambda t: t.exit_time, reverse=True)
+                
+                for trade in recent_trades:
+                    pnl = float(trade.pnl)
+                    if pnl > 0:
+                        if consecutive_losses == 0:  # Still in winning streak
+                            consecutive_wins += 1
+                        else:
+                            break
+                    elif pnl < 0:
+                        if consecutive_wins == 0:  # Still in losing streak
+                            consecutive_losses += 1
+                        else:
+                            break
+                    # Skip break-even trades
 
+                # Calculate max drawdown
+                max_drawdown = 0.0
+                if trades:
+                    # Sort trades by exit time to calculate running balance
+                    sorted_trades = sorted(trades, key=lambda t: t.exit_time)
+                    running_balance = 0.0
+                    peak_balance = 0.0
+                    
+                    for trade in sorted_trades:
+                        running_balance += float(trade.pnl)
+                        if running_balance > peak_balance:
+                            peak_balance = running_balance
+                        
+                        # Calculate drawdown from peak
+                        if peak_balance > 0:
+                            drawdown = (peak_balance - running_balance) / peak_balance
+                            max_drawdown = max(max_drawdown, drawdown)
+                
+                # Calculate Sharpe ratio (simplified)
+                if len(trades) > 1:
+                    pnls = [float(t.pnl) for t in trades]
+                    import numpy as np
+                    returns_std = np.std(pnls)
+                    mean_return = np.mean(pnls)
+                    sharpe_ratio = mean_return / returns_std if returns_std > 0 else 0.0
+                else:
+                    sharpe_ratio = 0.0
+                
+                # Calculate max drawdown using account history
+                max_drawdown = 0.0
+                try:
+                    history_query = session.query(AccountHistory)
+                    history_query = history_query.filter(AccountHistory.session_id == session_id)
+                    if start_date:
+                        history_query = history_query.filter(AccountHistory.timestamp >= start_date)
+                    if end_date:
+                        history_query = history_query.filter(AccountHistory.timestamp <= end_date)
+                    
+                    account_history = history_query.order_by(AccountHistory.timestamp).all()
+                    
+                    if account_history and len(account_history) > 0:
+                        peak_balance = account_history[0].balance
+                        for record in account_history:
+                            if record.balance > peak_balance:
+                                peak_balance = record.balance
+                            # Protect against division by zero
+                            if peak_balance > 0:
+                                drawdown = (peak_balance - record.balance) / peak_balance
+                                max_drawdown = max(max_drawdown, drawdown)
+                except Exception:
+                    # If account history is not available or fails, default to 0
+                    max_drawdown = 0.0
+                
+                return {
+                    "total_trades": total_trades,
+                    "win_rate": win_rate,
+                    "profit_factor": profit_factor,
+                    "sharpe_ratio": sharpe_ratio,
+                    "expectancy": expectancy,
+                    "avg_trade_duration_hours": avg_trade_duration_hours,
+                    "consecutive_losses": consecutive_losses,
+                    "consecutive_wins": consecutive_wins,
+                    "max_drawdown": max_drawdown,
+                    "gross_profit": gross_profit,
+                    "gross_loss": gross_loss,
+                    "total_pnl": total_pnl
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get performance metrics: {e}")
+            # Return safe defaults
+            return {
+                "total_trades": 0,
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
+                "sharpe_ratio": 0.0,
+                "expectancy": 0.0,
+                "avg_trade_duration_hours": 0.0,
+                "consecutive_losses": 0,
+                "consecutive_wins": 0,
+                "max_drawdown": 0.0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+                "total_pnl": 0.0
+            }
+
+    def log_partial_trade(
+        self,
+        position_id: int,
+        operation_type: str,
+        size: float,
+        price: float,
+        pnl: float | None = None,
+        target_level: int | None = None,
+    ) -> int:
+        """Log a partial exit or scale-in operation for a position."""
+        with self.get_session() as session:
+            try:
+                op_type = (
+                    PartialOperationType.PARTIAL_EXIT
+                    if operation_type == "partial_exit"
+                    else PartialOperationType.SCALE_IN
+                )
+                record = PartialTrade(
+                    position_id=position_id,
+                    operation_type=op_type,
+                    size=Decimal(str(size)),
+                    price=Decimal(str(price)),
+                    pnl=Decimal(str(pnl)) if pnl is not None else None,
+                    target_level=target_level,
+                    timestamp=datetime.utcnow(),
+                )
+                session.add(record)
+                session.commit()
+                return record.id
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Failed to log partial trade for position {position_id}: {e}")
+                raise
+
+    def apply_partial_exit_update(
+        self,
+        position_id: int,
+        executed_fraction_of_original: float,
+        price: float,
+        target_level: int,
+    ) -> None:
+        """Convenience method: append partial trade, decrement current size, increment counters."""
+        with self.get_session() as session:
+            position = session.query(Position).filter_by(id=position_id).first()
+            if not position:
+                logger.error(f"Position {position_id} not found")
+                return
+            # Log partial trade
+            pt = PartialTrade(
+                position_id=position_id,
+                operation_type=PartialOperationType.PARTIAL_EXIT,
+                size=Decimal(str(executed_fraction_of_original)),
+                price=Decimal(str(price)),
+                target_level=target_level,
+                timestamp=datetime.utcnow(),
+            )
+            session.add(pt)
+            # Update position current size and counters
+            cur = float(position.current_size or position.size or 0.0)
+            new_cur = max(0.0, cur - float(executed_fraction_of_original))
+            position.current_size = Decimal(str(new_cur))
+            position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
+            position.last_partial_exit_price = Decimal(str(price))
+            position.last_update = datetime.utcnow()
+            session.commit()
+
+    def apply_scale_in_update(
+        self,
+        position_id: int,
+        added_fraction_of_original: float,
+        price: float,
+        threshold_level: int,
+    ) -> None:
+        """Convenience method: append scale-in trade, increment current size and counters."""
+        with self.get_session() as session:
+            position = session.query(Position).filter_by(id=position_id).first()
+            if not position:
+                logger.error(f"Position {position_id} not found")
+                return
+            # Log scale-in trade
+            pt = PartialTrade(
+                position_id=position_id,
+                operation_type=PartialOperationType.SCALE_IN,
+                size=Decimal(str(added_fraction_of_original)),
+                price=Decimal(str(price)),
+                target_level=threshold_level,
+                timestamp=datetime.utcnow(),
+            )
+            session.add(pt)
+            # Update position current size and counters
+            cur = float(position.current_size or position.size or 0.0)
+            new_cur = min(1.0, cur + float(added_fraction_of_original))
+            position.current_size = Decimal(str(new_cur))
+            position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
+            position.last_scale_in_price = Decimal(str(price))
+            position.last_update = datetime.utcnow()
+            session.commit()

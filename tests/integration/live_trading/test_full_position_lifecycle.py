@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -10,16 +9,9 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def _file_sqlite_url(tmp_path: Path) -> str:
-    db_path = tmp_path / "engine_lifecycle.db"
-    return f"sqlite:///{db_path}"
-
-
 @pytest.mark.mock_only
 def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, mock_data_provider):
     """End-to-end: session → open → MFE/MAE update → trade log → close position.
-
-    Uses file-based sqlite to survive across threads and engine internals.
     """
     from src.live.trading_engine import LiveTradingEngine, PositionSide
 
@@ -35,7 +27,6 @@ def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, 
         enable_live_trading=False,
         initial_balance=1000.0,
         check_interval=0.01,
-        database_url=_file_sqlite_url(tmp_path),
         log_trades=True,
     )
 

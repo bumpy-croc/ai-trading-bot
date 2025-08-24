@@ -291,6 +291,7 @@ Example:
 ## Notes
 - `daily_risk_used` approximates risk as the sum of opened fraction sizes; adjust as needed for your brokerage/exchange semantics.
 - For correlated exposure controls, extend `get_position_correlation_risk` to use actual correlation matrices across symbols/timeframes.
+- Correlation control: The system computes rolling correlations across symbols and enforces portfolio-level exposure caps among highly correlated groups. See below.
 
 ## Time-Based Exit Policies
 
@@ -355,6 +356,44 @@ Pass `time_exit_policy=policy` to both `LiveTradingEngine` and `Backtester`.
 - All time comparisons are UTC-normalized; `zoneinfo` is used for local market time computations when available.
 - DST transitions: end-of-day logic uses local market session close time each day; tests should include DST boundaries.
 - Holiday-aware sessions are planned for future work; current implementation supports weekdays and 24h markets.
+
+## Correlation Control
+
+The correlation layer prevents over-exposure to highly correlated assets.
+
+- Engine: `position_management/correlation_engine.py`
+- Config defaults (in `config/constants.py`):
+  - `DEFAULT_CORRELATION_WINDOW_DAYS = 30`
+  - `DEFAULT_CORRELATION_THRESHOLD = 0.7`
+  - `DEFAULT_MAX_CORRELATED_EXPOSURE = 0.15`
+  - `DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS = 1`
+  - `DEFAULT_CORRELATION_SAMPLE_MIN_SIZE = 20`
+- Risk parameters (in `RiskParameters`):
+  - `correlation_window_days`, `correlation_threshold`, `max_correlated_exposure`, `correlation_update_frequency_hours`
+
+How it works:
+- Live and Backtest engines build a per-symbol price series window for open symbols plus the candidate entry symbol.
+- `CorrelationEngine` computes a returns-based correlation matrix and clusters symbols whose pairwise correlation ≥ threshold.
+- The candidate position fraction is reduced proportionally if projected correlated exposure exceeds `max_correlated_exposure`.
+- Database tables `correlation_matrix` and `portfolio_exposures` can store correlation snapshots and group exposures.
+
+Strategy overrides can set per-trade limits via:
+
+```python
+def get_risk_overrides(self):
+    return {
+        'position_sizer': 'fixed_fraction',
+        'base_fraction': 0.03,
+        'correlation_control': {
+            'max_correlated_exposure': 0.15,
+        }
+    }
+```
+
+Monitoring:
+- REST endpoints expose recent correlation data:
+  - `/api/correlation/matrix`
+  - `/api/correlation/exposures`
 
 ## Performance Considerations
 
@@ -424,35 +463,96 @@ DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 ```
 
-## MFE/MAE Tracking
+## Partial Exits and Scale-Ins
 
-The system tracks Maximum Favorable Excursion (MFE) and Maximum Adverse Excursion (MAE) for active positions and completed trades.
+Professional position management often requires taking profits in stages and adding to winners under controlled risk. This system supports both via a dedicated policy.
 
-- MFE: Largest unrealized profit reached before exit (stored as decimal fraction; e.g., 0.05 = +5%).
-- MAE: Largest unrealized loss reached before exit (decimal fraction; negative values for losses).
+### Configuration
 
-Implementation details:
-- Live engine updates rolling MFE/MAE each loop via `position_management.MFEMAETracker` and persists to `positions`.
-- On close, final MFE/MAE are written to `trades`.
-- Backtester tracks MFE/MAE per active trade and records final metrics in `Backtester.trades` and DB (when enabled).
+Defaults are provided in `src/config/constants.py` and are surfaced via `RiskParameters`:
 
-Database schema additions:
-- `positions`: `mfe`, `mae`, `mfe_price`, `mae_price`, `mfe_time`, `mae_time`.
-- `trades`: `mfe`, `mae`, `mfe_price`, `mae_price`, `mfe_time`, `mae_time`.
+- DEFAULT_PARTIAL_EXIT_TARGETS = [0.03, 0.06, 0.10]
+- DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]
+- DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]
+- DEFAULT_SCALE_IN_SIZES = [0.25, 0.25]
+- DEFAULT_MAX_SCALE_INS = 2
 
-Configuration defaults (in `src/config/constants.py`):
-- `DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS = 60`
-- `DEFAULT_MFE_MAE_PRECISION_DECIMALS = 8`
-- `DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"`
+`RiskParameters` exposes matching fields so strategies can override:
 
-Usage examples:
 ```python
-from src.position_management.mfe_mae_tracker import MFEMAETracker
-tracker = MFEMAETracker()
-tracker.update_position_metrics(position_id, entry_price, current_price, side, fraction, now)
-metrics = tracker.get_position_metrics(position_id)
+params = RiskParameters(
+    partial_exit_targets=[0.03, 0.06, 0.10],
+    partial_exit_sizes=[0.25, 0.25, 0.50],
+    scale_in_thresholds=[0.02, 0.05],
+    scale_in_sizes=[0.25, 0.25],
+    max_scale_ins=2,
+)
 ```
 
-Best practices:
-- Use MFE/MAE ratios (MFE / abs(MAE)) to evaluate exit efficiency.
-- Consider MAE-based protective exits and MFE-based trailing take-profits.
+### Policy
+
+`src/position_management/partial_manager.py` defines:
+- `PartialExitPolicy`: computes when to trigger partial exits and scale-ins
+- `PositionState`: lightweight state for engines/backtests
+
+Key methods:
+- `check_partial_exits(position, current_price) -> list[dict]`
+- `check_scale_in_opportunity(position, current_price, market_data) -> Optional[dict]`
+
+### Database Schema
+
+The `positions` table includes fields to track partial operations:
+- `original_size`, `current_size`
+- `partial_exits_taken`, `scale_ins_taken`
+- `last_partial_exit_price`, `last_scale_in_price`
+
+`partial_trades` table logs each partial operation with type, size, price, pnl, and target/threshold level.
+
+Migration: `0004_partial_operations.py`.
+
+### Live Engine Integration
+
+`LiveTradingEngine` accepts an optional `partial_manager` and otherwise derives from `RiskParameters`. On each loop:
+- Evaluates partial exits first; realizes P&L on the exited fraction and reduces `current_size`
+- Evaluates scale-ins; increases `current_size` and `size` subject to caps and daily risk
+- When `current_size` reaches 0, the position is fully closed
+
+RiskManager updates exposure via:
+- `adjust_position_after_partial_exit(symbol, executed_fraction)`
+- `adjust_position_after_scale_in(symbol, added_fraction)`
+
+### Backtester Integration
+
+`Backtester` mirrors live logic, realizing P&L for partial exits and adjusting size for scale-ins. Results include updated balances and trade records sized by the remaining `current_size` at final close.
+
+### Example Usage
+
+```python
+from src.position_management.partial_manager import PartialExitPolicy
+
+engine = LiveTradingEngine(
+    strategy=strategy,
+    data_provider=provider,
+    partial_manager=PartialExitPolicy(
+        exit_targets=[0.03, 0.06, 0.10],
+        exit_sizes=[0.25, 0.25, 0.50],
+        scale_in_thresholds=[0.02, 0.05],
+        scale_in_sizes=[0.25, 0.25],
+        max_scale_ins=2,
+    ),
+)
+```
+
+### Notes
+
+- Sizes are expressed as fractions of the original entry size.
+- All operations respect `max_position_size` and `max_daily_risk`.
+- Works for both long and short via PnL-sign logic.
+
+## Trailing Stops and Breakeven
+
+Trailing stops automatically tighten risk as price moves in your favor, and can optionally move the stop to breakeven once a profit threshold is reached.
+
+- Activation: Starts trailing once sized PnL crosses `activation_threshold` (decimal, e.g., 0.015 = 1.5%).
+- Distance: Choose percentage (`trailing_distance_pct`) or ATR-based (`trailing_distance_atr_mult`). ATR-based takes precedence when ATR is available.
+- Breakeven: When `breakeven_threshold` is reached, stop moves to entry ± `breakeven_buffer` (above for long, below for short).

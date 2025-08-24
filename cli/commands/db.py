@@ -8,10 +8,18 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+# Ensure project root and src are in sys.path for absolute imports
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+SRC_PATH = PROJECT_ROOT / "src"
+if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
+    sys.path.insert(1, str(SRC_PATH))
+
 
 def _verify(_ns: argparse.Namespace) -> int:
-    from config.config_manager import get_config
-    from database.manager import DatabaseManager
+    from src.config.config_manager import get_config
+    from src.database.manager import DatabaseManager
 
     print("🔍 Verifying PostgreSQL Database Connection")
     print("=" * 50)
@@ -119,8 +127,8 @@ def _backup(ns: argparse.Namespace) -> int:
 
 
 def _setup_railway(ns: argparse.Namespace) -> int:
-    from config.config_manager import get_config
-    from database.manager import DatabaseManager
+    from src.config.config_manager import get_config
+    from src.database.manager import DatabaseManager
 
     if ns.verify:
         # Verify Railway setup

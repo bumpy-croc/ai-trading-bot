@@ -19,13 +19,13 @@ Ideal for:
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import onnxruntime as ort
 import pandas as pd
 
-from src.config import get_config
+from src.config.config_manager import get_config
 from src.config.constants import DEFAULT_USE_PREDICTION_ENGINE
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
@@ -351,14 +351,43 @@ class MlAdaptive(BaseStrategy):
         )
 
     def get_parameters(self) -> dict:
+        """Return strategy parameters for logging"""
         return {
-            "name": self.name,
             "model_path": self.model_path,
             "sequence_length": self.sequence_length,
             "stop_loss_pct": self.stop_loss_pct,
             "take_profit_pct": self.take_profit_pct,
             "use_prediction_engine": self.use_prediction_engine,
-            "engine_model_name": self.model_name,
+            "model_name": self.model_name,
+        }
+
+    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
+        """
+        Provide risk management overrides including partial operations and trailing stop configuration.
+        
+        This strategy uses conservative partial exits and scale-ins:
+        - Take 25% profit at 3% gain, 25% at 6% gain, 50% at 10% gain
+        - Scale in 25% at 2% gain, 25% at 5% gain (max 2 scale-ins)
+        
+        And conservative trailing stops:
+        - Activate at 1.5% profit
+        - 0.5% trailing distance
+        - Breakeven at 2% profit
+        """
+        return {
+            "partial_operations": {
+                "exit_targets": [0.03, 0.06, 0.10],  # 3%, 6%, 10%
+                "exit_sizes": [0.25, 0.25, 0.50],     # 25%, 25%, 50%
+                "scale_in_thresholds": [0.02, 0.05],  # 2%, 5%
+                "scale_in_sizes": [0.25, 0.25],       # 25%, 25%
+                "max_scale_ins": 2,
+            },
+            "trailing_stop": {
+                "activation_threshold": 0.015,  # 1.5%
+                "trailing_distance_pct": 0.005,  # 0.5%
+                "breakeven_threshold": 0.02,  # 2.0%
+                "breakeven_buffer": 0.001,  # 0.1%
+            }
         }
 
     def calculate_stop_loss(self, df, index, price, side) -> float:

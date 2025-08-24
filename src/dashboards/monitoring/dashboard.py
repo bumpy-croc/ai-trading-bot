@@ -73,6 +73,17 @@ class PositionDict(TypedDict):
     stop_loss: float | None
     take_profit: float | None
     order_id: str | None
+    # Partial operations tracking
+    original_size: float | None
+    current_size: float | None
+    partial_exits_taken: int | None
+    scale_ins_taken: int | None
+    last_partial_exit_price: float | None
+    last_scale_in_price: float | None
+    # Trailing stops and MFE/MAE tracking
+    trailing_stop_activated: bool | None
+    trailing_stop_price: float | None
+    breakeven_triggered: bool | None
     mfe: float | None
     mae: float | None
 
@@ -248,6 +259,13 @@ class MonitoringDashboard:
             trades = self._get_recent_trades(limit)
             return jsonify(trades)
 
+        @self.app.route("/api/partial-trades")
+        def get_partial_trades():
+            """Get recent partial trades (partial exits and scale-ins)"""
+            limit = request.args.get("limit", 50, type=int)
+            partial_trades = self._get_partial_trades(limit)
+            return jsonify(partial_trades)
+
         @self.app.route("/api/performance")
         def get_performance_chart():
             """Get performance chart data"""
@@ -337,6 +355,38 @@ class MonitoringDashboard:
             try:
                 rows = self.db_manager.fetch_optimization_cycles(limit=limit, offset=offset)
                 return jsonify({"items": rows, "count": len(rows)})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
+
+        @self.app.route("/api/correlation/matrix")
+        def get_correlation_matrix():
+            """Return recent correlation matrix entries (flattened)."""
+            try:
+                rows = self.db_manager.execute_query(
+                    """
+                    SELECT symbol_pair, correlation_value, p_value, sample_size, last_updated, window_days
+                    FROM correlation_matrix
+                    ORDER BY last_updated DESC
+                    LIMIT 200
+                    """
+                )
+                return jsonify({"items": rows})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
+
+        @self.app.route("/api/correlation/exposures")
+        def get_portfolio_exposures():
+            """Return latest portfolio exposure per correlation group."""
+            try:
+                rows = self.db_manager.execute_query(
+                    """
+                    SELECT correlation_group, total_exposure, position_count, symbols, last_updated
+                    FROM portfolio_exposures
+                    ORDER BY last_updated DESC
+                    LIMIT 100
+                    """
+                )
+                return jsonify({"items": rows})
             except Exception as e:
                 return jsonify({"items": [], "error": str(e)}), 200
 
@@ -1371,6 +1421,21 @@ class MonitoringDashboard:
                                 else None
                             ),
                             "order_id": pos.get("order_id"),
+                            # Partial operations data
+                            "original_size": self._safe_float(pos.get("original_size")),
+                            "current_size": self._safe_float(pos.get("current_size")),
+                            "partial_exits_taken": pos.get("partial_exits_taken"),
+                            "scale_ins_taken": pos.get("scale_ins_taken"),
+                            "last_partial_exit_price": self._safe_float(pos.get("last_partial_exit_price")),
+                            "last_scale_in_price": self._safe_float(pos.get("last_scale_in_price")),
+                            # Trailing stops and MFE/MAE tracking
+                            "trailing_stop_activated": bool(pos.get("trailing_stop_activated", False)),
+                            "trailing_stop_price": (
+                                self._safe_float(pos.get("trailing_stop_price"))
+                                if pos.get("trailing_stop_price") is not None
+                                else None
+                            ),
+                            "breakeven_triggered": bool(pos.get("breakeven_triggered", False)),
                             "mfe": self._safe_float(pos.get("mfe")) if pos.get("mfe") is not None else 0.0,
                             "mae": self._safe_float(pos.get("mae")) if pos.get("mae") is not None else 0.0,
                         }
@@ -1428,6 +1493,49 @@ class MonitoringDashboard:
             return trades
         except Exception as e:
             logger.error(f"Error getting recent trades: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return []
+
+    def _get_partial_trades(self, limit: int = 50) -> list[dict]:
+        """Get recent partial trades (partial exits and scale-ins)"""
+        try:
+            query = """
+            SELECT
+                pt.operation_type, pt.size, pt.price, pt.pnl, pt.target_level, pt.timestamp,
+                p.symbol, p.side, p.entry_price
+            FROM partial_trades pt
+            JOIN positions p ON pt.position_id = p.id
+            ORDER BY pt.timestamp DESC
+            LIMIT %s
+            """
+            result = self.db_manager.execute_query(query, (limit,))
+            logger.info(f"Partial trades query returned {len(result)} rows")
+
+            partial_trades: list[dict] = []
+            for row in result or []:
+                try:
+                    trade = {
+                        "operation_type": str(row.get("operation_type", "")),
+                        "symbol": str(row.get("symbol", "")),
+                        "side": str(row.get("side", "")),
+                        "entry_price": float(row.get("entry_price", 0)),
+                        "operation_price": float(row.get("price", 0)),
+                        "size": float(row.get("size", 0)),
+                        "pnl": float(row.get("pnl", 0)) if row.get("pnl") is not None else None,
+                        "target_level": row.get("target_level"),
+                        "timestamp": row.get("timestamp"),
+                    }
+                    partial_trades.append(trade)
+                except Exception as e:
+                    logger.error(f"Error converting partial trade row: {e}")
+                    logger.error(f"Row data: {row}")
+
+            logger.info(f"Successfully converted {len(partial_trades)} partial trades")
+            return partial_trades
+        except Exception as e:
+            logger.error(f"Error getting partial trades: {e}")
             import traceback
 
             traceback.print_exc()
