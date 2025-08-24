@@ -102,6 +102,8 @@ class Backtester:
         dynamic_risk_config: Optional[DynamicRiskConfig] = None,
         # Trailing stops
         trailing_stop_policy: Optional[TrailingStopPolicy] = None,
+        # Partial operations
+        partial_manager: Optional[Any] = None,
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -114,6 +116,7 @@ class Backtester:
         self.current_trade: Optional[ActiveTrade] = None
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
         self.trailing_stop_policy = trailing_stop_policy
+        self.partial_manager = partial_manager
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk

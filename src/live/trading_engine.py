@@ -86,6 +86,10 @@ class Position:
     current_size: float | None = None
     partial_exits_taken: int = 0
     scale_ins_taken: int = 0
+    # Trailing stop state
+    trailing_stop_activated: bool = False
+    trailing_stop_price: float | None = None
+    breakeven_triggered: bool = False
 
 
 @dataclass
