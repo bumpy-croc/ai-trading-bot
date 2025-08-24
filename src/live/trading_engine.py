@@ -15,6 +15,7 @@ from typing import Any
 import pandas as pd
 from position_management.partial_manager import PartialExitPolicy, PositionState
 
+from src.config import get_config
 from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
@@ -299,8 +300,6 @@ class LiveTradingEngine:
         self.account_synchronizer = None
         if enable_live_trading:
             try:
-                from src.config import get_config
-
                 config = get_config()
                 self.exchange_interface, provider_name = _create_exchange_provider(provider, config)
                 if self.exchange_interface:
@@ -729,7 +728,11 @@ class LiveTradingEngine:
         """Main trading loop"""
         logger.info("Trading loop started")
         steps = 0
-        heartbeat_every = int(os.getenv("ENGINE_HEARTBEAT_STEPS", "60")) if os.getenv("ENGINE_HEARTBEAT_STEPS") else 60
+        cfg = get_config()
+        try:
+            heartbeat_every = int(cfg.get("ENGINE_HEARTBEAT_STEPS", "60"))
+        except Exception:
+            heartbeat_every = 60
         while self.is_running and not self.stop_event.is_set():
             if max_steps is not None and steps >= max_steps:
                 logger.info(f"Reached max_steps={max_steps}, stopping engine for test.")

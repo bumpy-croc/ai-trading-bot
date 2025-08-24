@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 import logging.config
-import os
 import re
 import time
 from typing import Any
 
+from src.config import get_config
 from src.utils.logging_context import get_context
 
 
@@ -113,7 +113,7 @@ class ContextInjectorFilter(logging.Filter):
 class SamplingFilter(logging.Filter):
     """Probabilistically sample DEBUG/INFO logs to reduce noise.
 
-    Controlled via env:
+    Controlled via config:
     - LOG_SAMPLING_RATE_DEBUG (default 1.0)
     - LOG_SAMPLING_RATE_INFO (default 1.0)
     """
@@ -121,8 +121,9 @@ class SamplingFilter(logging.Filter):
     def __init__(self) -> None:
         super().__init__()
         try:
-            self.rate_debug = float(os.getenv("LOG_SAMPLING_RATE_DEBUG", "1.0"))
-            self.rate_info = float(os.getenv("LOG_SAMPLING_RATE_INFO", "1.0"))
+            cfg = get_config()
+            self.rate_debug = float(cfg.get("LOG_SAMPLING_RATE_DEBUG", "1.0"))
+            self.rate_info = float(cfg.get("LOG_SAMPLING_RATE_INFO", "1.0"))
         except Exception:
             self.rate_debug = 1.0
             self.rate_info = 1.0
@@ -145,13 +146,14 @@ class SamplingFilter(logging.Filter):
 class MaxMessageLengthFilter(logging.Filter):
     """Truncates overly long messages to a max length with an indicator.
 
-    Controlled via env LOG_MAX_MESSAGE_LEN (default 5000 characters).
+    Controlled via config LOG_MAX_MESSAGE_LEN (default 5000 characters).
     """
 
     def __init__(self) -> None:
         super().__init__()
         try:
-            self.max_len = int(os.getenv("LOG_MAX_MESSAGE_LEN", "5000"))
+            cfg = get_config()
+            self.max_len = int(cfg.get("LOG_MAX_MESSAGE_LEN", "5000"))
         except Exception:
             self.max_len = 5000
 
@@ -165,7 +167,8 @@ class MaxMessageLengthFilter(logging.Filter):
 
 
 def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
-    level = (level_name or os.getenv("LOG_LEVEL") or "INFO").upper()
+    cfg = get_config()
+    level = (level_name or cfg.get("LOG_LEVEL", "INFO")).upper()
     if json:
         formatter = {
             "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
@@ -198,28 +201,32 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
             }
         },
         "loggers": {
-            # Reduce noise from chatty libraries while allowing overrides via env
-            "sqlalchemy.engine": {"level": os.getenv("LOG_SQLALCHEMY_LEVEL", "WARNING"), "propagate": True},
-            "urllib3": {"level": os.getenv("LOG_URLLIB3_LEVEL", "WARNING"), "propagate": True},
-            "binance": {"level": os.getenv("LOG_BINANCE_LEVEL", "WARNING"), "propagate": True},
-            "ccxt": {"level": os.getenv("LOG_CCXT_LEVEL", "WARNING"), "propagate": True},
+            # Reduce noise from chatty libraries while allowing overrides via config
+            "sqlalchemy.engine": {"level": cfg.get("LOG_SQLALCHEMY_LEVEL", "WARNING"), "propagate": True},
+            "urllib3": {"level": cfg.get("LOG_URLLIB3_LEVEL", "WARNING"), "propagate": True},
+            "binance": {"level": cfg.get("LOG_BINANCE_LEVEL", "WARNING"), "propagate": True},
+            "ccxt": {"level": cfg.get("LOG_CCXT_LEVEL", "WARNING"), "propagate": True},
         },
         "root": {"handlers": ["console"], "level": level},
     }
 
 
 def configure_logging(level_name: str | None = None, use_json: bool | None = None) -> None:
+    cfg = get_config()
     # Determine JSON default: if not explicitly provided, prefer JSON in production-like envs
     if use_json is None:
-        # Explicit env override takes precedence if set
-        if "LOG_JSON" in os.environ:
-            use_json = bool(int(os.getenv("LOG_JSON", "0")))
+        # Explicit config override takes precedence if set
+        if cfg.get("LOG_JSON") is not None:
+            try:
+                use_json = bool(int(cfg.get("LOG_JSON", "0")))
+            except Exception:
+                use_json = False
         else:
             # Heuristics: Railway or ENV/APP_ENV=production -> JSON by default
             is_railway = any(
-                os.getenv(k) for k in ("RAILWAY_DEPLOYMENT_ID", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
+                cfg.get(k) is not None for k in ("RAILWAY_DEPLOYMENT_ID", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
             )
-            env_name = (os.getenv("ENV") or os.getenv("APP_ENV") or os.getenv("RAILWAY_ENVIRONMENT_NAME") or "").lower()
+            env_name = (cfg.get("ENV") or cfg.get("APP_ENV") or cfg.get("RAILWAY_ENVIRONMENT_NAME") or "").lower()
             is_production = env_name == "production"
             use_json = is_railway or is_production
     config = build_logging_config(level_name, json=use_json)
