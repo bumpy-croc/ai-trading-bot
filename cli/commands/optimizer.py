@@ -17,12 +17,11 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
+        from src.database.manager import DatabaseManager
         from src.optimizer.analyzer import PerformanceAnalyzer
         from src.optimizer.runner import ExperimentRunner
         from src.optimizer.schemas import ExperimentConfig, ParameterSet
         from src.optimizer.validator import StatisticalValidator, ValidationConfig
-
-        from src.database.manager import DatabaseManager
 
         end = datetime.now()
         start = end - timedelta(days=ns.days)

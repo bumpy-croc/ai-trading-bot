@@ -163,6 +163,13 @@ class Position(Base):
     entry_price = Column(Numeric(18, 8), nullable=False)
     size = Column(Numeric(18, 8), nullable=False)
     quantity = Column(Numeric(18, 8))
+    # Partial operations tracking
+    original_size = Column(Numeric(18, 8))  # initial position size fraction
+    current_size = Column(Numeric(18, 8))   # remaining size fraction
+    partial_exits_taken = Column(Integer, default=0)
+    scale_ins_taken = Column(Integer, default=0)
+    last_partial_exit_price = Column(Numeric(18, 8))
+    last_scale_in_price = Column(Numeric(18, 8))
 
     # Risk management
     stop_loss = Column(Numeric(18, 8))
@@ -199,6 +206,7 @@ class Position(Base):
 
     # Relationships
     trades = relationship("Trade", backref="position")
+    partial_trades = relationship("PartialTrade", backref="position")
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
 
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -210,6 +218,28 @@ class Position(Base):
     end_of_day_exit = Column(Boolean, default=False)
     weekend_exit = Column(Boolean, default=False)
     time_restriction_group = Column(String(50))
+
+
+class PartialOperationType(enum.Enum):
+    PARTIAL_EXIT = "partial_exit"
+    SCALE_IN = "scale_in"
+
+
+class PartialTrade(Base):
+    __tablename__ = "partial_trades"
+
+    id = Column(Integer, primary_key=True)
+    position_id = Column(Integer, ForeignKey("positions.id"), index=True, nullable=False)
+    operation_type = Column(Enum(PartialOperationType), nullable=False)
+    size = Column(Numeric(18, 8), nullable=False)  # Fraction of original size executed
+    price = Column(Numeric(18, 8), nullable=False)
+    pnl = Column(Numeric(18, 8))  # Realized PnL in currency units
+    target_level = Column(Integer)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("idx_partial_trade_position", "position_id", "timestamp"),
+    )
 
 
 class MarketSession(Base):

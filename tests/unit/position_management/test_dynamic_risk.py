@@ -140,7 +140,7 @@ class TestDynamicRiskManager:
     def test_large_drawdown(self):
         """Test behavior with large drawdown"""
         # Mock database to return minimal performance data
-        self.db_manager.get_performance_metrics.return_value = {
+        self.db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 5,  # Below minimum for reliable adjustment
             "win_rate": 0.4,
             "profit_factor": 0.8
@@ -162,7 +162,7 @@ class TestDynamicRiskManager:
     def test_poor_performance_adjustment(self):
         """Test adjustment based on poor performance"""
         # Mock database to return poor performance data
-        self.db_manager.get_performance_metrics.return_value = {
+        self.db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 20,  # Sufficient data
             "win_rate": 0.2,     # Poor win rate
             "profit_factor": 0.5  # Poor profit factor
@@ -181,7 +181,7 @@ class TestDynamicRiskManager:
     def test_good_performance_adjustment(self):
         """Test adjustment based on good performance"""
         # Mock database to return good performance data
-        self.db_manager.get_performance_metrics.return_value = {
+        self.db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 20,  # Sufficient data
             "win_rate": 0.8,     # Good win rate
             "profit_factor": 2.5  # Good profit factor
@@ -240,7 +240,7 @@ class TestDynamicRiskManager:
     def test_insufficient_data_handling(self):
         """Test behavior with insufficient performance data"""
         # Mock database to return insufficient data
-        self.db_manager.get_performance_metrics.return_value = {
+        self.db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 5,  # Below minimum threshold
             "win_rate": 0.6,
             "profit_factor": 1.5
@@ -261,7 +261,7 @@ class TestDynamicRiskManager:
     def test_database_error_handling(self):
         """Test handling of database errors"""
         # Mock database to raise an exception
-        self.db_manager.get_performance_metrics.side_effect = Exception("Database error")
+        self.db_manager.get_dynamic_risk_performance_metrics.side_effect = Exception("Database error")
         
         # Should not crash and should handle gracefully
         adjustments = self.manager.calculate_dynamic_risk_adjustments(

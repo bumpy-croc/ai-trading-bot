@@ -92,6 +92,13 @@ DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01   # 1% daily volatility
 DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)  # (high_vol, low_vol)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 
+# Partial operations defaults (partial exits and scale-ins)
+DEFAULT_PARTIAL_EXIT_TARGETS = [0.03, 0.06, 0.10]  # 3%, 6%, 10%
+DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]   # 25%, 25%, 50% of original size
+DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]        # 2%, 5%
+DEFAULT_SCALE_IN_SIZES = [0.25, 0.25]             # 25%, 25% of original size
+DEFAULT_MAX_SCALE_INS = 2
+
 # Trailing Stop Defaults
 DEFAULT_TRAILING_ACTIVATION_THRESHOLD = 0.015  # 1.5%
 DEFAULT_TRAILING_DISTANCE_PCT = 0.005  # 0.5%

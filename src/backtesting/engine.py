@@ -10,6 +10,11 @@ from typing import Any, Optional
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
+from performance.metrics import cash_pnl
+from position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from position_management.partial_manager import PositionState
+from position_management.time_exits import TimeExitPolicy
+from regime.detector import RegimeDetector
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.backtesting.models import Trade as CompletedTrade
@@ -31,13 +36,9 @@ from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
-from src.performance.metrics import cash_pnl
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
-from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
-from src.position_management.time_exits import TimeExitPolicy
 from src.position_management.trailing_stops import TrailingStopPolicy
-from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import BaseStrategy
 
@@ -67,6 +68,11 @@ class ActiveTrade:
         self.exit_price: Optional[float] = None
         self.exit_time: Optional[datetime] = None
         self.exit_reason: Optional[str] = None
+        # Partial operations runtime state
+        self.original_size: float = self.size
+        self.current_size: float = self.size
+        self.partial_exits_taken: int = 0
+        self.scale_ins_taken: int = 0
         # Trailing state
         self.trailing_stop_activated: bool = False
         self.breakeven_triggered: bool = False
@@ -96,6 +102,8 @@ class Backtester:
         dynamic_risk_config: Optional[DynamicRiskConfig] = None,
         # Trailing stops
         trailing_stop_policy: Optional[TrailingStopPolicy] = None,
+        # Partial operations
+        partial_manager: Optional[Any] = None,
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -108,6 +116,7 @@ class Backtester:
         self.current_trade: Optional[ActiveTrade] = None
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
         self.trailing_stop_policy = trailing_stop_policy
+        self.partial_manager = partial_manager
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -458,6 +467,73 @@ class Backtester:
                         df, i, self.current_trade.entry_price
                     )
 
+                    # Evaluate partial exits and scale-ins before full exit
+                    try:
+                        if self.partial_manager is None:
+                            raise RuntimeError("partial_ops_disabled")
+                        state = PositionState(
+                            entry_price=self.current_trade.entry_price,
+                            side=self.current_trade.side,
+                            original_size=self.current_trade.original_size,
+                            current_size=self.current_trade.current_size,
+                            partial_exits_taken=self.current_trade.partial_exits_taken,
+                            scale_ins_taken=self.current_trade.scale_ins_taken,
+                        )
+                        # Partial exits cascade
+                        actions = self.partial_manager.check_partial_exits(state, current_price)
+                        for act in actions:
+                            # Translate to fraction-of-balance using original size
+                            exec_of_original = float(act["size"])  # fraction of ORIGINAL
+                            delta = exec_of_original * state.original_size
+                            exec_frac = min(delta, state.current_size)
+                            if exec_frac <= 0:
+                                continue
+                            # Realize PnL for the exited fraction
+                            move = (
+                                (current_price - self.current_trade.entry_price)
+                                / self.current_trade.entry_price
+                                if self.current_trade.side == "long"
+                                else (self.current_trade.entry_price - current_price)
+                                / self.current_trade.entry_price
+                            )
+                            pnl_pct = move * exec_frac
+                            pnl_cash = cash_pnl(pnl_pct, self.balance)
+                            self.balance += pnl_cash
+                            # Update state
+                            state.current_size = max(0.0, state.current_size - exec_frac)
+                            state.partial_exits_taken += 1
+                            self.current_trade.current_size = state.current_size
+                            self.current_trade.partial_exits_taken = state.partial_exits_taken
+                            # Risk manager update
+                            try:
+                                self.risk_manager.adjust_position_after_partial_exit(symbol, exec_frac)
+                            except Exception:
+                                pass
+                            # Optional DB logging of partial operations could be added later for backtests
+
+                        # Scale-in opportunity
+                        scale = self.partial_manager.check_scale_in_opportunity(state, current_price, self._extract_indicators(df, i))
+                        if scale is not None:
+                            add_of_original = float(scale["size"])  # fraction of ORIGINAL
+                            if add_of_original > 0:
+                                # Enforce caps
+                                delta_add = add_of_original * state.original_size
+                                remaining_daily = max(0.0, self.risk_manager.params.max_daily_risk - self.risk_manager.daily_risk_used)
+                                add_effective = min(delta_add, remaining_daily)
+                                if add_effective > 0:
+                                    state.current_size = min(1.0, state.current_size + add_effective)
+                                    self.current_trade.current_size = state.current_size
+                                    self.current_trade.size = min(1.0, self.current_trade.size + add_effective)
+                                    state.scale_ins_taken += 1
+                                    self.current_trade.scale_ins_taken = state.scale_ins_taken
+                                    try:
+                                        self.risk_manager.adjust_position_after_scale_in(symbol, add_effective)
+                                    except Exception:
+                                        pass
+                    except Exception as e:
+                        if str(e) != "partial_ops_disabled":
+                            logger.debug(f"Partial ops evaluation skipped/failed: {e}")
+
                     # Update MFE/MAE tracker for the active trade
                     try:
                         self.mfe_mae_tracker.update_position_metrics(
@@ -557,16 +633,17 @@ class Backtester:
                         exit_time = current_time
 
                         # Calculate PnL percent (sized) and then convert to cash
+                        fraction = float(getattr(self.current_trade, "current_size", self.current_trade.size))
                         if self.current_trade.side == "long":
                             trade_pnl_pct = (
                                 (exit_price - self.current_trade.entry_price)
                                 / self.current_trade.entry_price
-                            ) * self.current_trade.size
+                            ) * fraction
                         else:
                             trade_pnl_pct = (
                                 (self.current_trade.entry_price - exit_price)
                                 / self.current_trade.entry_price
-                            ) * self.current_trade.size
+                            ) * fraction
                         trade_pnl_cash = cash_pnl(trade_pnl_pct, self.balance)
 
                         # Snapshot MFE/MAE
@@ -600,7 +677,7 @@ class Backtester:
                                 side=self.current_trade.side,
                                 entry_price=self.current_trade.entry_price,
                                 exit_price=exit_price,
-                                size=self.current_trade.size,
+                                size=fraction,
                                 entry_time=self.current_trade.entry_time,
                                 exit_time=exit_time,
                                 pnl=trade_pnl_cash,
@@ -627,7 +704,7 @@ class Backtester:
                                 exit_price=exit_price,
                                 entry_time=self.current_trade.entry_time,
                                 exit_time=exit_time,
-                                size=self.current_trade.size,
+                                size=fraction,
                                 pnl=trade_pnl_cash,
                                 exit_reason=exit_reason,
                                 stop_loss=self.current_trade.stop_loss,

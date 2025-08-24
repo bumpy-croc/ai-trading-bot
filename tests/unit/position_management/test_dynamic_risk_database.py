@@ -32,7 +32,7 @@ class TestDynamicRiskDatabase:
     def test_database_logging_significant_adjustment(self, dynamic_risk_manager, mock_db_manager):
         """Test that significant risk adjustments are logged to database"""
         # Setup mock to return performance data that triggers adjustment
-        mock_db_manager.get_performance_metrics.return_value = {
+        mock_db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 20,
             "win_rate": 0.3,  # Poor performance
             "profit_factor": 0.8,
@@ -57,7 +57,7 @@ class TestDynamicRiskDatabase:
     def test_performance_metrics_caching(self, dynamic_risk_manager, mock_db_manager):
         """Test that performance metrics are cached for performance"""
         # Setup mock
-        mock_db_manager.get_performance_metrics.return_value = {
+        mock_db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 15,
             "win_rate": 0.6,
             "profit_factor": 1.2
@@ -78,7 +78,7 @@ class TestDynamicRiskDatabase:
         )
 
         # Database should only be called once
-        assert mock_db_manager.get_performance_metrics.call_count == 1
+        assert mock_db_manager.get_dynamic_risk_performance_metrics.call_count == 1
         
         # Results should be the same
         assert adjustments1.position_size_factor == adjustments2.position_size_factor
@@ -86,7 +86,7 @@ class TestDynamicRiskDatabase:
     def test_database_error_handling(self, mock_db_manager):
         """Test graceful handling of database errors"""
         # Setup database to raise an error
-        mock_db_manager.get_performance_metrics.side_effect = Exception("Database connection failed")
+        mock_db_manager.get_dynamic_risk_performance_metrics.side_effect = Exception("Database connection failed")
         
         config = DynamicRiskConfig()
         manager = DynamicRiskManager(config, db_manager=mock_db_manager)
@@ -105,7 +105,7 @@ class TestDynamicRiskDatabase:
     def test_recovery_threshold_logic(self, dynamic_risk_manager, mock_db_manager):
         """Test recovery threshold de-throttling functionality"""
         # Setup normal performance metrics
-        mock_db_manager.get_performance_metrics.return_value = {
+        mock_db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 25,
             "win_rate": 0.55,
             "profit_factor": 1.1,
@@ -144,8 +144,8 @@ class TestDynamicRiskDatabase:
         
         mock_session.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = mock_records
         
-        # Setup get_performance_metrics to return basic data
-        mock_db_manager.get_performance_metrics.return_value = {
+        # Setup get_dynamic_risk_performance_metrics to return basic data
+        mock_db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 20,
             "win_rate": 0.5,
             "profit_factor": 1.0
@@ -164,7 +164,7 @@ class TestDynamicRiskDatabase:
     def test_minimum_trades_requirement(self, dynamic_risk_manager, mock_db_manager):
         """Test that performance adjustments require minimum trade count"""
         # Setup insufficient trade count
-        mock_db_manager.get_performance_metrics.return_value = {
+        mock_db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 5,  # Below minimum of 10
             "win_rate": 0.2,   # Poor performance
             "profit_factor": 0.5,
@@ -269,7 +269,7 @@ class TestDatabaseManagerMethods:
         mock_session.query.return_value = mock_query
 
         # Test calculation
-        metrics = db_manager.get_performance_metrics(
+        metrics = db_manager.get_dynamic_risk_performance_metrics(
             session_id=123,
             start_date=datetime.utcnow() - timedelta(days=30)
         )
@@ -296,7 +296,7 @@ class TestDatabaseManagerMethods:
         mock_session.query.return_value = mock_query
 
         # Test calculation with no data
-        metrics = db_manager.get_performance_metrics(session_id=123)
+        metrics = db_manager.get_dynamic_risk_performance_metrics(session_id=123)
 
         # Should return safe defaults
         assert metrics["total_trades"] == 0
