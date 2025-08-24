@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any
 
 import pandas as pd
+from position_management.partial_manager import PartialExitPolicy, PositionState
 
 from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
@@ -32,7 +33,6 @@ from src.config.constants import (
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
-from position_management.partial_manager import PartialExitPolicy, PositionState
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
@@ -158,6 +158,7 @@ class LiveTradingEngine:
         enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
         dynamic_risk_config: DynamicRiskConfig | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
+        trailing_stop_policy: TrailingStopPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = False,
     ):

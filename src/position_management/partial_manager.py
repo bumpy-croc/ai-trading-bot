@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -19,8 +17,8 @@ class PositionState:
     current_size: float   # fraction of balance remaining
     partial_exits_taken: int = 0
     scale_ins_taken: int = 0
-    last_partial_exit_price: Optional[float] = None
-    last_scale_in_price: Optional[float] = None
+    last_partial_exit_price: float | None = None
+    last_scale_in_price: float | None = None
 
 
 @dataclass
@@ -31,10 +29,10 @@ class PartialExitPolicy:
     Sizes are expressed as fractions of the original position size.
     """
 
-    exit_targets: List[float]
-    exit_sizes: List[float]
-    scale_in_thresholds: List[float] = field(default_factory=list)
-    scale_in_sizes: List[float] = field(default_factory=list)
+    exit_targets: list[float]
+    exit_sizes: list[float]
+    scale_in_thresholds: list[float] = field(default_factory=list)
+    scale_in_sizes: list[float] = field(default_factory=list)
     max_scale_ins: int = 0
 
     def __post_init__(self):
@@ -89,8 +87,8 @@ class PartialExitPolicy:
         return actions
 
     def check_scale_in_opportunity(
-        self, position: PositionState, current_price: float, market_data: Optional[dict] = None
-    ) -> Optional[dict]:
+        self, position: PositionState, current_price: float, market_data: dict | None = None
+    ) -> dict | None:
         """Return a scale-in action dict or None.
 
         Action dict: {'type': 'scale_in', 'size': float, 'threshold_level': int}

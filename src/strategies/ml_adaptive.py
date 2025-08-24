@@ -19,7 +19,7 @@ Ideal for:
 """
 
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any, Optional
 
 import numpy as np
 import onnxruntime as ort

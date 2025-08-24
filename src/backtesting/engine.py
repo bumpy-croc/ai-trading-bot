@@ -25,19 +25,6 @@ from src.backtesting.utils import (
 from src.backtesting.utils import (
     extract_sentiment_data as util_extract_sentiment,
 )
-from config.config_manager import get_config
-from config.constants import DEFAULT_INITIAL_BALANCE
-from data_providers.data_provider import DataProvider
-from data_providers.sentiment_provider import SentimentDataProvider
-from database.manager import DatabaseManager
-from database.models import TradeSource
-from performance.metrics import cash_pnl
-from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
-from regime.detector import RegimeDetector
-from risk.risk_manager import RiskManager
-from strategies.base import BaseStrategy
-from position_management.time_exits import TimeExitPolicy
-from position_management.partial_manager import PartialExitPolicy, PositionState
 from src.config.config_manager import get_config
 from src.config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_MFE_MAE_PRECISION_DECIMALS
 from src.data_providers.data_provider import DataProvider
@@ -48,6 +35,7 @@ from src.performance.metrics import cash_pnl
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.position_management.partial_manager import PositionState
 from src.position_management.time_exits import TimeExitPolicy
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
