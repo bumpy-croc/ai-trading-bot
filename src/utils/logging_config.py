@@ -6,6 +6,8 @@ import os
 import re
 from typing import Any
 
+from src.utils.logging_context import get_context
+
 
 class SensitiveDataFilter(logging.Filter):
     """
@@ -65,18 +67,13 @@ class SensitiveDataFilter(logging.Filter):
             if isinstance(record.args, dict):
                 record.args = self._redact_mapping(record.args)
             elif isinstance(record.args, (list, tuple)):
-                needs_redaction = False
                 sanitized = []
                 for a in record.args:  # type: ignore[assignment]
                     if isinstance(a, str):
-                        redacted_a = self._redact_text(a)
-                        if redacted_a != a:
-                            needs_redaction = True
-                        sanitized.append(redacted_a)
+                        sanitized.append(self._redact_text(a))
                     else:
                         sanitized.append(a)
-                if needs_redaction:
-                    record.args = tuple(sanitized)
+                record.args = tuple(sanitized)
         except Exception:
             # Never fail logging because of filter errors
             return True
@@ -97,11 +94,27 @@ class NamespacePrefixFilter(logging.Filter):
         return True
 
 
+class ContextInjectorFilter(logging.Filter):
+    """Injects structured context fields from contextvars into LogRecord."""
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        try:
+            ctx = get_context()
+            for key, value in ctx.items():
+                # Attach as record attributes so formatters (including json) include these via %(key)s if configured
+                if not hasattr(record, key):
+                    setattr(record, key, value)
+        except Exception:
+            return True
+        return True
+
+
 def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
     level = (level_name or os.getenv("LOG_LEVEL") or "INFO").upper()
     if json:
         formatter = {
             "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+            # Include standard fields; context fields will be injected by ContextInjectorFilter
             "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
         }
     else:
@@ -114,6 +127,7 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
         "filters": {
             "redact": {"()": "src.utils.logging_config.SensitiveDataFilter"},
             "ns": {"()": "src.utils.logging_config.NamespacePrefixFilter"},
+            "ctx": {"()": "src.utils.logging_config.ContextInjectorFilter"},
         },
         "formatters": {
             "default": formatter,
@@ -123,7 +137,7 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
                 "class": "logging.StreamHandler",
                 "formatter": "default",
                 "level": level,
-                "filters": ["redact", "ns"],
+                "filters": ["redact", "ns", "ctx"],
             }
         },
         "loggers": {

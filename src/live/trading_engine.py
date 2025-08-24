@@ -45,6 +45,8 @@ from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.base import BaseStrategy
+from src.utils.logging_context import set_context, update_context
+from src.utils.logging_events import log_engine_event
 
 from .account_sync import AccountSynchronizer
 
@@ -466,6 +468,20 @@ class LiveTradingEngine:
             return
 
         self.is_running = True
+        # Set base logging context for this engine run
+        set_context(
+            component="live_engine",
+            strategy=getattr(self.strategy, "__class__", type("_", (), {})).__name__,
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+        log_engine_event(
+            "engine_start",
+            initial_balance=self.current_balance,
+            max_position_size=self.max_position_size,
+            check_interval=self.check_interval,
+            mode="live" if self.enable_live_trading else "paper",
+        )
         logger.info(f"🚀 Starting live trading for {symbol} on {timeframe} timeframe")
         logger.info(f"Initial balance: ${self.current_balance:,.2f}")
         logger.info(f"Max position size: {self.max_position_size * 100:.1f}% of balance")
@@ -514,6 +530,9 @@ class LiveTradingEngine:
                 time_exit_config=tx_cfg,
                 market_timezone=(self.time_exit_policy.market_timezone if self.time_exit_policy else None),
             )
+
+            # Update context with session id
+            update_context(session_id=self.trading_session_id)
 
             # Initialize balance tracking
             self.db_manager.update_balance(
