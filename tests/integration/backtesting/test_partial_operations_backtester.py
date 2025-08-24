@@ -16,7 +16,7 @@ class SimpleMockProvider(MockDataProvider):
         self._prices = prices
 
     def get_historical_data(self, symbol, timeframe, start=None, end=None):
-        idx = pd.date_range(start=datetime.utcnow() - timedelta(minutes=len(self._prices)), periods=len(self._prices), freq="T")
+        idx = pd.date_range(start=datetime.utcnow() - timedelta(minutes=len(self._prices)), periods=len(self._prices), freq="min")
         df = pd.DataFrame({
             "open": self._prices,
             "high": self._prices,

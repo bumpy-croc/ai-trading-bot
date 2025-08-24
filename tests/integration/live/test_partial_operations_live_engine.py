@@ -20,7 +20,7 @@ class SimpleMockProvider(MockDataProvider):
 
     def get_historical_data(self, symbol, timeframe, start=None, end=None):
         # Build minimal OHLCV DataFrame
-        idx = pd.date_range(start=datetime.utcnow() - timedelta(minutes=len(self.prices)), periods=len(self.prices), freq="T")
+        idx = pd.date_range(start=datetime.utcnow() - timedelta(minutes=len(self.prices)), periods=len(self.prices), freq="min")
         df = pd.DataFrame({
             "open": self.prices,
             "high": self.prices,
