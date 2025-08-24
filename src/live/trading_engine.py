@@ -46,7 +46,12 @@ from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.base import BaseStrategy
 from src.utils.logging_context import set_context, update_context
-from src.utils.logging_events import log_engine_event
+from src.utils.logging_events import (
+    log_data_event,
+    log_engine_event,
+    log_order_event,
+    log_risk_event,
+)
 
 from .account_sync import AccountSynchronizer
 
@@ -411,6 +416,11 @@ class LiveTradingEngine:
                     f"size factor={adjustments.position_size_factor:.2f}, "
                     f"reason={adjustments.primary_reason}"
                 )
+                log_risk_event(
+                    "dynamic_risk_adjustment",
+                    position_size_factor=adjustments.position_size_factor,
+                    reason=adjustments.primary_reason,
+                )
                 
                 # Log to database for tracking
                 if self.db_manager and self.trading_session_id:
@@ -659,6 +669,7 @@ class LiveTradingEngine:
         """Main trading loop"""
         logger.info("Trading loop started")
         steps = 0
+        heartbeat_every = int(os.getenv("ENGINE_HEARTBEAT_STEPS", "60")) if os.getenv("ENGINE_HEARTBEAT_STEPS") else 60
         while self.is_running and not self.stop_event.is_set():
             if max_steps is not None and steps >= max_steps:
                 logger.info(f"Reached max_steps={max_steps}, stopping engine for test.")
@@ -675,6 +686,7 @@ class LiveTradingEngine:
                 # Fetch latest market data
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
+                    log_data_event("no_data", reason="empty_frame")
                     logger.warning("No market data received")
                     self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)
@@ -711,6 +723,14 @@ class LiveTradingEngine:
                 current_index = len(df) - 1
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
+                if steps % heartbeat_every == 0:
+                    log_engine_event(
+                        "heartbeat",
+                        step=steps,
+                        open_positions=len(self.positions),
+                        balance=self.current_balance,
+                        last_candle_time=str(df.index[-1]),
+                    )
                 logger.info(
                     f"Trading loop: current_index={current_index}, last_candle_time={df.index[-1]}"
                 )
@@ -1207,6 +1227,14 @@ class LiveTradingEngine:
             logger.info(
                 f"🚀 Opened {side.value} position: {symbol} @ ${price:.2f} (Size: ${position_value:.2f})"
             )
+            log_order_event(
+                "open_position",
+                order_id=order_id,
+                symbol=symbol,
+                side=side.value,
+                entry_price=price,
+                size=size,
+            )
 
             # Send alert if configured
             self._send_alert(f"Position Opened: {symbol} {side.value} @ ${price:.2f}")
@@ -1374,6 +1402,15 @@ class LiveTradingEngine:
                 f"📈 Closed {position.side.value} position for {position.symbol}: "
                 f"P&L={pnl:.2%}, Reason={reason}, "
                 f"Balance=${self.current_balance:,.2f}"
+            )
+            log_order_event(
+                "close_position",
+                order_id=position.order_id,
+                symbol=position.symbol,
+                side=position.side.value,
+                exit_price=current_price,
+                pnl=pnl,
+                reason=reason,
             )
 
         except Exception as e:

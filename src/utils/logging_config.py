@@ -4,6 +4,7 @@ import logging
 import logging.config
 import os
 import re
+import time
 from typing import Any
 
 from src.utils.logging_context import get_context
@@ -109,6 +110,60 @@ class ContextInjectorFilter(logging.Filter):
         return True
 
 
+class SamplingFilter(logging.Filter):
+    """Probabilistically sample DEBUG/INFO logs to reduce noise.
+
+    Controlled via env:
+    - LOG_SAMPLING_RATE_DEBUG (default 1.0)
+    - LOG_SAMPLING_RATE_INFO (default 1.0)
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        try:
+            self.rate_debug = float(os.getenv("LOG_SAMPLING_RATE_DEBUG", "1.0"))
+            self.rate_info = float(os.getenv("LOG_SAMPLING_RATE_INFO", "1.0"))
+        except Exception:
+            self.rate_debug = 1.0
+            self.rate_info = 1.0
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        try:
+            if record.levelno <= logging.DEBUG:
+                return (hash((record.name, record.lineno, int(time.time() / 10))) % 1000) < int(
+                    1000 * self.rate_debug
+                )
+            if record.levelno == logging.INFO:
+                return (hash((record.name, record.lineno, int(time.time() / 10))) % 1000) < int(
+                    1000 * self.rate_info
+                )
+            return True
+        except Exception:
+            return True
+
+
+class MaxMessageLengthFilter(logging.Filter):
+    """Truncates overly long messages to a max length with an indicator.
+
+    Controlled via env LOG_MAX_MESSAGE_LEN (default 5000 characters).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        try:
+            self.max_len = int(os.getenv("LOG_MAX_MESSAGE_LEN", "5000"))
+        except Exception:
+            self.max_len = 5000
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        try:
+            if isinstance(record.msg, str) and len(record.msg) > self.max_len:
+                record.msg = record.msg[: self.max_len] + "... [truncated]"
+        except Exception:
+            return True
+        return True
+
+
 def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
     level = (level_name or os.getenv("LOG_LEVEL") or "INFO").upper()
     if json:
@@ -128,6 +183,8 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
             "redact": {"()": "src.utils.logging_config.SensitiveDataFilter"},
             "ns": {"()": "src.utils.logging_config.NamespacePrefixFilter"},
             "ctx": {"()": "src.utils.logging_config.ContextInjectorFilter"},
+            "sample": {"()": "src.utils.logging_config.SamplingFilter"},
+            "truncate": {"()": "src.utils.logging_config.MaxMessageLengthFilter"},
         },
         "formatters": {
             "default": formatter,
@@ -137,7 +194,7 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
                 "class": "logging.StreamHandler",
                 "formatter": "default",
                 "level": level,
-                "filters": ["redact", "ns", "ctx"],
+                "filters": ["redact", "ns", "ctx", "sample", "truncate"],
             }
         },
         "loggers": {
