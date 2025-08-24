@@ -25,6 +25,7 @@ from config.constants import (
     DEFAULT_MAX_CHECK_INTERVAL,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
+    POSITION_SIZE_TOLERANCE,
 )
 from data_providers.binance_provider import BinanceProvider
 from data_providers.coinbase_provider import CoinbaseProvider
@@ -46,7 +47,7 @@ from config.constants import (
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_TIME_RESTRICTIONS,
 )
-from position_management.partial_manager import PartialExitPolicy, PositionState
+from src.position_management.partial_manager import PartialExitPolicy, PositionState
 
 from .account_sync import AccountSynchronizer
 
@@ -1391,7 +1392,7 @@ class LiveTradingEngine:
                 logger.debug(f"DB partial-exit update failed: {e}")
 
         # If fully closed by partials, close position
-        if position.current_size <= 1e-9:
+        if position.current_size <= POSITION_SIZE_TOLERANCE:
             self._close_position(position, reason=f"Partial exits complete @ level {target_level}")
 
     def _execute_scale_in(self, position: Position, delta_fraction: float, price: float, threshold_level: int, fraction_of_original: float):

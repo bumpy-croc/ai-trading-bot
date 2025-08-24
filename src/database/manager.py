@@ -1800,7 +1800,9 @@ class DatabaseManager:
             )
             session.add(pt)
             # Update position current size and counters
-            cur = float(position.current_size or position.size or 0.0)
+            if position.current_size is None and position.size is None:
+                raise ValueError(f"Position {position_id} has no valid size - both current_size and size are None")
+            cur = float(position.current_size or position.size)
             new_cur = max(0.0, cur - float(executed_fraction_of_original))
             position.current_size = Decimal(str(new_cur))
             position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
@@ -1832,7 +1834,9 @@ class DatabaseManager:
             )
             session.add(pt)
             # Update position current size and counters
-            cur = float(position.current_size or position.size or 0.0)
+            if position.current_size is None and position.size is None:
+                raise ValueError(f"Position {position_id} has no valid size - both current_size and size are None")
+            cur = float(position.current_size or position.size)
             new_cur = min(1.0, cur + float(added_fraction_of_original))
             position.current_size = Decimal(str(new_cur))
             position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)

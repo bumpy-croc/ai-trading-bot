@@ -355,8 +355,10 @@ class RiskManager:
         current = float(pos.get("size", 0.0))
         new_size = max(0.0, current - float(executed_fraction_of_original))
         pos["size"] = new_size
-        # Reduce daily risk used proportionally (approximation)
-        self.daily_risk_used = max(0.0, self.daily_risk_used - float(executed_fraction_of_original))
+        # Reduce daily risk used by the actual risk amount (fraction of original position's risk contribution)
+        original_position_risk = current  # Assuming current size represents the original risk contribution
+        risk_reduction = float(executed_fraction_of_original) * original_position_risk
+        self.daily_risk_used = max(0.0, self.daily_risk_used - risk_reduction)
 
     def adjust_position_after_scale_in(self, symbol: str, added_fraction_of_original: float) -> None:
         """Increase tracked exposure after a scale-in, enforcing daily and per-position caps."""

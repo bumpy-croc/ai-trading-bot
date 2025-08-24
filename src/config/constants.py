@@ -95,3 +95,6 @@ DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]   # 25%, 25%, 50% of original si
 DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]        # 2%, 5%
 DEFAULT_SCALE_IN_SIZES = [0.25, 0.25]             # 25%, 25% of original size
 DEFAULT_MAX_SCALE_INS = 2
+
+# Position size tolerance for checking if position is effectively closed
+POSITION_SIZE_TOLERANCE = 1e-9

@@ -39,9 +39,14 @@ from regime.detector import RegimeDetector
 from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
 from position_management.time_exits import TimeExitPolicy
-from position_management.partial_manager import PartialExitPolicy, PositionState
+from src.position_management.partial_manager import PartialExitPolicy, PositionState
 
 logger = logging.getLogger(__name__)
+
+
+class PartialOperationsDisabledError(Exception):
+    """Custom exception for when partial operations are disabled."""
+    pass
 
 
 class ActiveTrade:
@@ -419,7 +424,7 @@ class Backtester:
                     # Evaluate partial exits and scale-ins before full exit
                     try:
                         if self.partial_manager is None:
-                            raise RuntimeError("partial_ops_disabled")
+                            raise PartialOperationsDisabledError("Partial operations are disabled")
                         state = PositionState(
                             entry_price=self.current_trade.entry_price,
                             side=self.current_trade.side,
@@ -479,9 +484,11 @@ class Backtester:
                                         self.risk_manager.adjust_position_after_scale_in(symbol, add_effective)
                                     except Exception:
                                         pass
+                    except PartialOperationsDisabledError:
+                        # Expected when partial operations are disabled, no need to log
+                        pass
                     except Exception as e:
-                        if str(e) != "partial_ops_disabled":
-                            logger.debug(f"Partial ops evaluation skipped/failed: {e}")
+                        logger.debug(f"Partial ops evaluation skipped/failed: {e}")
 
                     # Additional parity checks: stop loss, take profit, and time-limit
                     hit_stop_loss = False
