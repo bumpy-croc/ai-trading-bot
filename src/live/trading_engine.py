@@ -218,14 +218,26 @@ class LiveTradingEngine:
         if partial_manager is not None:
             self.partial_manager = partial_manager
         elif enable_partial_operations:
-            rp = self.risk_manager.params if self.risk_manager else RiskParameters()
-            self.partial_manager = PartialExitPolicy(
-                exit_targets=rp.partial_exit_targets or [],
-                exit_sizes=rp.partial_exit_sizes or [],
-                scale_in_thresholds=rp.scale_in_thresholds or [],
-                scale_in_sizes=rp.scale_in_sizes or [],
-                max_scale_ins=rp.max_scale_ins,
-            )
+            # Check strategy overrides first, then fall back to risk parameters
+            strategy_overrides = self.strategy.get_risk_overrides()
+            if strategy_overrides and 'partial_operations' in strategy_overrides:
+                partial_config = strategy_overrides['partial_operations']
+                self.partial_manager = PartialExitPolicy(
+                    exit_targets=partial_config.get('exit_targets', []),
+                    exit_sizes=partial_config.get('exit_sizes', []),
+                    scale_in_thresholds=partial_config.get('scale_in_thresholds', []),
+                    scale_in_sizes=partial_config.get('scale_in_sizes', []),
+                    max_scale_ins=partial_config.get('max_scale_ins', 0),
+                )
+            else:
+                rp = self.risk_manager.params if self.risk_manager else RiskParameters()
+                self.partial_manager = PartialExitPolicy(
+                    exit_targets=rp.partial_exit_targets or [],
+                    exit_sizes=rp.partial_exit_sizes or [],
+                    scale_in_thresholds=rp.scale_in_thresholds or [],
+                    scale_in_sizes=rp.scale_in_sizes or [],
+                    max_scale_ins=rp.max_scale_ins,
+                )
         else:
             self.partial_manager = None
 
