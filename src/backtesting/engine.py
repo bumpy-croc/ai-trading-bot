@@ -38,8 +38,6 @@ from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.mfe_mae_tracker import MFEMAETracker
-from src.position_management.partial_manager import PositionState
-from src.position_management.time_exits import TimeExitPolicy
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import BaseStrategy
