@@ -152,6 +152,18 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
 
 
 def configure_logging(level_name: str | None = None, use_json: bool | None = None) -> None:
-    use_json = bool(int(os.getenv("LOG_JSON", "0"))) if use_json is None else use_json
+    # Determine JSON default: if not explicitly provided, prefer JSON in production-like envs
+    if use_json is None:
+        # Explicit env override takes precedence if set
+        if "LOG_JSON" in os.environ:
+            use_json = bool(int(os.getenv("LOG_JSON", "0")))
+        else:
+            # Heuristics: Railway or ENV/APP_ENV=production -> JSON by default
+            is_railway = any(
+                os.getenv(k) for k in ("RAILWAY_DEPLOYMENT_ID", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
+            )
+            env_name = (os.getenv("ENV") or os.getenv("APP_ENV") or os.getenv("RAILWAY_ENVIRONMENT_NAME") or "").lower()
+            is_production = env_name == "production"
+            use_json = is_railway or is_production
     config = build_logging_config(level_name, json=use_json)
     logging.config.dictConfig(config)
