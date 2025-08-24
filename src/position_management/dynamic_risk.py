@@ -229,7 +229,7 @@ class DynamicRiskManager:
 			try:
 				# Get recent performance data
 				start_date = now - timedelta(days=self.config.performance_window_days)
-				db_metrics = self.db_manager.get_performance_metrics(
+				db_metrics = self.db_manager.get_dynamic_risk_performance_metrics(
 					start_date=start_date,
 					session_id=session_id
 				)

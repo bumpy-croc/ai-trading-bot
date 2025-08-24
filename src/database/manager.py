@@ -1643,7 +1643,7 @@ class DatabaseManager:
             logger.error(f"Failed to log risk adjustment: {e}")
             raise
 
-    def get_performance_metrics(
+    def get_dynamic_risk_performance_metrics(
         self,
         session_id: int,
         start_date: datetime = None,
@@ -1680,17 +1680,17 @@ class DatabaseManager:
                 if not trades:
                     return {
                         "total_trades": 0,
-                        "win_rate": 0,
-                        "profit_factor": 0,
+                        "win_rate": 0.0,
+                        "profit_factor": 0.0,
                         "sharpe_ratio": 0.0,
                         "expectancy": 0.0,
                         "avg_trade_duration_hours": 0.0,
                         "consecutive_losses": 0,
                         "consecutive_wins": 0,
-                        "max_drawdown": 0,
-                        "gross_profit": 0,
-                        "gross_loss": 0,
-                        "total_pnl": 0
+                        "max_drawdown": 0.0,
+                        "gross_profit": 0.0,
+                        "gross_loss": 0.0,
+                        "total_pnl": 0.0
                     }
                 
                 # Calculate basic metrics
@@ -1769,6 +1769,31 @@ class DatabaseManager:
                 else:
                     sharpe_ratio = 0.0
                 
+                # Calculate max drawdown using account history
+                max_drawdown = 0.0
+                try:
+                    history_query = session.query(AccountHistory)
+                    history_query = history_query.filter(AccountHistory.session_id == session_id)
+                    if start_date:
+                        history_query = history_query.filter(AccountHistory.timestamp >= start_date)
+                    if end_date:
+                        history_query = history_query.filter(AccountHistory.timestamp <= end_date)
+                    
+                    account_history = history_query.order_by(AccountHistory.timestamp).all()
+                    
+                    if account_history and len(account_history) > 0:
+                        peak_balance = account_history[0].balance
+                        for record in account_history:
+                            if record.balance > peak_balance:
+                                peak_balance = record.balance
+                            # Protect against division by zero
+                            if peak_balance > 0:
+                                drawdown = (peak_balance - record.balance) / peak_balance
+                                max_drawdown = max(max_drawdown, drawdown)
+                except Exception:
+                    # If account history is not available or fails, default to 0
+                    max_drawdown = 0.0
+                
                 return {
                     "total_trades": total_trades,
                     "win_rate": win_rate,
@@ -1781,7 +1806,8 @@ class DatabaseManager:
                     "max_drawdown": max_drawdown,
                     "gross_profit": gross_profit,
                     "gross_loss": gross_loss,
-                    "total_pnl": total_pnl
+                    "total_pnl": total_pnl,
+                    "max_drawdown": max_drawdown
                 }
                 
         except Exception as e:
@@ -1789,17 +1815,17 @@ class DatabaseManager:
             # Return safe defaults
             return {
                 "total_trades": 0,
-                "win_rate": 0,
-                "profit_factor": 0,
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
                 "sharpe_ratio": 0.0,
                 "expectancy": 0.0,
                 "avg_trade_duration_hours": 0.0,
                 "consecutive_losses": 0,
                 "consecutive_wins": 0,
-                "max_drawdown": 0,
-                "gross_profit": 0,
-                "gross_loss": 0,
-                "total_pnl": 0
+                "max_drawdown": 0.0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+                "total_pnl": 0.0
             }
 
     def log_partial_trade(
