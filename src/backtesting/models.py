@@ -19,3 +19,10 @@ class Trade:
     exit_reason: str
     stop_loss: float | None = None
     take_profit: float | None = None
+    # MFE/MAE tracking fields
+    mfe: float = 0.0
+    mae: float = 0.0
+    mfe_price: float | None = None
+    mae_price: float | None = None
+    mfe_time: datetime | None = None
+    mae_time: datetime | None = None

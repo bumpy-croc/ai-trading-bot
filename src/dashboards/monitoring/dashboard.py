@@ -80,6 +80,12 @@ class PositionDict(TypedDict):
     scale_ins_taken: int | None
     last_partial_exit_price: float | None
     last_scale_in_price: float | None
+    # Trailing stops and MFE/MAE tracking
+    trailing_stop_activated: bool | None
+    trailing_stop_price: float | None
+    breakeven_triggered: bool | None
+    mfe: float | None
+    mae: float | None
 
 
 class TradeDict(TypedDict):
@@ -101,7 +107,7 @@ class MonitoringDashboard:
 
     def __init__(self, db_url: str | None = None, update_interval: int = 3600):
         self.app = Flask(__name__, template_folder="templates", static_folder="static")
-        from utils.secrets import get_secret_key
+        from src.utils.secrets import get_secret_key
 
         self.app.config["SECRET_KEY"] = get_secret_key()
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
@@ -349,6 +355,38 @@ class MonitoringDashboard:
             try:
                 rows = self.db_manager.fetch_optimization_cycles(limit=limit, offset=offset)
                 return jsonify({"items": rows, "count": len(rows)})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
+
+        @self.app.route("/api/correlation/matrix")
+        def get_correlation_matrix():
+            """Return recent correlation matrix entries (flattened)."""
+            try:
+                rows = self.db_manager.execute_query(
+                    """
+                    SELECT symbol_pair, correlation_value, p_value, sample_size, last_updated, window_days
+                    FROM correlation_matrix
+                    ORDER BY last_updated DESC
+                    LIMIT 200
+                    """
+                )
+                return jsonify({"items": rows})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
+
+        @self.app.route("/api/correlation/exposures")
+        def get_portfolio_exposures():
+            """Return latest portfolio exposure per correlation group."""
+            try:
+                rows = self.db_manager.execute_query(
+                    """
+                    SELECT correlation_group, total_exposure, position_count, symbols, last_updated
+                    FROM portfolio_exposures
+                    ORDER BY last_updated DESC
+                    LIMIT 100
+                    """
+                )
+                return jsonify({"items": rows})
             except Exception as e:
                 return jsonify({"items": [], "error": str(e)}), 200
 
@@ -1390,12 +1428,21 @@ class MonitoringDashboard:
                             "scale_ins_taken": pos.get("scale_ins_taken"),
                             "last_partial_exit_price": self._safe_float(pos.get("last_partial_exit_price")),
                             "last_scale_in_price": self._safe_float(pos.get("last_scale_in_price")),
+                            # Trailing stops and MFE/MAE tracking
+                            "trailing_stop_activated": bool(pos.get("trailing_stop_activated", False)),
+                            "trailing_stop_price": (
+                                self._safe_float(pos.get("trailing_stop_price"))
+                                if pos.get("trailing_stop_price") is not None
+                                else None
+                            ),
+                            "breakeven_triggered": bool(pos.get("breakeven_triggered", False)),
+                            "mfe": self._safe_float(pos.get("mfe")) if pos.get("mfe") is not None else 0.0,
+                            "mae": self._safe_float(pos.get("mae")) if pos.get("mae") is not None else 0.0,
                         }
                     )
                 )
 
             return positions
-
         except Exception as e:
             logger.error(f"Error getting current positions: {e}")
             return []

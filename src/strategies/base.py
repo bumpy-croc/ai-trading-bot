@@ -164,6 +164,12 @@ class BaseStrategy(ABC):
             - scale_in_thresholds: List[float] (e.g., [0.02, 0.05] for 2%, 5%)
             - scale_in_sizes: List[float] (e.g., [0.25, 0.25] for 25%, 25%)
             - max_scale_ins: int (e.g., 2)
+          - trailing_stop: dict with trailing parameters (all decimals):
+            - activation_threshold: float  # e.g., 0.015 for 1.5%
+            - trailing_distance_pct: float | None  # e.g., 0.005 for 0.5%
+            - trailing_distance_atr_mult: float | None  # e.g., 1.5
+            - breakeven_threshold: float  # e.g., 0.02 for 2%
+            - breakeven_buffer: float  # e.g., 0.001 for 0.1%
             
         Example:
             return {
@@ -178,6 +184,12 @@ class BaseStrategy(ABC):
                     'scale_in_thresholds': [0.02, 0.05],
                     'scale_in_sizes': [0.25, 0.25],
                     'max_scale_ins': 2
+                },
+                'trailing_stop': {
+                    'activation_threshold': 0.015,
+                    'trailing_distance_pct': 0.005,
+                    'breakeven_threshold': 0.02,
+                    'breakeven_buffer': 0.001,
                 }
             }
             

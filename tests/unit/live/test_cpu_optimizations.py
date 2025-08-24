@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from config.constants import (
+from src.config.constants import (
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_MAX_CHECK_INTERVAL,

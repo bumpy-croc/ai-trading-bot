@@ -14,7 +14,8 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
-from regime.detector import RegimeConfig, RegimeDetector
+
+from src.regime.detector import RegimeConfig, RegimeDetector
 
 from .config import PredictionConfig
 from .ensemble import SimpleEnsembleAggregator

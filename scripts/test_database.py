@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from src.database.manager import DatabaseManager
 from src.database.models import PositionSide, TradeSource
-from utils.logging_config import configure_logging
+from src.utils.logging_config import configure_logging
 
 configure_logging()
 logger = logging.getLogger(__name__)

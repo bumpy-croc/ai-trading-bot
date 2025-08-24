@@ -10,21 +10,19 @@ from typing import Any, Optional
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
-from performance.metrics import cash_pnl
-from regime.detector import RegimeDetector
 from sqlalchemy.exc import SQLAlchemyError
 
-from backtesting.models import Trade as CompletedTrade
-from backtesting.utils import (
+from src.backtesting.models import Trade as CompletedTrade
+from src.backtesting.utils import (
     compute_performance_metrics,
 )
-from backtesting.utils import (
+from src.backtesting.utils import (
     extract_indicators as util_extract_indicators,
 )
-from backtesting.utils import (
+from src.backtesting.utils import (
     extract_ml_predictions as util_extract_ml,
 )
-from backtesting.utils import (
+from src.backtesting.utils import (
     extract_sentiment_data as util_extract_sentiment,
 )
 from config.config_manager import get_config
@@ -40,6 +38,21 @@ from risk.risk_manager import RiskManager
 from strategies.base import BaseStrategy
 from position_management.time_exits import TimeExitPolicy
 from position_management.partial_manager import PartialExitPolicy, PositionState
+from src.config.config_manager import get_config
+from src.config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_MFE_MAE_PRECISION_DECIMALS
+from src.data_providers.data_provider import DataProvider
+from src.data_providers.sentiment_provider import SentimentDataProvider
+from src.database.manager import DatabaseManager
+from src.database.models import TradeSource
+from src.performance.metrics import cash_pnl
+from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.position_management.time_exits import TimeExitPolicy
+from src.position_management.trailing_stops import TrailingStopPolicy
+from src.regime.detector import RegimeDetector
+from src.risk.risk_manager import RiskManager
+from src.strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +85,10 @@ class ActiveTrade:
         self.current_size: float = self.size
         self.partial_exits_taken: int = 0
         self.scale_ins_taken: int = 0
+        # Trailing state
+        self.trailing_stop_activated: bool = False
+        self.breakeven_triggered: bool = False
+        self.trailing_stop_price: Optional[float] = None
 
 
 class Backtester:
@@ -95,8 +112,8 @@ class Backtester:
         # Dynamic risk management
         enable_dynamic_risk: bool = False,  # Disabled by default for backtesting to preserve historical results
         dynamic_risk_config: Optional[DynamicRiskConfig] = None,
-        partial_manager: Optional[PartialExitPolicy] = None,
-        enable_partial_operations: bool = False,
+        # Trailing stops
+        trailing_stop_policy: Optional[TrailingStopPolicy] = None,
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -108,6 +125,7 @@ class Backtester:
         self.trades: list[dict] = []
         self.current_trade: Optional[ActiveTrade] = None
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
+        self.trailing_stop_policy = trailing_stop_policy
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -127,23 +145,22 @@ class Backtester:
         self.legacy_stop_loss_indexing = legacy_stop_loss_indexing
         self.enable_engine_risk_exits = enable_engine_risk_exits
 
+        # MFE/MAE tracker for active trade
+        self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
+
         # Risk manager (parity with live engine)
         self.risk_manager = RiskManager(risk_parameters)
-        # Partial operations policy
-        if partial_manager is not None:
-            self.partial_manager = partial_manager
-        elif enable_partial_operations:
-            rp = self.risk_manager.params
-            self.partial_manager = PartialExitPolicy(
-                exit_targets=rp.partial_exit_targets or [],
-                exit_sizes=rp.partial_exit_sizes or [],
-                scale_in_thresholds=rp.scale_in_thresholds or [],
-                scale_in_sizes=rp.scale_in_sizes or [],
-                max_scale_ins=rp.max_scale_ins,
+        # Correlation engine (for correlation-aware backtests)
+        try:
+            corr_cfg = CorrelationConfig(
+                correlation_window_days=self.risk_manager.params.correlation_window_days,
+                correlation_threshold=self.risk_manager.params.correlation_threshold,
+                max_correlated_exposure=self.risk_manager.params.max_correlated_exposure,
+                correlation_update_frequency_hours=self.risk_manager.params.correlation_update_frequency_hours,
             )
-        else:
-            self.partial_manager = None
-
+            self.correlation_engine = CorrelationEngine(config=corr_cfg)
+        except Exception:
+            self.correlation_engine = None
         # Regime detector (always available for analytics/tests)
         try:
             self.regime_detector = RegimeDetector()
@@ -201,18 +218,9 @@ class Backtester:
                         self.strategy.set_database_manager(self.db_manager)
                 except (SQLAlchemyError, ValueError) as sqlite_err:
                     logger.warning(
-                        f"Fallback SQLite initialization failed ({sqlite_err}). Disabling database logging."
+                        f"Fallback SQLite database connection also failed: {sqlite_err}. Proceeding without DB logging."
                     )
-                    self.log_to_database = False
-
-                    class DummyDBManager:
-                        def __getattr__(self, _):
-                            def _noop(*args, **kwargs):
-                                return None
-
-                            return _noop
-
-                    self.db_manager = DummyDBManager()
+                    self.db_manager = None
 
     def _merge_dynamic_risk_config(self, base_config: DynamicRiskConfig, strategy) -> DynamicRiskConfig:
         """Merge strategy risk overrides with base dynamic risk configuration"""
@@ -412,6 +420,58 @@ class Backtester:
 
                 # Check for exit if in position
                 if self.current_trade is not None:
+                    # Apply trailing stop before evaluating exits
+                    if self.trailing_stop_policy is not None:
+                        # Determine ATR if present
+                        atr_val = None
+                        try:
+                            if "atr" in df.columns:
+                                v = df["atr"].iloc[i]
+                                atr_val = float(v) if v is not None and not pd.isna(v) else None
+                        except Exception:
+                            atr_val = None
+                        new_sl, act, be = self.trailing_stop_policy.update_trailing_stop(
+                            side=self.current_trade.side,
+                            entry_price=float(self.current_trade.entry_price),
+                            current_price=float(current_price),
+                            existing_stop=float(self.current_trade.stop_loss) if self.current_trade.stop_loss is not None else None,
+                            position_fraction=float(self.current_trade.size),
+                            atr=atr_val,
+                            trailing_activated=bool(self.current_trade.trailing_stop_activated),
+                            breakeven_triggered=bool(self.current_trade.breakeven_triggered),
+                        )
+                        changed = False
+                        if new_sl is not None and (
+                            self.current_trade.stop_loss is None
+                            or (self.current_trade.side == "long" and new_sl > float(self.current_trade.stop_loss))
+                            or (self.current_trade.side != "long" and new_sl < float(self.current_trade.stop_loss))
+                        ):
+                            self.current_trade.stop_loss = new_sl
+                            self.current_trade.trailing_stop_price = new_sl
+                            changed = True
+                        if act != self.current_trade.trailing_stop_activated or be != self.current_trade.breakeven_triggered:
+                            self.current_trade.trailing_stop_activated = act
+                            self.current_trade.breakeven_triggered = be
+                            changed = True or changed
+                        if changed and self.log_to_database and self.db_manager:
+                            try:
+                                self.db_manager.log_strategy_execution(
+                                    strategy_name=self.strategy.__class__.__name__,
+                                    symbol=symbol,
+                                    signal_type="risk_adjustment",
+                                    action_taken="trailing_stop_update",
+                                    price=current_price,
+                                    timeframe=timeframe,
+                                    reasons=[
+                                        f"sl_updated={self.current_trade.stop_loss}",
+                                        f"activated={self.current_trade.trailing_stop_activated}",
+                                        f"breakeven={self.current_trade.breakeven_triggered}",
+                                    ],
+                                    session_id=self.trading_session_id,
+                                )
+                            except Exception:
+                                pass
+
                     exit_signal = self.strategy.check_exit_conditions(
                         df, i, self.current_trade.entry_price
                     )
@@ -482,6 +542,19 @@ class Backtester:
                     except Exception as e:
                         if str(e) != "partial_ops_disabled":
                             logger.debug(f"Partial ops evaluation skipped/failed: {e}")
+
+                    # Update MFE/MAE tracker for the active trade
+                    try:
+                        self.mfe_mae_tracker.update_position_metrics(
+                            position_key="active",
+                            entry_price=float(self.current_trade.entry_price),
+                            current_price=float(current_price),
+                            side=self.current_trade.side,
+                            position_fraction=float(self.current_trade.size),
+                            current_time=current_time,
+                        )
+                    except Exception:
+                        pass
 
                     # Additional parity checks: stop loss, take profit, and time-limit
                     hit_stop_loss = False
@@ -582,6 +655,9 @@ class Backtester:
                             ) * fraction
                         trade_pnl_cash = cash_pnl(trade_pnl_pct, self.balance)
 
+                        # Snapshot MFE/MAE
+                        metrics = self.mfe_mae_tracker.get_position_metrics("active")
+
                         # Update balance
                         self.balance += trade_pnl_cash
 
@@ -620,6 +696,12 @@ class Backtester:
                                 stop_loss=self.current_trade.stop_loss,
                                 take_profit=self.current_trade.take_profit,
                                 session_id=self.trading_session_id,
+                                mfe=(metrics.mfe if metrics else None),
+                                mae=(metrics.mae if metrics else None),
+                                mfe_price=(metrics.mfe_price if metrics else None),
+                                mae_price=(metrics.mae_price if metrics else None),
+                                mfe_time=(metrics.mfe_time if metrics else None),
+                                mae_time=(metrics.mae_time if metrics else None),
                             )
 
                         # Store completed trade
@@ -636,8 +718,17 @@ class Backtester:
                                 exit_reason=exit_reason,
                                 stop_loss=self.current_trade.stop_loss,
                                 take_profit=self.current_trade.take_profit,
+                                mfe=metrics.mfe if metrics else 0.0,
+                                mae=metrics.mae if metrics else 0.0,
+                                mfe_price=metrics.mfe_price if metrics else None,
+                                mae_price=metrics.mae_price if metrics else None,
+                                mfe_time=metrics.mfe_time if metrics else None,
+                                mae_time=metrics.mae_time if metrics else None,
                             )
                         )
+
+                        # Clear tracker for next trade
+                        self.mfe_mae_tracker.clear("active")
 
                         # Notify risk manager to close tracked position
                         try:
@@ -674,6 +765,42 @@ class Backtester:
                     except Exception:
                         overrides = None
                     if overrides and overrides.get("position_sizer"):
+                        # Build correlation context if available
+                        correlation_ctx = None
+                        try:
+                            if self.correlation_engine is not None:
+                                # Use available df as candidate series and fetch for other open symbols
+                                # Use current open positions tracked by risk manager
+                                open_symbols = set(self.risk_manager.positions.keys()) if getattr(self, "risk_manager", None) and self.risk_manager.positions else set()
+                                symbols_to_check = set([symbol]) | open_symbols
+                                price_series: dict[str, pd.Series] = {str(symbol): df["close"].copy()}
+                                end_ts = df.index[-1] if len(df) > 0 else None
+                                start_ts = end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days) if end_ts is not None else None
+                                for sym in symbols_to_check:
+                                    s = str(sym)
+                                    if s in price_series:
+                                        continue
+                                    try:
+                                        if start_ts is not None and end_ts is not None:
+                                            hist = self.data_provider.get_historical_data(
+                                                s,
+                                                timeframe=timeframe,
+                                                start=start_ts.to_pydatetime(),
+                                                end=end_ts.to_pydatetime(),
+                                            )
+                                            if not hist.empty and "close" in hist:
+                                                price_series[s] = hist["close"]
+                                    except Exception:
+                                        continue
+                                corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
+                                correlation_ctx = {
+                                    "engine": self.correlation_engine,
+                                    "candidate_symbol": symbol,
+                                    "corr_matrix": corr_matrix,
+                                    "max_exposure_override": overrides.get("correlation_control", {}).get("max_correlated_exposure") if overrides else None,
+                                }
+                        except Exception:
+                            correlation_ctx = None
                         size_fraction = self.risk_manager.calculate_position_fraction(
                             df=df,
                             index=i,
@@ -681,6 +808,7 @@ class Backtester:
                             price=current_price,
                             indicators=self._extract_indicators(df, i),
                             strategy_overrides=overrides,
+                            correlation_ctx=correlation_ctx,
                         )
                     else:
                         size_fraction = self.strategy.calculate_position_size(df, i, self.balance)

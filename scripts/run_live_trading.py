@@ -22,17 +22,17 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from config import get_config
-from config.constants import DEFAULT_INITIAL_BALANCE
-from data_providers.mock_data_provider import MockDataProvider
-from data_providers.senticrypt_provider import SentiCryptProvider
-from live.trading_engine import LiveTradingEngine
-from risk.risk_manager import RiskParameters
+from src.config import get_config
+from src.config.constants import DEFAULT_INITIAL_BALANCE
+from src.data_providers.mock_data_provider import MockDataProvider
+from src.data_providers.senticrypt_provider import SentiCryptProvider
+from src.live.trading_engine import LiveTradingEngine
+from src.risk.risk_manager import RiskParameters
 
 # Import strategies
-from strategies.ml_basic import MlBasic
-from strategies.test_high_frequency import TestHighFrequencyStrategy
-from utils.logging_config import configure_logging
+from src.strategies.ml_basic import MlBasic
+from src.strategies.test_high_frequency import TestHighFrequencyStrategy
+from src.utils.logging_config import configure_logging
 
 # Configure logging - ensure the logs directory exists at project root
 project_root = Path(__file__).resolve().parents[1]

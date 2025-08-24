@@ -291,6 +291,7 @@ Example:
 ## Notes
 - `daily_risk_used` approximates risk as the sum of opened fraction sizes; adjust as needed for your brokerage/exchange semantics.
 - For correlated exposure controls, extend `get_position_correlation_risk` to use actual correlation matrices across symbols/timeframes.
+- Correlation control: The system computes rolling correlations across symbols and enforces portfolio-level exposure caps among highly correlated groups. See below.
 
 ## Time-Based Exit Policies
 
@@ -355,6 +356,44 @@ Pass `time_exit_policy=policy` to both `LiveTradingEngine` and `Backtester`.
 - All time comparisons are UTC-normalized; `zoneinfo` is used for local market time computations when available.
 - DST transitions: end-of-day logic uses local market session close time each day; tests should include DST boundaries.
 - Holiday-aware sessions are planned for future work; current implementation supports weekdays and 24h markets.
+
+## Correlation Control
+
+The correlation layer prevents over-exposure to highly correlated assets.
+
+- Engine: `position_management/correlation_engine.py`
+- Config defaults (in `config/constants.py`):
+  - `DEFAULT_CORRELATION_WINDOW_DAYS = 30`
+  - `DEFAULT_CORRELATION_THRESHOLD = 0.7`
+  - `DEFAULT_MAX_CORRELATED_EXPOSURE = 0.15`
+  - `DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS = 1`
+  - `DEFAULT_CORRELATION_SAMPLE_MIN_SIZE = 20`
+- Risk parameters (in `RiskParameters`):
+  - `correlation_window_days`, `correlation_threshold`, `max_correlated_exposure`, `correlation_update_frequency_hours`
+
+How it works:
+- Live and Backtest engines build a per-symbol price series window for open symbols plus the candidate entry symbol.
+- `CorrelationEngine` computes a returns-based correlation matrix and clusters symbols whose pairwise correlation ≥ threshold.
+- The candidate position fraction is reduced proportionally if projected correlated exposure exceeds `max_correlated_exposure`.
+- Database tables `correlation_matrix` and `portfolio_exposures` can store correlation snapshots and group exposures.
+
+Strategy overrides can set per-trade limits via:
+
+```python
+def get_risk_overrides(self):
+    return {
+        'position_sizer': 'fixed_fraction',
+        'base_fraction': 0.03,
+        'correlation_control': {
+            'max_correlated_exposure': 0.15,
+        }
+    }
+```
+
+Monitoring:
+- REST endpoints expose recent correlation data:
+  - `/api/correlation/matrix`
+  - `/api/correlation/exposures`
 
 ## Performance Considerations
 
@@ -509,3 +548,11 @@ engine = LiveTradingEngine(
 - Sizes are expressed as fractions of the original entry size.
 - All operations respect `max_position_size` and `max_daily_risk`.
 - Works for both long and short via PnL-sign logic.
+
+## Trailing Stops and Breakeven
+
+Trailing stops automatically tighten risk as price moves in your favor, and can optionally move the stop to breakeven once a profit threshold is reached.
+
+- Activation: Starts trailing once sized PnL crosses `activation_threshold` (decimal, e.g., 0.015 = 1.5%).
+- Distance: Choose percentage (`trailing_distance_pct`) or ATR-based (`trailing_distance_atr_mult`). ATR-based takes precedence when ATR is available.
+- Breakeven: When `breakeven_threshold` is reached, stop moves to entry ± `breakeven_buffer` (above for long, below for short).

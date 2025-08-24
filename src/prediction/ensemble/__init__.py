@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from prediction.models.onnx_runner import ModelPrediction
+from src.prediction.models.onnx_runner import ModelPrediction
 
 
 @dataclass

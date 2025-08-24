@@ -19,8 +19,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from live.strategy_manager import StrategyManager
-from utils.logging_config import configure_logging
+from src.live.strategy_manager import StrategyManager
+from src.utils.logging_config import configure_logging
 
 configure_logging()
 logger = logging.getLogger(__name__)

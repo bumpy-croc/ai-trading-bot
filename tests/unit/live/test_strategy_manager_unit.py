@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from live.strategy_manager import StrategyManager, StrategyVersion
+from src.live.strategy_manager import StrategyManager, StrategyVersion
 
 pytestmark = pytest.mark.unit
 
@@ -28,7 +28,7 @@ class TestStrategyManager:
     def test_strategy_loading(self, temp_directory):
         manager = StrategyManager(staging_dir=str(temp_directory))
         strategy = manager.load_strategy("ml_basic", version="test_v1")
-        from strategies.ml_basic import MlBasic
+        from src.strategies.ml_basic import MlBasic
 
         assert isinstance(strategy, MlBasic)
         assert manager.current_strategy == strategy

@@ -13,40 +13,42 @@ from enum import Enum
 from typing import Any
 
 import pandas as pd
-from performance.metrics import Side, pnl_percent
-from regime.detector import RegimeDetector
 
-from config.constants import (
+from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
+    DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_ERROR_COOLDOWN,
     DEFAULT_INITIAL_BALANCE,
+    DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
-)
-from data_providers.binance_provider import BinanceProvider
-from data_providers.coinbase_provider import CoinbaseProvider
-from data_providers.data_provider import DataProvider
-from data_providers.sentiment_provider import SentimentDataProvider
-from database.manager import DatabaseManager
-from database.models import TradeSource
-from live.strategy_manager import StrategyManager
-from performance.metrics import Side, pnl_percent
-from position_management.dynamic_risk import DynamicRiskManager, DynamicRiskConfig
-from regime.detector import RegimeDetector
-from risk.risk_manager import RiskManager, RiskParameters
-from strategies.base import BaseStrategy
-from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
-from config.constants import (
-    DEFAULT_MAX_HOLDING_HOURS,
-    DEFAULT_END_OF_DAY_FLAT,
-    DEFAULT_WEEKEND_FLAT,
-    DEFAULT_MARKET_TIMEZONE,
     DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
 )
 from position_management.partial_manager import PartialExitPolicy, PositionState
+from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.coinbase_provider import CoinbaseProvider
+from src.data_providers.data_provider import DataProvider
+from src.data_providers.sentiment_provider import SentimentDataProvider
+from src.database.manager import DatabaseManager
+from src.database.models import TradeSource
+from src.live.strategy_manager import StrategyManager
+from src.performance.metrics import Side, pnl_percent
+from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
+from src.position_management.trailing_stops import TrailingStopPolicy
+from src.regime.detector import RegimeDetector
+from src.risk.risk_manager import RiskManager, RiskParameters
+from src.strategies.base import BaseStrategy
 
 from .account_sync import AccountSynchronizer
 
@@ -190,6 +192,9 @@ class LiveTradingEngine:
         self.sentiment_provider = sentiment_provider
         self.risk_manager = RiskManager(risk_parameters)
         
+        # Trailing stop policy
+        self.trailing_stop_policy = trailing_stop_policy or self._build_trailing_policy()
+        
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
         self.dynamic_risk_manager = None
@@ -240,6 +245,18 @@ class LiveTradingEngine:
                 )
         else:
             self.partial_manager = None
+
+        # Correlation engine setup
+        try:
+            corr_cfg = CorrelationConfig(
+                correlation_window_days=self.risk_manager.params.correlation_window_days,
+                correlation_threshold=self.risk_manager.params.correlation_threshold,
+                max_correlated_exposure=self.risk_manager.params.max_correlated_exposure,
+                correlation_update_frequency_hours=self.risk_manager.params.correlation_update_frequency_hours,
+            )
+            self.correlation_engine = CorrelationEngine(config=corr_cfg)
+        except Exception:
+            self.correlation_engine = None
 
         # Initialize database manager
         try:
@@ -323,6 +340,7 @@ class LiveTradingEngine:
         self.completed_trades: list[Trade] = []
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
+        self.timeframe: str | None = None  # Will be set when trading starts
 
         # Performance tracking
         self.total_trades = 0
@@ -331,9 +349,14 @@ class LiveTradingEngine:
         self.peak_balance = initial_balance
         self.max_drawdown = 0.0
 
+        # MFE/MAE tracker
+        self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
+        self._last_mfe_mae_persist: datetime | None = None
+
         # Error handling
         self.max_consecutive_errors = max_consecutive_errors
         self.consecutive_errors = 0
+        self.error_cooldown = DEFAULT_ERROR_COOLDOWN
 
         # Time exit policy (construct from overrides if not provided)
         self.time_exit_policy = time_exit_policy
@@ -497,6 +520,7 @@ class LiveTradingEngine:
             return
 
         self.is_running = True
+        self.timeframe = timeframe  # Store the trading timeframe
         logger.info(f"🚀 Starting live trading for {symbol} on {timeframe} timeframe")
         logger.info(f"Initial balance: ${self.current_balance:,.2f}")
         logger.info(f"Max position size: {self.max_position_size * 100:.1f}% of balance")
@@ -646,8 +670,8 @@ class LiveTradingEngine:
                     if position.order_id in self.positions:
                         del self.positions[position.order_id]
 
-        # Wait for main thread to finish
-        if self.main_thread and self.main_thread.is_alive():
+        # Wait for main thread to finish (avoid joining current thread)
+        if self.main_thread and self.main_thread.is_alive() and self.main_thread != threading.current_thread():
             self.main_thread.join(timeout=30)
 
         # Print final statistics
@@ -728,6 +752,13 @@ class LiveTradingEngine:
                 )
                 # Update position PnL
                 self._update_position_pnl(current_price)
+                # Apply trailing stop adjustments and update MFE/MAE before exit checks
+                try:
+                    self._update_trailing_stops(df, current_index, float(current_price))
+                except Exception as e:
+                    logger.debug(f"Trailing stop update failed: {e}")
+                # Update rolling MFE/MAE per position and persist lightweight updates
+                self._update_positions_mfe_mae(current_price)
                 # Check exit conditions for existing positions
                 self._check_exit_conditions(df, current_index, current_price)
                 # Evaluate partial exits and scale-ins for open positions
@@ -750,6 +781,8 @@ class LiveTradingEngine:
                             except Exception:
                                 overrides = None
                             indicators = self._extract_indicators(df, current_index)
+                            # Correlation context for short entries
+                            short_correlation_ctx = self._build_correlation_context(symbol, df, overrides)
                             if overrides and overrides.get("position_sizer"):
                                 short_fraction = self.risk_manager.calculate_position_fraction(
                                     df=df,
@@ -758,6 +791,7 @@ class LiveTradingEngine:
                                     price=current_price,
                                     indicators=indicators,
                                     strategy_overrides=overrides,
+                                    correlation_ctx=short_correlation_ctx,
                                 )
                                 short_fraction = min(short_fraction, self.max_position_size)
                                 short_position_size = short_fraction
@@ -897,6 +931,56 @@ class LiveTradingEngine:
 
         return df
 
+    def _build_correlation_context(self, symbol: str, df: pd.DataFrame, overrides: dict | None) -> dict | None:
+        """
+        Build correlation context dict for risk manager sizing, including corr matrix and optional exposure override.
+        Returns None if correlation engine is unavailable or an error occurs.
+        """
+        try:
+            if self.correlation_engine is None:
+                return None
+            # Build price series for candidate + currently open symbols
+            symbols_to_check = set([symbol]) | set(p.symbol for p in self.positions.values())
+            price_series: dict[str, pd.Series] = {}
+            end_ts = df.index[-1] if len(df) > 0 else None
+            start_ts = (
+                end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days)
+                if end_ts is not None
+                else None
+            )
+            if symbol:
+                try:
+                    price_series[str(symbol)] = df["close"].copy()
+                except Exception:
+                    pass
+            for sym in symbols_to_check:
+                s = str(sym)
+                if s in price_series:
+                    continue
+                try:
+                    if start_ts is not None and end_ts is not None:
+                        # Use the strategy's actual trading timeframe instead of hardcoding "1h"
+                        trading_timeframe = self.timeframe or "1h"  # Fallback to "1h" if not set
+                        hist = self.data_provider.get_historical_data(
+                            s,
+                            timeframe=trading_timeframe,
+                            start=start_ts.to_pydatetime(),
+                            end=end_ts.to_pydatetime(),
+                        )
+                        if not hist.empty and "close" in hist:
+                            price_series[s] = hist["close"]
+                except Exception:
+                    continue
+            corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
+            return {
+                "engine": self.correlation_engine,
+                "candidate_symbol": symbol,
+                "corr_matrix": corr_matrix,
+                "max_exposure_override": overrides.get("correlation_control", {}).get("max_correlated_exposure") if overrides else None,
+            }
+        except Exception:
+            return None
+
     def _update_position_pnl(self, current_price: float):
         """Update unrealized PnL for all positions"""
         for position in self.positions.values():
@@ -908,6 +992,49 @@ class LiveTradingEngine:
                 position.unrealized_pnl = pnl_percent(
                     position.entry_price, current_price, Side.SHORT, position.size
                 )
+
+    def _update_positions_mfe_mae(self, current_price: float):
+        """Compute and persist rolling MFE/MAE for active positions."""
+        now = datetime.utcnow()
+        for order_id, position in self.positions.items():
+            # fraction is position.size (fraction of balance)
+            self.mfe_mae_tracker.update_position_metrics(
+                position_key=order_id,
+                entry_price=float(position.entry_price),
+                current_price=float(current_price),
+                side=position.side.value,
+                position_fraction=float(position.size),
+                current_time=now,
+            )
+        # Throttle DB persistence to avoid overhead
+        should_persist = False
+        if self._last_mfe_mae_persist is None:
+            should_persist = True
+        else:
+            delta = (now - self._last_mfe_mae_persist).total_seconds()
+            should_persist = delta >= float(DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS)
+        if not should_persist:
+            return
+        self._last_mfe_mae_persist = now
+        for order_id, _position in self.positions.items():
+            db_id = self.position_db_ids.get(order_id)
+            if db_id is not None:
+                try:
+                    m = self.mfe_mae_tracker.get_position_metrics(order_id)
+                    if not m:
+                        continue
+                    self.db_manager.update_position(
+                        position_id=db_id,
+                        current_price=float(current_price),
+                        mfe=float(m.mfe),
+                        mae=float(m.mae),
+                        mfe_price=float(m.mfe_price) if m.mfe_price is not None else None,
+                        mae_price=float(m.mae_price) if m.mae_price is not None else None,
+                        mfe_time=m.mfe_time,
+                        mae_time=m.mae_time,
+                    )
+                except Exception as e:
+                    logger.debug(f"MFE/MAE DB update failed for {order_id}: {e}")
 
     def _check_exit_conditions(self, df: pd.DataFrame, current_index: int, current_price: float):
         """Check if any positions should be closed"""
@@ -1020,6 +1147,8 @@ class LiveTradingEngine:
                 )
             except Exception:
                 overrides = None
+            # Build correlation context if engine available
+            correlation_ctx = self._build_correlation_context(symbol, df, overrides)
             if overrides and overrides.get("position_sizer"):
                 fraction = self.risk_manager.calculate_position_fraction(
                     df=df,
@@ -1028,6 +1157,7 @@ class LiveTradingEngine:
                     price=current_price,
                     indicators=indicators,
                     strategy_overrides=overrides,
+                    correlation_ctx=correlation_ctx,
                 )
                 # Enforce engine-level cap
                 fraction = min(fraction, self.max_position_size)
@@ -1149,6 +1279,9 @@ class LiveTradingEngine:
 
             self.positions[order_id] = position
 
+            # Initialize MFE/MAE cache for this position
+            self.mfe_mae_tracker.clear(order_id)  # ensure fresh state
+
             # Log position to database
             if self.trading_session_id is not None:
                 position_db_id = self.db_manager.log_position(
@@ -1162,6 +1295,9 @@ class LiveTradingEngine:
                     take_profit=take_profit,
                     quantity=position_value / price,  # Calculate actual quantity
                     session_id=self.trading_session_id,
+                    trailing_stop_activated=False,
+                    trailing_stop_price=None,
+                    breakeven_triggered=False,
                 )
                 self.position_db_ids[order_id] = position_db_id
                 # Initialize DB partial fields
@@ -1230,10 +1366,25 @@ class LiveTradingEngine:
     def _close_position(self, position: Position, reason: str):
         """Close a position and update balance"""
         try:
-            current_price = self.data_provider.get_current_price(position.symbol)
+            current_price_raw = self.data_provider.get_current_price(position.symbol)
+            try:
+                current_price = float(current_price_raw)
+            except Exception:
+                current_price = None
             if not current_price:
-                logger.error(f"Could not get current price for {position.symbol}")
-                return
+                # Fallback: try latest data frame
+                try:
+                    df = self._get_latest_data(position.symbol, "1m")
+                    if df is not None and not df.empty and "close" in df.columns:
+                        current_price = float(df["close"].iloc[-1])
+                except Exception:
+                    current_price = None
+            if not current_price:
+                # As a last resort use entry price to allow cleanup and logging
+                logger.warning(
+                    f"Falling back to entry price for {position.symbol} during close; live price unavailable"
+                )
+                current_price = float(position.entry_price)
 
             # Calculate P&L based on CURRENT remaining size
             fraction = float(position.current_size if position.current_size is not None else position.size)
@@ -1252,6 +1403,9 @@ class LiveTradingEngine:
             if self.current_balance > self.peak_balance:
                 self.peak_balance = self.current_balance
 
+            # Fetch final MFE/MAE metrics for this position
+            metrics = self.mfe_mae_tracker.get_position_metrics(position.order_id)
+
             # Create trade record
             trade = Trade(
                 symbol=position.symbol,
@@ -1263,7 +1417,6 @@ class LiveTradingEngine:
                 exit_time=datetime.now(),
                 pnl=pnl,
                 exit_reason=reason,
-                order_id=position.order_id,
             )
 
             # Update statistics
@@ -1290,6 +1443,12 @@ class LiveTradingEngine:
                     entry_time=position.entry_time,
                     exit_time=datetime.now(),
                     session_id=self.trading_session_id,
+                    mfe=(metrics.mfe if metrics else None),
+                    mae=(metrics.mae if metrics else None),
+                    mfe_price=(metrics.mfe_price if metrics else None),
+                    mae_price=(metrics.mae_price if metrics else None),
+                    mfe_time=(metrics.mfe_time if metrics else None),
+                    mae_time=(metrics.mae_time if metrics else None),
                 )
 
                 # Close position in database if it exists
@@ -1302,9 +1461,10 @@ class LiveTradingEngine:
             if self.enable_live_trading:
                 self._close_order(position.symbol, position.order_id)
 
-            # Remove from active positions
+            # Remove from active positions and tracker cache
             if position.order_id in self.positions:
                 del self.positions[position.order_id]
+            self.mfe_mae_tracker.clear(position.order_id)
 
             logger.info(
                 f"📈 Closed {position.side.value} position for {position.symbol}: "
@@ -1314,6 +1474,14 @@ class LiveTradingEngine:
 
         except Exception as e:
             logger.error(f"Failed to close position {position.order_id}: {e}", exc_info=True)
+            # Ensure local cleanup so engine/shutdown does not leave dangling positions
+            try:
+                if position.order_id in self.positions:
+                    del self.positions[position.order_id]
+                self.mfe_mae_tracker.clear(position.order_id)
+            except Exception:
+                # Best-effort cleanup; ignore secondary errors
+                pass
 
     def _check_partial_and_scale_ops(self, df: pd.DataFrame, current_index: int, current_price: float):
         """Evaluate partial exits and scale-ins for open positions."""
@@ -1915,3 +2083,98 @@ class LiveTradingEngine:
             logger.error("❌ Model update initiation failed")
 
         return success
+
+    def _build_trailing_policy(self) -> TrailingStopPolicy | None:
+        """Construct trailing policy from risk parameters and strategy overrides if available."""
+        try:
+            overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, "get_risk_overrides") else None
+        except Exception:
+            overrides = None
+        cfg = None
+        if overrides and isinstance(overrides, dict):
+            cfg = overrides.get("trailing_stop")
+        params = getattr(self.risk_manager, "params", None)
+        if cfg or params:
+            activation = (cfg.get("activation_threshold") if cfg else None) or (
+                params.trailing_activation_threshold if params else None
+            )
+            dist_pct = (cfg.get("trailing_distance_pct") if cfg else None)
+            atr_mult = (cfg.get("trailing_distance_atr_mult") if cfg else None)
+            # Fallback to params trailing_atr_multiplier if not provided via overrides
+            if atr_mult is None and params is not None:
+                atr_mult = params.trailing_atr_multiplier
+            be_thr = (cfg.get("breakeven_threshold") if cfg else None) or (
+                params.breakeven_threshold if params else None
+            )
+            be_buf = (cfg.get("breakeven_buffer") if cfg else None) or (
+                params.breakeven_buffer if params else None
+            )
+            if activation and (dist_pct or atr_mult or (params and (params.trailing_distance_pct or params.trailing_atr_multiplier))):
+                return TrailingStopPolicy(
+                    activation_threshold=float(activation),
+                    trailing_distance_pct=float(dist_pct) if dist_pct is not None else (float(params.trailing_distance_pct) if params and params.trailing_distance_pct is not None else None),
+                    atr_multiplier=float(atr_mult) if atr_mult is not None else None,
+                    breakeven_threshold=float(be_thr) if be_thr is not None else 0.02,
+                    breakeven_buffer=float(be_buf) if be_buf is not None else 0.001,
+                )
+        return None
+
+    def _update_trailing_stops(self, df: pd.DataFrame, current_index: int, current_price: float) -> None:
+        """Apply trailing stop policy to open positions and persist any changes."""
+        if not self.trailing_stop_policy or not self.positions:
+            return
+        # Determine ATR if available
+        atr_value = None
+        try:
+            if "atr" in df.columns and current_index < len(df):
+                val = df["atr"].iloc[current_index]
+                atr_value = float(val) if val is not None and not pd.isna(val) else None
+        except Exception:
+            atr_value = None
+
+        for pos in list(self.positions.values()):
+            side_str = pos.side.value if hasattr(pos.side, "value") else str(pos.side).lower()
+            existing_sl = pos.stop_loss
+            new_stop, act, be = self.trailing_stop_policy.update_trailing_stop(
+                side=side_str,
+                entry_price=float(pos.entry_price),
+                current_price=float(current_price),
+                existing_stop=float(existing_sl) if existing_sl is not None else None,
+                position_fraction=float(pos.size),
+                atr=atr_value,
+                trailing_activated=bool(pos.trailing_stop_activated),
+                breakeven_triggered=bool(pos.breakeven_triggered),
+            )
+            changed = False
+            if new_stop is not None and (existing_sl is None or (side_str == "long" and new_stop > float(existing_sl)) or (side_str == "short" and new_stop < float(existing_sl))):
+                pos.stop_loss = new_stop
+                pos.trailing_stop_price = new_stop
+                changed = True
+            if act != pos.trailing_stop_activated or be != pos.breakeven_triggered:
+                pos.trailing_stop_activated = act
+                pos.breakeven_triggered = be
+                changed = True or changed
+
+            if changed:
+                # Persist to database if known
+                try:
+                    position_db_id = self.position_db_ids.get(pos.order_id) if pos.order_id else None
+                    if position_db_id is not None:
+                        self.db_manager.update_position(
+                            position_id=position_db_id,
+                            stop_loss=pos.stop_loss,
+                            trailing_stop_activated=pos.trailing_stop_activated,
+                            trailing_stop_price=pos.trailing_stop_price,
+                            breakeven_triggered=pos.breakeven_triggered,
+                        )
+                except Exception:
+                    pass
+                # Log change
+                try:
+                    logger.info(
+                        f"Trailing stop updated for {pos.symbol} {side_str}: SL={pos.stop_loss:.4f} (activated={pos.trailing_stop_activated}, BE={pos.breakeven_triggered})"
+                    )
+                except Exception:
+                    logger.info(
+                        f"Trailing stop updated for {pos.symbol} {side_str}: activated={pos.trailing_stop_activated}, BE={pos.breakeven_triggered}"
+                    )

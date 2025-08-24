@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from prediction.config import PredictionConfig
+from src.prediction.config import PredictionConfig
 
 
 class TestPredictionConfig:

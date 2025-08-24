@@ -8,15 +8,8 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from indicators.technical import (
-    calculate_atr,
-    calculate_bollinger_bands,
-    calculate_macd,
-    calculate_moving_averages,
-    calculate_rsi,
-)
 
-from config.constants import (
+from src.config.constants import (
     DEFAULT_ATR_PERIOD,
     DEFAULT_BOLLINGER_PERIOD,
     DEFAULT_BOLLINGER_STD_DEV,
@@ -27,6 +20,13 @@ from config.constants import (
     DEFAULT_NORMALIZATION_WINDOW,
     DEFAULT_RSI_PERIOD,
     DEFAULT_SEQUENCE_LENGTH,
+)
+from src.indicators.technical import (
+    calculate_atr,
+    calculate_bollinger_bands,
+    calculate_macd,
+    calculate_moving_averages,
+    calculate_rsi,
 )
 
 from .base import FeatureExtractor

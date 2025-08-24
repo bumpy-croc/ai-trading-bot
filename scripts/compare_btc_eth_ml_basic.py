@@ -9,12 +9,12 @@ project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 sys.path.append(str(project_root / "src"))
 
-from backtesting.engine import Backtester
-from data_providers.binance_provider import BinanceProvider
-from data_providers.cached_data_provider import CachedDataProvider
-from data_providers.coinbase_provider import CoinbaseProvider
-from strategies.ml_basic import MlBasic
-from utils.symbol_factory import SymbolFactory
+from src.backtesting.engine import Backtester
+from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.cached_data_provider import CachedDataProvider
+from src.data_providers.coinbase_provider import CoinbaseProvider
+from src.strategies.ml_basic import MlBasic
+from src.utils.symbol_factory import SymbolFactory
 
 
 def parse_args():

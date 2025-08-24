@@ -1,6 +1,6 @@
 import pytest
 
-from strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import MlBasic
 
 pytestmark = pytest.mark.unit
 

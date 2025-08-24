@@ -9,9 +9,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from strategies.base import BaseStrategy
-from strategies.bull import Bull
-from strategies.ml_basic import MlBasic
+from src.strategies.base import BaseStrategy
+from src.strategies.bull import Bull
+from src.strategies.ml_basic import MlBasic
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class StrategyManager:
             "bull": Bull,
         }
         try:
-            from strategies.bear import BearStrategy
+            from src.strategies.bear import BearStrategy
 
             self.strategy_registry["bear"] = BearStrategy
         except Exception as e:

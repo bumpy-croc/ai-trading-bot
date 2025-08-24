@@ -2,18 +2,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Ensure project root and src are in sys.path for absolute imports
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+SRC_PATH = PROJECT_ROOT / "src"
+if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
+    sys.path.insert(1, str(SRC_PATH))
 
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
-        from optimizer.analyzer import PerformanceAnalyzer
-        from optimizer.runner import ExperimentRunner
-        from optimizer.schemas import ExperimentConfig, ParameterSet
-        from optimizer.validator import StatisticalValidator, ValidationConfig
+        from src.optimizer.analyzer import PerformanceAnalyzer
+        from src.optimizer.runner import ExperimentRunner
+        from src.optimizer.schemas import ExperimentConfig, ParameterSet
+        from src.optimizer.validator import StatisticalValidator, ValidationConfig
 
-        from database.manager import DatabaseManager
+        from src.database.manager import DatabaseManager
 
         end = datetime.now()
         start = end - timedelta(days=ns.days)
@@ -144,7 +153,7 @@ def _handle(ns: argparse.Namespace) -> int:
 
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("optimizer", help="Run optimization cycle (Phase 2)")
-    from config.constants import DEFAULT_INITIAL_BALANCE
+    from src.config.constants import DEFAULT_INITIAL_BALANCE
 
     p.add_argument("--strategy", default="ml_basic")
     p.add_argument("--symbol", default="BTCUSDT")

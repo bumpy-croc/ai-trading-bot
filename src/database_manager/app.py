@@ -24,8 +24,8 @@ from flask_login import (  # type: ignore
 from sqlalchemy.orm import scoped_session  # type: ignore
 
 # Re-use existing database layer
-from database.manager import DatabaseManager  # type: ignore
-from database.models import Base  # type: ignore
+from src.database.manager import DatabaseManager  # type: ignore
+from src.database.models import Base  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def create_app() -> Flask:
             "❌ Failed to initialise DatabaseManager due to a database connection error: %s", exc
         )
         app = Flask(__name__)
-        from utils.secrets import get_secret_key
+        from src.utils.secrets import get_secret_key
 
         app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
 
@@ -105,7 +105,7 @@ def create_app() -> Flask:
 
     # Create Flask app
     app = Flask(__name__)
-    from utils.secrets import get_secret_key
+    from src.utils.secrets import get_secret_key
 
     app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
 

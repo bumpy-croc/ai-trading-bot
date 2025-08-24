@@ -3,28 +3,36 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from utils.logging_config import configure_logging
-from utils.symbol_factory import SymbolFactory
+# Ensure project root and src are in sys.path for absolute imports
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+SRC_PATH = PROJECT_ROOT / "src"
+if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
+    sys.path.insert(1, str(SRC_PATH))
+
+from src.utils.logging_config import configure_logging
+from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_strategy(strategy_name: str):
     try:
         if strategy_name == "ml_basic":
-            from strategies.ml_basic import MlBasic
+            from src.strategies.ml_basic import MlBasic
 
             return MlBasic()
         if strategy_name == "bear":
-            from strategies.bear import BearStrategy
+            from src.strategies.bear import BearStrategy
 
             return BearStrategy()
         if strategy_name == "bull":
-            from strategies.bull import Bull
+            from src.strategies.bull import Bull
 
             return Bull()
         print(f"Unknown strategy: {strategy_name}")
@@ -53,9 +61,9 @@ def _get_date_range(args):
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
-        from backtesting import Backtester
-        from data_providers.feargreed_provider import FearGreedProvider
-        from risk import RiskParameters
+        from src.backtesting.engine import Backtester
+        from src.data_providers.feargreed_provider import FearGreedProvider
+        from src.risk.risk_manager import RiskParameters
 
         configure_logging()
 
@@ -65,18 +73,18 @@ def _handle(ns: argparse.Namespace) -> int:
 
         # Provider
         if ns.provider == "coinbase":
-            from data_providers.coinbase_provider import CoinbaseProvider
+            from src.data_providers.coinbase_provider import CoinbaseProvider
 
             provider = CoinbaseProvider()
         else:
-            from data_providers.binance_provider import BinanceProvider
+            from src.data_providers.binance_provider import BinanceProvider
 
             provider = BinanceProvider()
         if ns.no_cache:
             data_provider = provider
             logger.info("Data caching disabled")
         else:
-            from data_providers.cached_data_provider import CachedDataProvider
+            from src.data_providers.cached_data_provider import CachedDataProvider
 
             data_provider = CachedDataProvider(provider, cache_ttl_hours=ns.cache_ttl)
             logger.info(f"Using cached data provider (TTL: {ns.cache_ttl} hours)")
@@ -222,7 +230,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--days", type=int, default=30, help="Number of days to backtest")
     p.add_argument("--start", help="Start date (YYYY-MM-DD)")
     p.add_argument("--end", help="End date (YYYY-MM-DD)")
-    from config.constants import DEFAULT_INITIAL_BALANCE
+    from src.config.constants import DEFAULT_INITIAL_BALANCE
 
     p.add_argument(
         "--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
