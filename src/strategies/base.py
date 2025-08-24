@@ -158,6 +158,12 @@ class BaseStrategy(ABC):
             - risk_reduction_factors: List[float]
             - recovery_thresholds: List[float]
             - volatility_adjustment_enabled: bool
+          - partial_operations: dict with partial exit and scale-in configuration:
+            - exit_targets: List[float] (e.g., [0.03, 0.06, 0.10] for 3%, 6%, 10%)
+            - exit_sizes: List[float] (e.g., [0.25, 0.25, 0.50] for 25%, 25%, 50%)
+            - scale_in_thresholds: List[float] (e.g., [0.02, 0.05] for 2%, 5%)
+            - scale_in_sizes: List[float] (e.g., [0.25, 0.25] for 25%, 25%)
+            - max_scale_ins: int (e.g., 2)
             
         Example:
             return {
@@ -165,6 +171,13 @@ class BaseStrategy(ABC):
                     'enabled': True,
                     'drawdown_thresholds': [0.03, 0.08, 0.15],
                     'risk_reduction_factors': [0.9, 0.7, 0.5]
+                },
+                'partial_operations': {
+                    'exit_targets': [0.03, 0.06, 0.10],
+                    'exit_sizes': [0.25, 0.25, 0.50],
+                    'scale_in_thresholds': [0.02, 0.05],
+                    'scale_in_sizes': [0.25, 0.25],
+                    'max_scale_ins': 2
                 }
             }
             

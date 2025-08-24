@@ -88,3 +88,28 @@ def test_edge_cases_small_position_and_exact_hits():
     # Exact scale-in threshold
     act = policy.check_scale_in_opportunity(pos, 101.5)
     assert act is not None and act["size"] == 0.2
+
+
+def test_strategy_integration():
+    """Test that strategies can provide partial operations configuration"""
+    from src.strategies.ml_adaptive import MlAdaptive
+    
+    strategy = MlAdaptive()
+    overrides = strategy.get_risk_overrides()
+    
+    assert overrides is not None
+    assert 'partial_operations' in overrides
+    
+    partial_config = overrides['partial_operations']
+    assert 'exit_targets' in partial_config
+    assert 'exit_sizes' in partial_config
+    assert 'scale_in_thresholds' in partial_config
+    assert 'scale_in_sizes' in partial_config
+    assert 'max_scale_ins' in partial_config
+    
+    # Verify the configuration values
+    assert partial_config['exit_targets'] == [0.03, 0.06, 0.10]
+    assert partial_config['exit_sizes'] == [0.25, 0.25, 0.50]
+    assert partial_config['scale_in_thresholds'] == [0.02, 0.05]
+    assert partial_config['scale_in_sizes'] == [0.25, 0.25]
+    assert partial_config['max_scale_ins'] == 2
