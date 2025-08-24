@@ -65,13 +65,18 @@ class SensitiveDataFilter(logging.Filter):
             if isinstance(record.args, dict):
                 record.args = self._redact_mapping(record.args)
             elif isinstance(record.args, (list, tuple)):
+                needs_redaction = False
                 sanitized = []
                 for a in record.args:  # type: ignore[assignment]
                     if isinstance(a, str):
-                        sanitized.append(self._redact_text(a))
+                        redacted_a = self._redact_text(a)
+                        if redacted_a != a:
+                            needs_redaction = True
+                        sanitized.append(redacted_a)
                     else:
                         sanitized.append(a)
-                record.args = tuple(sanitized)
+                if needs_redaction:
+                    record.args = tuple(sanitized)
         except Exception:
             # Never fail logging because of filter errors
             return True
