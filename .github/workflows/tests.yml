@@ -162,7 +162,7 @@ jobs:
     needs: [unit-tests, integration-tests]
     if: ${{ always() && (needs.unit-tests.result == 'failure' || needs.integration-tests.result == 'failure') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: read
@@ -173,6 +173,11 @@ jobs:
       uses: actions/checkout@v4
       with:
         ref: ${{ github.event.pull_request.head.ref }}
+
+    - name: Download all test artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: test-artifacts
 
     - name: Analyze Test Failures
       id: analyze-failures
@@ -207,15 +212,74 @@ jobs:
           echo "pr_branch=" >> $GITHUB_OUTPUT
         fi
 
+    - name: Extract Test Failure Details
+      id: extract-failures
+      run: |
+        echo "=== Extracting detailed test failure information ==="
+        
+        # Create a comprehensive failure report
+        FAILURE_REPORT=""
+        
+        # Process unit test failures (all 4 splits)
+        if [[ "${{ needs.unit-tests.result }}" == "failure" ]]; then
+          echo "Processing unit test failures..."
+          
+          for i in {1..4}; do
+            if [[ -f "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" ]]; then
+              echo "Found unit test report for split $i"
+              
+              # Extract failure details from JUnit XML
+              FAILURE_REPORT+="\n\n=== UNIT TESTS SPLIT $i/4 FAILURES ===\n"
+              
+              # Use the dedicated Python script to parse XML and extract failure details
+              python3 scripts/parse_junit_failures.py "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" >> failure_details.txt
+              
+              FAILURE_REPORT+="$(cat failure_details.txt)\n"
+              rm -f failure_details.txt
+            fi
+          done
+        fi
+        
+        # Process integration test failures
+        if [[ "${{ needs.integration-tests.result }}" == "failure" ]]; then
+          echo "Processing integration test failures..."
+          
+          if [[ -f "test-artifacts/integration-test-reports/junit-integration.xml" ]]; then
+            echo "Found integration test report"
+            
+            FAILURE_REPORT+="\n\n=== INTEGRATION TESTS FAILURES ===\n"
+            
+            # Extract failure details from JUnit XML using the dedicated script
+            python3 scripts/parse_junit_failures.py "test-artifacts/integration-test-reports/junit-integration.xml" >> integration_failure_details.txt
+            
+            FAILURE_REPORT+="$(cat integration_failure_details.txt)\n"
+            rm -f integration_failure_details.txt
+          fi
+        fi
+        
+        # Save the comprehensive failure report
+        echo -e "$FAILURE_REPORT" > comprehensive_failure_report.txt
+        
+        # Count total failures
+        TOTAL_FAILURES=$(echo -e "$FAILURE_REPORT" | grep -c "Test:" || echo "0")
+        echo "total_failures=$TOTAL_FAILURES" >> $GITHUB_OUTPUT
+        
+        echo "Extracted $TOTAL_FAILURES test failures"
+        echo "Comprehensive failure report saved to comprehensive_failure_report.txt"
+
     - name: Launch Cursor Background Agent
       run: |
         echo "=== Launching Cursor Background Agent for Test Failures ==="
         echo "Failed tests: ${{ steps.analyze-failures.outputs.failure_string }}"
+        echo "Total failures: ${{ steps.extract-failures.outputs.total_failures }}"
         echo "PR: ${{ steps.analyze-failures.outputs.pr_number }}"
         echo "Branch: ${{ steps.analyze-failures.outputs.pr_branch }}"
         
         # Get the run URL for context
         RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        
+        # Read the comprehensive failure report
+        FAILURE_DETAILS=$(cat comprehensive_failure_report.txt)
         
         # Construct detailed prompt for fixing test failures
         cat > prompt.txt << EOF
@@ -226,18 +290,24 @@ jobs:
         PR: ${{ steps.analyze-failures.outputs.pr_number }}
         PR Title: ${{ steps.analyze-failures.outputs.pr_title }}
         Failed Tests: ${{ steps.analyze-failures.outputs.failure_string }} tests
+        Total Failures: ${{ steps.extract-failures.outputs.total_failures }}
         CI Run: $RUN_URL
+
+        DETAILED FAILURE ANALYSIS:
+        $FAILURE_DETAILS
 
         Please analyze the failing tests and fix them:
 
         1. **Investigate the failures:** 
-           - Download and examine the test artifacts/logs from the CI run
-           - Identify the root causes of the ${{ steps.analyze-failures.outputs.failure_string }} test failures
+           - Review the detailed failure information above
+           - Identify the root causes of the test failures
+           - Check the test artifacts in the CI run for additional context
            
         2. **Implement fixes:**
            - Make minimal, targeted fixes to resolve the test failures
            - Ensure fixes follow the project's coding standards and patterns
            - Add or update tests if necessary to prevent regression
+           - Focus on the most critical failures first
            
         3. **Commit and push:**
            - Commit your changes directly to the PR branch: ${{ steps.analyze-failures.outputs.pr_branch }}
@@ -247,8 +317,15 @@ jobs:
         4. **Verify:**
            - Ensure your fixes address the specific test failures mentioned
            - Follow the project's testing guidelines and code quality standards
+           - Run tests locally if possible to verify fixes
 
-        Context: This is an automated fix request triggered by CI test failures. Focus on getting the tests passing while maintaining code quality and following existing patterns in the codebase.
+        IMPORTANT: This is the ONLY agent being launched for these test failures. 
+        All ${{ steps.extract-failures.outputs.total_failures }} failures need to be addressed 
+        in a single comprehensive fix. Do not create multiple agents or duplicate efforts.
+
+        Context: This is an automated fix request triggered by CI test failures. 
+        Focus on getting the tests passing while maintaining code quality and following 
+        existing patterns in the codebase.
         EOF
 
         echo "=== Sending to Cursor Background Agent ==="
@@ -261,11 +338,11 @@ jobs:
 
         echo ""
         echo "=== Cursor Background Agent Launched ==="
-        echo "The agent will analyze the test failures and implement fixes."
+        echo "The agent will analyze all ${{ steps.extract-failures.outputs.total_failures }} test failures and implement comprehensive fixes."
         echo "Check the PR branch for any commits made by the agent."
 
         # Cleanup temporary files
-        rm -f prompt.txt
+        rm -f prompt.txt comprehensive_failure_report.txt
 
     - name: Log Failure Details
       run: |
@@ -274,5 +351,6 @@ jobs:
         echo "Branch: ${{ steps.analyze-failures.outputs.pr_branch }}"
         echo "PR: ${{ steps.analyze-failures.outputs.pr_number }}"
         echo "Failed tests: ${{ steps.analyze-failures.outputs.failure_string }}"
+        echo "Total failures: ${{ steps.extract-failures.outputs.total_failures }}"
         echo "CI run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        echo "Cursor agent launched successfully"
+        echo "Single Cursor agent launched successfully with comprehensive failure details"
