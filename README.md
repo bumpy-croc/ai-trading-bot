@@ -203,6 +203,8 @@ Sentiment data (SentiCrypt) and ML training are supported. Pretrained models liv
 
 ## Logging
 - Centralized logging via `utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
+- JSON logs default to enabled in production-like environments (Railway or ENV/APP_ENV=production).
+- See `docs/LOGGING_GUIDE.md` for structured events, context, and operations guidance.
 
 ---
 

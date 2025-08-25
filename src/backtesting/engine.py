@@ -41,6 +41,8 @@ from src.position_management.mfe_mae_tracker import MFEMAETracker
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import BaseStrategy
+from src.utils.logging_context import set_context, update_context
+from src.utils.logging_events import log_engine_event
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +301,19 @@ class Backtester:
     ) -> dict:
         """Run backtest with sentiment data if available"""
         try:
+            # Set base logging context for this backtest run
+            set_context(
+                component="backtester",
+                strategy=getattr(self.strategy, "__class__", type("_", (), {})).__name__,
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+            log_engine_event(
+                "backtest_start",
+                initial_balance=self.initial_balance,
+                start=start.isoformat(),
+                end=end.isoformat() if end else None,
+            )
             # Create trading session in database if enabled
             if self.log_to_database and self.db_manager:
                 self.trading_session_id = self.db_manager.create_trading_session(
@@ -314,6 +329,8 @@ class Backtester:
                 # Set session ID on strategy for logging
                 if hasattr(self.strategy, "session_id"):
                     self.strategy.session_id = self.trading_session_id
+                # Update context with session id
+                update_context(session_id=self.trading_session_id)
 
                 # Update dynamic risk manager with database connection
                 if self.enable_dynamic_risk and self.dynamic_risk_manager and self.db_manager:

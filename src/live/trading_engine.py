@@ -15,6 +15,7 @@ from typing import Any
 import pandas as pd
 from position_management.partial_manager import PartialExitPolicy, PositionState
 
+from src.config import get_config
 from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
@@ -49,6 +50,13 @@ from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.base import BaseStrategy
+from src.utils.logging_context import set_context, update_context
+from src.utils.logging_events import (
+    log_data_event,
+    log_engine_event,
+    log_order_event,
+    log_risk_event,
+)
 
 from .account_sync import AccountSynchronizer
 
@@ -292,8 +300,6 @@ class LiveTradingEngine:
         self.account_synchronizer = None
         if enable_live_trading:
             try:
-                from src.config import get_config
-
                 config = get_config()
                 self.exchange_interface, provider_name = _create_exchange_provider(provider, config)
                 if self.exchange_interface:
@@ -468,6 +474,11 @@ class LiveTradingEngine:
                     f"size factor={adjustments.position_size_factor:.2f}, "
                     f"reason={adjustments.primary_reason}"
                 )
+                log_risk_event(
+                    "dynamic_risk_adjustment",
+                    position_size_factor=adjustments.position_size_factor,
+                    reason=adjustments.primary_reason,
+                )
                 
                 # Log to database for tracking
                 if self.db_manager and self.trading_session_id:
@@ -526,6 +537,20 @@ class LiveTradingEngine:
 
         self.is_running = True
         self.timeframe = timeframe  # Store the trading timeframe
+        # Set base logging context for this engine run
+        set_context(
+            component="live_engine",
+            strategy=getattr(self.strategy, "__class__", type("_", (), {})).__name__,
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+        log_engine_event(
+            "engine_start",
+            initial_balance=self.current_balance,
+            max_position_size=self.max_position_size,
+            check_interval=self.check_interval,
+            mode="live" if self.enable_live_trading else "paper",
+        )
         logger.info(f"🚀 Starting live trading for {symbol} on {timeframe} timeframe")
         logger.info(f"Initial balance: ${self.current_balance:,.2f}")
         logger.info(f"Max position size: {self.max_position_size * 100:.1f}% of balance")
@@ -574,6 +599,9 @@ class LiveTradingEngine:
                 time_exit_config=tx_cfg,
                 market_timezone=(self.time_exit_policy.market_timezone if self.time_exit_policy else None),
             )
+
+            # Update context with session id
+            update_context(session_id=self.trading_session_id)
 
             # Initialize balance tracking
             self.db_manager.update_balance(
@@ -700,6 +728,11 @@ class LiveTradingEngine:
         """Main trading loop"""
         logger.info("Trading loop started")
         steps = 0
+        cfg = get_config()
+        try:
+            heartbeat_every = int(cfg.get("ENGINE_HEARTBEAT_STEPS", "60"))
+        except Exception:
+            heartbeat_every = 60
         while self.is_running and not self.stop_event.is_set():
             if max_steps is not None and steps >= max_steps:
                 logger.info(f"Reached max_steps={max_steps}, stopping engine for test.")
@@ -716,6 +749,7 @@ class LiveTradingEngine:
                 # Fetch latest market data
                 df = self._get_latest_data(symbol, timeframe)
                 if df is None or df.empty:
+                    log_data_event("no_data", reason="empty_frame")
                     logger.warning("No market data received")
                     self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)
@@ -752,6 +786,14 @@ class LiveTradingEngine:
                 current_index = len(df) - 1
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
+                if steps % heartbeat_every == 0:
+                    log_engine_event(
+                        "heartbeat",
+                        step=steps,
+                        open_positions=len(self.positions),
+                        balance=self.current_balance,
+                        last_candle_time=str(df.index[-1]),
+                    )
                 logger.info(
                     f"Trading loop: current_index={current_index}, last_candle_time={df.index[-1]}"
                 )
@@ -1325,6 +1367,14 @@ class LiveTradingEngine:
             logger.info(
                 f"🚀 Opened {side.value} position: {symbol} @ ${price:.2f} (Size: ${position_value:.2f})"
             )
+            log_order_event(
+                "open_position",
+                order_id=order_id,
+                symbol=symbol,
+                side=side.value,
+                entry_price=price,
+                size=size,
+            )
 
             # Send alert if configured
             self._send_alert(f"Position Opened: {symbol} {side.value} @ ${price:.2f}")
@@ -1475,6 +1525,15 @@ class LiveTradingEngine:
                 f"📈 Closed {position.side.value} position for {position.symbol}: "
                 f"P&L={pnl:.2%}, Reason={reason}, "
                 f"Balance=${self.current_balance:,.2f}"
+            )
+            log_order_event(
+                "close_position",
+                order_id=position.order_id,
+                symbol=position.symbol,
+                side=position.side.value,
+                exit_price=current_price,
+                pnl=pnl,
+                reason=reason,
             )
 
         except Exception as e:
