@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import logging.config
 import re
@@ -166,15 +167,53 @@ class MaxMessageLengthFilter(logging.Filter):
         return True
 
 
+class SimpleJsonFormatter(logging.Formatter):
+    """Simple JSON formatter as fallback when pythonjsonlogger is not available."""
+    
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        
+        # * Add exception info if present
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+            
+        # * Add any extra fields from the record
+        for key, value in record.__dict__.items():
+            if key not in ["name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module", "lineno", "funcName", "created", "msecs", "relativeCreated", "thread", "threadName", "processName", "process", "getMessage", "exc_info", "exc_text", "stack_info"]:
+                log_entry[key] = value
+                
+        return json.dumps(log_entry)
+
+
 def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
     cfg = get_config()
     level = (level_name or cfg.get("LOG_LEVEL", "INFO")).upper()
+    
+    # * Check if JSON logging is available, fallback to custom JSON formatter if not
     if json:
-        formatter = {
-            "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
-            # Include standard fields; context fields will be injected by ContextInjectorFilter
-            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
-        }
+        try:
+            # * Test if pythonjsonlogger is available without importing it
+            import importlib.util
+            if importlib.util.find_spec("pythonjsonlogger"):
+                formatter = {
+                    "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+                    # Include standard fields; context fields will be injected by ContextInjectorFilter
+                    "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+                }
+            else:
+                raise ImportError("pythonjsonlogger not found")
+        except ImportError as e:
+            # * Fallback to custom JSON formatter if pythonjsonlogger is not available
+            import logging
+            logging.warning(f"pythonjsonlogger not available, falling back to custom JSON formatter: {e}")
+            formatter = {
+                "()": "src.utils.logging_config.SimpleJsonFormatter",
+            }
     else:
         formatter = {
             "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",

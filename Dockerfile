@@ -24,6 +24,9 @@ RUN pip install --upgrade pip --no-cache-dir && \
 # Copy application code
 COPY . .
 
+# Install the package in editable mode to ensure dependencies are available
+RUN pip install -e .
+
 # Create necessary directories
 # Removed: data directory moved to src/data, logs and ml already exist
 
