@@ -99,12 +99,20 @@ class NamespacePrefixFilter(logging.Filter):
 class ContextInjectorFilter(logging.Filter):
     """Injects structured context fields from contextvars into LogRecord."""
 
+    # * Built-in LogRecord fields that should not be overwritten
+    _RESERVED_FIELDS = {
+        "name", "msg", "args", "levelname", "levelno", "pathname", "filename", 
+        "module", "lineno", "funcName", "created", "msecs", "relativeCreated", 
+        "thread", "threadName", "processName", "process", "getMessage", 
+        "exc_info", "exc_text", "stack_info", "message"
+    }
+
     def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
         try:
             ctx = get_context()
             for key, value in ctx.items():
-                # Attach as record attributes so formatters (including json) include these via %(key)s if configured
-                if not hasattr(record, key):
+                # * Only add context fields that don't conflict with built-in LogRecord fields
+                if key not in self._RESERVED_FIELDS and not hasattr(record, key):
                     setattr(record, key, value)
         except Exception:
             return True
@@ -171,20 +179,26 @@ class SimpleJsonFormatter(logging.Formatter):
     """Simple JSON formatter as fallback when pythonjsonlogger is not available."""
     
     def format(self, record: logging.LogRecord) -> str:
+        # * Safely get the message without overwriting the message field
+        try:
+            message = record.getMessage()
+        except Exception:
+            message = str(record.msg) if record.msg else ""
+            
         log_entry = {
             "timestamp": self.formatTime(record),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": message,
         }
         
         # * Add exception info if present
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
             
-        # * Add any extra fields from the record
+        # * Add any extra fields from the record (excluding built-in fields)
         for key, value in record.__dict__.items():
-            if key not in ["name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module", "lineno", "funcName", "created", "msecs", "relativeCreated", "thread", "threadName", "processName", "process", "getMessage", "exc_info", "exc_text", "stack_info"]:
+            if key not in ["name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module", "lineno", "funcName", "created", "msecs", "relativeCreated", "thread", "threadName", "processName", "process", "getMessage", "exc_info", "exc_text", "stack_info", "message"]:
                 log_entry[key] = value
                 
         return json.dumps(log_entry)
