@@ -41,5 +41,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD /bin/sh -c 'curl -f http://localhost:${PORT:-8000}/health || exit 1'
 
-# Default command - use the CLI directly
-CMD ["atb", "live-health", "ml_basic"]
+# Copy startup script and make it executable
+COPY bin/startup.sh /app/startup.sh
+RUN chmod +x /app/startup.sh
+
+# Default command - run migrations then start application
+CMD ["/app/startup.sh"]

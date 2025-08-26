@@ -8,8 +8,8 @@ Create Date: 2025-08-21
 import sqlalchemy as sa  # type: ignore
 from alembic import op  # type: ignore
 
-revision = "0004_trailing_stops"
-down_revision = "0003_dynamic_risk_tables"
+revision = "0008_trailing_stops"
+down_revision = "0007_time_exits"
 branch_labels = None
 depends_on = None
 

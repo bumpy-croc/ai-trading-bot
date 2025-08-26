@@ -9,8 +9,8 @@ import sqlalchemy as sa  # type: ignore
 from alembic import op  # type: ignore
 from sqlalchemy.engine import reflection  # type: ignore
 
-revision = "0004_partial_operations"
-down_revision = "0003_dynamic_risk_tables"
+revision = "0006_partial_operations"
+down_revision = "0005_mfe_mae_tracking"
 branch_labels = None
 depends_on = None
 

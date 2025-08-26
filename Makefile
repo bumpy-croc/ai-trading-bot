@@ -9,7 +9,7 @@ DAYS ?= 30
 
 .PHONY: help install deps deps-server atb dashboards dashboard-monitoring \
         dashboard-backtesting live live-health backtest optimizer test lint fmt clean \
-        rules setup-pre-commit dev-setup
+        rules setup-pre-commit dev-setup migrate startup
 
 help:
 	@echo "Common targets:"
@@ -27,6 +27,8 @@ help:
 	@echo "  make test                 # run pytest with 4 workers"
 	@echo "  make code-quality         # ruff/black/mypy/bandit"
 	@echo "  make clean                # remove caches, build artifacts"
+	@echo "  make migrate              # run database migrations"
+	@echo "  make startup              # run migrations and start application"
 
 install:
 	python -m pip install --upgrade pip
@@ -84,6 +86,13 @@ clean:
 # --------------------------------- Development Setup --------------------------------------------
 dev-setup:
 	python scripts/setup_development.py
+
+# --------------------------------- Database Migrations --------------------------------------------
+migrate: install
+	atb db migrate
+
+startup: install
+	bin/startup.sh
 
 # --------------------------------- Rules Generation --------------------------------------------
 rules: deps

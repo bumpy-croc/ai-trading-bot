@@ -11,8 +11,8 @@ import sqlalchemy as sa  # type: ignore
 from alembic import op  # type: ignore
 
 # revision identifiers, used by Alembic.
-revision = "0004_time_exits"
-down_revision = "0003_dynamic_risk_tables"
+revision = "0007_time_exits"
+down_revision = "0006_partial_operations"
 branch_labels = None
 depends_on = None
 

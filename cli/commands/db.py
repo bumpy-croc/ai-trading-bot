@@ -17,6 +17,64 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
 
+def _migrate(ns: argparse.Namespace) -> int:
+    """Run database migrations"""
+    
+    print("🔄 Running database migrations...")
+    
+    try:
+        # Check if DATABASE_URL is available
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            print("❌ DATABASE_URL environment variable not found")
+            print("   Please ensure your Railway PostgreSQL service is properly configured")
+            return 1
+        
+        print(f"✅ Database URL found: {database_url[:20]}...")
+        
+        if ns.check:
+            # Just check migration status
+            result = subprocess.run(
+                ["alembic", "current"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                print("✅ Current migration status:")
+                print(result.stdout)
+                return 0
+            else:
+                print("❌ Failed to check migration status:")
+                print(result.stderr)
+                return 1
+        
+        # Run alembic upgrade
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            print("✅ Database migrations completed successfully")
+            if result.stdout:
+                print("📋 Migration output:")
+                print(result.stdout)
+            return 0
+        else:
+            print("❌ Database migrations failed")
+            print("📋 Error output:")
+            print(result.stderr)
+            return 1
+            
+    except Exception as e:
+        print(f"❌ Error running migrations: {e}")
+        return 1
+
+
 def _verify(_ns: argparse.Namespace) -> int:
     from src.config.config_manager import get_config
     from src.database.manager import DatabaseManager
@@ -256,6 +314,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     p_verify = sub.add_parser("verify", help="Verify database connection")
     p_verify.set_defaults(func=_verify)
+
+    p_migrate = sub.add_parser("migrate", help="Run database migrations")
+    p_migrate.add_argument("--check", action="store_true", help="Check migration status only")
+    p_migrate.set_defaults(func=_migrate)
 
     p_backup = sub.add_parser("backup", help="Backup database")
     p_backup.add_argument("--backup-dir", default=os.getenv("BACKUP_DIR", "./backups"))
