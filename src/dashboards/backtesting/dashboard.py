@@ -113,7 +113,7 @@ class BacktestDashboard:
     # ------------------------- run ------------------------------------
     def run(self, host: str = "127.0.0.1", port: int = 8001, debug: bool = False):
         logger.info(f"BacktestDashboard available at http://{host}:{port}")
-        self.app.run(host=host, port=port, debug=debug)
+        self.app.run(host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":

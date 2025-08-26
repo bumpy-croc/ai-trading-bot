@@ -202,7 +202,7 @@ class MarketPredictionDashboard:
     # ------------------------------------------------------------------
     def run(self, host: str = "127.0.0.1", port: int = 8002, debug: bool = False):
         logger.info("MarketPredictionDashboard available at http://%s:%d", host, port)
-        self.app.run(host=host, port=port, debug=debug)
+        self.app.run(host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":

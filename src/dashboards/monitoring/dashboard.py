@@ -1753,7 +1753,7 @@ class MonitoringDashboard:
         self.start_monitoring()
         try:
             self.socketio.run(
-                self.app, host=host, port=port, debug=debug, use_reloader=False, log_output=True
+                self.app, host=host, port=port, debug=debug, use_reloader=False, log_output=True, allow_unsafe_werkzeug=True
             )
             # If we ever return from run(), log why
             logger.warning(
