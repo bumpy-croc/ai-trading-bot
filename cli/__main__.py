@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         dashboards,
         data,
         db,
+        dev,
         live,
         live_health,
         optimizer,
@@ -39,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     live_health.register(subparsers)
     data.register(subparsers)
     db.register(subparsers)
+    dev.register(subparsers)
     train.register(subparsers)
     tests.register(subparsers)
 
