@@ -176,7 +176,7 @@ class MaxMessageLengthFilter(logging.Filter):
 
 
 class SimpleJsonFormatter(logging.Formatter):
-    """Simple JSON formatter as fallback when pythonjsonlogger is not available."""
+    """Custom JSON formatter for structured logging."""
     
     def format(self, record: logging.LogRecord) -> str:
         # * Safely get the message without overwriting the message field
@@ -208,26 +208,11 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
     cfg = get_config()
     level = (level_name or cfg.get("LOG_LEVEL", "INFO")).upper()
     
-    # * Check if JSON logging is available, fallback to custom JSON formatter if not
+    # * Use custom JSON formatter for structured logging
     if json:
-        try:
-            # * Test if pythonjsonlogger is available without importing it
-            import importlib.util
-            if importlib.util.find_spec("pythonjsonlogger"):
-                formatter = {
-                    "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
-                    # Include standard fields; context fields will be injected by ContextInjectorFilter
-                    "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
-                }
-            else:
-                raise ImportError("pythonjsonlogger not found")
-        except ImportError as e:
-            # * Fallback to custom JSON formatter if pythonjsonlogger is not available
-            import logging
-            logging.warning(f"pythonjsonlogger not available, falling back to custom JSON formatter: {e}")
-            formatter = {
-                "()": "src.utils.logging_config.SimpleJsonFormatter",
-            }
+        formatter = {
+            "()": "src.utils.logging_config.SimpleJsonFormatter",
+        }
     else:
         formatter = {
             "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
