@@ -1,7 +1,7 @@
 """Add MFE/MAE tracking columns to positions and trades
 
-Revision ID: 0004_mfe_mae_tracking
-Revises: 0003_dynamic_risk_tables
+Revision ID: 0005_mfe_mae_tracking
+Revises: 0004_time_exits
 Create Date: 2025-08-21
 """
 

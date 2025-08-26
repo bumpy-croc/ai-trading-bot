@@ -1,7 +1,7 @@
 """Add trailing stop fields to positions
 
-Revision ID: 0004_trailing_stops
-Revises: 0003_dynamic_risk_tables
+Revision ID: 0008_trailing_stops
+Revises: 0006_partial_operations
 Create Date: 2025-08-21
 """
 
@@ -9,7 +9,7 @@ import sqlalchemy as sa  # type: ignore
 from alembic import op  # type: ignore
 
 revision = "0008_trailing_stops"
-down_revision = "0007_time_exits"
+down_revision = "0006_partial_operations"
 branch_labels = None
 depends_on = None
 
