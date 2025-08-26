@@ -2,27 +2,68 @@ from __future__ import annotations
 
 import argparse
 
+from cli.commands.train_commands import (
+    train_model_main,
+    train_price_model_main,
+    train_price_only_model_main,
+    simple_model_validator_main,
+)
 from cli.core.forward import forward_to_module_main
 
 
 def _handle_safe(ns: argparse.Namespace) -> int:
-    return forward_to_module_main("scripts.safe_model_trainer", ns.args or [])
+    return forward_to_module_main("src.ml.safe_model_trainer", ns.args or [])
 
 
 def _handle_model(ns: argparse.Namespace) -> int:
-    return forward_to_module_main("scripts.train_model", ns.args or [])
+    # Parse arguments for the training command
+    parser = argparse.ArgumentParser(description="Train combined model")
+    parser.add_argument("symbol", help="Trading pair symbol (e.g., BTCUSDT)")
+    parser.add_argument("--start-date", type=str, default="2019-01-01", help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", type=str, default="2024-12-01", help="End date (YYYY-MM-DD)")
+    parser.add_argument("--timeframe", type=str, default="1d", help="Timeframe")
+    parser.add_argument("--force-sentiment", action="store_true", help="Force sentiment inclusion")
+    parser.add_argument("--force-price-only", action="store_true", help="Train price-only model")
+    
+    # Parse the arguments from ns.args
+    args = parser.parse_args(ns.args or [])
+    return train_model_main(args)
 
 
 def _handle_price(ns: argparse.Namespace) -> int:
-    return forward_to_module_main("scripts.train_price_model", ns.args or [])
+    # Parse arguments for the price model training command
+    parser = argparse.ArgumentParser(description="Train price model")
+    parser.add_argument("symbol", help="Trading pair symbol (e.g., BTCUSDT)")
+    parser.add_argument("--start-date", type=str, default="2019-01-01", help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", type=str, default="2024-12-01", help="End date (YYYY-MM-DD)")
+    parser.add_argument("--timeframe", type=str, default="1d", help="Timeframe")
+    
+    # Parse the arguments from ns.args
+    args = parser.parse_args(ns.args or [])
+    return train_price_model_main(args)
 
 
 def _handle_price_only(ns: argparse.Namespace) -> int:
-    return forward_to_module_main("scripts.train_price_only_model", ns.args or [])
+    # Parse arguments for the price-only model training command
+    parser = argparse.ArgumentParser(description="Train price-only model")
+    parser.add_argument("symbol", help="Trading pair symbol (e.g., BTCUSDT)")
+    parser.add_argument("--start-date", type=str, default="2019-01-01", help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", type=str, default="2024-12-01", help="End date (YYYY-MM-DD)")
+    parser.add_argument("--timeframe", type=str, default="1d", help="Timeframe")
+    
+    # Parse the arguments from ns.args
+    args = parser.parse_args(ns.args or [])
+    return train_price_only_model_main(args)
 
 
 def _handle_simple_validator(ns: argparse.Namespace) -> int:
-    return forward_to_module_main("scripts.simple_model_validator", ns.args or [])
+    # Parse arguments for the simple validator command
+    parser = argparse.ArgumentParser(description="Simple model validator")
+    parser.add_argument("symbol", help="Trading pair symbol (e.g., BTCUSDT)")
+    
+    # Parse the arguments from ns.args
+    args = parser.parse_args(ns.args or [])
+    return simple_model_validator_main(args)
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:

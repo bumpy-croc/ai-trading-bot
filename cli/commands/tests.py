@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import argparse
 
-from cli.core.forward import forward_to_module_main
+from cli.commands.test_commands import (
+    test_database_main,
+    test_download_main,
+    test_secrets_access_main,
+    heartbeat_main,
+)
 
 
 def _handle_db(ns: argparse.Namespace) -> int:
-    return forward_to_module_main("scripts.test_database", ns.args or [])
+    return test_database_main(ns)
 
 
 def _handle_download(ns: argparse.Namespace) -> int:
-    return forward_to_module_main("scripts.test_download", ns.args or [])
+    return test_download_main(ns)
 
 
 def _handle_secrets(ns: argparse.Namespace) -> int:
-    return forward_to_module_main("scripts.test_secrets_access", ns.args or [])
+    return test_secrets_access_main(ns)
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -35,28 +40,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     # Heartbeat job
     def _handle_heartbeat(ns: argparse.Namespace) -> int:
-        import os
-        import sys
-        from datetime import datetime
-
-        from database.manager import DatabaseManager
-        from database.models import EventType
-
-        component = os.getenv("HEARTBEAT_COMPONENT", "scheduler")
-        try:
-            db = DatabaseManager()
-        except Exception as exc:
-            print(f"❌ Failed to init DB manager: {exc}", file=sys.stderr)
-            return 1
-        db.log_event(
-            event_type=EventType.TEST,
-            message="Heartbeat",
-            severity="info",
-            component=component,
-            details={"timestamp": datetime.utcnow().isoformat()},
-        )
-        print("✅ Heartbeat logged")
-        return 0
+        return heartbeat_main(ns)
 
     p_hb = sub.add_parser("heartbeat", help="Log a heartbeat SystemEvent")
     p_hb.set_defaults(func=_handle_heartbeat)

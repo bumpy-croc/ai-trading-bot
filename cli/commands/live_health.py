@@ -150,7 +150,7 @@ def _handle(ns: argparse.Namespace) -> int:
         else:
             filtered_args.append(tail[i])
             i += 1
-    return forward_to_module_main("scripts.run_live_trading", filtered_args)
+    return forward_to_module_main("src.live.runner", filtered_args)
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:

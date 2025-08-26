@@ -2,18 +2,8 @@
 """
 Live Trading Bot Runner
 
-This script starts the live trading engine with proper configuration and safety checks.
+This module provides the live trading engine with proper configuration and safety checks.
 It supports both paper trading (simulation) and live trading with real money.
-
-Usage:
-    # Paper trading (default - safe)
-    python run_live_trading.py ml_basic --symbol BTCUSDT --paper-trading
-
-    # Live trading (requires explicit confirmation)
-    python run_live_trading.py ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
-
-    # With custom settings
-    python run_live_trading.py ml_basic --symbol BTCUSDT --balance 5000 --max-position 0.05
 """
 
 import argparse
@@ -35,7 +25,7 @@ from src.strategies.test_high_frequency import TestHighFrequencyStrategy
 from src.utils.logging_config import configure_logging
 
 # Configure logging - ensure the logs directory exists at project root
-project_root = Path(__file__).resolve().parents[1]
+project_root = Path(__file__).resolve().parents[2]
 logs_dir = project_root / "logs"
 logs_dir.mkdir(exist_ok=True)
 log_file_path = logs_dir / f"live_trading_{datetime.now().strftime('%Y%m%d')}.log"
@@ -54,7 +44,7 @@ def load_strategy(strategy_name: str):
 
     # Lazy import for optional strategies to keep startup fast
     if strategy_name == "bear":
-        from strategies.bear import BearStrategy
+        from src.strategies.bear import BearStrategy
 
         strategies["bear"] = BearStrategy
 
@@ -99,138 +89,111 @@ def parse_args():
         "--paper-trading", action="store_true", help="Run in paper trading mode (safe)"
     )
     parser.add_argument(
-        "--live-trading", action="store_true", help="Run with real money (DANGEROUS)"
+        "--live-trading",
+        action="store_true",
+        help="Run in live trading mode (requires --i-understand-the-risks)",
     )
     parser.add_argument(
         "--i-understand-the-risks",
         action="store_true",
-        help="Required confirmation for live trading",
+        help="Explicitly acknowledge the risks of live trading",
+    )
+
+    # Data provider options
+    parser.add_argument(
+        "--provider",
+        choices=["binance", "coinbase"],
+        default="binance",
+        help="Data provider to use",
+    )
+    parser.add_argument(
+        "--mock-data", action="store_true", help="Use mock data for testing"
+    )
+    parser.add_argument(
+        "--no-cache", action="store_true", help="Disable data caching"
     )
 
     # Risk management
     parser.add_argument(
-        "--risk-per-trade", type=float, default=0.01, help="Risk per trade (1% = 0.01)"
+        "--risk-per-trade",
+        type=float,
+        default=0.02,
+        help="Base risk per trade (0.02 = 2% of balance)",
     )
     parser.add_argument(
-        "--max-risk-per-trade", type=float, default=0.02, help="Maximum risk per trade"
+        "--max-risk-per-trade",
+        type=float,
+        default=0.05,
+        help="Maximum risk per trade (0.05 = 5% of balance)",
     )
     parser.add_argument(
-        "--max-drawdown", type=float, default=0.2, help="Maximum drawdown before stopping"
-    )
-
-    # Data providers
-    parser.add_argument("--use-sentiment", action="store_true", help="Use sentiment analysis")
-    parser.add_argument("--no-cache", action="store_true", help="Disable data caching")
-    parser.add_argument(
-        "--mock-data", action="store_true", help="Use mock data provider for rapid testing"
-    )
-    parser.add_argument(
-        "--provider",
-        choices=["coinbase", "binance"],
-        default="binance",
-        help="Exchange provider to use (default: binance)",
+        "--max-drawdown",
+        type=float,
+        default=0.20,
+        help="Maximum drawdown before stopping (0.20 = 20%)",
     )
 
-    # Monitoring
-    parser.add_argument("--webhook-url", help="Webhook URL for alerts")
+    # Logging and monitoring
     parser.add_argument(
-        "--log-trades", action="store_true", default=True, help="Log trades to file"
+        "--log-trades", action="store_true", help="Log individual trades to file"
+    )
+    parser.add_argument(
+        "--webhook-url", help="Webhook URL for trade notifications"
     )
     parser.add_argument(
         "--snapshot-interval",
         type=int,
-        default=1800,
-        help="Account snapshot interval in seconds (default: 1800 = 30 minutes, 0 = disable)",
+        default=3600,
+        help="Account snapshot interval in seconds",
+    )
+
+    # Sentiment analysis
+    parser.add_argument(
+        "--use-sentiment", action="store_true", help="Enable sentiment analysis"
     )
 
     return parser.parse_args()
 
 
 def validate_configuration(args):
-    """Validate trading configuration and safety checks"""
-    logger.info("Validating configuration...")
+    """Validate configuration and safety checks"""
+    if args.live_trading and not args.i_understand_the_risks:
+        logger.error("❌ Live trading requires explicit risk acknowledgment")
+        logger.error("   Use --i-understand-the-risks flag")
+        return False
 
-    # Skip API credential checks when running in paper trading mode
-    if args.paper_trading and not args.live_trading:
-        logger.info("Paper trading mode detected – skipping API credential validation")
-    else:
-        # Check API credentials
-        config = get_config()
-        try:
-            api_key = config.get("BINANCE_API_KEY")
-            secret = config.get("BINANCE_API_SECRET")
-
-            if not api_key or not secret:
-                raise ValueError("Missing key or secret")
-
-            logger.info("✅ Binance API credentials detected")
-        except ValueError:
-            logger.error("❌ Binance API credentials not found!")
-            logger.error("Please ensure BOTH variables are set in Railway (or other providers):")
-            logger.error("  - BINANCE_API_KEY")
-            logger.error("  - BINANCE_API_SECRET")
-            return False
-
-    # Validate trading mode
     if args.live_trading:
-        if not args.i_understand_the_risks:
-            logger.error("❌ LIVE TRADING REQUIRES EXPLICIT RISK ACKNOWLEDGMENT")
-            logger.error("Add --i-understand-the-risks flag if you want to trade with real money")
-            return False
-
-        logger.warning("⚠️  LIVE TRADING MODE ENABLED - REAL MONEY AT RISK")
-        logger.warning("⚠️  This bot will execute real trades on your Binance account")
-
-        # Additional confirmation for live trading
-        confirmation = input("\nType 'I UNDERSTAND' to continue with live trading: ")
-        if confirmation != "I UNDERSTAND":
-            logger.info("Live trading cancelled by user")
-            return False
+        logger.warning("🚨 LIVE TRADING MODE - REAL MONEY WILL BE USED")
+        logger.warning("   Strategy: %s", args.strategy)
+        logger.warning("   Symbol: %s", args.symbol)
+        logger.warning("   Balance: $%.2f", args.balance)
+        logger.warning("   Max position: %.1f%%", args.max_position * 100)
     else:
-        logger.info("✅ Paper trading mode - no real orders will be executed")
+        logger.info("📄 PAPER TRADING MODE - No real money will be used")
 
-    # Validate parameters
-    if args.max_position > 0.5:
-        logger.error("Maximum position size too large (>50%). This is dangerous.")
+    # Validate strategy exists
+    try:
+        load_strategy(args.strategy)
+    except Exception:
         return False
 
-    if args.balance < 100:
-        logger.error("Balance too small. Minimum recommended: $100")
-        return False
-
-    if args.check_interval < 30:
-        logger.warning("Check interval very short. May cause rate limiting.")
-
-    logger.info("✅ Configuration validated")
     return True
 
 
 def print_startup_info(args, strategy):
     """Print startup information"""
-    print("\n" + "=" * 70)
-    print("🤖 LIVE TRADING BOT STARTUP")
-    print("=" * 70)
-    print(f"Strategy: {strategy.name}")
-    print(f"Symbol: {args.symbol}")
-    print(f"Timeframe: {args.timeframe}")
-    print(f"Max Position Size: {args.max_position * 100:.1f}% of balance")
-    print(f"Check Interval: {args.check_interval}s")
-    print(f"Risk Per Trade: {args.risk_per_trade * 100:.1f}%")
-    print(f"Trading Mode: {'🔴 LIVE TRADING' if args.live_trading else '📄 PAPER TRADING'}")
-    print(f"Sentiment Analysis: {'✅ Enabled' if args.use_sentiment else '❌ Disabled'}")
-    print(f"Data Caching: {'❌ Disabled' if args.no_cache else '✅ Enabled'}")
-    print(f"Trade Logging: {'✅ Enabled' if args.log_trades else '❌ Disabled'}")
-    print(f"Alerts: {'✅ Configured' if args.webhook_url else '❌ Not configured'}")
-    snapshot_info = (
-        f"{args.snapshot_interval}s ({args.snapshot_interval // 60}min)"
-        if args.snapshot_interval > 0
-        else "Disabled"
-    )
-    print(f"Account Snapshots: {snapshot_info}")
-    print("=" * 70)
+    logger.info("🤖 AI Trading Bot Starting")
+    logger.info("   Strategy: %s", strategy.name)
+    logger.info("   Symbol: %s", args.symbol)
+    logger.info("   Timeframe: %s", args.timeframe)
+    logger.info("   Initial Balance: $%.2f", args.balance)
+    logger.info("   Max Position Size: %.1f%%", args.max_position * 100)
+    logger.info("   Check Interval: %d seconds", args.check_interval)
+    logger.info("   Mode: %s", "LIVE TRADING" if args.live_trading else "Paper Trading")
 
 
 def main():
+    """Main entry point for live trading"""
     try:
         args = parse_args()
 
@@ -251,18 +214,18 @@ def main():
             logger.info("Using MockDataProvider for rapid testing")
         else:
             if args.provider == "coinbase":
-                from data_providers.coinbase_provider import CoinbaseProvider
+                from src.data_providers.coinbase_provider import CoinbaseProvider
 
                 provider = CoinbaseProvider()
             else:
-                from data_providers.binance_provider import BinanceProvider
+                from src.data_providers.binance_provider import BinanceProvider
 
                 provider = BinanceProvider()
             if args.no_cache:
                 data_provider = provider
                 logger.info("Data caching disabled")
             else:
-                from data_providers.cached_data_provider import CachedDataProvider
+                from src.data_providers.cached_data_provider import CachedDataProvider
 
                 data_provider = CachedDataProvider(provider, cache_ttl_hours=1)
                 logger.info("Data caching enabled (1 hour TTL)")

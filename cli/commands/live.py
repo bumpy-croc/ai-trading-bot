@@ -7,14 +7,14 @@ from cli.core.forward import forward_to_module_main
 
 def _handle(ns: argparse.Namespace) -> int:
     tail = ns.args or []
-    return forward_to_module_main("scripts.run_live_trading", tail)
+    return forward_to_module_main("src.live.runner", tail)
 
 
 def _control(ns: argparse.Namespace) -> int:
     # Minimal inline controller using SafeModelTrainer
     import json
 
-    from scripts.safe_model_trainer import SafeModelTrainer
+    from src.ml.safe_model_trainer import SafeModelTrainer
 
     trainer = SafeModelTrainer()
 
@@ -74,7 +74,7 @@ def _control(ns: argparse.Namespace) -> int:
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser("live", help="Run live trading (proxies to scripts.run_live_trading)")
+    p = subparsers.add_parser("live", help="Run live trading")
     p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed through to runner")
     p.set_defaults(func=_handle)
 

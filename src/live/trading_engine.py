@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Any
 
 import pandas as pd
-from position_management.partial_manager import PartialExitPolicy, PositionState
+from src.position_management.partial_manager import PartialExitPolicy, PositionState
 
 from src.config import get_config
 from src.config.constants import (

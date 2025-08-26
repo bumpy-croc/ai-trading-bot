@@ -52,7 +52,7 @@ except ImportError:
             self.stop_loss = stop_loss
             self.order_id = order_id
 
-    PositionSide = Mock()
+    PositionSide = Mock()  # noqa: F821
 
 
 
