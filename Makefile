@@ -1,11 +1,5 @@
 SHELL := /bin/bash
 
-VENV := .venv
-VENV_BIN := $(VENV)/bin
-PY := $(VENV_BIN)/python
-PIP := $(VENV_BIN)/pip
-ATB := $(VENV_BIN)/atb
-
 # Tunables (override on CLI, e.g., make backtest STRATEGY=bull DAYS=90)
 PORT ?= 8090
 STRATEGY ?= ml_basic
@@ -13,15 +7,16 @@ SYMBOL ?= BTCUSDT
 TIMEFRAME ?= 1h
 DAYS ?= 30
 
-.PHONY: help venv install deps deps-server atb dashboards dashboard-monitoring \
+.PHONY: help install deps deps-server atb dashboards dashboard-monitoring \
         dashboard-backtesting live live-health backtest optimizer test lint fmt clean \
-        rules setup-pre-commit
+        rules setup-pre-commit dev-setup
 
 help:
 	@echo "Common targets:"
-	@echo "  make venv                 # create .venv"
+	@echo "  make dev-setup            # setup development environment with venv"
 	@echo "  make install              # install CLI (editable) and upgrade pip"
 	@echo "  make deps                 # install dev deps (requirements.txt)"
+	@echo "  make deps-server          # install production deps (requirements-server.txt)"
 	@echo "  make setup-pre-commit     # install pre-commit hooks"
 	@echo "  make dashboards           # list dashboards"
 	@echo "  make dashboard-monitoring # run monitoring dashboard on PORT=$(PORT)"
@@ -33,62 +28,63 @@ help:
 	@echo "  make code-quality         # ruff/black/mypy/bandit"
 	@echo "  make clean                # remove caches, build artifacts"
 
-venv:
-	test -d $(VENV) || python3 -m venv $(VENV)
+install:
+	python -m pip install --upgrade pip
+	pip install -e .
 
-install: venv
-	$(PY) -m pip install --upgrade pip
-	$(PIP) install -e .
+deps: install
+	pip install -r requirements.txt
 
-deps: venv
-	$(PIP) install -r requirements.txt
-
-deps-server: venv
-	$(PIP) install -r requirements-server.txt
+deps-server: install
+	pip install -r requirements-server.txt
 
 setup-pre-commit: deps
-	$(PY) scripts/setup_pre_commit.py
+	python scripts/setup_pre_commit.py
 
-# ------------- CLI wrappers (use venv bins directly, no need to activate) -------------
+# ------------- CLI wrappers (direct execution) -------------
 atb: install
-	@$(ATB) --help
+	@atb --help
 
 dashboards: install
-	$(ATB) dashboards list
+	atb dashboards list
 
 dashboard-monitoring: install
-	$(ATB) dashboards run monitoring --port $(PORT)
+	atb dashboards run monitoring --port $(PORT)
 
 dashboard-backtesting: install
-	$(ATB) dashboards run backtesting --port 8001
+	atb dashboards run backtesting --port 8001
 
 live: install
-	$(ATB) live $(STRATEGY)
+	atb live $(STRATEGY)
 
 live-health: install
-	$(ATB) live-health $(STRATEGY)
+	atb live-health $(STRATEGY)
 
 backtest: install
-	$(ATB) backtest $(STRATEGY) --symbol $(SYMBOL) --timeframe $(TIMEFRAME) --days $(DAYS)
+	atb backtest $(STRATEGY) --symbol $(SYMBOL) --timeframe $(TIMEFRAME) --days $(DAYS)
 
 optimizer: install
-	$(ATB) optimizer --strategy $(STRATEGY) --days $(DAYS)
+	atb optimizer --strategy $(STRATEGY) --days $(DAYS)
 
 # ------------------------------ Quality / tests ---------------------------------------
 test: deps
-	$(VENV_BIN)/pytest -n 4
+	pytest -n 4
 
-lint: venv
-	$(VENV_BIN)/ruff check . || true
+lint:
+	ruff check . || true
 
-code-quality: venv
-	$(VENV_BIN)/black .  && $(VENV_BIN)/ruff check .  && $(PY) bin/run_mypy.py && $(VENV_BIN)/bandit -c pyproject.toml -r src
+code-quality:
+	black .  && ruff check .  && python bin/run_mypy.py && bandit -c pyproject.toml -r src
 
 # --------------------------------- Hygiene --------------------------------------------
 clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist *.egg-info
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
 
+# --------------------------------- Development Setup --------------------------------------------
+dev-setup:
+	python scripts/setup_development.py
+
 # --------------------------------- Rules Generation --------------------------------------------
 rules: deps
-	$(PY) scripts/generate_rules.py
+	python scripts/generate_rules.py

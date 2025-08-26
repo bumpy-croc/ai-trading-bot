@@ -1,4 +1,5 @@
 # Server requirements - lighter build without heavy libraries for training models
+# Production dependencies with pinned versions for stability
 python-binance==1.0.19
 pandas==2.1.4
 python-dotenv==1.0.0
@@ -10,13 +11,21 @@ nltk==3.8.1
 ccxt==4.4.85
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
-psutil==5.9.6
+psutil>=5.9.6
 
+# ML inference
 onnxruntime==1.17.0
+onnx==1.14.0
+
+# Web framework
 Flask==2.3.3
 Flask-SocketIO==5.3.6
 Flask-Admin==1.6.1
-onnx==1.14.0
 eventlet==0.35.1
+
+# Database migrations
 alembic==1.13.1
+
+# Production utilities
+gunicorn==21.2.0
 
