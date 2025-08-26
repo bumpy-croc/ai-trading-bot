@@ -30,6 +30,10 @@ RUN pip install .
 # Create necessary directories
 RUN mkdir -p logs artifacts
 
+# Copy startup script and make it executable
+COPY bin/startup.sh /app/startup.sh
+RUN chmod +x /app/startup.sh
+
 # Create non-root user and adjust ownership
 RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
@@ -40,10 +44,6 @@ EXPOSE 8000
 # Health check endpoint (Railway format)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD /bin/sh -c 'curl -f http://localhost:${PORT:-8000}/health || exit 1'
-
-# Copy startup script and make it executable
-COPY bin/startup.sh /app/startup.sh
-RUN chmod +x /app/startup.sh
 
 # Default command - run migrations then start application
 CMD ["/app/startup.sh"]
