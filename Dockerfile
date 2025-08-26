@@ -27,6 +27,10 @@ COPY . .
 # Install the package in editable mode to ensure dependencies are available
 RUN pip install -e .
 
+# Create virtual environment structure for Makefile compatibility
+RUN python -m venv .venv && \
+    .venv/bin/pip install -e .
+
 # Create necessary directories
 # Removed: data directory moved to src/data, logs and ml already exist
 
