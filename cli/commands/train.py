@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 
 from cli.commands.train_commands import (
+    simple_model_validator_main,
     train_model_main,
     train_price_model_main,
     train_price_only_model_main,
-    simple_model_validator_main,
 )
 from cli.core.forward import forward_to_module_main
 

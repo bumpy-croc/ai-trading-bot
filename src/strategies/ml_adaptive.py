@@ -363,18 +363,43 @@ class MlAdaptive(BaseStrategy):
 
     def get_risk_overrides(self) -> Optional[dict[str, Any]]:
         """
-        Provide risk management overrides including partial operations and trailing stop configuration.
+        Provide risk management overrides including dynamic risk, partial operations, trailing stops, and time-based exits.
         
-        This strategy uses conservative partial exits and scale-ins:
+        This strategy uses:
+        
+        Dynamic Risk Management:
+        - Adaptive position sizing based on performance and market conditions
+        - Drawdown-based risk reduction: 5%, 10%, 15% thresholds
+        - Recovery-based risk restoration: 2%, 5% positive return thresholds
+        - Volatility-based adjustments for high/low volatility periods
+        
+        Conservative Partial Operations:
         - Take 25% profit at 3% gain, 25% at 6% gain, 50% at 10% gain
         - Scale in 25% at 2% gain, 25% at 5% gain (max 2 scale-ins)
         
-        And conservative trailing stops:
+        Conservative Trailing Stops:
         - Activate at 1.5% profit
         - 0.5% trailing distance
         - Breakeven at 2% profit
+        
+        Time-Based Exits:
+        - Maximum 24-hour holding period for crypto positions
+        - No weekend restrictions (crypto trades 24/7)
+        - No overnight restrictions (crypto trades 24/7)
         """
         return {
+            "dynamic_risk": {
+                "enabled": True,
+                "performance_window_days": 30,
+                "drawdown_thresholds": [0.05, 0.10, 0.15],  # 5%, 10%, 15%
+                "risk_reduction_factors": [0.8, 0.6, 0.4],   # 80%, 60%, 40% of normal size
+                "recovery_thresholds": [0.02, 0.05],         # 2%, 5% positive returns
+                "volatility_adjustment_enabled": True,
+                "volatility_window_days": 30,
+                "high_volatility_threshold": 0.03,           # 3% daily volatility
+                "low_volatility_threshold": 0.01,            # 1% daily volatility
+                "volatility_risk_multipliers": (0.7, 1.3),   # (high_vol, low_vol) multipliers
+            },
             "partial_operations": {
                 "exit_targets": [0.03, 0.06, 0.10],  # 3%, 6%, 10%
                 "exit_sizes": [0.25, 0.25, 0.50],     # 25%, 25%, 50%
@@ -387,6 +412,14 @@ class MlAdaptive(BaseStrategy):
                 "trailing_distance_pct": 0.005,  # 0.5%
                 "breakeven_threshold": 0.02,  # 2.0%
                 "breakeven_buffer": 0.001,  # 0.1%
+            },
+            "time_exits": {
+                "max_holding_hours": 24,  # Maximum 24-hour holding period
+                "end_of_day_flat": False,  # No end-of-day restrictions for crypto
+                "weekend_flat": False,     # No weekend restrictions for crypto
+                "no_overnight": False,     # No overnight restrictions for crypto
+                "trading_hours_only": False,  # No trading hours restrictions for crypto
+                "market_timezone": "UTC",  # Use UTC for crypto markets
             }
         }
 
