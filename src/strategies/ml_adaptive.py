@@ -417,9 +417,11 @@ class MlAdaptive(BaseStrategy):
                 "max_holding_hours": 24,  # Maximum 24-hour holding period
                 "end_of_day_flat": False,  # No end-of-day restrictions for crypto
                 "weekend_flat": False,     # No weekend restrictions for crypto
-                "no_overnight": False,     # No overnight restrictions for crypto
-                "trading_hours_only": False,  # No trading hours restrictions for crypto
                 "market_timezone": "UTC",  # Use UTC for crypto markets
+                "time_restrictions": {
+                    "no_overnight": False,     # No overnight restrictions for crypto
+                    "trading_hours_only": False,  # No trading hours restrictions for crypto
+                }
             }
         }
 
