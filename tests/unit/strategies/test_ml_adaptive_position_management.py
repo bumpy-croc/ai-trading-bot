@@ -79,8 +79,8 @@ class TestMlAdaptivePositionManagement:
         assert time_exits["max_holding_hours"] == 24
         assert time_exits["end_of_day_flat"] is False
         assert time_exits["weekend_flat"] is False
-        assert time_exits["no_overnight"] is False
-        assert time_exits["trading_hours_only"] is False
+        assert time_exits["time_restrictions"]["no_overnight"] is False
+        assert time_exits["time_restrictions"]["trading_hours_only"] is False
         assert time_exits["market_timezone"] == "UTC"
 
     def test_strategy_initialization_with_position_management(self):
