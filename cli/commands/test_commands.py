@@ -5,15 +5,12 @@ Test Commands for CLI
 This module contains all the test functionality ported from the scripts directory.
 """
 
-import argparse
 import os
-import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 from src.database.manager import DatabaseManager
 from src.database.models import EventType
-import os
 
 
 def test_database_main(args):
