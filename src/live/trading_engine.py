@@ -13,7 +13,6 @@ from enum import Enum
 from typing import Any
 
 import pandas as pd
-from src.position_management.partial_manager import PartialExitPolicy, PositionState
 
 from src.config import get_config
 from src.config.constants import (
@@ -45,6 +44,7 @@ from src.performance.metrics import Side, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.position_management.partial_manager import PartialExitPolicy, PositionState
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector

@@ -10,7 +10,6 @@ This system ensures that model training doesn't interfere with live trading by:
 """
 
 import argparse
-import json
 import logging
 import os
 import shutil

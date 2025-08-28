@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 
 from cli.commands.test_commands import (
+    heartbeat_main,
     test_database_main,
     test_download_main,
     test_secrets_access_main,
-    heartbeat_main,
 )
 
 

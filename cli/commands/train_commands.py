@@ -5,10 +5,8 @@ Training Commands for CLI
 This module contains all the training functionality ported from the scripts directory.
 """
 
-import argparse
 import json
 import os
-import sys
 from datetime import datetime
 from pathlib import Path
 
