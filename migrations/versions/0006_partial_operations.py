@@ -1,7 +1,7 @@
 """Add partial operations fields and partial_trades table
 
-Revision ID: 0004_partial_operations
-Revises: 0003_dynamic_risk_tables
+Revision ID: 0006_partial_operations
+Revises: 0005_mfe_mae_tracking
 Create Date: 2025-08-21
 """
 

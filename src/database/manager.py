@@ -911,8 +911,8 @@ class DatabaseManager:
                     "EXPIRED": "cancelled",
                 }
 
-                db_status = status_mapping.get(status.upper(), status.lower())
-                order.status = OrderStatus[db_status.upper()]
+                db_status = status_mapping.get(status.upper(), status.upper())
+                order.status = OrderStatus(db_status)
                 order.last_update = datetime.utcnow()
                 session.commit()
                 logger.info(f"Updated order {order_id} status to {db_status}")
