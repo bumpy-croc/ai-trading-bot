@@ -26,6 +26,7 @@ from .exceptions import (
 )
 from .features.pipeline import FeaturePipeline
 from .models.registry import PredictionModelRegistry
+from .utils.caching import PredictionCacheManager
 
 
 @dataclass
@@ -47,15 +48,25 @@ class PredictionResult:
 class PredictionEngine:
     """Main prediction engine facade that orchestrates all components"""
 
-    def __init__(self, config: Optional[PredictionConfig] = None):
+    def __init__(self, config: Optional[PredictionConfig] = None, database_manager=None):
         """
         Initialize prediction engine with configuration
 
         Args:
             config: Optional prediction configuration. If None, loads from ConfigManager
+            database_manager: Optional database manager for prediction caching
         """
         self.config = config or PredictionConfig.from_config_manager()
         self.config.validate()
+
+        # Initialize prediction cache manager if enabled
+        self.cache_manager = None
+        if self.config.prediction_cache_enabled and database_manager:
+            self.cache_manager = PredictionCacheManager(
+                database_manager,
+                ttl=self.config.prediction_cache_ttl,
+                max_size=self.config.prediction_cache_max_size
+            )
 
         # Initialize components
         self.feature_pipeline = FeaturePipeline(
@@ -68,7 +79,7 @@ class PredictionEngine:
             cache_ttl=self.config.feature_cache_ttl,
         )
 
-        self.model_registry = PredictionModelRegistry(self.config)
+        self.model_registry = PredictionModelRegistry(self.config, self.cache_manager)
 
         # Optional helpers
         self._ensemble_aggregator = None
@@ -457,43 +468,83 @@ class PredictionEngine:
 
     def get_performance_stats(self) -> dict[str, Any]:
         """Get engine performance statistics"""
+        avg_inference_time = (
+            self._total_inference_time / self._prediction_count
+            if self._prediction_count > 0
+            else 0.0
+        )
+        cache_hit_rate = (
+            self._cache_hits / (self._cache_hits + self._cache_misses)
+            if (self._cache_hits + self._cache_misses) > 0
+            else 0.0
+        )
+        model_times = {
+            k: np.mean(v) for k, v in self._model_inference_times.items()
+        }
+        avg_feature_time = (
+            self._total_feature_extraction_time / self._feature_extraction_count
+            if self._feature_extraction_count > 0
+            else 0.0
+        )
+
         return {
-            "total_predictions": self._prediction_count,
-            "avg_inference_time": (
-                self._total_inference_time / self._prediction_count
-                if self._prediction_count > 0
-                else 0.0
-            ),
-            "cache_hit_rate": (
-                self._cache_hits / (self._cache_hits + self._cache_misses)
-                if (self._cache_hits + self._cache_misses) > 0
-                else 0.0
-            ),
+            "prediction_count": self._prediction_count,
+            "total_inference_time": self._total_inference_time,
+            "average_inference_time": avg_inference_time,
+            "cache_hit_rate": cache_hit_rate,
+            "feature_extraction_time": self._feature_extraction_time,
+            "average_feature_extraction_time": avg_feature_time,
+            "model_inference_times": model_times,
             "cache_hits": self._cache_hits,
             "cache_misses": self._cache_misses,
-            "available_models": len(self.get_available_models()),
-            "avg_feature_extraction_time": (
-                self._total_feature_extraction_time / self._feature_extraction_count
-                if self._feature_extraction_count > 0
-                else 0.0
-            ),
         }
 
     def clear_caches(self) -> None:
-        """Clear all caches"""
-        self.feature_pipeline.clear_cache()
-        # Reset cache hit status after clearing
-        if hasattr(self.feature_pipeline, "_last_cache_hit"):
-            self.feature_pipeline._last_cache_hit = False
-        # Reset performance stats related to caching
-        self._cache_hits = 0
-        self._cache_misses = 0
-        # Reset feature extraction tracking
-        self._total_feature_extraction_time = 0.0
-        self._feature_extraction_count = 0
+        """Clear all caches (feature and prediction)"""
+        # Clear feature cache
+        if self.feature_pipeline.cache:
+            self.feature_pipeline.cache.clear()
+        
+        # Clear prediction cache
+        if self.cache_manager:
+            self.cache_manager.clear()
 
-    def reload_models(self) -> None:
-        """Reload all models"""
+    def get_cache_stats(self) -> dict[str, Any]:
+        """Get comprehensive cache statistics"""
+        stats = {}
+        
+        # Feature cache stats
+        if self.feature_pipeline.cache:
+            stats["feature_cache"] = self.feature_pipeline.cache.get_stats()
+        
+        # Prediction cache stats
+        if self.cache_manager:
+            stats["prediction_cache"] = self.cache_manager.get_stats()
+        
+        return stats
+
+    def invalidate_model_cache(self, model_name: Optional[str] = None) -> int:
+        """
+        Invalidate prediction cache for specific model or all models.
+        
+        Args:
+            model_name: Specific model name to invalidate, or None for all models
+            
+        Returns:
+            Number of cache entries invalidated
+        """
+        if not self.cache_manager:
+            return 0
+            
+        return self.model_registry.invalidate_cache(model_name)
+
+    def reload_models_and_clear_cache(self) -> None:
+        """Reload all models and clear prediction cache"""
+        # Clear prediction cache first
+        if self.cache_manager:
+            self.cache_manager.clear()
+        
+        # Reload models
         self.model_registry.reload_models()
 
     def health_check(self) -> dict[str, Any]:
