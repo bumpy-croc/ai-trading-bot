@@ -181,12 +181,17 @@ jobs:
 
     - name: Analyze Test Failures
       id: analyze-failures
+      env:
+        UNIT_FAILED: ${{ needs.unit-tests.result }}
+        INTEGRATION_FAILED: ${{ needs.integration-tests.result }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BRANCH: ${{ github.event.pull_request.head.ref }}
       run: |
         echo "=== Analyzing test failures ==="
         
         # Determine which tests failed
-        UNIT_FAILED="${{ needs.unit-tests.result }}"
-        INTEGRATION_FAILED="${{ needs.integration-tests.result }}"
         
         FAILURE_TYPES=()
         if [[ "$UNIT_FAILED" == "failure" ]]; then
@@ -202,10 +207,10 @@ jobs:
         echo "failure_string=$FAILURE_STRING" >> $GITHUB_OUTPUT
         
         # Get PR information if available
-        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
-          echo "pr_branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_title=$PR_TITLE" >> $GITHUB_OUTPUT
+          echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
         else
           echo "pr_number=" >> $GITHUB_OUTPUT
           echo "pr_title=" >> $GITHUB_OUTPUT
@@ -226,11 +231,6 @@ jobs:
           
           for i in {1..4}; do
             if [[ -f "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" ]]; then
-              echo "Found unit test report for split $i"
-              
-              # Extract failure details from JUnit XML
-              FAILURE_REPORT+="\n\n=== UNIT TESTS SPLIT $i/4 FAILURES ===\n"
-              
               # Use the dedicated Python script to parse XML and extract failure details
               python3 scripts/parse_junit_failures.py "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" >> failure_details.txt
               
