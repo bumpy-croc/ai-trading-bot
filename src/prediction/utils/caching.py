@@ -396,11 +396,15 @@ class PredictionCacheManager:
             Hash string for the features
         """
         try:
-            # Use numpy's hash function for efficient hashing
+            # Use numpy's tobytes() for efficient hashing
             features_bytes = features.tobytes()
             return hashlib.sha256(features_bytes).hexdigest()
-        except Exception:
-            # Fallback to string-based hashing
+        except (AttributeError, ValueError, TypeError) as e:
+            # Fallback to string-based hashing if tobytes() fails
+            logging.debug(
+                "Failed to hash features using tobytes(): %s: %s. Falling back to string-based hashing.",
+                type(e).__name__, str(e)
+            )
             return hashlib.sha256(str(features).encode()).hexdigest()
 
     def _generate_config_hash(self, model_name: str, config: dict) -> str:

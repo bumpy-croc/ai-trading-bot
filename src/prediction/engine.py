@@ -501,10 +501,9 @@ class PredictionEngine:
 
     def clear_caches(self) -> None:
         """Clear all caches (feature and prediction)"""
-        # Clear feature cache
-        if self.feature_pipeline.cache:
-            self.feature_pipeline.cache.clear()
-        
+        # Clear feature cache using the proper method
+        self.feature_pipeline.clear_cache()
+
         # Clear prediction cache
         if self.cache_manager:
             self.cache_manager.clear()

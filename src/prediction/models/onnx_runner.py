@@ -5,6 +5,7 @@ This module provides functionality to run ONNX models for prediction.
 """
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -134,8 +135,12 @@ class OnnxRunner:
             }
             
             return self.cache_manager.get(features, model_name, config)
-        except Exception:
-            # Return None on cache errors to fall back to model inference
+        except Exception as e:
+            # Log cache errors at debug level to aid in troubleshooting while maintaining fallback behavior
+            logging.debug(
+                "Cache lookup failed for model %s: %s: %s. Falling back to model inference.",
+                model_name, type(e).__name__, str(e)
+            )
             return None
 
     def _cache_result(self, features: np.ndarray, prediction: dict[str, Any]) -> None:
@@ -155,9 +160,12 @@ class OnnxRunner:
                 features, model_name, config,
                 prediction["price"], prediction["confidence"], prediction["direction"]
             )
-        except Exception:
-            # Silently fail on cache errors to not affect prediction
-            pass
+        except Exception as e:
+            # Log cache errors at debug level to aid in troubleshooting while not affecting prediction
+            logging.debug(
+                "Failed to cache prediction result for model %s: %s: %s. Continuing with prediction.",
+                model_name, type(e).__name__, str(e)
+            )
 
     def _prepare_input(self, features: np.ndarray) -> np.ndarray:
         """Prepare features for model input"""
