@@ -21,6 +21,11 @@ DEFAULT_ENABLE_ENSEMBLE = False
 DEFAULT_ENSEMBLE_METHOD = "mean"
 DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE = False
 
+# Prediction Caching Constants
+DEFAULT_PREDICTION_CACHE_TTL = 60  # seconds
+DEFAULT_PREDICTION_CACHE_MAX_SIZE = 1000  # maximum number of cached predictions
+DEFAULT_PREDICTION_CACHE_ENABLED = True  # enable/disable prediction caching
+
 # Feature Engineering Constants
 DEFAULT_SEQUENCE_LENGTH = 120  # LSTM sequence length for technical features
 DEFAULT_NORMALIZATION_WINDOW = 120  # Window for price normalization

@@ -21,6 +21,9 @@ from src.config.constants import (
     DEFAULT_MIN_CONFIDENCE_THRESHOLD,
     DEFAULT_MODEL_CACHE_TTL,
     DEFAULT_MODEL_REGISTRY_PATH,
+    DEFAULT_PREDICTION_CACHE_ENABLED,
+    DEFAULT_PREDICTION_CACHE_MAX_SIZE,
+    DEFAULT_PREDICTION_CACHE_TTL,
     DEFAULT_PREDICTION_HORIZONS,
 )
 
@@ -50,6 +53,11 @@ class PredictionConfig:
     enable_ensemble: bool = DEFAULT_ENABLE_ENSEMBLE
     ensemble_method: str = DEFAULT_ENSEMBLE_METHOD
     enable_regime_aware_confidence: bool = DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE
+    
+    # Prediction caching options
+    prediction_cache_enabled: bool = DEFAULT_PREDICTION_CACHE_ENABLED
+    prediction_cache_ttl: int = DEFAULT_PREDICTION_CACHE_TTL
+    prediction_cache_max_size: int = DEFAULT_PREDICTION_CACHE_MAX_SIZE
 
     @classmethod
     def from_config_manager(cls) -> "PredictionConfig":
@@ -99,36 +107,49 @@ class PredictionConfig:
             enable_regime_aware_confidence=config.get_bool(
                 "ENABLE_REGIME_AWARE_CONFIDENCE", default=DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE
             ),
+            prediction_cache_enabled=config.get_bool(
+                "PREDICTION_CACHE_ENABLED", default=DEFAULT_PREDICTION_CACHE_ENABLED
+            ),
+            prediction_cache_ttl=config.get_int(
+                "PREDICTION_CACHE_TTL", default=DEFAULT_PREDICTION_CACHE_TTL
+            ),
+            prediction_cache_max_size=config.get_int(
+                "PREDICTION_CACHE_MAX_SIZE", default=DEFAULT_PREDICTION_CACHE_MAX_SIZE
+            ),
         )
 
     def validate(self) -> None:
-        """
-        Validate configuration values.
-
-        Raises:
-            ValueError: If any configuration value is invalid
-        """
-        if not self.prediction_horizons:
-            raise ValueError("At least one prediction horizon must be specified")
-
-        if any(h <= 0 for h in self.prediction_horizons):
-            raise ValueError("Prediction horizons must be positive integers")
-
-        if not 0 <= self.min_confidence_threshold <= 1:
-            raise ValueError("Confidence threshold must be between 0 and 1")
-
-        if self.max_prediction_latency <= 0:
-            raise ValueError("Prediction latency must be positive")
-
+        """Validate configuration parameters"""
+        if self.min_confidence_threshold < 0.0 or self.min_confidence_threshold > 1.0:
+            raise ValueError("min_confidence_threshold must be between 0.0 and 1.0")
+        
+        if self.max_prediction_latency <= 0.0:
+            raise ValueError("max_prediction_latency must be positive")
+        
         if self.feature_cache_ttl <= 0:
-            raise ValueError("Feature cache TTL must be positive")
-
+            raise ValueError("feature_cache_ttl must be positive")
+        
         if self.model_cache_ttl <= 0:
-            raise ValueError("Model cache TTL must be positive")
-
-        # Basic sanity for ensemble
-        if self.ensemble_method not in ("mean", "median", "weighted"):
-            raise ValueError("Invalid ensemble method; choose 'mean', 'median', or 'weighted'")
+            raise ValueError("model_cache_ttl must be positive")
+        
+        if self.confidence_scale_factor <= 0.0:
+            raise ValueError("confidence_scale_factor must be positive")
+        
+        if self.direction_threshold < 0.0:
+            raise ValueError("direction_threshold must be non-negative")
+        
+        if self.prediction_cache_ttl <= 0:
+            raise ValueError("prediction_cache_ttl must be positive")
+        
+        if self.prediction_cache_max_size <= 0:
+            raise ValueError("prediction_cache_max_size must be positive")
+        
+        if not isinstance(self.prediction_horizons, list) or not self.prediction_horizons:
+            raise ValueError("prediction_horizons must be a non-empty list")
+        
+        for horizon in self.prediction_horizons:
+            if not isinstance(horizon, int) or horizon <= 0:
+                raise ValueError("All prediction_horizons must be positive integers")
 
     def __str__(self) -> str:
         """String representation of the configuration."""
@@ -140,5 +161,8 @@ class PredictionConfig:
             f"sentiment={self.enable_sentiment}, "
             f"microstructure={self.enable_market_microstructure}, "
             f"ensemble={self.enable_ensemble}/{self.ensemble_method}, "
-            f"regime_conf={self.enable_regime_aware_confidence})"
+            f"regime_conf={self.enable_regime_aware_confidence}, "
+            f"cache_enabled={self.prediction_cache_enabled}, "
+            f"cache_ttl={self.prediction_cache_ttl}, "
+            f"cache_max_size={self.prediction_cache_max_size})"
         )

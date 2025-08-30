@@ -104,7 +104,7 @@ class TestPredictionConfig:
             model_cache_ttl=600,
         )
 
-        with pytest.raises(ValueError, match="At least one prediction horizon"):
+        with pytest.raises(ValueError, match="prediction_horizons must be a non-empty list"):
             invalid_config.validate()
 
     def test_prediction_config_validation_negative_horizons(self):
@@ -120,7 +120,7 @@ class TestPredictionConfig:
             model_cache_ttl=600,
         )
 
-        with pytest.raises(ValueError, match="Prediction horizons must be positive"):
+        with pytest.raises(ValueError, match="All prediction_horizons must be positive integers"):
             invalid_config.validate()
 
     def test_prediction_config_validation_invalid_confidence(self):
@@ -137,7 +137,7 @@ class TestPredictionConfig:
             model_cache_ttl=600,
         )
 
-        with pytest.raises(ValueError, match="Confidence threshold must be between 0 and 1"):
+        with pytest.raises(ValueError, match="min_confidence_threshold must be between 0.0 and 1.0"):
             invalid_config_high.validate()
 
         # Test confidence < 0
@@ -152,7 +152,7 @@ class TestPredictionConfig:
             model_cache_ttl=600,
         )
 
-        with pytest.raises(ValueError, match="Confidence threshold must be between 0 and 1"):
+        with pytest.raises(ValueError, match="min_confidence_threshold must be between 0.0 and 1.0"):
             invalid_config_low.validate()
 
     def test_prediction_config_validation_negative_latency(self):
@@ -168,7 +168,7 @@ class TestPredictionConfig:
             model_cache_ttl=600,
         )
 
-        with pytest.raises(ValueError, match="Prediction latency must be positive"):
+        with pytest.raises(ValueError, match="max_prediction_latency must be positive"):
             invalid_config.validate()
 
     def test_prediction_config_validation_invalid_cache_ttl(self):
@@ -185,7 +185,7 @@ class TestPredictionConfig:
             model_cache_ttl=600,
         )
 
-        with pytest.raises(ValueError, match="Feature cache TTL must be positive"):
+        with pytest.raises(ValueError, match="feature_cache_ttl must be positive"):
             invalid_config_feature.validate()
 
         # Test negative model cache TTL
@@ -200,7 +200,7 @@ class TestPredictionConfig:
             model_cache_ttl=-600,  # Negative TTL
         )
 
-        with pytest.raises(ValueError, match="Model cache TTL must be positive"):
+        with pytest.raises(ValueError, match="model_cache_ttl must be positive"):
             invalid_config_model.validate()
 
     def test_prediction_config_str_representation(self):

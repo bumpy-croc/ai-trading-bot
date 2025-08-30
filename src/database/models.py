@@ -694,3 +694,36 @@ class PortfolioExposure(Base):
     position_count = Column(Integer)
     symbols = Column(JSONType)  # List of symbols in group
     last_updated = Column(DateTime)
+
+
+class PredictionCache(Base):
+    """Cache for prediction results to avoid redundant inference"""
+
+    __tablename__ = "prediction_cache"
+
+    id = Column(Integer, primary_key=True)
+    cache_key = Column(String(255), nullable=False, unique=True, index=True)
+    model_name = Column(String(100), nullable=False, index=True)
+    
+    # Input features hash for cache key generation
+    features_hash = Column(String(64), nullable=False, index=True)
+    
+    # Cached prediction results
+    predicted_price = Column(Numeric(18, 8), nullable=False)
+    confidence = Column(Numeric(18, 8), nullable=False)
+    direction = Column(Integer, nullable=False)  # 1, 0, -1
+    
+    # Cache metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    access_count = Column(Integer, default=0)
+    last_accessed = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Configuration context for cache invalidation
+    config_hash = Column(String(64), nullable=False)  # Hash of model configuration
+    
+    __table_args__ = (
+        Index("idx_pred_cache_expires", "expires_at"),
+        Index("idx_pred_cache_model_config", "model_name", "config_hash"),
+        Index("idx_pred_cache_access", "last_accessed"),
+    )

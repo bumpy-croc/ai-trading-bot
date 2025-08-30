@@ -33,6 +33,7 @@ from .models import (
     PerformanceMetrics,
     Position,
     PositionSide,
+    PredictionCache,
     RiskAdjustment,
     StrategyExecution,
     SystemEvent,
