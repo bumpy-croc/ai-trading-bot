@@ -30,7 +30,7 @@ The AI Trading Bot now includes a comprehensive persistent balance and position 
 python scripts/verify_database_connection.py
 
 # Start trading with initial balance
-python scripts/run_live_trading.py ml_basic --balance 1000 --paper-trading
+atb live ml_basic --symbol BTCUSDT --paper-trading
 ```
 
 ### 2. **Balance Recovery Process**
@@ -94,10 +94,11 @@ engine = LiveTradingEngine(
 ### Command Line Options
 ```bash
 # Resume from last balance (default)
-python scripts/run_live_trading.py ml_basic --balance 1000
+atb live ml_basic --symbol BTCUSDT --paper-trading
 
-# Start fresh (ignore existing balance)
-python scripts/run_live_trading.py ml_basic --balance 1000 --no-resume
+# Start fresh (force reset - requires explicit confirmation)
+# Note: Check CLI help for specific balance reset options
+atb live ml_basic --symbol BTCUSDT --paper-trading --help
 ```
 
 ## 💡 Usage Scenarios
@@ -144,13 +145,13 @@ CREATE TABLE account_balances (
 ```bash
 # 1. Stop any running trading bot
 # 2. Run database migration
-python scripts/migrate_database.py migrate
+atb db migrate
 
 # 3. Validate database connectivity
-python scripts/verify_database_connection.py --verify
+python scripts/verify_database_connection.py
 
 # 4. Restart trading bot
-python scripts/run_live_trading.py ml_basic --paper-trading
+atb live ml_basic --symbol BTCUSDT --paper-trading
 ```
 
 ### Migration Details
@@ -216,13 +217,14 @@ GET /api/balance/history?limit=50
 ### Balance Not Recovering
 ```bash
 # Check DB connectivity
-python scripts/verify_database_connection.py --verify
+atb db verify
 
-# View current balance
-python -c "from database.manager import DatabaseManager; dm = DatabaseManager(); print(f'Current balance: ${dm.get_current_balance():.2f}')"
+# View current balance via database admin UI
+# Start admin UI: python src/database_manager/app.py
+# Or check via CLI: atb db --help  # Check available database commands
 
-# Ensure tables exist and connection is healthy
-python scripts/verify_database_connection.py --verify
+# Ensure database connection is healthy
+python scripts/verify_database_connection.py
 ```
 
 ### Positions Not Restored
