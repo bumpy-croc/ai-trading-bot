@@ -95,6 +95,8 @@ class BacktestDashboard:
         return summaries
 
     def _load_single_backtest(self, filename: str) -> dict[str, Any] | None:
+        if "../" in filename or "..\\" in filename:
+            raise Exception("Invalid file path")
         path = self.logs_dir / filename
         if not path.exists():
             return None
