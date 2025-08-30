@@ -59,6 +59,8 @@ class AugmentoProvider(SentimentDataProvider):
             time.sleep(self.min_request_interval - time_since_last)
 
         url = f"{self.base_url}/{endpoint}"
+        if not url.startswith(('http://', 'https://')):
+            raise ValueError("URL must start with http:// or https://")
         response = requests.get(url, params=params, headers=self.headers, timeout=30)
 
         self.last_request_time = time.time()
