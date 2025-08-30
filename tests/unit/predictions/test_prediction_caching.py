@@ -233,23 +233,26 @@ class TestOnnxRunnerCaching:
             "cache_hit": True
         }
         self.mock_cache_manager.get.return_value = cache_result
-        
+
         # Mock ONNX session
         mock_session = MagicMock()
         mock_session.get_inputs.return_value = [MagicMock(name="input")]
         mock_inference_session.return_value = mock_session
-        
-        runner = OnnxRunner("test_model.onnx", self.config, self.mock_cache_manager)
-        
+
+        # Use proper path format instead of filename string
+        model_path = "/tmp/test_model.onnx"
+        runner = OnnxRunner(model_path, self.config, self.mock_cache_manager)
+
         # Mock model metadata
         runner.model_metadata = {"normalization_params": {}}
-        
+
         result = runner.predict(self.features)
-        
+
         # Should return cached result without running inference
         assert result.price == 100.5
         assert result.confidence == 0.8
         assert result.direction == 1
+        # model_name should be basename of the path
         assert result.model_name == "test_model.onnx"
         
         # Verify cache was checked
@@ -260,22 +263,25 @@ class TestOnnxRunnerCaching:
         """Test prediction with cache miss"""
         # Mock cache miss
         self.mock_cache_manager.get.return_value = None
-        
+
         # Mock ONNX session and inference
         mock_session = MagicMock()
         mock_session.get_inputs.return_value = [MagicMock(name="input")]
         mock_session.run.return_value = [np.array([[0.5]])]  # Mock output
         mock_inference_session.return_value = mock_session
-        
-        runner = OnnxRunner("test_model.onnx", self.config, self.mock_cache_manager)
-        
+
+        # Use proper path format instead of filename string
+        model_path = "/tmp/test_model.onnx"
+        runner = OnnxRunner(model_path, self.config, self.mock_cache_manager)
+
         # Mock model metadata
         runner.model_metadata = {"normalization_params": {}}
-        
+
         result = runner.predict(self.features)
-        
+
         # Should run inference and cache result
         assert result.price == 0.5
+        # model_name should be basename of the path
         assert result.model_name == "test_model.onnx"
         
         # Verify cache was checked and result was cached
@@ -290,38 +296,45 @@ class TestOnnxRunnerCaching:
         mock_session.get_inputs.return_value = [MagicMock(name="input")]
         mock_session.run.return_value = [np.array([[0.5]])]  # Mock output
         mock_inference_session.return_value = mock_session
-        
-        runner = OnnxRunner("test_model.onnx", self.config, cache_manager=None)
-        
+
+        # Use proper path format instead of filename string
+        model_path = "/tmp/test_model.onnx"
+        runner = OnnxRunner(model_path, self.config, cache_manager=None)
+
         # Mock model metadata
         runner.model_metadata = {"normalization_params": {}}
-        
+
         result = runner.predict(self.features)
-        
+
         # Should run inference without caching
         assert result.price == 0.5
+        # model_name should be basename of the path
         assert result.model_name == "test_model.onnx"
 
     def test_cache_disabled(self):
         """Test prediction when cache is disabled"""
         self.config.prediction_cache_enabled = False
-        
+
         with patch('src.prediction.models.onnx_runner.ort.InferenceSession') as mock_inference_session:
             # Mock ONNX session and inference
             mock_session = MagicMock()
             mock_session.get_inputs.return_value = [MagicMock(name="input")]
             mock_session.run.return_value = [np.array([[0.5]])]  # Mock output
             mock_inference_session.return_value = mock_session
-            
-            runner = OnnxRunner("test_model.onnx", self.config, self.mock_cache_manager)
-            
+
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config, self.mock_cache_manager)
+
             # Mock model metadata
             runner.model_metadata = {"normalization_params": {}}
-            
+
             result = runner.predict(self.features)
-            
+
             # Should run inference without checking cache
             assert result.price == 0.5
+            # model_name should be basename of the path
+            assert result.model_name == "test_model.onnx"
             self.mock_cache_manager.get.assert_not_called()
             self.mock_cache_manager.set.assert_not_called()
 
