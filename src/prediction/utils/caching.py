@@ -398,8 +398,11 @@ class PredictionCacheManager:
         try:
             # Use numpy's hash function for efficient hashing
             features_bytes = features.tobytes()
-            return hashlib.sha256(features_bytes).hexdigest()
-        except Exception:
+        except (AttributeError, ValueError) as e:
+            logger.warning(
+                "Failed to hash features using tobytes(): %s: %s. Falling back to string-based hashing.",
+                type(e).__name__, str(e)
+            )
             # Fallback to string-based hashing
             return hashlib.sha256(str(features).encode()).hexdigest()
 
