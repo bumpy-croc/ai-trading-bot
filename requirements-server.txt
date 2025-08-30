@@ -27,5 +27,5 @@ eventlet==0.35.1
 alembic==1.13.1
 
 # Production utilities
-gunicorn==21.2.0
+gunicorn==23.0.0
 
