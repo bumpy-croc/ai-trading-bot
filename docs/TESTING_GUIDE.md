@@ -529,13 +529,13 @@ Minimum coverage requirements:
 
 ```bash
 # Generate coverage report
-pytest --cov=ai-trading-bot --cov-report=html
+pytest --cov=src --cov-report=html
 
 # View coverage report
 open htmlcov/index.html
 
 # Check coverage of specific module
-pytest --cov=live.trading_engine --cov-report=term-missing
+pytest --cov=src.live.trading_engine --cov-report=term-missing
 ```
 
 ## Contributing Tests

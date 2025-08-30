@@ -166,7 +166,7 @@ railway variables | grep BINANCE
 
 - **Railway Docs**: [docs.railway.app](https://docs.railway.app)
 - **Railway Discord**: [railway.app/discord](https://railway.app/discord)
-- **Full Guide**: [Railway Deployment Guide](docs/RAILWAY_DEPLOYMENT_GUIDE.md)
+- **Full Guide**: [Railway Deployment Guide](RAILWAY_DEPLOYMENT_GUIDE.md)
 
 ---
 

@@ -11,14 +11,21 @@ Note: default refresh interval is 3600 seconds. Override with `--update-interval
 
 ## Quick start
 ```bash
-pip install -r requirements-server.txt
-python scripts/start_dashboard.py
+# Install dependencies
+make deps-server  # or make deps for full development setup
+
+# Start monitoring dashboard
+atb dashboards run monitoring --port 8000
 # http://localhost:8000
 ```
 
 Or run directly:
 ```bash
-python src/monitoring/dashboard.py --host 0.0.0.0 --port 8000 --update-interval 3600
+# Check available dashboards
+atb dashboards list
+
+# Run with custom settings
+atb dashboards run monitoring --host 0.0.0.0 --port 8000
 ```
 
 ## Configuration
