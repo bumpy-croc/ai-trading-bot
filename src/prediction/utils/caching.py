@@ -388,10 +388,10 @@ class PredictionCacheManager:
     def _generate_features_hash(self, features: np.ndarray) -> str:
         """
         Generate a hash for the input features array.
-        
+
         Args:
             features: Input features array
-            
+
         Returns:
             Hash string for the features
         """
@@ -399,8 +399,8 @@ class PredictionCacheManager:
             # Use numpy's tobytes() for efficient hashing
             features_bytes = features.tobytes()
             return hashlib.sha256(features_bytes).hexdigest()
-        except (AttributeError, ValueError, TypeError) as e:
-            # Fallback to string-based hashing if tobytes() fails
+        except Exception as e:
+            # Fallback to string-based hashing if any error occurs
             logger.warning(
                 "Failed to hash features using tobytes(): %s: %s. Falling back to string-based hashing.",
                 type(e).__name__, str(e)
