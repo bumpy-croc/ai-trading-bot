@@ -3,6 +3,7 @@ alwaysApply: true
 ---
 
 # General
+- Always follow the coding standards in `docs/CODE_QUALITY.md`
 - Follow repo patterns; match existing style and imports (absolute imports under `src/`).
 - Add only essential comments; explain non-obvious decisions.
 - Place constants/config in `src/config/constants.py` when cross-cutting.
