@@ -20,15 +20,27 @@ A modular cryptocurrency trading system focused on long-term, risk-balanced tren
 1) Install
 
 ```bash
+# Create virtual environment
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+
+# Install CLI and dependencies
+make install                 # Install CLI (atb) + upgrade pip
+make deps                    # Install dev dependencies (can timeout - see workarounds)
+
+# Alternative: use server dependencies for faster install
+make deps-server             # Lighter production dependencies
+```
+
+**Note**: If pip install times out due to large packages (TensorFlow ~500MB), try:
+```bash
+.venv/bin/pip install --timeout 1000 <package>
 ```
 
 2) Database (PostgreSQL)
 
 - Local (Docker):
 ```bash
-docker-compose up -d postgres
+docker compose up -d postgres
 export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
 ```
 - Verify:
@@ -96,16 +108,22 @@ atb tests heartbeat
 8) Development setup
 
 ```bash
-# Install pre-commit hooks for code quality
-python scripts/setup_pre_commit.py
+# Setup development environment
+python -m venv .venv && source .venv/bin/activate
+make install && make deps
 
-# Or manually:
+# Install pre-commit hooks manually (recommended)
 python3 -m pip install pre-commit
 pre-commit install
 
-# Run linting manually
+# Run code quality checks
+make code-quality  # ruff + black + mypy + bandit
+
+# Or run individually:
 ruff check . --fix
 ruff format .
+python bin/run_mypy.py
+bandit -c pyproject.toml -r src
 ```
 
 ---
