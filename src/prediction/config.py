@@ -122,31 +122,39 @@ class PredictionConfig:
         """Validate configuration parameters"""
         if self.min_confidence_threshold < 0.0 or self.min_confidence_threshold > 1.0:
             raise ValueError("min_confidence_threshold must be between 0.0 and 1.0")
-        
+
         if self.max_prediction_latency <= 0.0:
             raise ValueError("max_prediction_latency must be positive")
-        
+
         if self.feature_cache_ttl <= 0:
             raise ValueError("feature_cache_ttl must be positive")
-        
+
         if self.model_cache_ttl <= 0:
             raise ValueError("model_cache_ttl must be positive")
-        
+
         if self.confidence_scale_factor <= 0.0:
             raise ValueError("confidence_scale_factor must be positive")
-        
+
         if self.direction_threshold < 0.0:
             raise ValueError("direction_threshold must be non-negative")
-        
+
         if self.prediction_cache_ttl <= 0:
             raise ValueError("prediction_cache_ttl must be positive")
-        
+
         if self.prediction_cache_max_size <= 0:
             raise ValueError("prediction_cache_max_size must be positive")
-        
+
+        # Validate ensemble method
+        valid_ensemble_methods = {"mean", "median", "weighted"}
+        if self.ensemble_method not in valid_ensemble_methods:
+            raise ValueError(
+                f"ensemble_method must be one of {valid_ensemble_methods}, "
+                f"got '{self.ensemble_method}'"
+            )
+
         if not isinstance(self.prediction_horizons, list) or not self.prediction_horizons:
             raise ValueError("prediction_horizons must be a non-empty list")
-        
+
         for horizon in self.prediction_horizons:
             if not isinstance(horizon, int) or horizon <= 0:
                 raise ValueError("All prediction_horizons must be positive integers")
