@@ -125,15 +125,15 @@ class OnnxRunner:
         """Check cache for existing prediction result"""
         if not self.cache_manager:
             return None
-            
+
+        model_name = os.path.basename(self.model_path)
         try:
-            model_name = os.path.basename(self.model_path)
             config = {
                 "confidence_scale_factor": self.config.confidence_scale_factor,
                 "direction_threshold": self.config.direction_threshold,
-                "normalization_params": self.model_metadata.get("normalization_params", {}),
+                "normalization_params": self.model_metadata.get("normalization_params", {}) if self.model_metadata else {},
             }
-            
+
             return self.cache_manager.get(features, model_name, config)
         except Exception as e:
             # Log cache errors at debug level to aid in troubleshooting while maintaining fallback behavior
@@ -147,15 +147,15 @@ class OnnxRunner:
         """Cache prediction result"""
         if not self.cache_manager:
             return
-            
+
+        model_name = os.path.basename(self.model_path)
         try:
-            model_name = os.path.basename(self.model_path)
             config = {
                 "confidence_scale_factor": self.config.confidence_scale_factor,
                 "direction_threshold": self.config.direction_threshold,
-                "normalization_params": self.model_metadata.get("normalization_params", {}),
+                "normalization_params": self.model_metadata.get("normalization_params", {}) if self.model_metadata else {},
             }
-            
+
             self.cache_manager.set(
                 features, model_name, config,
                 prediction["price"], prediction["confidence"], prediction["direction"]
@@ -183,7 +183,7 @@ class OnnxRunner:
             raise ValueError(f"Features must be 1D, 2D, or 3D array, got shape {features.shape}")
 
         # Normalize features if metadata contains normalization params
-        if self.model_metadata.get("normalization_params"):
+        if self.model_metadata and self.model_metadata.get("normalization_params"):
             features = self._normalize_features(features)
 
         return features.astype(np.float32)
@@ -220,7 +220,7 @@ class OnnxRunner:
             pred = output.flatten()[0]
 
         # Denormalize prediction if needed
-        if self.model_metadata.get("price_normalization"):
+        if self.model_metadata and self.model_metadata.get("price_normalization"):
             pred = self._denormalize_price(pred)
 
         # Calculate confidence and direction
