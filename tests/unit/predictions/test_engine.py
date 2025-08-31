@@ -471,19 +471,34 @@ class TestPredictionEngineUtilities:
     def test_clear_caches(self):
         """Test clearing caches"""
         engine = PredictionEngine()
-        
+
         # Mock the feature pipeline cache
         mock_cache = MagicMock()
         engine.feature_pipeline.cache = mock_cache
-        
+
         # Mock the prediction cache manager
         mock_cache_manager = MagicMock()
         engine.cache_manager = mock_cache_manager
-        
+
+        # Set some initial values for performance statistics
+        engine._cache_hits = 5
+        engine._cache_misses = 3
+        engine._feature_extraction_time = 1.5
+        engine._total_feature_extraction_time = 10.0
+        engine._feature_extraction_count = 7
+
         engine.clear_caches()
-        
+
+        # Verify cache clearing methods were called
         mock_cache.clear.assert_called_once()
         mock_cache_manager.clear.assert_called_once()
+
+        # Verify performance statistics were reset
+        assert engine._cache_hits == 0
+        assert engine._cache_misses == 0
+        assert engine._feature_extraction_time == 0.0
+        assert engine._total_feature_extraction_time == 0.0
+        assert engine._feature_extraction_count == 0
 
     def test_reload_models(self):
         """Test reloading models"""

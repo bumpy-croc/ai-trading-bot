@@ -501,12 +501,19 @@ class PredictionEngine:
 
     def clear_caches(self) -> None:
         """Clear all caches (feature and prediction)"""
-        # Clear feature cache using the proper method
-        self.feature_pipeline.clear_cache()
+        # Clear feature cache
+        self.feature_pipeline.cache.clear()
 
         # Clear prediction cache
         if self.cache_manager:
             self.cache_manager.clear()
+
+        # Reset internal cache-related performance statistics
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._feature_extraction_time = 0.0
+        self._total_feature_extraction_time = 0.0
+        self._feature_extraction_count = 0
 
     def get_cache_stats(self) -> dict[str, Any]:
         """Get comprehensive cache statistics"""
