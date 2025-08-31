@@ -5,15 +5,17 @@ This module provides functionality to run ONNX models for prediction.
 """
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import onnxruntime as ort
 
 from ..config import PredictionConfig
+from ..utils.caching import PredictionCacheManager
 
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
@@ -33,16 +35,18 @@ class ModelPrediction:
 class OnnxRunner:
     """Handles ONNX model loading and inference"""
 
-    def __init__(self, model_path: str, config: PredictionConfig):
+    def __init__(self, model_path: str, config: PredictionConfig, cache_manager: Optional[PredictionCacheManager] = None):
         """
         Initialize ONNX runner with model path and configuration.
 
         Args:
             model_path: Path to the ONNX model file
             config: Prediction engine configuration
+            cache_manager: Optional prediction cache manager
         """
         self.model_path = model_path
         self.config = config
+        self.cache_manager = cache_manager
         self.session = None
         self.model_metadata = None
         self._load_model()
@@ -70,10 +74,24 @@ class OnnxRunner:
             return {"sequence_length": 120, "feature_count": 5, "normalization_params": {}}
 
     def predict(self, features: np.ndarray) -> ModelPrediction:
-        """Run prediction on features"""
+        """Run prediction on features with optional caching"""
         start_time = time.time()
 
         try:
+            # Check cache first if enabled
+            if self.cache_manager and self.config.prediction_cache_enabled:
+                cache_result = self._check_cache(features)
+                if cache_result is not None:
+                    # Return cached result
+                    inference_time = time.time() - start_time
+                    return ModelPrediction(
+                        price=cache_result["price"],
+                        confidence=cache_result["confidence"],
+                        direction=cache_result["direction"],
+                        model_name=os.path.basename(self.model_path),
+                        inference_time=inference_time,
+                    )
+
             # Prepare input
             input_data = self._prepare_input(features)
 
@@ -88,6 +106,10 @@ class OnnxRunner:
 
             inference_time = time.time() - start_time
 
+            # Cache the result if enabled
+            if self.cache_manager and self.config.prediction_cache_enabled:
+                self._cache_result(features, prediction)
+
             return ModelPrediction(
                 price=prediction["price"],
                 confidence=prediction["confidence"],
@@ -98,6 +120,52 @@ class OnnxRunner:
 
         except Exception as e:
             raise RuntimeError(f"Prediction failed: {e}") from e
+
+    def _check_cache(self, features: np.ndarray) -> Optional[dict]:
+        """Check cache for existing prediction result"""
+        if not self.cache_manager:
+            return None
+
+        model_name = os.path.basename(self.model_path)
+        try:
+            config = {
+                "confidence_scale_factor": self.config.confidence_scale_factor,
+                "direction_threshold": self.config.direction_threshold,
+                "normalization_params": self.model_metadata.get("normalization_params", {}) if self.model_metadata else {},
+            }
+
+            return self.cache_manager.get(features, model_name, config)
+        except Exception as e:
+            # Log cache errors at debug level to aid in troubleshooting while maintaining fallback behavior
+            logging.debug(
+                "Cache lookup failed for model %s: %s: %s. Falling back to model inference.",
+                model_name, type(e).__name__, str(e)
+            )
+            return None
+
+    def _cache_result(self, features: np.ndarray, prediction: dict[str, Any]) -> None:
+        """Cache prediction result"""
+        if not self.cache_manager:
+            return
+
+        model_name = os.path.basename(self.model_path)
+        try:
+            config = {
+                "confidence_scale_factor": self.config.confidence_scale_factor,
+                "direction_threshold": self.config.direction_threshold,
+                "normalization_params": self.model_metadata.get("normalization_params", {}) if self.model_metadata else {},
+            }
+
+            self.cache_manager.set(
+                features, model_name, config,
+                prediction["price"], prediction["confidence"], prediction["direction"]
+            )
+        except Exception as e:
+            # Log cache errors at debug level to aid in troubleshooting while not affecting prediction
+            logging.debug(
+                "Failed to cache prediction result for model %s: %s: %s. Continuing with prediction.",
+                model_name, type(e).__name__, str(e)
+            )
 
     def _prepare_input(self, features: np.ndarray) -> np.ndarray:
         """Prepare features for model input"""
@@ -115,7 +183,7 @@ class OnnxRunner:
             raise ValueError(f"Features must be 1D, 2D, or 3D array, got shape {features.shape}")
 
         # Normalize features if metadata contains normalization params
-        if self.model_metadata.get("normalization_params"):
+        if self.model_metadata and self.model_metadata.get("normalization_params"):
             features = self._normalize_features(features)
 
         return features.astype(np.float32)
@@ -152,7 +220,7 @@ class OnnxRunner:
             pred = output.flatten()[0]
 
         # Denormalize prediction if needed
-        if self.model_metadata.get("price_normalization"):
+        if self.model_metadata and self.model_metadata.get("price_normalization"):
             pred = self._denormalize_price(pred)
 
         # Calculate confidence and direction
