@@ -112,10 +112,6 @@ atb tests heartbeat
 python -m venv .venv && source .venv/bin/activate
 make install && make deps
 
-# Install pre-commit hooks manually (recommended)
-python3 -m pip install pre-commit
-pre-commit install
-
 # Run code quality checks
 make code-quality  # ruff + black + mypy + bandit
 
