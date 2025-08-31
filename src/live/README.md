@@ -5,10 +5,13 @@ Executes strategies in real time with risk controls, data providers, and databas
 ## CLI
 ```bash
 # Paper trading (safe)
-python scripts/run_live_trading.py ml_basic --symbol BTCUSDT --paper-trading
+atb live ml_basic --symbol BTCUSDT --paper-trading
 
 # Live trading (explicit confirmation required)
-python scripts/run_live_trading.py ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
+atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
+
+# Live trading with health endpoint
+atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading
 ```
 
 ## Programmatic

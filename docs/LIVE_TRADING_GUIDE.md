@@ -77,17 +77,17 @@ export BINANCE_API_SECRET="your_api_secret"
 
 ```bash
 # Safe paper trading - no real money
-python scripts/run_live_trading.py ml_basic --symbol BTC-USD --paper-trading
+atb live ml_basic --symbol BTCUSDT --paper-trading
 
-# Custom configuration
-python scripts/run_live_trading.py ml_basic --balance 5000 --max-position 0.05 --check-interval 30
+# With health endpoint for monitoring
+atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading
 ```
 
 ### **3. Live Trading (Advanced)**
 
 ```bash
 # DANGER: Real money trading
-python scripts/run_live_trading.py ml_basic --symbol BTC-USD --live-trading --i-understand-the-risks
+atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
 # The system will ask for additional confirmation
 ```

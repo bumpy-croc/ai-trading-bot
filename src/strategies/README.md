@@ -7,7 +7,7 @@ Built-in strategies using indicators and/or ML predictions.
 
 ## Usage (with backtester)
 ```bash
-python scripts/run_backtest.py ml_basic --symbol BTCUSDT --days 90
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90
 ```
 
 ## Create your own

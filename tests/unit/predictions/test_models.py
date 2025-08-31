@@ -130,12 +130,14 @@ class TestOnnxRunner:
         mock_session_instance = Mock()
         mock_session.return_value = mock_session_instance
 
-        runner = OnnxRunner("test_model.onnx", self.config)
+        # Use proper path format instead of filename string
+        model_path = "/tmp/test_model.onnx"
+        runner = OnnxRunner(model_path, self.config)
 
         assert runner.session is not None
         assert runner.model_metadata is not None
         assert runner.model_metadata["sequence_length"] == 120
-        mock_session.assert_called_once()
+        mock_session.assert_called_once_with(model_path, providers=["CPUExecutionProvider"])
 
     @patch("onnxruntime.InferenceSession")
     @patch("builtins.open", side_effect=FileNotFoundError)
@@ -144,7 +146,9 @@ class TestOnnxRunner:
         mock_session_instance = Mock()
         mock_session.return_value = mock_session_instance
 
-        runner = OnnxRunner("test_model.onnx", self.config)
+        # Use proper path format instead of filename string
+        model_path = "/tmp/test_model.onnx"
+        runner = OnnxRunner(model_path, self.config)
 
         # Should use default metadata
         assert runner.model_metadata["sequence_length"] == 120
@@ -157,7 +161,9 @@ class TestOnnxRunner:
         mock_session.return_value = mock_session_instance
 
         with patch("builtins.open", mock_open(read_data='{"sequence_length": 120}')):
-            runner = OnnxRunner("test_model.onnx", self.config)
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
 
             # Test with 2D input
             features = np.random.rand(120, 5).astype(np.float32)
@@ -174,7 +180,9 @@ class TestOnnxRunner:
         mock_session.return_value = mock_session_instance
 
         with patch("builtins.open", mock_open(read_data='{"sequence_length": 120}')):
-            runner = OnnxRunner("test_model.onnx", self.config)
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
 
             # Mock model output
             output = np.array([[[0.05]]])
@@ -198,7 +206,9 @@ class TestOnnxRunner:
         mock_session.return_value = mock_session_instance
 
         with patch("builtins.open", mock_open(read_data='{"sequence_length": 120}')):
-            runner = OnnxRunner("test_model.onnx", self.config)
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
 
             # Create test features
             features = np.random.rand(120, 5).astype(np.float32)
@@ -207,6 +217,7 @@ class TestOnnxRunner:
             prediction = runner.predict(features)
 
             assert isinstance(prediction, ModelPrediction)
+            # model_name should be basename of the path
             assert prediction.model_name == "test_model.onnx"
             assert prediction.inference_time >= 0
             assert isinstance(prediction.confidence, float)
@@ -219,7 +230,9 @@ class TestOnnxRunner:
         mock_session.return_value = mock_session_instance
 
         with patch("builtins.open", mock_open(read_data='{"sequence_length": 120}')):
-            runner = OnnxRunner("test_model.onnx", self.config)
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
 
             # Test 1D input
             features_1d = np.random.rand(5).astype(np.float32)
@@ -260,7 +273,9 @@ class TestOnnxRunner:
         }
 
         with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
-            runner = OnnxRunner("test_model.onnx", self.config)
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
 
             # Create 3D features
             features = np.random.rand(1, 10, 3).astype(np.float32)
@@ -281,7 +296,9 @@ class TestOnnxRunner:
         metadata = {"normalization_params": {"feature1": {"mean": 0.0, "std": 1.0}}}
 
         with patch("builtins.open", mock_open(read_data=json.dumps(metadata))):
-            runner = OnnxRunner("test_model.onnx", self.config)
+            # Use proper path format instead of filename string
+            model_path = "/tmp/test_model.onnx"
+            runner = OnnxRunner(model_path, self.config)
 
             # Test with 2D features (should raise ValueError)
             features_2d = np.random.rand(10, 1).astype(np.float32)

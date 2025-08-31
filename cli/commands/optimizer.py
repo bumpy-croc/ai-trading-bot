@@ -140,6 +140,8 @@ def _handle(ns: argparse.Namespace) -> int:
             except Exception as e:
                 report.setdefault("persistence", {})["error"] = str(e)
 
+        if "../" in ns.output or "..\\" in ns.output:
+            raise Exception("Invalid file path")
         out_path = Path(ns.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w") as f:
