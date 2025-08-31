@@ -9,7 +9,7 @@ import sqlalchemy as sa  # type: ignore
 from alembic import op  # type: ignore
 
 revision = "0008_trailing_stops"
-down_revision = "0006_partial_operations"
+down_revision = "0007"
 branch_labels = None
 depends_on = None
 

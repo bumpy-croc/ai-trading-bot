@@ -4,7 +4,7 @@
       "builder": "dockerfile"
     },
     "deploy": {
-      "startCommand": "make dashboard-monitoring",
+      "startCommand": "make migrate && make dashboard-monitoring",
       "healthcheckPath": "/health",
       "healthcheckTimeout": 30,
       "restartPolicyType": "ON_FAILURE",
