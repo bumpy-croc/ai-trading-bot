@@ -12,8 +12,8 @@ Real-time web dashboard for monitoring cryptocurrency trading bot performance, r
 ## Quick Start
 
 ```bash
-pip install -r requirements-server.txt
-python scripts/start_dashboard.py
+make deps-server  # or make deps for full development setup
+atb dashboards run monitoring --port 8000
 # Open http://localhost:8000
 ```
 
