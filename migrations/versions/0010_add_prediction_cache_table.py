@@ -1,7 +1,7 @@
 """add prediction cache table
 
-Revision ID: 0010
-Revises: 0009
+Revision ID: 0010_add_prediction_cache_table
+Revises: 0009_correlation_tables
 Create Date: 2024-01-01 00:00:00.000000
 
 """
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = '0010'
+revision = '0010_add_prediction_cache_table'
 down_revision = '0009_correlation_tables'
 branch_labels = None
 depends_on = None

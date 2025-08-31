@@ -1,7 +1,7 @@
 """Add trailing stop fields to positions
 
 Revision ID: 0008_trailing_stops
-Revises: 0006_partial_operations
+Revises: 0007
 Create Date: 2025-08-21
 """
 
