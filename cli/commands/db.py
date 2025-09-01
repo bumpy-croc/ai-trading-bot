@@ -93,7 +93,8 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
             ctx = MigrationContext.configure(conn)
             current = ctx.get_current_revision()
         start_point = current or "base"
-        upgrade_path = list(script.get_upgrade_revs("head", start_point))  # type: ignore[arg-type]
+        # * Compute pending upgrade revisions using supported Alembic API
+        upgrade_path = list(script.iterate_revisions("head", start_point))
         pending = [rev.revision for rev in reversed(upgrade_path)]
         if current is None:
             state = "unversioned"
