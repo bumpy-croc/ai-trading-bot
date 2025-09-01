@@ -12,7 +12,8 @@ WORKDIR /app
 # Set Python path and runtime envs
 ENV PYTHONPATH=/app/src \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PATH="/home/appuser/.local/bin:$PATH"
 
 # Copy production requirements and install dependencies
 COPY requirements-server.txt ./requirements-server.txt
