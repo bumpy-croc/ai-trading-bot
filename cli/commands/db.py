@@ -30,8 +30,9 @@ from src.database.models import Base
 
 # * Constants for Alembic/DB
 MIN_POSTGRESQL_URL_PREFIX = "postgresql"
-ALEMBIC_INI_PATH = str(PROJECT_ROOT / "alembic.ini")
-MIGRATIONS_PATH = str(PROJECT_ROOT / "migrations")
+# * Allow environment overrides for packaged/production deployments
+ALEMBIC_INI_PATH = os.getenv("ATB_ALEMBIC_INI", str(PROJECT_ROOT / "alembic.ini"))
+MIGRATIONS_PATH = os.getenv("ATB_MIGRATIONS_PATH", str(PROJECT_ROOT / "migrations"))
 
 
 def _print_header(title: str) -> None:
@@ -61,9 +62,16 @@ def _resolve_database_url() -> str:
 
 
 def _alembic_config(db_url: str) -> Config:
-    if not os.path.exists(ALEMBIC_INI_PATH):
-        raise RuntimeError(f"Missing alembic.ini at {ALEMBIC_INI_PATH}")
-    cfg = Config(ALEMBIC_INI_PATH)
+    """Create an Alembic Config, tolerating missing alembic.ini in production.
+
+    When ``alembic.ini`` is not available (e.g., installed package), fall back to
+    a programmatic configuration using ``MIGRATIONS_PATH`` and the resolved DB URL.
+    """
+    if os.path.exists(ALEMBIC_INI_PATH):
+        cfg = Config(ALEMBIC_INI_PATH)
+    else:
+        # * Programmatic config: no ini file present
+        cfg = Config()
     cfg.set_main_option("script_location", MIGRATIONS_PATH)
     cfg.set_main_option("sqlalchemy.url", db_url)
     return cfg
