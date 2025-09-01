@@ -84,6 +84,9 @@ DEFAULT_SLEEP_POLL_INTERVAL = 0.5  # Sleep polling interval (reduced from 0.1s)
 DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 1800  # Account snapshot interval (30 minutes)
 DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 2 minutes
 
+# Trailing stop fallback (used in safety mode when ATR is unavailable)
+DEFAULT_FALLBACK_TRAILING_PCT = 0.01  # 1% trailing distance as conservative fallback
+
 # Dynamic Risk Management Constants
 DEFAULT_DYNAMIC_RISK_ENABLED = True
 DEFAULT_PERFORMANCE_WINDOW_DAYS = 30

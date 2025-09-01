@@ -22,6 +22,7 @@ from src.config.constants import (
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_FALLBACK_TRAILING_PCT,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
@@ -774,12 +775,32 @@ class LiveTradingEngine:
                         self._send_alert("Strategy/Model updated in live trading")
                     else:
                         logger.error("❌ Failed to apply strategy/model update")
+                # Proceed to indicator calculation
+
                 # Calculate indicators
                 df = self.strategy.calculate_indicators(df)
                 # Remove warmup period and ensure we have enough data
-                df = df.dropna()
+                try:
+                    essential_columns = ["open", "high", "low", "close", "volume"]
+                    df = df.dropna(subset=essential_columns)
+                except Exception:
+                    # Fallback to conservative behavior if subset fails for any reason
+                    df = df.dropna()
+                # Context readiness gating
+                ready, reason = self._is_context_ready(df)
+                safety_mode = not ready
+                if safety_mode:
+                    logger.info("Safety mode active: %s", reason)
                 if len(df) < 2:
-                    logger.warning("Insufficient data for analysis")
+                    try:
+                        tail_nan_counts = df.tail(5).isna().sum().to_dict()
+                    except Exception:
+                        tail_nan_counts = {}
+                    logger.warning(
+                        "Insufficient data for analysis | rows=%s | tail_nan_counts=%s",
+                        len(df),
+                        tail_nan_counts,
+                    )
                     self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
@@ -801,17 +822,26 @@ class LiveTradingEngine:
                 self._update_position_pnl(current_price)
                 # Apply trailing stop adjustments and update MFE/MAE before exit checks
                 try:
-                    self._update_trailing_stops(df, current_index, float(current_price))
+                    if safety_mode:
+                        self._update_trailing_stops_with_fallback(df, current_index, float(current_price))
+                    else:
+                        self._update_trailing_stops(df, current_index, float(current_price))
                 except Exception as e:
                     logger.debug(f"Trailing stop update failed: {e}")
                 # Update rolling MFE/MAE per position and persist lightweight updates
                 self._update_positions_mfe_mae(current_price)
                 # Check exit conditions for existing positions
-                self._check_exit_conditions(df, current_index, current_price)
+                if safety_mode:
+                    self._check_protective_exits_only(df, current_index, current_price)
+                else:
+                    self._check_exit_conditions(df, current_index, current_price)
                 # Evaluate partial exits and scale-ins for open positions
-                self._check_partial_and_scale_ops(df, current_index, current_price)
+                if not safety_mode:
+                    self._check_partial_and_scale_ops(df, current_index, current_price)
                 # Check entry conditions if not at maximum positions
-                if len(self.positions) < self.risk_manager.get_max_concurrent_positions():
+                if (not safety_mode) and (
+                    len(self.positions) < self.risk_manager.get_max_concurrent_positions()
+                ):
                     self._check_entry_conditions(df, current_index, symbol, current_price)
                     # Check for short entry if strategy supports it
                     if hasattr(self.strategy, "check_short_entry_conditions"):
@@ -940,10 +970,129 @@ class LiveTradingEngine:
 
         logger.info("Trading loop ended")
 
+    def _is_context_ready(self, df: pd.DataFrame) -> tuple[bool, str]:
+        """Check if the current frame has enough context for strategy-driven decisions.
+
+        Returns (ready, reason_if_not_ready).
+        """
+        try:
+            rows = len(df)
+            # Required rows from ML sequence length (for ML strategies only)
+            try:
+                seq_len = int(getattr(self.strategy, "sequence_length", 0) or 0)
+            except Exception:
+                seq_len = 0
+            # Do not assume a large indicator window by default; strategies can opt-in via attribute
+            try:
+                max_window_attr = getattr(self.strategy, "max_indicator_window", 0)
+                max_window = int(max_window_attr or 0)
+            except Exception:
+                max_window = 0
+            min_needed_base = max(seq_len, max_window)
+            min_needed = (min_needed_base + 1) if min_needed_base > 0 else 2
+
+            if rows < min_needed:
+                return False, f"insufficient_rows:{rows}<min_needed:{min_needed}"
+
+            # Current index must have valid essentials
+            idx = rows - 1
+            essentials = ["open", "high", "low", "close", "volume"]
+            for col in essentials:
+                try:
+                    if pd.isna(df.iloc[idx][col]):
+                        return False, f"nan_in_essentials:{col}"
+                except Exception:
+                    return False, f"missing_essential:{col}"
+
+            # Strategy-specific readiness: prediction availability for ML strategies
+            if seq_len > 0:
+                if "onnx_pred" in df.columns:
+                    try:
+                        if pd.isna(df["onnx_pred"].iloc[idx]):
+                            return False, "prediction_unavailable_at_current_index"
+                    except Exception:
+                        return False, "prediction_column_access_error"
+
+            # Data freshness check
+            if not self._is_data_fresh(df):
+                return False, "stale_data"
+
+            return True, ""
+        except Exception as e:
+            logger.debug(f"Context readiness check failed: {e}")
+            return False, "readiness_check_error"
+
+    def _update_trailing_stops_with_fallback(self, df: pd.DataFrame, index: int, current_price: float):
+        """Apply trailing stops using ATR if available; fallback to fixed pct when missing."""
+        try:
+            atr_available = "atr" in df.columns and not pd.isna(df["atr"].iloc[index])
+            for position in self.positions.values():
+                # Compute trailing distance
+                if atr_available and current_price > 0:
+                    trailing_distance = float(df["atr"].iloc[index]) / float(current_price)
+                    trailing_distance = max(trailing_distance, float(DEFAULT_FALLBACK_TRAILING_PCT))
+                else:
+                    trailing_distance = float(DEFAULT_FALLBACK_TRAILING_PCT)
+
+                try:
+                    self.trailing_stop_policy.apply_trailing_update(position, current_price, trailing_distance)
+                except Exception:
+                    # Approximate with direct stop adjustment
+                    if position.side == PositionSide.LONG:
+                        new_stop = current_price * (1.0 - trailing_distance)
+                        if not position.stop_loss or new_stop > position.stop_loss:
+                            position.stop_loss = new_stop
+                    else:
+                        new_stop = current_price * (1.0 + trailing_distance)
+                        if not position.stop_loss or new_stop < position.stop_loss:
+                            position.stop_loss = new_stop
+        except Exception as e:
+            logger.debug(f"Trailing fallback failed: {e}")
+
+    def _check_protective_exits_only(self, df: pd.DataFrame, current_index: int, current_price: float):
+        """Enforce only non-strategy exits: hard SL/TP and time exits."""
+        try:
+            positions_to_close: list[tuple[Any, str]] = []
+            for position in self.positions.values():
+                should_exit = False
+                exit_reason = ""
+
+                # Stop loss
+                if position.stop_loss and self._check_stop_loss(position, current_price):
+                    should_exit = True
+                    exit_reason = "Stop loss"
+                # Take profit
+                elif position.take_profit and self._check_take_profit(position, current_price):
+                    should_exit = True
+                    exit_reason = "Take profit"
+                else:
+                    # Time-based exits remain active
+                    hit_time_exit = False
+                    reason = None
+                    if self.time_exit_policy is not None:
+                        hit_time_exit, reason = self.time_exit_policy.check_time_exit_conditions(
+                            position.entry_time, datetime.utcnow()
+                        )
+                    else:
+                        hit_time_exit = (datetime.utcnow() - position.entry_time).total_seconds() > 86400
+                        reason = "Time limit"
+                    if hit_time_exit:
+                        should_exit = True
+                        exit_reason = reason or "Time exit"
+
+                if should_exit:
+                    positions_to_close.append((position, exit_reason))
+
+            for position, reason in positions_to_close:
+                self._close_position(position, reason)
+        except Exception as e:
+            logger.debug(f"Protective exits check failed: {e}")
+
     def _get_latest_data(self, symbol: str, timeframe: str) -> pd.DataFrame | None:
         """Fetch latest market data with error handling"""
         try:
-            df = self.data_provider.get_live_data(symbol, timeframe, limit=200)
+            # Fetch with a generous limit to satisfy indicator and ML warmups
+            df = self.data_provider.get_live_data(symbol, timeframe, limit=500)
             self.last_data_update = datetime.now()
             return df
         except Exception as e:
