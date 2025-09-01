@@ -12,7 +12,7 @@ def _emit(event_type: str, level: int, message: str, **fields: Any) -> None:
     ctx = get_context()
     payload: dict[str, Any] = {
         "event_type": event_type,
-        "message": message,
+        # * Do not use reserved LogRecord attribute names (e.g., 'message') in extra
     }
     # Merge context then explicit fields (explicit wins)
     payload.update(ctx)
