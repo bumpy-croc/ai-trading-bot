@@ -3,7 +3,8 @@
     "builder": "dockerfile"
   },
   "deploy": {
-    "startCommand": "atb db verify --apply-migrations && atb live-health ml_basic",
+    "preDeployCommand": "atb db verify --apply-migrations",
+    "startCommand": "atb live-health ml_basic",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 10,
     "restartPolicyType": "ON_FAILURE",
