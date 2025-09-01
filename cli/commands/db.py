@@ -7,11 +7,13 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 # Ensure project root and src are in sys.path for absolute imports
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from src.utils.project_paths import get_project_root
+
+PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 SRC_PATH = PROJECT_ROOT / "src"
@@ -25,7 +27,6 @@ from sqlalchemy import inspect as sa_inspect  # type: ignore
 from sqlalchemy.exc import SQLAlchemyError  # type: ignore
 
 from src.database.models import Base
-
 
 # * Constants for Alembic/DB
 MIN_POSTGRESQL_URL_PREFIX = "postgresql"
@@ -49,7 +50,7 @@ def _resolve_database_url() -> str:
     from src.config.config_manager import get_config
 
     cfg = get_config()
-    database_url: Optional[str] = cfg.get("DATABASE_URL") or os.getenv("DATABASE_URL")
+    database_url: str | None = cfg.get("DATABASE_URL") or os.getenv("DATABASE_URL")
     if not database_url:
         raise RuntimeError("DATABASE_URL is required but not set.")
     if not database_url.startswith(MIN_POSTGRESQL_URL_PREFIX):

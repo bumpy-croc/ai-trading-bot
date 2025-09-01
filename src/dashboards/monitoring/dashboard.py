@@ -15,7 +15,6 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from pathlib import Path
 from typing import Any, TypedDict
 
 # --- Ensure greenlet/eventlet is configured before importing network libs.
@@ -41,7 +40,8 @@ except ModuleNotFoundError:
     # Add project root and src to sys.path dynamically as a last resort
     import sys
 
-    project_root = Path(__file__).resolve().parents[2]
+    from src.utils.project_paths import get_project_root
+    project_root = get_project_root()
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
     src_path = project_root / "src"

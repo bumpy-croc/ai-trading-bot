@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import argparse
 import importlib
-from pathlib import Path
 
 from cli.core.forward import forward_to_module_main
 
 
 def _list_scripts() -> list[str]:
-    root = Path(__file__).resolve().parents[3]
+    from src.utils.project_paths import get_project_root
+    root = get_project_root()
     out: list[str] = []
     for fp in sorted((root / "scripts").glob("*.py")):
         if fp.name in {"postgres-init.sql"}:

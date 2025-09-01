@@ -4,17 +4,17 @@ import json
 import logging
 import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from src.backtesting import Backtester
 from src.config.constants import DEFAULT_INITIAL_BALANCE
 from src.data_providers.feargreed_provider import FearGreedProvider
 from src.risk import RiskParameters
 from src.utils.logging_config import configure_logging
+from src.utils.project_paths import get_project_root
 from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger("run_backtest")
-project_root = Path(__file__).resolve().parents[1]
+project_root = get_project_root()
 
 
 def load_strategy(strategy_name: str):

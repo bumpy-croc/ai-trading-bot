@@ -93,7 +93,8 @@ class MarketPredictionDashboard:
         if df is None or df.empty:
             # Fallback to bundled CSV (offline mode)
             symbol_csv = "BTCUSDT_1d.csv" if symbol == "BTCUSDT" else "ETHUSDT_1d.csv"
-            csv_path = Path(__file__).resolve().parents[3] / "src" / "data" / symbol_csv
+            from src.utils.project_paths import get_project_root
+            csv_path = get_project_root() / "src" / "data" / symbol_csv
             if not csv_path.exists():
                 logger.error("Offline price CSV not found at %s", csv_path)
                 return pd.DataFrame()
