@@ -5,10 +5,11 @@
     },
     "deploy": {
       "preDeployCommand": "atb db verify --apply-migrations",
-      "startCommand": "atb dashboards run monitoring",
+      "startCommand": "python scripts/start_monitoring_dashboard.py",
       "healthcheckPath": "/health",
-      "healthcheckTimeout": 30,
+      "healthcheckTimeout": 90,
       "restartPolicyType": "ON_FAILURE",
-      "restartPolicyMaxRetries": 3
+      "restartPolicyMaxRetries": 3,
+      "healthcheckInterval": 30
     }
   }
