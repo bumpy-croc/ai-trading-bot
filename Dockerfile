@@ -29,7 +29,7 @@ COPY . .
 RUN pip install .
 
 # Create necessary directories
-RUN mkdir -p logs artifacts
+RUN mkdir -p logs artifacts cache/market_data
 
 # Create non-root user and adjust ownership
 RUN useradd -m appuser && chown -R appuser:appuser /app
