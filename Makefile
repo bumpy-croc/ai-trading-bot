@@ -91,9 +91,6 @@ dev-setup:
 migrate: install
 	atb db migrate
 
-startup: install
-	bin/startup.sh
-
 # --------------------------------- Rules Generation --------------------------------------------
 rules: deps
 	python scripts/generate_rules.py
