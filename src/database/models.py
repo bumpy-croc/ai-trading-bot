@@ -157,7 +157,9 @@ class Position(Base):
     id = Column(Integer, primary_key=True)
     symbol = Column(String(20), nullable=False, index=True)
     side = Column(Enum(PositionSide), nullable=False)
-    status = Column(Enum(OrderStatus), nullable=False, default=OrderStatus.OPEN)
+    status = Column(
+        Enum(OrderStatus, name="orderstatus"), nullable=False, default=OrderStatus.OPEN
+    )
 
     # Position details
     entry_price = Column(Numeric(18, 8), nullable=False)

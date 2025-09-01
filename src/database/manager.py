@@ -901,24 +901,14 @@ class DatabaseManager:
                 return False
 
             try:
-                # Map exchange status values to database status values
-                status_mapping = {
-                    "PENDING": "pending",
-                    "FILLED": "filled",
-                    "PARTIALLY_FILLED": "filled",  # Map to filled for simplicity
-                    "CANCELLED": "cancelled",
-                    "REJECTED": "failed",
-                    "EXPIRED": "cancelled",
-                }
-
-                db_status = status_mapping.get(status.upper(), status.upper())
-                order.status = OrderStatus(db_status)
+                normalized = self._normalize_order_status(status)
+                order.status = normalized
                 order.last_update = datetime.utcnow()
                 session.commit()
-                logger.info(f"Updated order {order_id} status to {db_status}")
+                logger.info(f"Updated order {order_id} status to {normalized.value}")
                 return True
-            except KeyError:
-                logger.error(f"Invalid order status: {status}")
+            except ValueError as exc:
+                logger.error(f"Invalid order status: {status} ({exc})")
                 return False
 
     def get_trades_by_symbol_and_date(
@@ -1623,6 +1613,38 @@ class DatabaseManager:
         elif isinstance(obj, np.generic):
             return obj.item()
         return obj
+
+    # ----------------------
+    # Enum normalization helpers
+    # ----------------------
+    def _normalize_order_status(self, value: str | OrderStatus) -> OrderStatus:
+        """Normalize external order status strings to internal OrderStatus enum.
+
+        Accepts strings in any case and normalizes common exchange variants to
+        canonical values. Returns a valid OrderStatus or raises ValueError.
+        """
+        if isinstance(value, OrderStatus):
+            return value
+
+        if value is None:
+            raise ValueError("Order status cannot be None")
+
+        normalized = str(value).strip().upper()
+
+        alias_mapping = {
+            "PARTIALLY_FILLED": "FILLED",
+            "REJECTED": "FAILED",
+            "EXPIRED": "CANCELLED",
+        }
+
+        mapped = alias_mapping.get(normalized, normalized)
+
+        try:
+            if mapped in OrderStatus.__members__:
+                return OrderStatus[mapped]
+            return OrderStatus(mapped)
+        except Exception as exc:
+            raise ValueError(f"Invalid order status: {value}") from exc
 
     # Dynamic Risk Management Methods
     
