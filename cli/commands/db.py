@@ -130,6 +130,8 @@ def _expected_schema_from_models() -> dict[str, Any]:
     expected_columns: dict[str, list[str]] = {}
     expected_pk: dict[str, list[str]] = {}
     expected_types: dict[str, dict[str, Any]] = {}
+    expected_nullable: dict[str, dict[str, bool]] = {}
+    expected_indexes: dict[str, list[dict[str, Any]]] = {}
 
     for table in Base.metadata.sorted_tables:
         name = str(table.name)
@@ -137,12 +139,27 @@ def _expected_schema_from_models() -> dict[str, Any]:
         expected_columns[name] = [str(col.name) for col in table.columns]
         expected_pk[name] = [str(col.name) for col in table.primary_key.columns]
         expected_types[name] = {str(col.name): col.type for col in table.columns}
+        expected_nullable[name] = {str(col.name): bool(col.nullable) for col in table.columns}
+        # Capture non-unique indexes defined in models
+        model_indexes: list[dict[str, Any]] = []
+        for idx in table.indexes:
+            try:
+                idx_name = str(idx.name) if idx.name else None
+                cols = [str(c.name) for c in idx.expressions]
+                unique = bool(getattr(idx, "unique", False))
+                if idx_name and not unique and cols:
+                    model_indexes.append({"name": idx_name, "columns": cols, "unique": unique})
+            except Exception:
+                continue
+        expected_indexes[name] = model_indexes
 
     return {
         "tables": expected_tables,
         "columns": expected_columns,
         "primary_keys": expected_pk,
         "types": expected_types,
+        "nullable": expected_nullable,
+        "indexes": expected_indexes,
     }
 
 
@@ -213,16 +230,19 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
     try:
         insp = sa_inspect(engine)
         actual_tables = set(insp.get_table_names(schema="public"))
+        # Ignore Alembic's internal versioning table in comparisons
+        system_tables = {"alembic_version"}
+        actual_tables_no_sys = actual_tables - system_tables
         expected_tables = set(expected["tables"])
-        missing_tables = sorted(expected_tables - actual_tables)
-        extra_tables = sorted(actual_tables - expected_tables)
+        missing_tables = sorted(expected_tables - actual_tables_no_sys)
+        extra_tables = sorted(actual_tables_no_sys - expected_tables)
         if missing_tables or extra_tables:
             result["ok"] = False
             result["missing_tables"] = missing_tables
             result["extra_tables"] = extra_tables
 
         for table in sorted(expected["tables"]):
-            if table not in actual_tables:
+            if table not in actual_tables_no_sys:
                 continue
             expected_cols = set(expected["columns"][table])
             col_info = insp.get_columns(table, schema="public")
@@ -267,9 +287,14 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
                 act_str = actual_types_map.get(col_name, "")
                 def _norm(s: str) -> str:
                     return (
-                        s.replace("jsonb", "json")
+                        s
+                        .replace("jsonb", "json")
                         .replace("timestampwithouttimezone", "timestamp")
-                        .replace("doubleprecision", "float8")
+                        # Normalize PostgreSQL float synonyms
+                        .replace("doubleprecision", "float")
+                        .replace("float8", "float")
+                        .replace("float4", "float")
+                        .replace("real", "float")
                     )
                 if _norm(exp_str) != _norm(act_str):
                     result["ok"] = False
@@ -284,6 +309,81 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
             pass
 
     return result
+
+
+def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, Any]) -> None:
+    """Apply safe schema fixes:
+    - Create missing non-unique indexes from models
+    - Convert JSON columns to JSONB on PostgreSQL
+    - Add missing nullable columns without defaults
+    """
+    engine = create_engine(
+        db_url,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:safe-fixes"},
+    )
+    try:
+        with engine.begin() as conn:
+            insp = sa_inspect(conn)
+
+            # Create missing non-unique indexes
+            for table in expected["tables"]:
+                if table not in insp.get_table_names(schema="public"):
+                    continue
+                actual_indexes = {i.get("name") for i in insp.get_indexes(table, schema="public")}
+                for idx in expected.get("indexes", {}).get(table, []):
+                    name = idx.get("name")
+                    cols = idx.get("columns", [])
+                    if not name or not cols:
+                        continue
+                    if name in actual_indexes:
+                        continue
+                    cols_sql = ", ".join(cols)
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({cols_sql})"))
+
+            # Convert JSON to JSONB where expected type is JSONB
+            for table in expected["tables"]:
+                if table not in insp.get_table_names(schema="public"):
+                    continue
+                columns = insp.get_columns(table, schema="public")
+                actual_types_map = {c["name"]: str(c["type"]).lower() for c in columns}
+                for col_name, exp_type in expected["types"][table].items():
+                    # Only attempt when actual exists and expected is JSON/JSONB
+                    actual_t = actual_types_map.get(col_name, "")
+                    try:
+                        compiled_exp = exp_type.compile(dialect=engine.dialect)  # type: ignore[attr-defined]
+                        exp_str = str(compiled_exp).lower()
+                    except Exception:
+                        exp_str = str(exp_type).lower()
+                    if "jsonb" in exp_str and "json" in actual_t and "jsonb" not in actual_t:
+                        conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {col_name} TYPE jsonb USING {col_name}::jsonb"))
+
+            # Add missing nullable columns (without defaults) only
+            for table in expected["tables"]:
+                if table not in insp.get_table_names(schema="public"):
+                    continue
+                columns = insp.get_columns(table, schema="public")
+                actual_cols = {c["name"] for c in columns}
+                for col_name in expected["columns"][table]:
+                    if col_name in actual_cols:
+                        continue
+                    nullable_map = expected.get("nullable", {}).get(table, {})
+                    if not nullable_map.get(col_name, True):
+                        # Skip non-nullable missing columns (unsafe)
+                        continue
+                    # Build a minimal type expression for safe add
+                    exp_type = expected["types"][table][col_name]
+                    try:
+                        type_expr = exp_type.compile(dialect=engine.dialect)  # type: ignore[attr-defined]
+                        type_sql = str(type_expr)
+                    except Exception:
+                        type_sql = str(exp_type)
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {type_sql}"))
+    finally:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
 
 def _migrate(ns: argparse.Namespace) -> int:
     """Run database migrations"""
@@ -402,6 +502,7 @@ def _verify(ns: argparse.Namespace) -> int:
 
         print("\nSchema Verification Against Models")
         print("----------------------------------")
+        expected = _expected_schema_from_models()
         verify = _verify_schema(db_url)
         if verify.get("ok"):
             print("✅ Schema matches SQLAlchemy models.")
@@ -433,7 +534,28 @@ def _verify(ns: argparse.Namespace) -> int:
                 for tbl, cols in verify["type_mismatches"].items():
                     for col, info in cols.items():
                         print(f"    • {tbl}.{col}: expected={info['expected']} actual={info['actual']}")
-            return 1
+            # Optionally apply safe fixes
+            if ns.apply_fixes:
+                print("\nApplying Safe Fixes")
+                print("-------------------")
+                try:
+                    _apply_safe_fixes(db_url, verify, expected)
+                    print("✅ Safe fixes applied.")
+                    # Re-verify after fixes
+                    print("\nRe-checking schema after fixes...")
+                    verify2 = _verify_schema(db_url)
+                    if verify2.get("ok"):
+                        print("✅ Schema matches SQLAlchemy models after fixes.")
+                        return 0
+                    else:
+                        print("⚠️  Remaining deviations after safe fixes. Review output above.")
+                        return 1
+                except Exception as e:
+                    print(f"❌ Failed to apply safe fixes: {e}")
+                    traceback.print_exc()
+                    return 1
+            else:
+                return 1
     except Exception as e:
         print(f"❌ Database verification failed: {e}")
         traceback.print_exc()
@@ -619,6 +741,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--apply-migrations",
         action="store_true",
         help="Apply Alembic migrations to head if pending",
+    )
+    p_verify.add_argument(
+        "--apply-fixes",
+        action="store_true",
+        help="Apply safe schema fixes (non-unique indexes, JSON→JSONB, nullable columns)",
     )
     p_verify.set_defaults(func=_verify)
 
