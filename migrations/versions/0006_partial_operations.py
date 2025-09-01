@@ -53,24 +53,35 @@ def upgrade():
     END$$;
     """)
 
-    # Create partial_trades table if not exists
-    op.create_table(
-        "partial_trades",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("position_id", sa.Integer(), sa.ForeignKey("positions.id"), nullable=False),
-        sa.Column("operation_type", sa.Enum("partial_exit", "scale_in", name="partialoperationtype"), nullable=False),
-        sa.Column("size", sa.Numeric(18, 8), nullable=False),
-        sa.Column("price", sa.Numeric(18, 8), nullable=False),
-        sa.Column("pnl", sa.Numeric(18, 8), nullable=True),
-        sa.Column("target_level", sa.Integer(), nullable=True),
-        sa.Column("timestamp", sa.DateTime(), nullable=False, server_default=sa.func.now()),
-    )
-    op.create_index("idx_partial_trade_position", "partial_trades", ["position_id", "timestamp"])
+    # Create partial_trades table and index (idempotent)
+    bind = op.get_bind()
+    inspector = reflection.Inspector.from_engine(bind)
+    if not inspector.has_table("partial_trades"):
+        op.create_table(
+            "partial_trades",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("position_id", sa.Integer(), sa.ForeignKey("positions.id"), nullable=False),
+            sa.Column("operation_type", sa.Enum("partial_exit", "scale_in", name="partialoperationtype"), nullable=False),
+            sa.Column("size", sa.Numeric(18, 8), nullable=False),
+            sa.Column("price", sa.Numeric(18, 8), nullable=False),
+            sa.Column("pnl", sa.Numeric(18, 8), nullable=True),
+            sa.Column("target_level", sa.Integer(), nullable=True),
+            sa.Column("timestamp", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+        )
+
+    # Guard index creation
+    try:
+        existing_indexes = inspector.get_indexes("partial_trades")
+    except Exception:
+        existing_indexes = []
+    if not any(i.get("name") == "idx_partial_trade_position" for i in existing_indexes):
+        op.execute("CREATE INDEX IF NOT EXISTS idx_partial_trade_position ON partial_trades (position_id, timestamp)")
 
 
 def downgrade():
-    op.drop_index("idx_partial_trade_position", table_name="partial_trades")
-    op.drop_table("partial_trades")
+    op.execute("DROP INDEX IF EXISTS idx_partial_trade_position")
+    if reflection.Inspector.from_engine(op.get_bind()).has_table("partial_trades"):
+        op.drop_table("partial_trades")
 
     for col in [
         "last_scale_in_price",

@@ -16,39 +16,55 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create prediction_cache table
-    op.create_table('prediction_cache',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('cache_key', sa.String(length=255), nullable=False),
-        sa.Column('model_name', sa.String(length=100), nullable=False),
-        sa.Column('features_hash', sa.String(length=64), nullable=False),
-        sa.Column('predicted_price', sa.Numeric(precision=18, scale=8), nullable=False),
-        sa.Column('confidence', sa.Numeric(precision=18, scale=8), nullable=False),
-        sa.Column('direction', sa.Integer(), nullable=False),
-        sa.Column('created_at', sa.DateTime(), nullable=False),
-        sa.Column('expires_at', sa.DateTime(), nullable=False),
-        sa.Column('access_count', sa.Integer(), nullable=True),
-        sa.Column('last_accessed', sa.DateTime(), nullable=True),
-        sa.Column('config_hash', sa.String(length=64), nullable=False),
-        sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('cache_key')
-    )
+    # Create prediction_cache table (idempotent)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table('prediction_cache'):
+        op.create_table('prediction_cache',
+            sa.Column('id', sa.Integer(), nullable=False),
+            sa.Column('cache_key', sa.String(length=255), nullable=False),
+            sa.Column('model_name', sa.String(length=100), nullable=False),
+            sa.Column('features_hash', sa.String(length=64), nullable=False),
+            sa.Column('predicted_price', sa.Numeric(precision=18, scale=8), nullable=False),
+            sa.Column('confidence', sa.Numeric(precision=18, scale=8), nullable=False),
+            sa.Column('direction', sa.Integer(), nullable=False),
+            sa.Column('created_at', sa.DateTime(), nullable=False),
+            sa.Column('expires_at', sa.DateTime(), nullable=False),
+            sa.Column('access_count', sa.Integer(), nullable=True),
+            sa.Column('last_accessed', sa.DateTime(), nullable=True),
+            sa.Column('config_hash', sa.String(length=64), nullable=False),
+            sa.PrimaryKeyConstraint('id'),
+            sa.UniqueConstraint('cache_key')
+        )
     
-    # Create indexes
-    op.create_index('idx_pred_cache_expires', 'prediction_cache', ['expires_at'])
-    op.create_index('idx_pred_cache_model_config', 'prediction_cache', ['model_name', 'config_hash'])
-    op.create_index('idx_pred_cache_access', 'prediction_cache', ['last_accessed'])
-    op.create_index('idx_pred_cache_model', 'prediction_cache', ['model_name'])
-    op.create_index('idx_pred_cache_features', 'prediction_cache', ['features_hash'])
+    # Create indexes (idempotent)
+    def _index_exists(name: str) -> bool:
+        try:
+            return any(i.get('name') == name for i in inspector.get_indexes('prediction_cache'))
+        except Exception:
+            return False
+
+    if not _index_exists('idx_pred_cache_expires'):
+        op.execute("CREATE INDEX IF NOT EXISTS idx_pred_cache_expires ON prediction_cache (expires_at)")
+    if not _index_exists('idx_pred_cache_model_config'):
+        op.execute("CREATE INDEX IF NOT EXISTS idx_pred_cache_model_config ON prediction_cache (model_name, config_hash)")
+    if not _index_exists('idx_pred_cache_access'):
+        op.execute("CREATE INDEX IF NOT EXISTS idx_pred_cache_access ON prediction_cache (last_accessed)")
+    if not _index_exists('idx_pred_cache_model'):
+        op.execute("CREATE INDEX IF NOT EXISTS idx_pred_cache_model ON prediction_cache (model_name)")
+    if not _index_exists('idx_pred_cache_features'):
+        op.execute("CREATE INDEX IF NOT EXISTS idx_pred_cache_features ON prediction_cache (features_hash)")
 
 
 def downgrade() -> None:
-    # Drop indexes
-    op.drop_index('idx_pred_cache_features', table_name='prediction_cache')
-    op.drop_index('idx_pred_cache_model', table_name='prediction_cache')
-    op.drop_index('idx_pred_cache_access', table_name='prediction_cache')
-    op.drop_index('idx_pred_cache_model_config', table_name='prediction_cache')
-    op.drop_index('idx_pred_cache_expires', table_name='prediction_cache')
+    # Drop indexes (idempotent)
+    op.execute('DROP INDEX IF EXISTS idx_pred_cache_features')
+    op.execute('DROP INDEX IF EXISTS idx_pred_cache_model')
+    op.execute('DROP INDEX IF EXISTS idx_pred_cache_access')
+    op.execute('DROP INDEX IF EXISTS idx_pred_cache_model_config')
+    op.execute('DROP INDEX IF EXISTS idx_pred_cache_expires')
     
-    # Drop table
-    op.drop_table('prediction_cache')
+    # Drop table if exists
+    inspector = sa.inspect(op.get_bind())
+    if inspector.has_table('prediction_cache'):
+        op.drop_table('prediction_cache')
