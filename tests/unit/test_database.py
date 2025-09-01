@@ -16,8 +16,8 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "src")
 )
 
-from database.manager import DatabaseManager
-from database.models import OrderStatus, PositionSide
+from src.database.manager import DatabaseManager
+from src.database.models import OrderStatus, PositionSide
 
 pytestmark = pytest.mark.unit
 
@@ -30,9 +30,11 @@ class TestDatabaseManager:
         """Create DatabaseManager with mocked PostgreSQL for testing"""
         postgresql_url = "postgresql://test_user:test_pass@localhost:5432/test_db"
 
-        with patch("database.manager.create_engine") as mock_create_engine, patch(
-            "database.manager.sessionmaker"
-        ) as mock_sessionmaker, patch("database.manager.Base"):
+        with (
+            patch("database.manager.create_engine") as mock_create_engine,
+            patch("database.manager.sessionmaker") as mock_sessionmaker,
+            patch("database.manager.Base"),
+        ):
             # Setup mocks
             mock_engine = Mock()
             mock_session_factory = Mock()
@@ -82,8 +84,10 @@ class TestInitialization(TestDatabaseManager):
         """Test initialization with valid PostgreSQL URL"""
         postgresql_url = "postgresql://test:test@localhost:5432/test"
 
-        with patch("database.manager.create_engine"), patch("database.manager.sessionmaker"), patch(
-            "database.manager.Base.metadata.create_all"
+        with (
+            patch("database.manager.create_engine"),
+            patch("database.manager.sessionmaker"),
+            patch("database.manager.Base.metadata.create_all"),
         ):
             db_manager = DatabaseManager(database_url=postgresql_url)
             assert db_manager.database_url == postgresql_url
@@ -92,10 +96,11 @@ class TestInitialization(TestDatabaseManager):
         """Test initialization from DATABASE_URL environment variable"""
         postgresql_url = "postgresql://test:test@localhost:5432/test"
 
-        with patch("database.manager.get_config") as mock_config, patch(
-            "database.manager.create_engine"
-        ), patch("database.manager.sessionmaker"), patch(
-            "database.manager.Base.metadata.create_all"
+        with (
+            patch("database.manager.get_config") as mock_config,
+            patch("database.manager.create_engine"),
+            patch("database.manager.sessionmaker"),
+            patch("database.manager.Base.metadata.create_all"),
         ):
             mock_config.return_value.get.return_value = postgresql_url
 
@@ -402,15 +407,18 @@ class TestDataRetrieval(TestDatabaseManager):
         mock_trade.entry_time = datetime.utcnow() - timedelta(hours=1)
 
         mock_query = Mock()
+        mock_query.filter.return_value = mock_query
         mock_query.all.return_value = [mock_trade]
         mock_postgresql_db._mock_session.query.return_value = mock_query
 
-        metrics = mock_postgresql_db.get_performance_metrics()
+        # Use the second get_performance_metrics method (which requires session_id)
+        metrics = mock_postgresql_db.get_performance_metrics(session_id=123)
 
         assert isinstance(metrics, dict)
         assert "total_trades" in metrics
         assert "win_rate" in metrics
-        assert "total_pnl" in metrics
+        # The method returns: total_trades, winning_trades, losing_trades, win_rate, total_pnl, avg_win, avg_loss, profit_factor, max_drawdown, best_trade, worst_trade, avg_trade_duration
+        assert "profit_factor" in metrics
         assert "max_drawdown" in metrics
 
 
@@ -512,6 +520,37 @@ class TestEnumConversion(TestDatabaseManager):
             )
 
             assert event_id == 101
+
+
+class TestOrderStatusNormalization(TestDatabaseManager):
+    """Tests for order status normalization in DatabaseManager.update_order_status"""
+
+    def test_update_order_status_normalizes_values(self, mock_postgresql_db):
+        mock_position = Mock()
+        mock_query = Mock()
+        mock_query.filter_by.return_value.first.return_value = mock_position
+        mock_postgresql_db._mock_session.query.return_value = mock_query
+
+        # Mixed casing and exchange variants map correctly
+        assert mock_postgresql_db.update_order_status(1, "open") is True
+        assert mock_position.status.value == OrderStatus.OPEN.value
+
+        assert mock_postgresql_db.update_order_status(1, "Partially_Filled") is True
+        assert mock_position.status.value == OrderStatus.FILLED.value
+
+        assert mock_postgresql_db.update_order_status(1, "rejected") is True
+        assert mock_position.status.value == OrderStatus.FAILED.value
+
+        assert mock_postgresql_db.update_order_status(1, "expired") is True
+        assert mock_position.status.value == OrderStatus.CANCELLED.value
+
+    def test_update_order_status_invalid_value(self, mock_postgresql_db):
+        mock_position = Mock()
+        mock_query = Mock()
+        mock_query.filter_by.return_value.first.return_value = mock_position
+        mock_postgresql_db._mock_session.query.return_value = mock_query
+
+        assert mock_postgresql_db.update_order_status(1, "unknown_status") is False
 
 
 if __name__ == "__main__":

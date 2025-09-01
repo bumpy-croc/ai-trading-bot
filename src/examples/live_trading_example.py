@@ -14,12 +14,12 @@ import sys
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config.constants import DEFAULT_INITIAL_BALANCE
-from data_providers.binance_provider import BinanceProvider
-from data_providers.senticrypt_provider import SentiCryptProvider
-from live.trading_engine import LiveTradingEngine
-from risk.risk_manager import RiskParameters
-from strategies.ml_basic import MlBasic
+from src.config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_PERFORMANCE_MONITOR_INTERVAL
+from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.senticrypt_provider import SentiCryptProvider
+from src.live.trading_engine import LiveTradingEngine
+from src.risk.risk_manager import RiskParameters
+from src.strategies.ml_basic import MlBasic
 
 
 def setup_paper_trading():
@@ -162,7 +162,7 @@ def monitor_performance(engine):
                 flush=True,
             )
 
-            time.sleep(10)  # Update every 10 seconds
+            time.sleep(DEFAULT_PERFORMANCE_MONITOR_INTERVAL)  # Configurable monitoring interval
 
     except KeyboardInterrupt:
         print("\n\n🛑 Monitoring stopped")

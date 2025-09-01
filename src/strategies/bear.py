@@ -7,12 +7,12 @@ This strategy is designed for bear market conditions.
 import numpy as np
 import pandas as pd
 
-from indicators.technical import (
+from src.indicators.technical import (
     calculate_atr,
     calculate_macd,
     calculate_rsi,
 )
-from strategies.base import BaseStrategy
+from src.strategies.base import BaseStrategy
 
 
 class BearStrategy(BaseStrategy):

@@ -167,7 +167,7 @@ python scripts/railway_database_setup.py --verify
 ### Configuration Flow
 1. **Service Starts**: Database Manager initializes
 2. **Check Environment**: Look for `DATABASE_URL`
-3. **Database Connection**: 
+3. **Database Connection**:
    - If `DATABASE_URL` exists → PostgreSQL (Railway)
    - If not → PostgreSQL (Local with docker-compose)
 4. **Connection Setup**: Configure appropriate connection pooling

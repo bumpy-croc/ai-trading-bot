@@ -123,15 +123,15 @@ class YourStrategy(BaseStrategy):
     def __init__(self, name):
         super().__init__(name)
         # Strategy-specific initialization
-    
+
     def calculate_indicators(self, df):
         # Calculate strategy-specific indicators
         pass
-    
+
     def check_entry_conditions(self, df, index):
         # Entry signal logic
         pass
-    
+
     def check_exit_conditions(self, df, index, entry_price):
         # Exit signal logic
         pass
@@ -146,15 +146,15 @@ class YourStrategy(BaseStrategy):
 
 ### **4. Execution Layer**
 
-**Backtesting (`src/backtesting/`)**: 
+**Backtesting (`src/backtesting/`)**:
 - `engine.py` - Simulates trades on historical data
 - Tracks performance metrics, drawdowns, and generates reports
 
-**Live Trading (`src/live/`)**: 
+**Live Trading (`src/live/`)**:
 - `trading_engine.py` - Executes real trades via exchange APIs
 - `strategy_manager.py` - Manages strategy lifecycle and switching
 
-**Risk Management (`src/risk/`)**: 
+**Risk Management (`src/risk/`)**:
 - `risk_manager.py` - Position sizing, stop-loss management, exposure limits
 - Always enforces max risk per trade (1-2% of capital)
 
@@ -277,9 +277,9 @@ python tests/run_tests.py validate
 - `fetch_rules(["architecture"])` - Complete system architecture
 - `fetch_rules(["strategies"])` - Strategy development details
 - `fetch_rules(["ml-models"])` - ML model training & integration
-- `fetch_rules(["commands"])` - Complete command reference 
+- `fetch_rules(["commands"])` - Complete command reference
 **For detailed implementation guides, use:**
 - `fetch_rules(["architecture"])` - Complete system architecture
 - `fetch_rules(["strategies"])` - Strategy development details
 - `fetch_rules(["ml-models"])` - ML model training & integration
-- `fetch_rules(["commands"])` - Complete command reference 
+- `fetch_rules(["commands"])` - Complete command reference

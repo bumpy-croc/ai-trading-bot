@@ -8,6 +8,8 @@ subdirectories.
 
 from pathlib import Path
 
+from src.utils.project_paths import get_project_root as get_project_root_utils
+
 
 def get_project_root() -> Path:
     """
@@ -16,20 +18,7 @@ def get_project_root() -> Path:
     Returns:
         Path: The project root directory
     """
-    # Start from this file's directory and work up to find the project root
-    current = Path(__file__).resolve().parent
-
-    # Look for project indicators (pyproject.toml, requirements.txt, etc.)
-    while current != current.parent:
-        if any(
-            (current / indicator).exists()
-            for indicator in ["requirements.txt", "pyproject.toml", "setup.py", ".git"]
-        ):
-            return current
-        current = current.parent
-
-    # Fallback: assume we're in src/config and go up two levels
-    return Path(__file__).resolve().parent.parent.parent
+    return get_project_root_utils()
 
 
 def get_data_dir() -> Path:
@@ -49,7 +38,7 @@ def get_cache_dir() -> Path:
     Returns:
         Path: The cache directory path
     """
-    return get_data_dir() / "cache"
+    return get_project_root() / "cache" / "market_data"
 
 
 def get_database_path(*_args, **_kwargs):  # type: ignore[override]

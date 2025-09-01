@@ -4,5 +4,5 @@
 - Prefer markers over fragile selection: e.g., `-m "not integration and not slow"`.
 - Keep tests stateless; use fixtures; avoid global state.
 - Mock external APIs; do not hit real exchanges in unit tests.
-- Integration tests are sequential and may enable DB containers via env `ENABLE_INTEGRATION_TESTS=1`.
+- Integration tests are sequential.
 - Keep test data under `tests/data/`; avoid large new binaries.

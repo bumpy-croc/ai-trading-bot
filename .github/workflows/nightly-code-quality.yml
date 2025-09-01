@@ -10,20 +10,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  launch-code-quality-agent:
+  code-quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
       checks: read
+    env:
+      COPILOT_ENABLED: ${{ vars.COPILOT_ENABLED || 'false' }}
+      COPILOT_ASSIGNEE: ${{ vars.COPILOT_ASSIGNEE || '' }}
 
     steps:
       - name: Checkout code
-      
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Determine default branch
+      - name: Determine default branch and date
         id: vars
         shell: bash
         run: |
@@ -32,56 +36,199 @@ jobs:
             DEFAULT_BRANCH="${GITHUB_REF_NAME}"
           fi
           echo "default_branch=$DEFAULT_BRANCH" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
 
-      - name: Build agent prompt
-        id: prompt
-        shell: bash
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tooling
         run: |
-          DATE=$(date -u +%Y-%m-%d)
-          cat > prompt.txt << 'EOF'
-          You are a background code-quality maintenance agent for this repository.
+          python -m pip install --upgrade pip
+          pip install ruff==0.5.0 black==24.4.2 mypy==1.10.0 bandit==1.7.9 pip-audit
+          pip install -r requirements.txt || true
 
-          Tasks to perform on the target branch:
-          1. Install and use Python tooling:
-             - ruff==0.5.0 for linting and import sorting. Run: ruff check . --fix
-             - black==24.4.2 for formatting. Run: black .
-             - mypy==1.10.0 for type checking. Config: mypy.ini, run: mypy --config-file mypy.ini src
-             - bandit==1.7.9 for security static analysis. Config: pyproject.toml, run: bandit -c pyproject.toml -r src
-             - pip-audit for dependency vulnerabilities. Run: pip-audit -r requirements.txt -f json -o artifacts/security/pip-audit.json; also produce a short markdown summary at artifacts/security/pip-audit.md.
-          2. Apply auto-fixable changes (ruff/black/imports). Do not make behavioral changes.
-          3. If mypy or bandit findings are trivially fixable without behavior change, fix them; otherwise, summarize them in the PR body with links/paths.
-          4. If present, run tests with: pytest -q. If they fail due to your changes, revert risky edits and keep formatting-only fixes.
-          5. Create or update a branch named chore/nightly-code-quality. Commit changes with a clear conventional message.
-          6. Open or update a pull request titled "chore: nightly code quality fixes (YYYY-MM-DD)" with:
-             - Summary of what changed (counts of files formatted, ruff fixes)
-             - Mypy, Bandit, and pip-audit summaries (and paths to detailed artifacts)
-             - Labels: maintenance, automated
-             - No reviewers assigned.
+      - name: Prepare artifact directories
+        run: |
+          mkdir -p artifacts/security
 
-          Constraints:
-          - Follow project configs in pyproject.toml, mypy.ini, pytest.ini.
-          - Only commit code/formatting changes and documentation for audit results. Do not upgrade dependency versions.
-          EOF
-          echo "title=chore: nightly code quality fixes ($DATE)" >> $GITHUB_OUTPUT
+      - name: Run ruff (fix)
+        run: |
+          ruff check . --fix || true
 
-      - name: Launch Cursor Background Agent
+      - name: Run black (format)
+        run: |
+          black . || true
+
+      - name: Stage formatting changes
+        run: |
+          git add -A
+
+      - name: Run mypy
+        id: mypy
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          mypy --config-file mypy.ini src | tee artifacts/mypy.txt
+          echo "mypy_exit=$?" >> $GITHUB_OUTPUT || true
+
+      - name: Run bandit
+        id: bandit
+        continue-on-error: true
+        run: |
+          bandit -c pyproject.toml -r src -q -f txt -o artifacts/security/bandit.txt || true
+
+      - name: Run pip-audit
+        id: pipaudit
+        continue-on-error: true
+        run: |
+          pip-audit -r requirements.txt -f json -o artifacts/security/pip-audit.json || true
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '
+              def row: "| \(.name) | \(.version) | \(.vulns|map(.id)|join(", ")) |";
+              if (.dependencies|length)==0 then "# pip-audit: no known vulnerabilities found" else
+              "# pip-audit summary\n\n| package | version | vulns |\n|---|---|---|\n" + (.dependencies|map(select(.vulns|length>0))|map(row)|join("\n")) end
+            ' artifacts/security/pip-audit.json > artifacts/security/pip-audit.md || echo "# pip-audit run failed" > artifacts/security/pip-audit.md
+          else
+            echo "jq not available; saving minimal pip-audit summary" > artifacts/security/pip-audit.md
+          fi
+
+      - name: Run tests (optional)
+        continue-on-error: true
+        run: |
+          pytest -q || true
+
+      - name: Stage analysis artifacts
+        run: |
+          git add artifacts/mypy.txt artifacts/security/bandit.txt artifacts/security/pip-audit.json artifacts/security/pip-audit.md || true
+
+      - name: Detect non-trivial issues
+        id: detect
         shell: bash
         env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          MYPY_EXIT: ${{ steps.mypy.outputs.mypy_exit }}
         run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "CURSOR_API_KEY is not set. Please add it to repository secrets to enable the background agent." >&2
-            exit 1
+          mypy_failed=false
+          if [ -n "$MYPY_EXIT" ] && [ "$MYPY_EXIT" != "0" ]; then
+            mypy_failed=true
           fi
-          echo "Launching maintenance agent on branch: ${{ steps.vars.outputs.default_branch }}"
-          curl -sS -X POST "https://api.cursor.com/v0/agents" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $CURSOR_API_KEY" \
-            -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ steps.vars.outputs.default_branch }}\" } }" | jq -r '.id // "ok"'
-          rm -f prompt.txt
 
-      - name: Log next steps
+          bandit_has_issues=false
+          if [ -s artifacts/security/bandit.txt ]; then
+            if ! grep -qi "No issues identified" artifacts/security/bandit.txt; then
+              bandit_has_issues=true
+            fi
+          fi
+
+          pipaudit_has_vulns=false
+          if [ -s artifacts/security/pip-audit.json ]; then
+            if command -v jq >/dev/null 2>&1; then
+              if jq -e 'any(.dependencies[]?; (.vulns // []) | length > 0)' artifacts/security/pip-audit.json >/dev/null; then
+                pipaudit_has_vulns=true
+              fi
+            else
+              python - <<'PY'
+              import json,sys
+          try:
+              with open('artifacts/security/pip-audit.json') as f:
+                  data=json.load(f)
+              deps=data.get('dependencies',[])
+              print('true' if any(d.get('vulns') for d in deps) else 'false')
+          except Exception:
+              print('false')
+          PY
+          | grep -q true && pipaudit_has_vulns=true || true
+                      fi
+                    fi
+
+                    needs_copilot=false
+                    if $mypy_failed || $bandit_has_issues || $pipaudit_has_vulns; then
+                      needs_copilot=true
+                    fi
+
+                    echo "mypy_failed=$mypy_failed" >> $GITHUB_OUTPUT
+                    echo "bandit_has_issues=$bandit_has_issues" >> $GITHUB_OUTPUT
+                    echo "pipaudit_has_vulns=$pipaudit_has_vulns" >> $GITHUB_OUTPUT
+                    echo "needs_copilot=$needs_copilot" >> $GITHUB_OUTPUT
+
+                - name: Build Copilot task instructions
+                  if: ${{ steps.detect.outputs.needs_copilot == 'true' && env.COPILOT_ENABLED == 'true' }}
+                  shell: bash
+                  run: |
+          DATE="${{ steps.vars.outputs.date }}"
+          {
+            echo "Please fix non-trivial code quality issues and open a PR."
+            echo
+            echo "Scope:"
+            echo "- Address mypy type-check failures (see artifacts/mypy.txt)."
+            echo "- Address Bandit security findings where safe without behavioral changes (see artifacts/security/bandit.txt)."
+            echo "- For dependencies with vulnerabilities (artifacts/security/pip-audit.md), prefer code-level mitigations; do NOT upgrade pinned versions in requirements.txt."
+            echo
+            echo "Constraints:"
+            echo "- Follow project configs in pyproject.toml, mypy.ini, pytest.ini."
+            echo "- No behavioral changes; only safe refactors and annotations."
+            echo "- Keep formatting consistent (ruff/black)."
+            echo
+            echo "Acceptance criteria:"
+            echo "- CI green on the default branch target."
+            echo "- Tests pass: pytest -q."
+            echo "- Lints clean: ruff check .; mypy src; bandit -c pyproject.toml -r src."
+            echo
+            echo "Artifacts to consult:"
+            echo "- artifacts/mypy.txt"
+            echo "- artifacts/security/bandit.txt"
+            echo "- artifacts/security/pip-audit.md"
+          } > copilot_task.md
+
+      - name: Create Copilot task issue
+        if: ${{ steps.detect.outputs.needs_copilot == 'true' && env.COPILOT_ENABLED == 'true' && env.COPILOT_ASSIGNEE != '' }}
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: "chore: Copilot task - code quality fixes (${{ steps.vars.outputs.date }})"
+          content-filepath: copilot_task.md
+          labels: maintenance, automated, copilot
+          assignees: ${{ env.COPILOT_ASSIGNEE }}
+
+      - name: Build PR body
+        id: pr_body
         shell: bash
         run: |
-          echo "A background agent was launched to run code quality maintenance."
-          echo "It should push to branch chore/nightly-code-quality and open/update a PR titled: ${{ steps.prompt.outputs.title }}"
+          DATE="${{ steps.vars.outputs.date }}"
+          CHANGED_COUNT=$(git status --porcelain | wc -l | tr -d ' ')
+          {
+            echo "chore: nightly code quality fixes ($DATE)"
+            echo
+            echo "Summary:"
+            echo "- Formatted and linted codebase (ruff, black)."
+            echo "- Mypy, Bandit, and pip-audit executed. See artifacts below."
+            echo
+            echo "Agent escalation:"
+            echo "- Needs Copilot: ${{ steps.detect.outputs.needs_copilot || 'false' }}"
+            echo
+            echo "Details:"
+            echo "- Files changed (staged): $CHANGED_COUNT"
+            echo "- Mypy exit code: ${{ steps.mypy.outputs.mypy_exit }}"
+            echo
+            echo "Artifacts:"
+            echo "- Mypy: artifacts/mypy.txt"
+            echo "- Bandit: artifacts/security/bandit.txt"
+            echo "- pip-audit JSON: artifacts/security/pip-audit.json"
+            echo "- pip-audit summary: artifacts/security/pip-audit.md"
+          } > pr_body.md
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: nightly code quality fixes (${{ steps.vars.outputs.date }})"
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          title: "chore: nightly code quality fixes (${{ steps.vars.outputs.date }})"
+          body-path: pr_body.md
+          branch: chore/nightly-code-quality
+          base: ${{ steps.vars.outputs.default_branch }}
+          labels: maintenance, automated
+          signoff: false
+          delete-branch: false
+          draft: false

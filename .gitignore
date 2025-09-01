@@ -5,6 +5,7 @@ __pycache__
 .pytest_cache
 logs/
 .cursor/mcp.json
+bandit-report.json
 
 .DS_Store
 
@@ -18,3 +19,9 @@ staging/
 file:unit_test_db_*
 # Local MCP config (contains secrets); use mcp.example.json as template
 mcp.json
+
+# Distribution / packaging
+*.egg-info/
+
+# Cache directory (market data cache files)
+cache/

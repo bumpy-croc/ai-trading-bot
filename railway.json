@@ -3,7 +3,8 @@
     "builder": "dockerfile"
   },
   "deploy": {
-    "startCommand": "python scripts/run_live_trading_with_health.py ml_basic",
+    "preDeployCommand": "atb db verify --apply-migrations",
+    "startCommand": "atb live-health ml_basic",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 10,
     "restartPolicyType": "ON_FAILURE",

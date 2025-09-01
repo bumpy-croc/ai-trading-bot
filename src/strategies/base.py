@@ -65,7 +65,8 @@ class BaseStrategy(ABC):
                 try:
                     context_pairs = [f"{k}={v}" for k, v in additional_context.items()]
                     final_reasons.extend(context_pairs)
-                except Exception:
+                except Exception as e:
+                    self.logger.debug(f"Failed to process additional context: {e}")
                     pass
             # Use the SymbolFactory for consistent formatting
             # Default to the strategy's trading pair when symbol is omitted or None
@@ -145,12 +146,53 @@ class BaseStrategy(ABC):
         """
         Optional hook: strategies can provide risk/position management overrides.
         Expected keys may include:
-          - position_sizer: 'fixed_fraction' | 'confidence_weighted'
+          - position_sizer: 'fixed_fraction' | 'confidence_weighted' | 'atr_risk'
           - base_fraction: float (e.g., 0.02 for 2%)
           - min_fraction: float
           - max_fraction: float
           - stop_loss_pct: float
           - take_profit_pct: float or None
+          - dynamic_risk: dict with dynamic risk configuration overrides:
+            - enabled: bool
+            - drawdown_thresholds: List[float]
+            - risk_reduction_factors: List[float]
+            - recovery_thresholds: List[float]
+            - volatility_adjustment_enabled: bool
+          - partial_operations: dict with partial exit and scale-in configuration:
+            - exit_targets: List[float] (e.g., [0.03, 0.06, 0.10] for 3%, 6%, 10%)
+            - exit_sizes: List[float] (e.g., [0.25, 0.25, 0.50] for 25%, 25%, 50%)
+            - scale_in_thresholds: List[float] (e.g., [0.02, 0.05] for 2%, 5%)
+            - scale_in_sizes: List[float] (e.g., [0.25, 0.25] for 25%, 25%)
+            - max_scale_ins: int (e.g., 2)
+          - trailing_stop: dict with trailing parameters (all decimals):
+            - activation_threshold: float  # e.g., 0.015 for 1.5%
+            - trailing_distance_pct: float | None  # e.g., 0.005 for 0.5%
+            - trailing_distance_atr_mult: float | None  # e.g., 1.5
+            - breakeven_threshold: float  # e.g., 0.02 for 2%
+            - breakeven_buffer: float  # e.g., 0.001 for 0.1%
+            
+        Example:
+            return {
+                'dynamic_risk': {
+                    'enabled': True,
+                    'drawdown_thresholds': [0.03, 0.08, 0.15],
+                    'risk_reduction_factors': [0.9, 0.7, 0.5]
+                },
+                'partial_operations': {
+                    'exit_targets': [0.03, 0.06, 0.10],
+                    'exit_sizes': [0.25, 0.25, 0.50],
+                    'scale_in_thresholds': [0.02, 0.05],
+                    'scale_in_sizes': [0.25, 0.25],
+                    'max_scale_ins': 2
+                },
+                'trailing_stop': {
+                    'activation_threshold': 0.015,
+                    'trailing_distance_pct': 0.005,
+                    'breakeven_threshold': 0.02,
+                    'breakeven_buffer': 0.001,
+                }
+            }
+            
         If None, the RiskManager defaults are used.
         """
         return None

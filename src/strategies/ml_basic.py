@@ -25,13 +25,13 @@ import numpy as np
 import onnxruntime as ort
 import pandas as pd
 
-from config import get_config
-from config.constants import DEFAULT_USE_PREDICTION_ENGINE
-from prediction import PredictionConfig, PredictionEngine
-from prediction.features.pipeline import FeaturePipeline
-from prediction.features.price_only import PriceOnlyFeatureExtractor
-from prediction.features.technical import TechnicalFeatureExtractor
-from strategies.base import BaseStrategy
+from src.config.config_manager import get_config
+from src.config.constants import DEFAULT_USE_PREDICTION_ENGINE
+from src.prediction import PredictionConfig, PredictionEngine
+from src.prediction.features.pipeline import FeaturePipeline
+from src.prediction.features.price_only import PriceOnlyFeatureExtractor
+from src.prediction.features.technical import TechnicalFeatureExtractor
+from src.strategies.base import BaseStrategy
 
 
 class MlBasic(BaseStrategy):
@@ -155,12 +155,13 @@ class MlBasic(BaseStrategy):
         # Use the prediction feature pipeline to generate normalized price features identically
         df = self.feature_pipeline.transform(df)
 
-        # Prepare predictions columns
+        # Prepare predictions columns with safe defaults to avoid persistent NaNs
         df["onnx_pred"] = np.nan
         df["ml_prediction"] = np.nan
         df["prediction_confidence"] = np.nan
-        df["engine_direction"] = np.nan
-        df["engine_confidence"] = np.nan
+        # Monitoring-only fields: default to 0.0 to prevent DataFrame-wide dropna from wiping rows
+        df["engine_direction"] = 0.0
+        df["engine_confidence"] = 0.0
 
         price_features = ["close", "volume", "high", "low", "open"]
 
@@ -229,6 +230,20 @@ class MlBasic(BaseStrategy):
                 df.at[df.index[i], "onnx_pred"] = fallback_price
                 df.at[df.index[i], "ml_prediction"] = fallback_price
                 df.at[df.index[i], "prediction_confidence"] = np.nan
+
+        # Optional: compute monitoring-only direction/confidence from predictions if available
+        try:
+            valid_mask = (~pd.isna(df["onnx_pred"])) & (df["close"] > 0)
+            # Direction: sign of (pred - close)
+            delta = (df["onnx_pred"] - df["close"]).where(valid_mask, 0.0)
+            df["engine_direction"] = np.sign(delta).fillna(0.0)
+            # Confidence proxy: normalized absolute delta capped at 1.0
+            with np.errstate(divide="ignore", invalid="ignore"):
+                conf = (delta.abs() / df["close"]).clip(0.0, 1.0)
+            df["engine_confidence"] = conf.fillna(0.0)
+        except Exception:
+            # Keep safe defaults if any issue arises
+            pass
 
         return df
 

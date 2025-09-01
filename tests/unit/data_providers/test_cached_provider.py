@@ -9,7 +9,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 try:
-    from data_providers.cached_data_provider import CachedDataProvider
+    from src.data_providers.cached_data_provider import CachedDataProvider
 
     CACHE_AVAILABLE = True
 except ImportError:

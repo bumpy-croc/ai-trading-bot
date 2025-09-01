@@ -1,1 +1,1 @@
-from dashboards.backtesting import BacktestDashboard  # noqa: F401
+from src.dashboards.backtesting import BacktestDashboard  # noqa: F401

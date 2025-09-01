@@ -7,6 +7,7 @@ PostgreSQL database manager for handling all database operations
 import logging
 import math
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -17,18 +18,22 @@ from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # 
 from sqlalchemy.orm import Session, sessionmaker  # type: ignore
 from sqlalchemy.pool import QueuePool  # type: ignore
 
-from config.config_manager import get_config
+from src.config.config_manager import get_config
 
 from .models import (
     AccountBalance,
     AccountHistory,
     Base,
+    DynamicPerformanceMetrics,
     EventType,
     OptimizationCycle,
     OrderStatus,
+    PartialOperationType,
+    PartialTrade,
     PerformanceMetrics,
     Position,
     PositionSide,
+    RiskAdjustment,
     StrategyExecution,
     SystemEvent,
     Trade,
@@ -77,6 +82,44 @@ class DatabaseManager:
         # Create tables if they don't exist
         self._create_tables()
 
+    def _is_running_unit_tests(self) -> bool:
+        """Determine whether the current pytest run executes unit tests.
+
+        Detection order (no call stack inspection):
+        1) Explicit environment flags:
+           - TEST_TYPE = "unit" | "integration"
+           - PYTEST_TEST_TYPE = alias of TEST_TYPE
+           - RUNNING_INTEGRATION_TESTS = 1/true/yes → integration
+        2) PYTEST_CURRENT_TEST path hint containing "tests/unit/" or "tests/integration/".
+        3) Conservative default: treat as integration (return False) to avoid SQLite fallback.
+
+        Returns:
+            True if running unit tests; False for integration tests or when undetermined.
+        """
+        # * Honor explicit environment flags first
+        explicit_type = os.getenv("TEST_TYPE") or os.getenv("PYTEST_TEST_TYPE")
+        if explicit_type:
+            lowered = explicit_type.strip().lower()
+            if lowered.startswith("unit"):
+                return True
+            if lowered.startswith("integration"):
+                return False
+
+        running_integration = os.getenv("RUNNING_INTEGRATION_TESTS", "").strip().lower()
+        if running_integration in {"1", "true", "yes", "on"}:
+            return False
+
+        # * Use pytest-provided hint about the current test item path
+        current_test = os.getenv("PYTEST_CURRENT_TEST", "")
+        if current_test:
+            if "tests/integration/" in current_test or "/tests/integration/" in current_test:
+                return False
+            if "tests/unit/" in current_test or "/tests/unit/" in current_test:
+                return True
+
+        # * Conservative default: treat as integration to avoid accidental SQLite fallback
+        return False
+
     def _init_database(self):
         """Initialize PostgreSQL database connection and session factory"""
 
@@ -91,7 +134,7 @@ class DatabaseManager:
                     "Please set DATABASE_URL in your environment or Railway configuration."
                 )
 
-        # Accept SQLite strictly for unit tests (fast path), controlled by ENABLE_INTEGRATION_TESTS
+        # Accept SQLite strictly for unit tests (fast path)
         is_sqlite = self.database_url.startswith("sqlite:")
         is_postgres = self.database_url.startswith("postgresql")
 
@@ -102,15 +145,18 @@ class DatabaseManager:
                 f"got: {self.database_url[:20]}..."
             )
 
-        # Guard SQLite usage behind the integration flag to avoid accidental use in production
-        run_integration = os.getenv("ENABLE_INTEGRATION_TESTS", "0") == "1"
+        # Guard SQLite usage in CI to avoid accidental use in production
         is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
-        # Allow SQLite for local integration testing when PostgreSQL is not available
-        if is_sqlite and run_integration and is_github_actions:
-            raise ValueError(
-                "SQLite URL provided while integration tests are enabled in CI. Use a PostgreSQL DATABASE_URL."
-            )
+        # Allow SQLite for unit tests, but require PostgreSQL for integration tests in CI
+        if is_sqlite and is_github_actions:
+            # Check if we're running integration tests by looking at pytest markers or environment
+            # Allow SQLite if running unit tests (detected by pytest current item markers)
+            is_unit_test = self._is_running_unit_tests()
+            if not is_unit_test:
+                raise ValueError(
+                    "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
+                )
 
         # Helper for creating a SQLite engine config
         def _sqlite_engine_config(url: str) -> tuple[str, dict[str, Any]]:
@@ -123,13 +169,9 @@ class DatabaseManager:
                 "poolclass": StaticPool if url.endswith(":memory:") else None,
             }
             engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
+            # * Keep plain in-memory SQLite with StaticPool so tests share a single
+            #   connection-backed memory DB per engine without creating filesystem entries.
             effective_url = url
-            if url.endswith(":memory:"):
-                import threading
-
-                dbname = f"unit_test_db_{os.getpid()}_{threading.get_ident()}"
-                effective_url = f"sqlite:///file:{dbname}?mode=memory&cache=shared"
-                engine_kwargs["connect_args"]["uri"] = True
             return effective_url, engine_kwargs
 
         # Create engine with appropriate configuration per backend
@@ -154,26 +196,38 @@ class DatabaseManager:
             )
 
         except Exception as e:
-            # If we're attempting Postgres but not in integration mode, fall back to SQLite for unit tests
-            if is_postgres and not run_integration:
-                logger.warning(
-                    "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
-                    e,
-                )
-                fallback_url = "sqlite:///:memory:"
-                effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
-                try:
-                    self.engine = create_engine(effective_url, **engine_kwargs)
-                    self.session_factory = sessionmaker(bind=self.engine)
-                    from sqlalchemy import text as _sql_text
-
-                    with self.engine.connect() as conn:
-                        conn.execute(_sql_text("SELECT 1"))
-                    logger.info(
-                        "✅ Database connection established (SQLite fallback for unit tests)"
+            # If we're attempting Postgres but it fails, fall back to SQLite for unit tests only
+            if is_postgres:
+                # Integration tests must always use PostgreSQL - no fallback allowed
+                is_unit_test = self._is_running_unit_tests()
+                
+                if is_unit_test:
+                    logger.warning(
+                        "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
+                        e,
                     )
-                except Exception as sqlite_err:
-                    logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                    fallback_url = "sqlite:///:memory:"
+                    effective_url, engine_kwargs = _sqlite_engine_config(fallback_url)
+                    try:
+                        self.engine = create_engine(effective_url, **engine_kwargs)
+                        self.session_factory = sessionmaker(bind=self.engine)
+                        from sqlalchemy import text as _sql_text
+
+                        with self.engine.connect() as conn:
+                            conn.execute(_sql_text("SELECT 1"))
+                        logger.info(
+                            "✅ Database connection established (SQLite fallback for unit tests)"
+                        )
+                    except Exception as sqlite_err:
+                        logger.error(f"Failed to initialize fallback SQLite database: {sqlite_err}")
+                        raise
+                else:
+                    # Integration tests require PostgreSQL in ALL environments (local, CI, production)
+                    logger.error(
+                        f"PostgreSQL connection failed for integration test. "
+                        f"Integration tests require a working PostgreSQL database to test end-to-end behavior. "
+                        f"Error: {e}"
+                    )
                     raise
             else:
                 logger.error(f"Failed to initialize database: {e}")
@@ -218,7 +272,7 @@ class DatabaseManager:
             raise
 
     @contextmanager
-    def get_session(self) -> Session:
+    def get_session(self) -> Generator[Session, None, None]:
         """
         Get a database session with automatic cleanup.
 
@@ -268,7 +322,8 @@ class DatabaseManager:
                     if hasattr(self.engine.pool, nm):
                         val = getattr(self.engine.pool, nm)
                         return val() if callable(val) else val
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to get pool attribute {nm}: {e}")
                 pass
             return default
 
@@ -371,6 +426,8 @@ class DatabaseManager:
         initial_balance: float,
         strategy_config: dict | None = None,
         session_name: str | None = None,
+        time_exit_config: dict | None = None,
+        market_timezone: str | None = None,
     ) -> int:
         """
         Create a new trading session.
@@ -398,6 +455,8 @@ class DatabaseManager:
                 initial_balance=initial_balance,
                 strategy_config=strategy_config,
                 start_time=datetime.utcnow(),
+                time_exit_config=time_exit_config,
+                market_timezone=market_timezone,
             )
 
             session.add(trading_session)
@@ -515,6 +574,12 @@ class DatabaseManager:
         session_id: int | None = None,
         quantity: float | None = None,
         commission: float | None = None,
+        mfe: float | None = None,
+        mae: float | None = None,
+        mfe_price: float | None = None,
+        mae_price: float | None = None,
+        mfe_time: datetime | None = None,
+        mae_time: datetime | None = None,
     ) -> int:
         """
         Log a completed trade to the database.
@@ -560,6 +625,12 @@ class DatabaseManager:
                 confidence_score=confidence_score,
                 strategy_config=strategy_config,
                 session_id=session_id or self._current_session_id,
+                mfe=mfe,
+                mae=mae,
+                mfe_price=mfe_price,
+                mae_price=mae_price,
+                mfe_time=mfe_time,
+                mae_time=mae_time,
             )
 
             session.add(trade)
@@ -569,7 +640,7 @@ class DatabaseManager:
                 # Handle duplicate order_id by adding a unique suffix and retrying once
                 if "order_id" in str(dup).lower():
                     session.rollback()
-                    trade.order_id = f"{order_id}_{int(datetime.utcnow().timestamp()*1000)}"
+                    trade.order_id = f"{order_id}_{int(datetime.utcnow().timestamp() * 1000)}"
                     session.add(trade)
                     session.commit()
                 else:
@@ -599,6 +670,15 @@ class DatabaseManager:
         confidence_score: float | None = None,
         quantity: float | None = None,
         session_id: int | None = None,
+        trailing_stop_activated: bool | None = None,
+        trailing_stop_price: float | None = None,
+        breakeven_triggered: bool | None = None,
+        mfe: float | None = None,
+        mae: float | None = None,
+        mfe_price: float | None = None,
+        mae_price: float | None = None,
+        mfe_time: datetime | None = None,
+        mae_time: datetime | None = None,
     ) -> int:
         """
         Log a new position to the database.
@@ -625,7 +705,20 @@ class DatabaseManager:
                 confidence_score=confidence_score,
                 order_id=order_id,
                 session_id=session_id or self._current_session_id,
+                mfe=mfe,
+                mae=mae,
+                mfe_price=mfe_price,
+                mae_price=mae_price,
+                mfe_time=mfe_time,
+                mae_time=mae_time,
             )
+            # Trailing fields (optional)
+            if trailing_stop_activated is not None:
+                position.trailing_stop_activated = bool(trailing_stop_activated)
+            if trailing_stop_price is not None:
+                position.trailing_stop_price = Decimal(str(trailing_stop_price))
+            if breakeven_triggered is not None:
+                position.breakeven_triggered = bool(breakeven_triggered)
 
             session.add(position)
             try:
@@ -633,7 +726,7 @@ class DatabaseManager:
             except IntegrityError as dup:
                 if "order_id" in str(dup).lower():
                     session.rollback()
-                    position.order_id = f"{order_id}_{int(datetime.utcnow().timestamp()*1000)}"
+                    position.order_id = f"{order_id}_{int(datetime.utcnow().timestamp() * 1000)}"
                     session.add(position)
                     session.commit()
                 else:
@@ -653,6 +746,21 @@ class DatabaseManager:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         size: float | None = None,
+        original_size: float | None = None,
+        current_size: float | None = None,
+        partial_exits_taken: int | None = None,
+        scale_ins_taken: int | None = None,
+        last_partial_exit_price: float | None = None,
+        last_scale_in_price: float | None = None,
+        trailing_stop_activated: bool | None = None,
+        trailing_stop_price: float | None = None,
+        breakeven_triggered: bool | None = None,
+        mfe: float | None = None,
+        mae: float | None = None,
+        mfe_price: float | None = None,
+        mae_price: float | None = None,
+        mfe_time: datetime | None = None,
+        mae_time: datetime | None = None,
     ):
         """Update an existing position with current market data."""
         with self.get_session() as session:
@@ -665,6 +773,18 @@ class DatabaseManager:
                 position.current_price = Decimal(str(current_price))
             if size is not None:
                 position.size = Decimal(str(size))
+            if original_size is not None:
+                position.original_size = Decimal(str(original_size))
+            if current_size is not None:
+                position.current_size = Decimal(str(current_size))
+            if partial_exits_taken is not None:
+                position.partial_exits_taken = int(partial_exits_taken)
+            if scale_ins_taken is not None:
+                position.scale_ins_taken = int(scale_ins_taken)
+            if last_partial_exit_price is not None:
+                position.last_partial_exit_price = Decimal(str(last_partial_exit_price))
+            if last_scale_in_price is not None:
+                position.last_scale_in_price = Decimal(str(last_scale_in_price))
             position.last_update = datetime.utcnow()
 
             # Calculate unrealized P&L if not provided - with division by zero protection
@@ -672,7 +792,6 @@ class DatabaseManager:
                 # Convert to float for calculation, then back to Decimal
                 current_price_float = float(current_price)
                 entry_price_float = float(position.entry_price)
-
                 if position.side == PositionSide.LONG:
                     unrealized_pnl_percent = (
                         (current_price_float - entry_price_float) / entry_price_float
@@ -695,10 +814,38 @@ class DatabaseManager:
             if take_profit is not None:
                 position.take_profit = Decimal(str(take_profit))
 
+            # Update trailing fields
+            if trailing_stop_activated is not None:
+                position.trailing_stop_activated = bool(trailing_stop_activated)
+            if trailing_stop_price is not None:
+                position.trailing_stop_price = Decimal(str(trailing_stop_price))
+            if breakeven_triggered is not None:
+                position.breakeven_triggered = bool(breakeven_triggered)
+
+            # Update MFE/MAE if provided (stored as decimals without percentage scaling)
+            if mfe is not None:
+                position.mfe = Decimal(str(mfe))
+            if mae is not None:
+                position.mae = Decimal(str(mae))
+            if mfe_price is not None:
+                position.mfe_price = Decimal(str(mfe_price))
+            if mae_price is not None:
+                position.mae_price = Decimal(str(mae_price))
+            if mfe_time is not None:
+                position.mfe_time = mfe_time
+            if mae_time is not None:
+                position.mae_time = mae_time
+
             session.commit()
 
-    def close_position(self, position_id: int) -> bool:
-        """Mark a position as closed."""
+    def close_position(
+        self, 
+        position_id: int, 
+        exit_price: float | None = None, 
+        exit_time: datetime | None = None, 
+        pnl: float | None = None
+    ) -> bool:
+        """Mark a position as closed with optional exit details."""
         with self.get_session() as session:
             position = session.query(Position).filter_by(id=position_id).first()
             if not position:
@@ -706,7 +853,14 @@ class DatabaseManager:
                 return False
 
             position.status = OrderStatus.FILLED
-            position.last_update = datetime.utcnow()
+            position.last_update = exit_time or datetime.utcnow()
+            
+            # Update position with exit details if provided
+            if exit_price is not None:
+                position.current_price = exit_price
+            if pnl is not None:
+                position.unrealized_pnl = pnl
+                
             session.commit()
 
             logger.info(f"Closed position #{position_id}")
@@ -747,24 +901,14 @@ class DatabaseManager:
                 return False
 
             try:
-                # Map exchange status values to database status values
-                status_mapping = {
-                    "PENDING": "pending",
-                    "FILLED": "filled",
-                    "PARTIALLY_FILLED": "filled",  # Map to filled for simplicity
-                    "CANCELLED": "cancelled",
-                    "REJECTED": "failed",
-                    "EXPIRED": "cancelled",
-                }
-
-                db_status = status_mapping.get(status.upper(), status.lower())
-                order.status = OrderStatus[db_status.upper()]
+                normalized = self._normalize_order_status(status)
+                order.status = normalized
                 order.last_update = datetime.utcnow()
                 session.commit()
-                logger.info(f"Updated order {order_id} status to {db_status}")
+                logger.info(f"Updated order {order_id} status to {normalized.value}")
                 return True
-            except KeyError:
-                logger.error(f"Invalid order status: {status}")
+            except ValueError as exc:
+                logger.error(f"Invalid order status: {status} ({exc})")
                 return False
 
     def get_trades_by_symbol_and_date(
@@ -980,6 +1124,15 @@ class DatabaseManager:
                     "take_profit": p.take_profit,
                     "entry_time": p.entry_time,
                     "strategy": p.strategy_name,
+                    "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
+                    "trailing_stop_price": getattr(p, "trailing_stop_price", None),
+                    "breakeven_triggered": getattr(p, "breakeven_triggered", False),
+                    "mfe": p.mfe,
+                    "mae": p.mae,
+                    "mfe_price": p.mfe_price,
+                    "mae_price": p.mae_price,
+                    "mfe_time": p.mfe_time,
+                    "mae_time": p.mae_time,
                 }
                 for p in positions
             ]
@@ -1010,6 +1163,12 @@ class DatabaseManager:
                     "exit_time": t.exit_time,
                     "exit_reason": t.exit_reason,
                     "strategy": t.strategy_name,
+                    "mfe": t.mfe,
+                    "mae": t.mae,
+                    "mfe_price": t.mfe_price,
+                    "mae_price": t.mae_price,
+                    "mfe_time": t.mfe_time,
+                    "mae_time": t.mae_time,
                 }
                 for t in trades
             ]
@@ -1041,13 +1200,13 @@ class DatabaseManager:
             if not trades:
                 return {
                     "total_trades": 0,
-                    "win_rate": 0,
-                    "total_pnl": 0,
-                    "avg_win": 0,
-                    "avg_loss": 0,
-                    "profit_factor": 0,
-                    "sharpe_ratio": 0,
-                    "max_drawdown": 0,
+                    "win_rate": 0.0,
+                    "total_pnl": 0.0,
+                    "avg_win": 0.0,
+                    "avg_loss": 0.0,
+                    "profit_factor": 0.0,
+                    "sharpe_ratio": 0.0,
+                    "max_drawdown": 0.0,
                 }
 
             # Calculate metrics with division by zero protection
@@ -1094,7 +1253,7 @@ class DatabaseManager:
             if not isinstance(account_history, (list, tuple)):
                 account_history = []
 
-            max_drawdown = 0
+            max_drawdown = 0.0
             if account_history:
                 peak_balance = account_history[0].balance
                 for record in account_history:
@@ -1454,3 +1613,445 @@ class DatabaseManager:
         elif isinstance(obj, np.generic):
             return obj.item()
         return obj
+
+    # ----------------------
+    # Enum normalization helpers
+    # ----------------------
+    def _normalize_order_status(self, value: str | OrderStatus) -> OrderStatus:
+        """Normalize external order status strings to internal OrderStatus enum.
+
+        Accepts strings in any case and normalizes common exchange variants to
+        canonical values. Returns a valid OrderStatus or raises ValueError.
+        """
+        if isinstance(value, OrderStatus):
+            return value
+
+        if value is None:
+            raise ValueError("Order status cannot be None")
+
+        normalized = str(value).strip().upper()
+
+        alias_mapping = {
+            "PARTIALLY_FILLED": "FILLED",
+            "REJECTED": "FAILED",
+            "EXPIRED": "CANCELLED",
+        }
+
+        mapped = alias_mapping.get(normalized, normalized)
+
+        try:
+            if mapped in OrderStatus.__members__:
+                return OrderStatus[mapped]
+            return OrderStatus(mapped)
+        except Exception as exc:
+            raise ValueError(f"Invalid order status: {value}") from exc
+
+    # Dynamic Risk Management Methods
+    
+    def log_dynamic_performance_metrics(
+        self,
+        session_id: int,
+        rolling_win_rate: float = None,
+        rolling_sharpe_ratio: float = None,
+        current_drawdown: float = None,
+        volatility_30d: float = None,
+        consecutive_losses: int = 0,
+        consecutive_wins: int = 0,
+        risk_adjustment_factor: float = 1.0,
+        profit_factor: float = None,
+        expectancy: float = None,
+        avg_trade_duration_hours: float = None
+    ) -> int:
+        """
+        Log dynamic performance metrics for adaptive risk management.
+        
+        Args:
+            session_id: Trading session ID
+            rolling_win_rate: Recent win rate (0.0 to 1.0)
+            rolling_sharpe_ratio: Recent Sharpe ratio
+            current_drawdown: Current drawdown percentage (0.0 to 1.0)
+            volatility_30d: 30-day rolling volatility
+            consecutive_losses: Current consecutive loss streak
+            consecutive_wins: Current consecutive win streak
+            risk_adjustment_factor: Applied risk adjustment factor
+            profit_factor: Gross profit / gross loss ratio
+            expectancy: Expected value per trade
+            avg_trade_duration_hours: Average trade duration in hours
+            
+        Returns:
+            ID of the created record
+        """
+        try:
+            with self.get_session() as session:
+                metrics = DynamicPerformanceMetrics(
+                    timestamp=datetime.utcnow(),
+                    session_id=session_id,
+                    rolling_win_rate=Decimal(str(rolling_win_rate)) if rolling_win_rate is not None else None,
+                    rolling_sharpe_ratio=Decimal(str(rolling_sharpe_ratio)) if rolling_sharpe_ratio is not None else None,
+                    current_drawdown=Decimal(str(current_drawdown)) if current_drawdown is not None else None,
+                    volatility_30d=Decimal(str(volatility_30d)) if volatility_30d is not None else None,
+                    consecutive_losses=consecutive_losses,
+                    consecutive_wins=consecutive_wins,
+                    risk_adjustment_factor=Decimal(str(risk_adjustment_factor)),
+                    profit_factor=Decimal(str(profit_factor)) if profit_factor is not None else None,
+                    expectancy=Decimal(str(expectancy)) if expectancy is not None else None,
+                    avg_trade_duration_hours=Decimal(str(avg_trade_duration_hours)) if avg_trade_duration_hours is not None else None
+                )
+                
+                session.add(metrics)
+                session.commit()
+                
+                logger.debug(f"Logged dynamic performance metrics for session {session_id}")
+                return metrics.id
+                
+        except Exception as e:
+            logger.error(f"Failed to log dynamic performance metrics: {e}")
+            raise
+
+    def log_risk_adjustment(
+        self,
+        session_id: int,
+        adjustment_type: str,
+        trigger_reason: str,
+        parameter_name: str,
+        original_value: float,
+        adjusted_value: float,
+        adjustment_factor: float,
+        current_drawdown: float = None,
+        performance_score: float = None,
+        volatility_level: float = None,
+        duration_minutes: int = None,
+        trades_during_adjustment: int = 0,
+        pnl_during_adjustment: float = None
+    ) -> int:
+        """
+        Log a risk parameter adjustment for tracking and analysis.
+        
+        Args:
+            session_id: Trading session ID
+            adjustment_type: Type of adjustment ('drawdown', 'performance', 'volatility')
+            trigger_reason: Detailed reason for the adjustment
+            parameter_name: Name of the adjusted parameter
+            original_value: Original parameter value
+            adjusted_value: New adjusted parameter value
+            adjustment_factor: Factor applied (adjusted_value / original_value)
+            current_drawdown: Current drawdown when adjustment was made
+            performance_score: Performance score when adjustment was made
+            volatility_level: Volatility level when adjustment was made
+            duration_minutes: How long this adjustment was active
+            trades_during_adjustment: Number of trades executed during adjustment
+            pnl_during_adjustment: P&L accumulated during adjustment period
+            
+        Returns:
+            ID of the created record
+        """
+        try:
+            with self.get_session() as session:
+                adjustment = RiskAdjustment(
+                    timestamp=datetime.utcnow(),
+                    session_id=session_id,
+                    adjustment_type=adjustment_type,
+                    trigger_reason=trigger_reason,
+                    parameter_name=parameter_name,
+                    original_value=Decimal(str(original_value)),
+                    adjusted_value=Decimal(str(adjusted_value)),
+                    adjustment_factor=Decimal(str(adjustment_factor)),
+                    current_drawdown=Decimal(str(current_drawdown)) if current_drawdown is not None else None,
+                    performance_score=Decimal(str(performance_score)) if performance_score is not None else None,
+                    volatility_level=Decimal(str(volatility_level)) if volatility_level is not None else None,
+                    duration_minutes=duration_minutes,
+                    trades_during_adjustment=trades_during_adjustment,
+                    pnl_during_adjustment=Decimal(str(pnl_during_adjustment)) if pnl_during_adjustment is not None else None
+                )
+                
+                session.add(adjustment)
+                session.commit()
+                
+                logger.debug(f"Logged risk adjustment {adjustment_type} for session {session_id}: {parameter_name} {original_value} -> {adjusted_value}")
+                return adjustment.id
+                
+        except Exception as e:
+            logger.error(f"Failed to log risk adjustment: {e}")
+            raise
+
+    def get_dynamic_risk_performance_metrics(
+        self,
+        session_id: int,
+        start_date: datetime = None,
+        end_date: datetime = None
+    ) -> dict[str, Any]:
+        """
+        Get recent performance metrics for dynamic risk calculation.
+        
+        Args:
+            session_id: Trading session ID
+            start_date: Start date for metrics calculation (defaults to 30 days ago)
+            end_date: End date for metrics calculation (defaults to now)
+            
+        Returns:
+            Dictionary containing calculated performance metrics
+        """
+        try:
+            if end_date is None:
+                end_date = datetime.utcnow()
+            if start_date is None:
+                start_date = end_date - timedelta(days=30)
+                
+            with self.get_session() as session:
+                # Get trades in the specified period
+                trades = (
+                    session.query(Trade)
+                    .filter(Trade.session_id == session_id)
+                    .filter(Trade.exit_time >= start_date)
+                    .filter(Trade.exit_time <= end_date)
+                    .filter(Trade.pnl.isnot(None))
+                    .all()
+                )
+                
+                if not trades:
+                    return {
+                        "total_trades": 0,
+                        "win_rate": 0.0,
+                        "profit_factor": 0.0,
+                        "sharpe_ratio": 0.0,
+                        "expectancy": 0.0,
+                        "avg_trade_duration_hours": 0.0,
+                        "consecutive_losses": 0,
+                        "consecutive_wins": 0,
+                        "max_drawdown": 0.0,
+                        "gross_profit": 0.0,
+                        "gross_loss": 0.0,
+                        "total_pnl": 0.0
+                    }
+                
+                # Calculate basic metrics
+                total_trades = len(trades)
+                winning_trades = [t for t in trades if float(t.pnl) > 0]
+                losing_trades = [t for t in trades if float(t.pnl) < 0]
+                
+                win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0.0
+                
+                gross_profit = sum(float(t.pnl) for t in winning_trades)
+                gross_loss = abs(sum(float(t.pnl) for t in losing_trades))
+                
+                profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf') if gross_profit > 0 else 1.0
+                if profit_factor == float('inf'):
+                    profit_factor = 10.0  # Cap at reasonable value
+                    
+                # Calculate expectancy
+                total_pnl = sum(float(t.pnl) for t in trades)
+                expectancy = total_pnl / total_trades if total_trades > 0 else 0.0
+                
+                # Calculate average trade duration
+                durations = []
+                for trade in trades:
+                    if trade.entry_time and trade.exit_time:
+                        duration = (trade.exit_time - trade.entry_time).total_seconds() / 3600
+                        durations.append(duration)
+                        
+                avg_trade_duration_hours = sum(durations) / len(durations) if durations else 0.0
+                
+                # Calculate consecutive streaks (from most recent trades)
+                consecutive_wins = 0
+                consecutive_losses = 0
+                
+                # Sort by exit time descending to get most recent first
+                recent_trades = sorted(trades, key=lambda t: t.exit_time, reverse=True)
+                
+                for trade in recent_trades:
+                    pnl = float(trade.pnl)
+                    if pnl > 0:
+                        if consecutive_losses == 0:  # Still in winning streak
+                            consecutive_wins += 1
+                        else:
+                            break
+                    elif pnl < 0:
+                        if consecutive_wins == 0:  # Still in losing streak
+                            consecutive_losses += 1
+                        else:
+                            break
+                    # Skip break-even trades
+
+                # Calculate max drawdown
+                max_drawdown = 0.0
+                if trades:
+                    # Sort trades by exit time to calculate running balance
+                    sorted_trades = sorted(trades, key=lambda t: t.exit_time)
+                    running_balance = 0.0
+                    peak_balance = 0.0
+                    
+                    for trade in sorted_trades:
+                        running_balance += float(trade.pnl)
+                        if running_balance > peak_balance:
+                            peak_balance = running_balance
+                        
+                        # Calculate drawdown from peak
+                        if peak_balance > 0:
+                            drawdown = (peak_balance - running_balance) / peak_balance
+                            max_drawdown = max(max_drawdown, drawdown)
+                
+                # Calculate Sharpe ratio (simplified)
+                if len(trades) > 1:
+                    pnls = [float(t.pnl) for t in trades]
+                    import numpy as np
+                    returns_std = np.std(pnls)
+                    mean_return = np.mean(pnls)
+                    sharpe_ratio = mean_return / returns_std if returns_std > 0 else 0.0
+                else:
+                    sharpe_ratio = 0.0
+                
+                # Calculate max drawdown using account history
+                max_drawdown = 0.0
+                try:
+                    history_query = session.query(AccountHistory)
+                    history_query = history_query.filter(AccountHistory.session_id == session_id)
+                    if start_date:
+                        history_query = history_query.filter(AccountHistory.timestamp >= start_date)
+                    if end_date:
+                        history_query = history_query.filter(AccountHistory.timestamp <= end_date)
+                    
+                    account_history = history_query.order_by(AccountHistory.timestamp).all()
+                    
+                    if account_history and len(account_history) > 0:
+                        peak_balance = account_history[0].balance
+                        for record in account_history:
+                            if record.balance > peak_balance:
+                                peak_balance = record.balance
+                            # Protect against division by zero
+                            if peak_balance > 0:
+                                drawdown = (peak_balance - record.balance) / peak_balance
+                                max_drawdown = max(max_drawdown, drawdown)
+                except Exception:
+                    # If account history is not available or fails, default to 0
+                    max_drawdown = 0.0
+                
+                return {
+                    "total_trades": total_trades,
+                    "win_rate": win_rate,
+                    "profit_factor": profit_factor,
+                    "sharpe_ratio": sharpe_ratio,
+                    "expectancy": expectancy,
+                    "avg_trade_duration_hours": avg_trade_duration_hours,
+                    "consecutive_losses": consecutive_losses,
+                    "consecutive_wins": consecutive_wins,
+                    "max_drawdown": max_drawdown,
+                    "gross_profit": gross_profit,
+                    "gross_loss": gross_loss,
+                    "total_pnl": total_pnl
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get performance metrics: {e}")
+            # Return safe defaults
+            return {
+                "total_trades": 0,
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
+                "sharpe_ratio": 0.0,
+                "expectancy": 0.0,
+                "avg_trade_duration_hours": 0.0,
+                "consecutive_losses": 0,
+                "consecutive_wins": 0,
+                "max_drawdown": 0.0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+                "total_pnl": 0.0
+            }
+
+    def log_partial_trade(
+        self,
+        position_id: int,
+        operation_type: str,
+        size: float,
+        price: float,
+        pnl: float | None = None,
+        target_level: int | None = None,
+    ) -> int:
+        """Log a partial exit or scale-in operation for a position."""
+        with self.get_session() as session:
+            try:
+                op_type = (
+                    PartialOperationType.PARTIAL_EXIT
+                    if operation_type == "partial_exit"
+                    else PartialOperationType.SCALE_IN
+                )
+                record = PartialTrade(
+                    position_id=position_id,
+                    operation_type=op_type,
+                    size=Decimal(str(size)),
+                    price=Decimal(str(price)),
+                    pnl=Decimal(str(pnl)) if pnl is not None else None,
+                    target_level=target_level,
+                    timestamp=datetime.utcnow(),
+                )
+                session.add(record)
+                session.commit()
+                return record.id
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Failed to log partial trade for position {position_id}: {e}")
+                raise
+
+    def apply_partial_exit_update(
+        self,
+        position_id: int,
+        executed_fraction_of_original: float,
+        price: float,
+        target_level: int,
+    ) -> None:
+        """Convenience method: append partial trade, decrement current size, increment counters."""
+        with self.get_session() as session:
+            position = session.query(Position).filter_by(id=position_id).first()
+            if not position:
+                logger.error(f"Position {position_id} not found")
+                return
+            # Log partial trade
+            pt = PartialTrade(
+                position_id=position_id,
+                operation_type=PartialOperationType.PARTIAL_EXIT,
+                size=Decimal(str(executed_fraction_of_original)),
+                price=Decimal(str(price)),
+                target_level=target_level,
+                timestamp=datetime.utcnow(),
+            )
+            session.add(pt)
+            # Update position current size and counters
+            cur = float(position.current_size or position.size or 0.0)
+            new_cur = max(0.0, cur - float(executed_fraction_of_original))
+            position.current_size = Decimal(str(new_cur))
+            position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
+            position.last_partial_exit_price = Decimal(str(price))
+            position.last_update = datetime.utcnow()
+            session.commit()
+
+    def apply_scale_in_update(
+        self,
+        position_id: int,
+        added_fraction_of_original: float,
+        price: float,
+        threshold_level: int,
+    ) -> None:
+        """Convenience method: append scale-in trade, increment current size and counters."""
+        with self.get_session() as session:
+            position = session.query(Position).filter_by(id=position_id).first()
+            if not position:
+                logger.error(f"Position {position_id} not found")
+                return
+            # Log scale-in trade
+            pt = PartialTrade(
+                position_id=position_id,
+                operation_type=PartialOperationType.SCALE_IN,
+                size=Decimal(str(added_fraction_of_original)),
+                price=Decimal(str(price)),
+                target_level=threshold_level,
+                timestamp=datetime.utcnow(),
+            )
+            session.add(pt)
+            # Update position current size and counters
+            cur = float(position.current_size or position.size or 0.0)
+            new_cur = min(1.0, cur + float(added_fraction_of_original))
+            position.current_size = Decimal(str(new_cur))
+            position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
+            position.last_scale_in_price = Decimal(str(price))
+            position.last_update = datetime.utcnow()
+            session.commit()

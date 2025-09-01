@@ -43,7 +43,7 @@ class FeatureDefinition:
     default_value: Optional[float] = None
     min_value: Optional[float] = None
     max_value: Optional[float] = None
-    dependencies: list[str] = None
+    dependencies: Optional[list[str]] = None
 
     def __post_init__(self):
         if self.dependencies is None:

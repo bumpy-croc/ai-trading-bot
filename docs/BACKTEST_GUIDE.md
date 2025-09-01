@@ -9,13 +9,13 @@ The AI trading bot includes a comprehensive backtesting system that allows you t
 ### Basic Backtest Command
 
 ```bash
-python scripts/run_backtest.py <strategy_name> --days <number_of_days> --timeframe <timeframe> --initial-balance <amount>
+atb backtest <strategy_name> --symbol <symbol> --timeframe <timeframe> --days <number_of_days> --initial-balance <amount>
 ```
 
 ### Example: 5-Year Backtest with MLBasic Strategy
 
 ```bash
-python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-balance 10000 --no-cache
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 1825 --initial-balance 10000
 ```
 
 ## Available Strategies
@@ -41,12 +41,10 @@ python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-bal
 | Option | Description | Default | Example |
 |--------|-------------|---------|---------|
 | `strategy` | Strategy name | Required | `ml_basic` |
+| `--symbol` | Trading symbol | Required | `--symbol BTCUSDT` |
 | `--days` | Number of days to backtest | 30 | `--days 1825` |
 | `--timeframe` | Candle timeframe | `1h` | `--timeframe 1h` |
 | `--initial-balance` | Starting balance | 10000 | `--initial-balance 10000` |
-| `--no-cache` | Disable data caching | False | `--no-cache` |
-| `--use-sentiment` | Enable sentiment analysis | False | `--use-sentiment` |
-| `--no-db` | Disable database logging | False | `--no-db` |
 
 ## Important Notes
 
@@ -65,9 +63,9 @@ Candle: 8760 of 43780
 
 ### Data Fetching
 
-- Use `--no-cache` to fetch fresh data from Binance
-- Without `--no-cache`, the system uses cached data (faster but may be outdated)
-- Data is automatically cached for 24 hours by default
+- Data is automatically cached by the system for faster subsequent runs
+- Cache can be managed using: `atb data cache-manager info|list|clear-old`
+- Prefill cache for faster backtests: `atb data prefill-cache --symbols BTCUSDT ETHUSDT --timeframes 1h 4h --years 4`
 
 ### Performance Expectations
 
@@ -131,4 +129,4 @@ python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-bal
 Shows performance for each calendar year in the test period.
 
 ### Early Stop Information
-If present, shows why the backtest stopped early and when. 
+If present, shows why the backtest stopped early and when.

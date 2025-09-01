@@ -87,6 +87,6 @@ class RailwayProvider(ConfigProvider):
         return {
             "project_id": os.getenv("RAILWAY_PROJECT_ID"),
             "service_id": os.getenv("RAILWAY_SERVICE_ID"),
-            "environment": os.getenv("RAILWAY_ENVIRONMENT"),
+            "environment": os.getenv("RAILWAY_ENVIRONMENT_NAME"),
             "domain": os.getenv("RAILWAY_DOMAIN"),
         }

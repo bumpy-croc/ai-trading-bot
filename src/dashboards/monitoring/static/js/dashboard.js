@@ -5,6 +5,8 @@ class TradingDashboard {
         this.updateInterval = 5000; // 5 seconds instead of 1 hour
         this.chart = null;
         this.lastMetrics = {};
+        this.positionsTableColumnCount = 10; // Number of columns in positions table
+        this.tradesTableColumnCount = 6; // Number of columns in trades table
         this.currencyFormatter = new Intl.NumberFormat('en-US', {
             style: 'currency',
             currency: 'USD',
@@ -18,7 +20,7 @@ class TradingDashboard {
             minimumFractionDigits: 1,
             maximumFractionDigits: 1,
         });
-        
+
         this.init();
     }
 
@@ -28,40 +30,40 @@ class TradingDashboard {
         this.loadConfiguration();
         this.initializeChart();
         this.hideLoading();
-        
+
         // Load initial data immediately
         this.loadInitialData();
-        
+
         // Set up periodic updates as fallback
         setInterval(() => {
             this.loadInitialData();
         }, this.updateInterval);
     }
-    
+
     async loadInitialData() {
         try {
             // Load metrics
             const metricsResponse = await fetch('/api/metrics');
             const metrics = await metricsResponse.json();
             this.updateMetrics(metrics);
-            
+
             // Load positions
             const positionsResponse = await fetch('/api/positions');
             const positions = await positionsResponse.json();
             // Resolve per-symbol prices to avoid BTC defaulting
             await this.hydratePositionsWithPrices(positions);
             this.updatePositions(positions);
-            
+
             // Load trades
             const tradesResponse = await fetch('/api/trades?limit=10');
             const trades = await tradesResponse.json();
             this.updateTrades(trades);
-            
+
             // Load performance data
             const performanceResponse = await fetch('/api/performance?days=7');
             const performance = await performanceResponse.json();
             this.updatePerformanceChart(performance);
-            
+
         } catch (error) {
             console.error('Error loading initial data:', error);
         }
@@ -181,7 +183,7 @@ class TradingDashboard {
                 const div = document.createElement('div');
                 div.className = 'form-check';
                 div.innerHTML = `
-                    <input class="form-check-input" type="checkbox" id="metric_${key}" 
+                    <input class="form-check-input" type="checkbox" id="metric_${key}"
                            value="${key}" ${metric.enabled ? 'checked' : ''}>
                     <label class="form-check-label" for="metric_${key}">
                         ${key.replace(/_/g, ' ').toUpperCase()}
@@ -195,7 +197,7 @@ class TradingDashboard {
     async saveConfiguration() {
         const form = document.getElementById('configForm');
         const formData = new FormData(form);
-        
+
         const config = {
             update_interval: parseInt(formData.get('updateInterval')),
             metrics: {}
@@ -276,7 +278,10 @@ class TradingDashboard {
             valueElement.textContent = formattedValue;
         }
 
-        if (changeElement && this.lastMetrics[key] !== undefined) {
+        // Special handling for dynamic risk metrics
+        if (key === 'dynamic_risk_factor') {
+            this.updateDynamicRiskDisplay(value);
+        } else if (changeElement && this.lastMetrics[key] !== undefined) {
             const change = this.calculateChange(key, value);
             if (change !== null) {
                 changeElement.textContent = change;
@@ -287,10 +292,97 @@ class TradingDashboard {
         this.lastMetrics[key] = value;
     }
 
+    updateDynamicRiskDisplay(factor) {
+        // Update the main metric display
+        const card = document.getElementById('metric_dynamic_risk_factor');
+        if (!card) return;
+
+        const valueElement = card.querySelector('.metric-value');
+        const changeElement = card.querySelector('.metric-change');
+        
+        if (valueElement) {
+            valueElement.textContent = `${Number(factor).toFixed(2)}x`;
+        }
+
+        // Get the reason from the other metric
+        const reason = this.lastMetrics['dynamic_risk_reason'] || 'normal';
+        if (changeElement) {
+            changeElement.textContent = reason;
+        }
+
+        // Update the risk status indicator
+        const indicator = document.getElementById('riskStatusIndicator');
+        if (indicator) {
+            // Remove existing status classes
+            indicator.classList.remove('normal', 'active', 'critical');
+            
+            // Determine status based on factor
+            if (factor === 1.0) {
+                indicator.classList.add('normal');
+                indicator.title = 'Risk management: Normal';
+            } else if (factor >= 0.5) {
+                indicator.classList.add('active');
+                indicator.title = `Risk management: Active (${reason})`;
+            } else {
+                indicator.classList.add('critical');
+                indicator.title = `Risk management: Critical reduction (${reason})`;
+            }
+        }
+
+        // Check for significant changes and show alert
+        const previousFactor = this.lastMetrics['dynamic_risk_factor'];
+        if (previousFactor !== undefined && Math.abs(factor - previousFactor) > 0.1) {
+            this.showDynamicRiskAlert(factor, reason, previousFactor);
+        }
+    }
+
+    showDynamicRiskAlert(newFactor, reason, oldFactor) {
+        // Create and show a temporary alert for dynamic risk changes
+        const alertContainer = document.createElement('div');
+        alertContainer.className = 'alert alert-warning alert-dismissible fade show dynamic-risk-alert';
+        alertContainer.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 1050; min-width: 300px;';
+        
+        const changeDirection = newFactor > oldFactor ? 'increased' : 'decreased';
+        const changePercent = Math.abs((newFactor - oldFactor) / oldFactor * 100).toFixed(0);
+        
+        alertContainer.innerHTML = `
+            <div class="d-flex align-items-center">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <div>
+                    <strong>Dynamic Risk Adjustment</strong><br>
+                    Risk factor ${changeDirection} by ${changePercent}% to ${newFactor.toFixed(2)}x<br>
+                    <small>Reason: ${reason}</small>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        `;
+        
+        document.body.appendChild(alertContainer);
+        
+        // Auto-remove after 10 seconds
+        setTimeout(() => {
+            if (alertContainer.parentNode) {
+                alertContainer.remove();
+            }
+        }, 10000);
+    }
+
     formatMetricValueOverride(key, value, format) {
         // Force specific keys to expected formats regardless of config
         const integerKeys = new Set(['active_positions_count', 'total_trades', 'failed_orders']);
         const currencyKeys = new Set(['current_balance', 'daily_pnl', 'weekly_pnl', 'total_pnl', 'position_sizes', 'total_position_value', 'available_margin', 'unrealized_pnl']);
+        
+        // Special handling for dynamic risk metrics
+        if (key === 'dynamic_risk_factor') {
+            return `${Number(value).toFixed(2)}x`;
+        }
+        if (key === 'dynamic_risk_reason') {
+            return String(value);
+        }
+        if (key === 'dynamic_risk_active') {
+            return value ? 'Active' : 'Normal';
+        }
+        
         if (integerKeys.has(key)) {
             return this.integerFormatter.format(Math.round(Number(value) || 0));
         }
@@ -332,7 +424,7 @@ class TradingDashboard {
                 return value.toString();
         }
     }
-    
+
     formatCurrency(value) {
         if (typeof value !== 'number') return '$0.00';
         return this.currencyFormatter.format(value);
@@ -362,15 +454,19 @@ class TradingDashboard {
         if (!tbody) return;
 
         if (!positions || positions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No active positions</td></tr>';
+            tbody.innerHTML = `<tr><td colspan="${this.positionsTableColumnCount}" class="text-center">No active positions</td></tr>`;
             return;
         }
-        
+
         tbody.innerHTML = positions.map(position => {
             const unrealizedPnl = typeof position.unrealized_pnl === 'number' ? position.unrealized_pnl : 0.0;
             const quantity = typeof position.quantity === 'number' ? position.quantity : 0;
             const entryPrice = typeof position.entry_price === 'number' ? position.entry_price : 0.0;
             const currentPrice = typeof position.current_price === 'number' ? position.current_price : 0.0;
+            const trailSL = position.trailing_stop_price ? this.formatCurrency(position.trailing_stop_price) : '-';
+            const beBadge = position.breakeven_triggered ? '<span class="badge bg-info">BE</span>' : '';
+            const mfe = typeof position.mfe === 'number' ? position.mfe : 0.0;
+            const mae = typeof position.mae === 'number' ? position.mae : 0.0;
             return `
             <tr>
                 <td>${position.symbol}</td>
@@ -381,6 +477,10 @@ class TradingDashboard {
                 <td class="${unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">
                     ${this.formatCurrency(unrealizedPnl)}
                 </td>
+                <td>${trailSL}</td>
+                <td>${beBadge}</td>
+                <td class="${mfe >= 0 ? 'text-success' : 'text-muted'}">${(mfe * 100).toFixed(2)}%</td>
+                <td class="${mae <= 0 ? 'text-danger' : 'text-muted'}">${(mae * 100).toFixed(2)}%</td>
             </tr>
             `;
         }).join('');
@@ -391,7 +491,7 @@ class TradingDashboard {
         if (!tbody) return;
 
         if (!trades || trades.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center">No recent trades</td></tr>';
+            tbody.innerHTML = `<tr><td colspan="${this.tradesTableColumnCount}" class="text-center">No recent trades</td></tr>`;
             return;
         }
 
@@ -474,7 +574,7 @@ class TradingDashboard {
     toggleConfigPanel() {
         const panel = document.getElementById('configPanel');
         const overlay = document.getElementById('overlay');
-        
+
         panel.classList.toggle('show');
         overlay.classList.toggle('show');
     }
@@ -496,9 +596,9 @@ class TradingDashboard {
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
         toast.textContent = message;
-        
+
         document.body.appendChild(toast);
-        
+
         // Auto remove after 5 seconds
         setTimeout(() => {
             toast.remove();
@@ -531,15 +631,15 @@ const toastStyles = `
         z-index: 1100;
         animation: slideIn 0.3s ease;
     }
-    
+
     .toast-success {
         background: var(--success-color);
     }
-    
+
     .toast-error {
         background: var(--danger-color);
     }
-    
+
     @keyframes slideIn {
         from { transform: translateX(100%); opacity: 0; }
         to { transform: translateX(0); opacity: 1; }
@@ -549,4 +649,4 @@ const toastStyles = `
 // Add styles to head
 const styleSheet = document.createElement('style');
 styleSheet.textContent = toastStyles;
-document.head.appendChild(styleSheet); 
+document.head.appendChild(styleSheet);

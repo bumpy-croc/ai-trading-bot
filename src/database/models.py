@@ -18,6 +18,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship
@@ -55,6 +56,7 @@ class PositionSide(enum.Enum):
 class OrderStatus(enum.Enum):
     """Order status enumeration"""
 
+    # Values use uppercase to match existing PostgreSQL enum labels
     PENDING = "PENDING"
     OPEN = "OPEN"
     FILLED = "FILLED"
@@ -124,6 +126,14 @@ class Trade(Base):
     exchange = Column(String(50), default="binance")
     timeframe = Column(String(10))
 
+    # MFE/MAE for completed trades (percent decimals, e.g., 0.05 = +5%)
+    mfe = Column(Numeric(18, 8), default=0.0)
+    mae = Column(Numeric(18, 8), default=0.0)
+    mfe_price = Column(Numeric(18, 8))
+    mae_price = Column(Numeric(18, 8))
+    mfe_time = Column(DateTime)
+    mae_time = Column(DateTime)
+
     # Relationships
     position_id = Column(Integer, ForeignKey("positions.id"))
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
@@ -147,17 +157,29 @@ class Position(Base):
     id = Column(Integer, primary_key=True)
     symbol = Column(String(20), nullable=False, index=True)
     side = Column(Enum(PositionSide), nullable=False)
-    status = Column(Enum(OrderStatus), nullable=False, default=OrderStatus.OPEN)
+    status = Column(
+        Enum(OrderStatus, name="orderstatus"), nullable=False, default=OrderStatus.OPEN
+    )
 
     # Position details
     entry_price = Column(Numeric(18, 8), nullable=False)
     size = Column(Numeric(18, 8), nullable=False)
     quantity = Column(Numeric(18, 8))
+    # Partial operations tracking
+    original_size = Column(Numeric(18, 8))  # initial position size fraction
+    current_size = Column(Numeric(18, 8))   # remaining size fraction
+    partial_exits_taken = Column(Integer, default=0)
+    scale_ins_taken = Column(Integer, default=0)
+    last_partial_exit_price = Column(Numeric(18, 8))
+    last_scale_in_price = Column(Numeric(18, 8))
 
     # Risk management
     stop_loss = Column(Numeric(18, 8))
     take_profit = Column(Numeric(18, 8))
     trailing_stop = Column(Boolean, default=False)
+    trailing_stop_activated = Column(Boolean, default=False)
+    trailing_stop_price = Column(Numeric(18, 8))
+    breakeven_triggered = Column(Boolean, default=False)
 
     # Timestamps
     entry_time = Column(DateTime, nullable=False, index=True)
@@ -167,6 +189,14 @@ class Position(Base):
     current_price = Column(Numeric(18, 8))
     unrealized_pnl = Column(Numeric(18, 8), default=0.0)
     unrealized_pnl_percent = Column(Numeric(18, 8), default=0.0)
+
+    # Rolling MFE/MAE for active positions (percent decimals)
+    mfe = Column(Numeric(18, 8), default=0.0)
+    mae = Column(Numeric(18, 8), default=0.0)
+    mfe_price = Column(Numeric(18, 8))
+    mae_price = Column(Numeric(18, 8))
+    mfe_time = Column(DateTime)
+    mae_time = Column(DateTime)
 
     # Strategy information
     strategy_name = Column(String(100), nullable=False)
@@ -178,11 +208,52 @@ class Position(Base):
 
     # Relationships
     trades = relationship("Trade", backref="position")
+    partial_trades = relationship("PartialTrade", backref="position")
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
 
     created_at = Column(DateTime, default=datetime.utcnow)
     __table_args__ = (UniqueConstraint("order_id", "session_id", name="uq_position_order_session"),)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Time-based exit fields
+    max_holding_until = Column(DateTime)  # When position must be closed
+    end_of_day_exit = Column(Boolean, default=False)
+    weekend_exit = Column(Boolean, default=False)
+    time_restriction_group = Column(String(50))
+
+
+class PartialOperationType(enum.Enum):
+    PARTIAL_EXIT = "partial_exit"
+    SCALE_IN = "scale_in"
+
+
+class PartialTrade(Base):
+    __tablename__ = "partial_trades"
+
+    id = Column(Integer, primary_key=True)
+    position_id = Column(Integer, ForeignKey("positions.id"), index=True, nullable=False)
+    operation_type = Column(Enum(PartialOperationType), nullable=False)
+    size = Column(Numeric(18, 8), nullable=False)  # Fraction of original size executed
+    price = Column(Numeric(18, 8), nullable=False)
+    pnl = Column(Numeric(18, 8))  # Realized PnL in currency units
+    target_level = Column(Integer)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("idx_partial_trade_position", "position_id", "timestamp"),
+    )
+
+
+class MarketSession(Base):
+    __tablename__ = "market_sessions"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), unique=True, index=True)
+    timezone = Column(String(50), default="UTC")
+    open_time = Column(Time)
+    close_time = Column(Time)
+    days_of_week = Column(JSONType)  # e.g., [1,2,3,4,5]
+    is_24h = Column(Boolean, default=False)
 
 
 class AccountHistory(Base):
@@ -298,6 +369,10 @@ class TradingSession(Base):
     symbol = Column(String(20), nullable=False)
     timeframe = Column(String(10), nullable=False)
     exchange = Column(String(50), default="binance")
+
+    # Time-exit configuration
+    time_exit_config = Column(JSONType)
+    market_timezone = Column(String(50))
 
     # Performance summary
     total_pnl = Column(Numeric(18, 8))
@@ -515,3 +590,142 @@ class PredictionPerformance(Base):
     )
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DynamicPerformanceMetrics(Base):
+    """Dynamic performance metrics for adaptive risk management"""
+
+    __tablename__ = "dynamic_performance_metrics"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    
+    # Rolling performance metrics
+    rolling_win_rate = Column(Numeric(18, 8))
+    rolling_sharpe_ratio = Column(Numeric(18, 8))
+    current_drawdown = Column(Numeric(18, 8))
+    volatility_30d = Column(Numeric(18, 8))
+    consecutive_losses = Column(Integer, default=0)
+    consecutive_wins = Column(Integer, default=0)
+    
+    # Risk adjustment factor applied
+    risk_adjustment_factor = Column(Numeric(18, 8), default=1.0)
+    
+    # Additional performance indicators
+    profit_factor = Column(Numeric(18, 8))
+    expectancy = Column(Numeric(18, 8))
+    avg_trade_duration_hours = Column(Numeric(18, 8))
+    
+    # Session reference
+    session_id = Column(Integer, ForeignKey("trading_sessions.id"), nullable=False)
+    
+    __table_args__ = (
+        Index("idx_dynamic_perf_timestamp", "timestamp"),
+        Index("idx_dynamic_perf_session", "session_id"),
+    )
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RiskAdjustment(Base):
+    """Risk parameter adjustments tracking"""
+
+    __tablename__ = "risk_adjustments"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    
+    # Adjustment type and trigger
+    adjustment_type = Column(String(50), nullable=False)  # 'drawdown', 'performance', 'volatility'
+    trigger_reason = Column(String(200))  # Detailed reason for adjustment
+    
+    # Original and adjusted values
+    parameter_name = Column(String(100), nullable=False)  # e.g., 'position_size_factor', 'stop_loss_multiplier'
+    original_value = Column(Numeric(18, 8), nullable=False)
+    adjusted_value = Column(Numeric(18, 8), nullable=False)
+    adjustment_factor = Column(Numeric(18, 8), nullable=False)
+    
+    # Context for the adjustment
+    current_drawdown = Column(Numeric(18, 8))
+    performance_score = Column(Numeric(18, 8))
+    volatility_level = Column(Numeric(18, 8))
+    
+    # Duration and effectiveness
+    duration_minutes = Column(Integer)  # How long the adjustment was active
+    trades_during_adjustment = Column(Integer, default=0)
+    pnl_during_adjustment = Column(Numeric(18, 8))
+    
+    # Session reference
+    session_id = Column(Integer, ForeignKey("trading_sessions.id"), nullable=False)
+    
+    __table_args__ = (
+        Index("idx_risk_adj_timestamp", "timestamp"),
+        Index("idx_risk_adj_type", "adjustment_type"),
+        Index("idx_risk_adj_session", "session_id"),
+    )
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CorrelationMatrix(Base):
+    """Stores pairwise correlation values for symbol pairs."""
+
+    __tablename__ = "correlation_matrix"
+
+    id = Column(Integer, primary_key=True)
+    symbol_pair = Column(String(50), index=True)  # e.g., "BTCUSDT-ETHUSDT" (sorted order)
+    correlation_value = Column(Numeric(18, 8))
+    p_value = Column(Numeric(18, 8))  # Optional statistical significance if computed
+    sample_size = Column(Integer)
+    last_updated = Column(DateTime)
+    window_days = Column(Integer)
+
+    __table_args__ = (
+        Index("idx_corr_pair_updated", "symbol_pair", "last_updated"),
+    )
+
+
+class PortfolioExposure(Base):
+    """Aggregated exposure per correlation group for portfolio-level limits."""
+
+    __tablename__ = "portfolio_exposures"
+
+    id = Column(Integer, primary_key=True)
+    correlation_group = Column(String(100), index=True)
+    total_exposure = Column(Numeric(18, 8))
+    position_count = Column(Integer)
+    symbols = Column(JSONType)  # List of symbols in group
+    last_updated = Column(DateTime)
+
+
+class PredictionCache(Base):
+    """Cache for prediction results to avoid redundant inference"""
+
+    __tablename__ = "prediction_cache"
+
+    id = Column(Integer, primary_key=True)
+    cache_key = Column(String(255), nullable=False, unique=True, index=True)
+    model_name = Column(String(100), nullable=False, index=True)
+    
+    # Input features hash for cache key generation
+    features_hash = Column(String(64), nullable=False, index=True)
+    
+    # Cached prediction results
+    predicted_price = Column(Numeric(18, 8), nullable=False)
+    confidence = Column(Numeric(18, 8), nullable=False)
+    direction = Column(Integer, nullable=False)  # 1, 0, -1
+    
+    # Cache metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    access_count = Column(Integer, default=0)
+    last_accessed = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Configuration context for cache invalidation
+    config_hash = Column(String(64), nullable=False)  # Hash of model configuration
+    
+    __table_args__ = (
+        Index("idx_pred_cache_expires", "expires_at"),
+        Index("idx_pred_cache_model_config", "model_name", "config_hash"),
+        Index("idx_pred_cache_access", "last_accessed"),
+    )

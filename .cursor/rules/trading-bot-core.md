@@ -1,6 +1,6 @@
 ---
 description: Trading Bot Core Information & Essential Guidelines
-globs: 
+globs:
 alwaysApply: true
 ---
 
