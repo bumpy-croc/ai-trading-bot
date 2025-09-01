@@ -10,11 +10,11 @@ from typing import Any, Optional
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
-from performance.metrics import cash_pnl
-from position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
-from position_management.partial_manager import PositionState
-from position_management.time_exits import TimeExitPolicy
-from regime.detector import RegimeDetector
+from src.performance.metrics import cash_pnl
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.partial_manager import PositionState
+from src.position_management.time_exits import TimeExitPolicy
+from src.regime.detector import RegimeDetector
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.backtesting.models import Trade as CompletedTrade

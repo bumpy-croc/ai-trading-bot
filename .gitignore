@@ -22,3 +22,6 @@ mcp.json
 
 # Distribution / packaging
 *.egg-info/
+
+# Cache directory (market data cache files)
+cache/

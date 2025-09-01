@@ -49,7 +49,7 @@ def get_cache_dir() -> Path:
     Returns:
         Path: The cache directory path
     """
-    return get_data_dir() / "cache"
+    return get_project_root() / "cache" / "market_data"
 
 
 def get_database_path(*_args, **_kwargs):  # type: ignore[override]
