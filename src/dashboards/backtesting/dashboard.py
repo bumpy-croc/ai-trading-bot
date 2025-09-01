@@ -95,6 +95,8 @@ class BacktestDashboard:
         return summaries
 
     def _load_single_backtest(self, filename: str) -> dict[str, Any] | None:
+        if "../" in filename or "..\\" in filename:
+            raise Exception("Invalid file path")
         path = self.logs_dir / filename
         if not path.exists():
             return None
@@ -113,7 +115,7 @@ class BacktestDashboard:
     # ------------------------- run ------------------------------------
     def run(self, host: str = "127.0.0.1", port: int = 8001, debug: bool = False):
         logger.info(f"BacktestDashboard available at http://{host}:{port}")
-        self.app.run(host=host, port=port, debug=debug)
+        self.app.run(host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":

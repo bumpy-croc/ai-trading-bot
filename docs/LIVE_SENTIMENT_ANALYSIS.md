@@ -56,11 +56,11 @@ The system automatically detects trading scenarios:
 ```python
 def get_live_sentiment(self, force_refresh=False):
     should_refresh = (
-        force_refresh or 
-        self._last_api_call is None or 
+        force_refresh or
+        self._last_api_call is None or
         cache_expired()
     )
-    
+
     if should_refresh:
         # Fresh API call
         return fetch_from_api()
@@ -234,13 +234,13 @@ The demo showed real API calls with:
 
 ## 🎯 **Bottom Line**
 
-### **The Problem**: 
+### **The Problem**:
 Traditional sentiment analysis uses stale data (24-48 hours old) for real-time trading decisions.
 
-### **Our Solution**: 
+### **Our Solution**:
 Hybrid system that automatically switches between historical data (backtesting) and live API data (real trading) with intelligent caching and fallback mechanisms.
 
-### **The Result**: 
+### **The Result**:
 - **96% faster** sentiment data
 - **Higher accuracy** predictions
 - **Better risk management**
@@ -257,4 +257,4 @@ Hybrid system that automatically switches between historical data (backtesting) 
 4. **Optimize thresholds**: Fine-tune confidence levels
 5. **Add more providers**: Expand beyond SentiCrypt
 
-The live sentiment system transforms your trading bot from a **reactive** system using stale data to a **proactive** system using fresh, actionable market intelligence! 🎯 
+The live sentiment system transforms your trading bot from a **reactive** system using stale data to a **proactive** system using fresh, actionable market intelligence! 🎯

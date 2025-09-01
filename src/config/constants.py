@@ -21,6 +21,11 @@ DEFAULT_ENABLE_ENSEMBLE = False
 DEFAULT_ENSEMBLE_METHOD = "mean"
 DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE = False
 
+# Prediction Caching Constants
+DEFAULT_PREDICTION_CACHE_TTL = 60  # seconds
+DEFAULT_PREDICTION_CACHE_MAX_SIZE = 1000  # maximum number of cached predictions
+DEFAULT_PREDICTION_CACHE_ENABLED = True  # enable/disable prediction caching
+
 # Feature Engineering Constants
 DEFAULT_SEQUENCE_LENGTH = 120  # LSTM sequence length for technical features
 DEFAULT_NORMALIZATION_WINDOW = 120  # Window for price normalization
@@ -48,10 +53,75 @@ DEFAULT_SHARPE_RATIO_THRESHOLD = 0.5
 DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 
 # Strategy/Engine integration flags
-DEFAULT_USE_PREDICTION_ENGINE = False
+DEFAULT_USE_PREDICTION_ENGINE = False  # MVP: disabled
+
+# Error Handling Constants
+DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
+
+# Trading Engine Constants
+DEFAULT_MAX_HOLDING_HOURS = 24
+DEFAULT_END_OF_DAY_FLAT = False
+DEFAULT_WEEKEND_FLAT = False
+DEFAULT_MARKET_TIMEZONE = 'UTC'
+DEFAULT_TIME_RESTRICTIONS = {
+    'no_overnight': True,
+    'no_weekend': True,
+    'trading_hours_only': False,
+}
 
 # Regime Detection Defaults (constants)
 DEFAULT_REGIME_ADJUST_POSITION_SIZE: bool = False
 DEFAULT_REGIME_HYSTERESIS_K: int = 3
 DEFAULT_REGIME_MIN_DWELL: int = 12
 DEFAULT_REGIME_MIN_CONFIDENCE: float = 0.5
+
+# CPU Optimization Constants
+DEFAULT_CHECK_INTERVAL = 60  # Base check interval in seconds
+DEFAULT_MIN_CHECK_INTERVAL = 30  # Minimum check interval (high activity)
+DEFAULT_MAX_CHECK_INTERVAL = 300  # Maximum check interval (low activity)
+DEFAULT_PERFORMANCE_MONITOR_INTERVAL = 30  # Performance monitoring interval
+DEFAULT_SLEEP_POLL_INTERVAL = 0.5  # Sleep polling interval (reduced from 0.1s)
+DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 1800  # Account snapshot interval (30 minutes)
+DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 2 minutes
+
+# Trailing stop fallback (used in safety mode when ATR is unavailable)
+DEFAULT_FALLBACK_TRAILING_PCT = 0.01  # 1% trailing distance as conservative fallback
+
+# Dynamic Risk Management Constants
+DEFAULT_DYNAMIC_RISK_ENABLED = True
+DEFAULT_PERFORMANCE_WINDOW_DAYS = 30
+DEFAULT_DRAWDOWN_THRESHOLDS = [0.05, 0.10, 0.15]  # 5%, 10%, 15%
+DEFAULT_RISK_REDUCTION_FACTORS = [0.8, 0.6, 0.4]
+DEFAULT_RECOVERY_THRESHOLDS = [0.02, 0.05]  # 2%, 5%
+DEFAULT_VOLATILITY_ADJUSTMENT_ENABLED = True
+DEFAULT_VOLATILITY_WINDOW_DAYS = 30
+DEFAULT_HIGH_VOLATILITY_THRESHOLD = 0.03  # 3% daily volatility
+DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01   # 1% daily volatility
+DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)  # (high_vol, low_vol)
+DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
+
+# Partial operations defaults (partial exits and scale-ins)
+DEFAULT_PARTIAL_EXIT_TARGETS = [0.03, 0.06, 0.10]  # 3%, 6%, 10%
+DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]   # 25%, 25%, 50% of original size
+DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]        # 2%, 5%
+DEFAULT_SCALE_IN_SIZES = [0.25, 0.25]             # 25%, 25% of original size
+DEFAULT_MAX_SCALE_INS = 2
+
+# Trailing Stop Defaults
+DEFAULT_TRAILING_ACTIVATION_THRESHOLD = 0.015  # 1.5%
+DEFAULT_TRAILING_DISTANCE_PCT = 0.005  # 0.5%
+DEFAULT_TRAILING_DISTANCE_ATR_MULT = 1.5
+DEFAULT_BREAKEVEN_THRESHOLD = 0.02  # 2.0%
+DEFAULT_BREAKEVEN_BUFFER = 0.001  # 0.1%
+
+# Correlation Control Defaults
+DEFAULT_CORRELATION_WINDOW_DAYS = 30
+DEFAULT_CORRELATION_THRESHOLD = 0.7
+DEFAULT_MAX_CORRELATED_EXPOSURE = 0.15  # 15%
+DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS = 1
+DEFAULT_CORRELATION_SAMPLE_MIN_SIZE = 20
+
+# MFE/MAE Tracking Defaults
+DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS = 60
+DEFAULT_MFE_MAE_PRECISION_DECIMALS = 8
+DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"

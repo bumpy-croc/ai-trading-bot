@@ -12,17 +12,18 @@ from datetime import datetime, timedelta
 # Add src to path for imports
 sys.path.insert(0, "src")
 
-from database.manager import DatabaseManager
-from database.models import (
+from src.database.manager import DatabaseManager
+from src.database.models import (
     EventType,
     PredictionPerformance,
     Trade,
     TradeSource,
 )
+from src.utils.logging_config import configure_logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = logging.getLogger("atb.populate_dummy")
 
 
 class DummyDataPopulator:
@@ -148,7 +149,7 @@ class DummyDataPopulator:
                     "base_position_size": random.uniform(0.01, 0.05),
                     "use_abs_confidence": random.choice([True, False]),
                 },
-                session_name=f"dummy_session_{i+1}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}",
+                session_name=f"dummy_session_{i + 1}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}",
             )
             session_ids.append(session_id)
             logger.info(f"Created trading session {session_id}")
@@ -192,7 +193,7 @@ class DummyDataPopulator:
                 size=size,
                 quantity=quantity,
                 strategy_name=strategy,
-                order_id=f"pos_order_{i+1}_{random.randint(1000, 9999)}",
+                order_id=f"pos_order_{i + 1}_{random.randint(1000, 9999)}",
                 stop_loss=entry_price * (0.95 if side == "LONG" else 1.05),
                 take_profit=entry_price * (1.05 if side == "LONG" else 0.95),
                 confidence_score=random.uniform(0.3, 0.95),
@@ -299,7 +300,7 @@ class DummyDataPopulator:
                 details={
                     "session_id": session_id,
                     "timestamp": datetime.utcnow().isoformat(),
-                    "additional_info": f"Event {i+1} details",
+                    "additional_info": f"Event {i + 1} details",
                 },
             )
 

@@ -1,5 +1,4 @@
 from datetime import datetime
-from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -9,6 +8,7 @@ pytestmark = pytest.mark.integration
 # Conditional imports to allow running without full live trading implementation
 try:
     from live.trading_engine import LiveTradingEngine, Position, PositionSide
+    from src.position_management.trailing_stops import TrailingStopPolicy
 
     LIVE_TRADING_AVAILABLE = True
 except ImportError:
@@ -52,10 +52,10 @@ except ImportError:
             self.stop_loss = stop_loss
             self.order_id = order_id
 
-    PositionSide = Mock()
+    PositionSide = Mock()  # noqa: F821
 
 
-@pytest.mark.skipif(not LIVE_TRADING_AVAILABLE, reason="Live trading components not available")
+
 class TestLiveTradingEngine:
     def test_engine_initialization(self, mock_strategy, mock_data_provider):
         engine = LiveTradingEngine(
@@ -90,7 +90,7 @@ class TestLiveTradingEngine:
         if hasattr(engine, "_open_position"):
             engine._open_position(
                 symbol="BTCUSDT",
-                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+                side=PositionSide.LONG,
                 size=0.1,
                 price=50000,
                 stop_loss=49000,
@@ -114,7 +114,7 @@ class TestLiveTradingEngine:
         if hasattr(Position, "__init__"):
             position = Position(
                 symbol="BTCUSDT",
-                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+                side=PositionSide.LONG,
                 size=0.1,
                 entry_price=50000,
                 entry_time=datetime.now(),
@@ -135,7 +135,7 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+            side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
@@ -151,7 +151,7 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+            side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
@@ -173,7 +173,7 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         long_position = Position(
             symbol="BTCUSDT",
-            side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+            side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
             entry_time=datetime.now(),
@@ -193,7 +193,7 @@ class TestLiveTradingEngine:
         if hasattr(engine, "_open_position"):
             engine._open_position(
                 symbol="BTCUSDT",
-                side=PositionSide.LONG if hasattr(PositionSide, "LONG") else "LONG",
+                side=PositionSide.LONG,
                 size=0.5,
                 price=50000,
             )
@@ -222,3 +222,45 @@ class TestLiveTradingEngine:
             assert performance["total_return"] == 5.0
             assert performance["current_drawdown"] == pytest.approx(2.78, rel=1e-2)
             assert performance["max_drawdown_pct"] == pytest.approx(2.78, rel=1e-2)
+
+
+@pytest.mark.live_trading
+def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
+    engine = LiveTradingEngine(
+        strategy=mock_strategy,
+        data_provider=mock_data_provider,
+        trailing_stop_policy=TrailingStopPolicy(
+            activation_threshold=0.005, trailing_distance_pct=0.005, breakeven_threshold=0.02, breakeven_buffer=0.001
+        ),
+    )
+
+    # Open a position
+    position = Position(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=1.0,  # Use full position size so 1% price move = 1% sized PnL
+        entry_price=100.0,
+        entry_time=datetime.now(),
+        stop_loss=99.0,
+        order_id="test_trail_001",
+    )
+    engine.positions[position.order_id] = position
+    engine.position_db_ids[position.order_id] = None  # disable db for this test
+
+    import pandas as pd
+    df = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0], "atr": [1.0, 1.0, 1.0, 1.0]})
+
+    # Before activation
+    engine._update_trailing_stops(df, 1, 101.0)  # +1%
+    assert position.trailing_stop_activated is True  # activation_threshold=0.5%
+    assert position.breakeven_triggered is False
+
+    old_sl = position.stop_loss
+    # Move further
+    engine._update_trailing_stops(df, 2, 102.0)
+    assert position.stop_loss is not None
+    assert position.stop_loss >= old_sl
+
+    # Hit breakeven threshold at +2%
+    engine._update_trailing_stops(df, 3, 103.0)
+    assert position.breakeven_triggered is True

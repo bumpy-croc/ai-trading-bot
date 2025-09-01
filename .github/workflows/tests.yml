@@ -1,0 +1,356 @@
+name: Tests
+
+on:
+  pull_request:
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  # Unit tests - split into 4 parallel jobs
+  unit-tests:
+    strategy:
+      matrix:
+        split-index: [1, 2, 3, 4]
+      fail-fast: false  # Continue running other groups if one fails
+    
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ACTIONS_STEP_DEBUG: true
+      ACTIONS_RUNNER_DEBUG: true
+      PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+      TEST_TYPE: unit
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        cache-dependency-path: requirements.txt
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run unit tests (split ${{ matrix.split-index }} of 4)
+      run: |
+        echo "=== Starting unit tests split: ${{ matrix.split-index }}/4 ==="
+        echo "PYTHONPATH=$PYTHONPATH"
+        python -m pytest \
+          -v \
+          --tb=short \
+          --timeout=300 \
+          --ignore=tests/integration \
+          -m "not integration" \
+          -n 2 --dist=loadgroup \
+          -k "not test_ml_basic_backtest_2024_smoke and not test_very_large_dataset" \
+          --splits 4 \
+          --group ${{ matrix.split-index }} \
+          --cov=src \
+          --cov-report=term-missing \
+          --cov-report=xml \
+          --junitxml=junit-unit-${{ matrix.split-index }}.xml
+    
+    - name: Upload unit test reports (split ${{ matrix.split-index }})
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: unit-test-reports-${{ matrix.split-index }}
+        path: |
+          junit-unit-${{ matrix.split-index }}.xml
+          coverage.xml
+        retention-days: 7
+
+  # Integration tests - run in parallel with unit tests
+  integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+      TEST_TYPE: integration
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: trading_bot
+          POSTGRES_PASSWORD: dev_password_123
+          POSTGRES_DB: trading_bot
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading_bot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        cache-dependency-path: requirements.txt
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
+    
+    - name: Wait for PostgreSQL
+      run: |
+        until pg_isready -h localhost -p 5432 -U trading_bot; do
+          echo "Waiting for PostgreSQL..."
+          sleep 2
+        done
+    
+    - name: Set up database schema
+      env:
+        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
+      run: |
+        echo "=== Setting up database schema ==="
+        python -c "
+        from src.database.manager import DatabaseManager
+        from src.database.models import Base
+        try:
+            db = DatabaseManager()
+            Base.metadata.create_all(db.engine)
+            print('✅ Database schema created successfully')
+        except Exception as e:
+            print(f'❌ Failed to create database schema: {e}')
+            raise
+        "
+    
+    - name: Run integration tests (with DB & external providers)
+      env:
+        DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
+      run: |
+        echo "=== Starting integration tests ==="
+        echo "PYTHONPATH=$PYTHONPATH"
+        python tests/run_tests.py integration -q \
+          --pytest-args --junitxml=junit-integration.xml
+    
+    - name: Upload integration test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-reports
+        path: |
+          junit-integration.xml
+        retention-days: 7
+
+  # Autofix agent - triggers on any test failure
+  autofix_agent:
+    needs: [unit-tests, integration-tests]
+    if: ${{ always() && (needs.unit-tests.result == 'failure' || needs.integration-tests.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.ref }}
+
+    - name: Download all test artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: test-artifacts
+
+    - name: Analyze Test Failures
+      id: analyze-failures
+      env:
+        UNIT_FAILED: ${{ needs.unit-tests.result }}
+        INTEGRATION_FAILED: ${{ needs.integration-tests.result }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+      run: |
+        echo "=== Analyzing test failures ==="
+        
+        # Determine which tests failed
+        
+        FAILURE_TYPES=()
+        if [[ "$UNIT_FAILED" == "failure" ]]; then
+          FAILURE_TYPES+=("unit")
+        fi
+        if [[ "$INTEGRATION_FAILED" == "failure" ]]; then
+          FAILURE_TYPES+=("integration")
+        fi
+        
+        FAILURE_STRING=$(IFS=" and "; echo "${FAILURE_TYPES[*]}")
+        
+        echo "Failed test types: $FAILURE_STRING"
+        echo "failure_string=$FAILURE_STRING" >> $GITHUB_OUTPUT
+        
+        # Get PR information if available
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_title=$PR_TITLE" >> $GITHUB_OUTPUT
+          echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
+        else
+          echo "pr_number=" >> $GITHUB_OUTPUT
+          echo "pr_title=" >> $GITHUB_OUTPUT
+          echo "pr_branch=" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Extract Test Failure Details
+      id: extract-failures
+      run: |
+        echo "=== Extracting detailed test failure information ==="
+        
+        # Create a comprehensive failure report
+        FAILURE_REPORT=""
+        
+        # Process unit test failures (all 4 splits)
+        if [[ "${{ needs.unit-tests.result }}" == "failure" ]]; then
+          echo "Processing unit test failures..."
+          
+          for i in {1..4}; do
+            if [[ -f "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" ]]; then
+              # Use the dedicated Python script to parse XML and extract failure details
+              python3 scripts/parse_junit_failures.py "test-artifacts/unit-test-reports-$i/junit-unit-$i.xml" >> failure_details.txt
+              
+              FAILURE_REPORT+="$(cat failure_details.txt)\n"
+              rm -f failure_details.txt
+            fi
+          done
+        fi
+        
+        # Process integration test failures
+        if [[ "${{ needs.integration-tests.result }}" == "failure" ]]; then
+          echo "Processing integration test failures..."
+          
+          if [[ -f "test-artifacts/integration-test-reports/junit-integration.xml" ]]; then
+            echo "Found integration test report"
+            
+            FAILURE_REPORT+="\n\n=== INTEGRATION TESTS FAILURES ===\n"
+            
+            # Extract failure details from JUnit XML using the dedicated script
+            python3 scripts/parse_junit_failures.py "test-artifacts/integration-test-reports/junit-integration.xml" >> integration_failure_details.txt
+            
+            FAILURE_REPORT+="$(cat integration_failure_details.txt)\n"
+            rm -f integration_failure_details.txt
+          fi
+        fi
+        
+        # Save the comprehensive failure report
+        echo -e "$FAILURE_REPORT" > comprehensive_failure_report.txt
+        
+        # Count total failures
+        TOTAL_FAILURES=$(echo -e "$FAILURE_REPORT" | grep -c "Test:" || echo "0")
+        echo "total_failures=$TOTAL_FAILURES" >> $GITHUB_OUTPUT
+        
+        echo "Extracted $TOTAL_FAILURES test failures"
+        echo "Comprehensive failure report saved to comprehensive_failure_report.txt"
+
+    - name: Launch Cursor Background Agent
+      run: |
+        echo "=== Launching Cursor Background Agent for Test Failures ==="
+        echo "Failed tests: ${{ steps.analyze-failures.outputs.failure_string }}"
+        echo "Total failures: ${{ steps.extract-failures.outputs.total_failures }}"
+        echo "PR: ${{ steps.analyze-failures.outputs.pr_number }}"
+        echo "Branch: ${{ steps.analyze-failures.outputs.pr_branch }}"
+        
+        # Get the run URL for context
+        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        
+        # Read the comprehensive failure report
+        FAILURE_DETAILS=$(cat comprehensive_failure_report.txt)
+        
+        # Construct detailed prompt for fixing test failures
+        cat > prompt.txt << EOF
+        CI tests have failed and require immediate attention and fixes.
+
+        Repository: ${{ github.repository }}
+        Branch: ${{ steps.analyze-failures.outputs.pr_branch }}
+        PR: ${{ steps.analyze-failures.outputs.pr_number }}
+        PR Title: ${{ steps.analyze-failures.outputs.pr_title }}
+        Failed Tests: ${{ steps.analyze-failures.outputs.failure_string }} tests
+        Total Failures: ${{ steps.extract-failures.outputs.total_failures }}
+        CI Run: $RUN_URL
+
+        DETAILED FAILURE ANALYSIS:
+        $FAILURE_DETAILS
+
+        Please analyze the failing tests and fix them:
+
+        1. **Investigate the failures:** 
+           - Review the detailed failure information above
+           - Identify the root causes of the test failures
+           - Check the test artifacts in the CI run for additional context
+           
+        2. **Implement fixes:**
+           - Make minimal, targeted fixes to resolve the test failures
+           - Ensure fixes follow the project's coding standards and patterns
+           - Add or update tests if necessary to prevent regression
+           - Focus on the most critical failures first
+           
+        3. **Commit and push:**
+           - Commit your changes directly to the PR branch: ${{ steps.analyze-failures.outputs.pr_branch }}
+           - Use clear, descriptive commit messages explaining what was fixed
+           - Do NOT create a new PR - push to the existing branch
+           
+        4. **Verify:**
+           - Ensure your fixes address the specific test failures mentioned
+           - Follow the project's testing guidelines and code quality standards
+           - Run tests locally if possible to verify fixes
+
+        IMPORTANT: This is the ONLY agent being launched for these test failures. 
+        All ${{ steps.extract-failures.outputs.total_failures }} failures need to be addressed 
+        in a single comprehensive fix. Do not create multiple agents or duplicate efforts.
+
+        Context: This is an automated fix request triggered by CI test failures. 
+        Focus on getting the tests passing while maintaining code quality and following 
+        existing patterns in the codebase.
+        EOF
+
+        echo "=== Sending to Cursor Background Agent ==="
+
+        # Launch Cursor background agent
+        curl -X POST "https://api.cursor.com/v0/agents" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
+          -d "{ \"prompt\": { \"text\": $(cat prompt.txt | jq -Rs .) }, \"source\": { \"repository\": \"${{ github.server_url }}/${{ github.repository }}\", \"ref\": \"${{ steps.analyze-failures.outputs.pr_branch }}\" } }"
+
+        echo ""
+        echo "=== Cursor Background Agent Launched ==="
+        echo "The agent will analyze all ${{ steps.extract-failures.outputs.total_failures }} test failures and implement comprehensive fixes."
+        echo "Check the PR branch for any commits made by the agent."
+
+        # Cleanup temporary files
+        rm -f prompt.txt comprehensive_failure_report.txt
+
+    - name: Log Failure Details
+      run: |
+        echo "=== Test Failure Summary ==="
+        echo "Repository: ${{ github.repository }}"
+        echo "Branch: ${{ steps.analyze-failures.outputs.pr_branch }}"
+        echo "PR: ${{ steps.analyze-failures.outputs.pr_number }}"
+        echo "Failed tests: ${{ steps.analyze-failures.outputs.failure_string }}"
+        echo "Total failures: ${{ steps.extract-failures.outputs.total_failures }}"
+        echo "CI run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        echo "Single Cursor agent launched successfully with comprehensive failure details"

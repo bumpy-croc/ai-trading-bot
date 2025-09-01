@@ -11,6 +11,7 @@ from typing import Optional
 import numpy as np
 
 from ..config import PredictionConfig
+from ..utils.caching import PredictionCacheManager
 from .onnx_runner import ModelPrediction, OnnxRunner
 
 # Set up logger
@@ -20,14 +21,16 @@ logger = logging.getLogger(__name__)
 class PredictionModelRegistry:
     """Registry for prediction models - replacement for existing ModelRegistry"""
 
-    def __init__(self, config: PredictionConfig):
+    def __init__(self, config: PredictionConfig, cache_manager: Optional[PredictionCacheManager] = None):
         """
         Initialize the prediction model registry.
 
         Args:
             config: Prediction engine configuration
+            cache_manager: Optional prediction cache manager
         """
         self.config = config
+        self.cache_manager = cache_manager
         self.models: dict[str, OnnxRunner] = {}
         self._load_models()
 
@@ -41,7 +44,7 @@ class PredictionModelRegistry:
         for onnx_file in onnx_files:
             model_name = onnx_file.stem
             try:
-                self.models[model_name] = OnnxRunner(str(onnx_file), self.config)
+                self.models[model_name] = OnnxRunner(str(onnx_file), self.config, self.cache_manager)
                 logger.info(f"✓ Loaded model: {model_name}")
             except Exception as e:
                 logger.warning(f"⚠ Warning: Failed to load model {model_name}: {e}")
@@ -92,3 +95,25 @@ class PredictionModelRegistry:
     def get_model_count(self) -> int:
         """Get the number of loaded models"""
         return len(self.models)
+
+    def invalidate_cache(self, model_name: Optional[str] = None) -> int:
+        """
+        Invalidate cache entries for models.
+        
+        Args:
+            model_name: Specific model name to invalidate, or None for all models
+            
+        Returns:
+            Number of cache entries invalidated
+        """
+        if not self.cache_manager:
+            return 0
+            
+        if model_name:
+            return self.cache_manager.invalidate_model(model_name)
+        else:
+            # Invalidate all models
+            total_invalidated = 0
+            for model_name in self.list_models():
+                total_invalidated += self.cache_manager.invalidate_model(model_name)
+            return total_invalidated

@@ -4,7 +4,7 @@
       "command": "npx",
       "args": ["-y", "@jasontanswe/railway-mcp"],
       "env": {
-        "RAILWAY_API_KEY": "${RAILWAY_API_KEY}" 
+        "RAILWAY_API_KEY": "${RAILWAY_API_KEY}"
       }
     }
   }

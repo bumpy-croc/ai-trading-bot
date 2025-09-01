@@ -11,8 +11,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from config.constants import DEFAULT_FEATURE_CACHE_TTL
-from prediction.utils.caching import FeatureCache
+from src.config.constants import DEFAULT_FEATURE_CACHE_TTL
+from src.prediction.utils.caching import FeatureCache
 
 from .base import FeatureExtractor
 from .market import MarketFeatureExtractor

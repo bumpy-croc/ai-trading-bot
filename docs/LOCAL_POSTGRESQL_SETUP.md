@@ -16,10 +16,19 @@ The AI Trading Bot uses **PostgreSQL for all environments** to provide complete 
 
 ## 🚀 Quick Setup
 
-### Automated Setup (Recommended)
+### Quick Setup (Recommended)
 ```bash
-# Run the setup script and choose PostgreSQL
-python scripts/setup_local_development.py
+# 1. Copy environment configuration
+cp .env.example .env
+
+# 2. Start PostgreSQL with Docker
+docker compose up -d postgres
+
+# 3. Set up environment
+export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
+
+# 4. Verify connection
+python scripts/verify_database_connection.py
 ```
 
 ### Manual Setup
@@ -145,13 +154,13 @@ python scripts/run_backtest.py ml_basic --days 30
 
 # Check database performance
 docker-compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
-SELECT 
+SELECT
     schemaname,
     tablename,
     attname,
     n_distinct,
     correlation
-FROM pg_stats 
+FROM pg_stats
 WHERE schemaname = 'public';"
 ```
 
@@ -249,14 +258,14 @@ python scripts/verify_database_connection.py
 ```bash
 # Monitor PostgreSQL performance
 docker-compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
-SELECT 
+SELECT
     query,
     calls,
     total_time,
     mean_time,
     rows
-FROM pg_stat_statements 
-ORDER BY total_time DESC 
+FROM pg_stat_statements
+ORDER BY total_time DESC
 LIMIT 10;"
 ```
 

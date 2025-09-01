@@ -58,10 +58,7 @@ print(f'✅ Connection successful! BTC Price: ${price:,.2f}')
 
 #### Option A: Conservative ML Basic Strategy
 ```bash
-python scripts/run_live_trading.py ml_basic \
+atb live ml_basic \
     --symbol BTCUSDT \
-    --paper-trading \
-    --balance 10000 \
-    --max-position 0.05 \
-    --check-interval 300
+    --paper-trading
 ```

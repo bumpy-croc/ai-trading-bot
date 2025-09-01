@@ -15,7 +15,6 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from pathlib import Path
 from typing import Any, TypedDict
 
 # --- Ensure greenlet/eventlet is configured before importing network libs.
@@ -41,7 +40,8 @@ except ModuleNotFoundError:
     # Add project root and src to sys.path dynamically as a last resort
     import sys
 
-    project_root = Path(__file__).resolve().parents[2]
+    from src.utils.project_paths import get_project_root
+    project_root = get_project_root()
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
     src_path = project_root / "src"
@@ -73,6 +73,19 @@ class PositionDict(TypedDict):
     stop_loss: float | None
     take_profit: float | None
     order_id: str | None
+    # Partial operations tracking
+    original_size: float | None
+    current_size: float | None
+    partial_exits_taken: int | None
+    scale_ins_taken: int | None
+    last_partial_exit_price: float | None
+    last_scale_in_price: float | None
+    # Trailing stops and MFE/MAE tracking
+    trailing_stop_activated: bool | None
+    trailing_stop_price: float | None
+    breakeven_triggered: bool | None
+    mfe: float | None
+    mae: float | None
 
 
 class TradeDict(TypedDict):
@@ -94,7 +107,7 @@ class MonitoringDashboard:
 
     def __init__(self, db_url: str | None = None, update_interval: int = 3600):
         self.app = Flask(__name__, template_folder="templates", static_folder="static")
-        from utils.secrets import get_secret_key
+        from src.utils.secrets import get_secret_key
 
         self.app.config["SECRET_KEY"] = get_secret_key()
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
@@ -147,6 +160,10 @@ class MonitoringDashboard:
             "max_drawdown": {"enabled": True, "priority": "high", "format": "percentage"},
             "risk_per_trade": {"enabled": True, "priority": "medium", "format": "percentage"},
             "volatility": {"enabled": True, "priority": "medium", "format": "percentage"},
+            # Dynamic Risk Management
+            "dynamic_risk_factor": {"enabled": True, "priority": "high", "format": "number"},
+            "dynamic_risk_reason": {"enabled": True, "priority": "high", "format": "text"},
+            "dynamic_risk_active": {"enabled": True, "priority": "high", "format": "boolean"},
             # Order Execution Metrics
             "fill_rate": {"enabled": True, "priority": "high", "format": "percentage"},
             "avg_slippage": {"enabled": True, "priority": "high", "format": "percentage"},
@@ -242,6 +259,13 @@ class MonitoringDashboard:
             trades = self._get_recent_trades(limit)
             return jsonify(trades)
 
+        @self.app.route("/api/partial-trades")
+        def get_partial_trades():
+            """Get recent partial trades (partial exits and scale-ins)"""
+            limit = request.args.get("limit", 50, type=int)
+            partial_trades = self._get_partial_trades(limit)
+            return jsonify(partial_trades)
+
         @self.app.route("/api/performance")
         def get_performance_chart():
             """Get performance chart data"""
@@ -334,6 +358,38 @@ class MonitoringDashboard:
             except Exception as e:
                 return jsonify({"items": [], "error": str(e)}), 200
 
+        @self.app.route("/api/correlation/matrix")
+        def get_correlation_matrix():
+            """Return recent correlation matrix entries (flattened)."""
+            try:
+                rows = self.db_manager.execute_query(
+                    """
+                    SELECT symbol_pair, correlation_value, p_value, sample_size, last_updated, window_days
+                    FROM correlation_matrix
+                    ORDER BY last_updated DESC
+                    LIMIT 200
+                    """
+                )
+                return jsonify({"items": rows})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
+
+        @self.app.route("/api/correlation/exposures")
+        def get_portfolio_exposures():
+            """Return latest portfolio exposure per correlation group."""
+            try:
+                rows = self.db_manager.execute_query(
+                    """
+                    SELECT correlation_group, total_exposure, position_count, symbols, last_updated
+                    FROM portfolio_exposures
+                    ORDER BY last_updated DESC
+                    LIMIT 100
+                    """
+                )
+                return jsonify({"items": rows})
+            except Exception as e:
+                return jsonify({"items": [], "error": str(e)}), 200
+
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""
 
@@ -413,6 +469,12 @@ class MonitoringDashboard:
                 metrics["risk_per_trade"] = self._get_risk_per_trade()
             if "volatility" in enabled_metrics:
                 metrics["volatility"] = self._get_volatility()
+            if "dynamic_risk_factor" in enabled_metrics:
+                metrics["dynamic_risk_factor"] = self._get_dynamic_risk_factor()
+            if "dynamic_risk_reason" in enabled_metrics:
+                metrics["dynamic_risk_reason"] = self._get_dynamic_risk_reason()
+            if "dynamic_risk_active" in enabled_metrics:
+                metrics["dynamic_risk_active"] = self._get_dynamic_risk_active()
 
             # Order Execution Metrics
             if "fill_rate" in enabled_metrics:
@@ -477,8 +539,8 @@ class MonitoringDashboard:
         """Get total PnL across all trades"""
         try:
             query = """
-            SELECT COALESCE(SUM(pnl), 0) as total_pnl 
-            FROM trades 
+            SELECT COALESCE(SUM(pnl), 0) as total_pnl
+            FROM trades
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -492,9 +554,9 @@ class MonitoringDashboard:
         try:
             # Get latest account snapshot
             query = """
-            SELECT balance 
-            FROM account_history 
-            ORDER BY timestamp DESC 
+            SELECT balance
+            FROM account_history
+            ORDER BY timestamp DESC
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
@@ -507,10 +569,10 @@ class MonitoringDashboard:
         """Calculate win rate percentage"""
         try:
             query = """
-            SELECT 
+            SELECT
                 COUNT(*) as total_trades,
                 COUNT(CASE WHEN pnl > 0 THEN 1 END) as winning_trades
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -638,14 +700,80 @@ class MonitoringDashboard:
             logger.error(f"Error calculating volatility: {e}")
             return 0.0
 
+    def _get_dynamic_risk_factor(self) -> float:
+        """Get current dynamic risk adjustment factor"""
+        try:
+            # Get the most recent risk adjustment
+            query = """
+            SELECT adjustment_factor, timestamp
+            FROM risk_adjustments
+            WHERE parameter_name = 'position_size_factor'
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and len(result) > 0:
+                return self._safe_float(result[0]["adjustment_factor"])
+            
+            return 1.0  # Default factor when no adjustments
+            
+        except Exception as e:
+            logger.error(f"Error getting dynamic risk factor: {e}")
+            return 1.0
+
+    def _get_dynamic_risk_reason(self) -> str:
+        """Get the reason for current dynamic risk adjustment"""
+        try:
+            # Get the most recent risk adjustment reason
+            query = """
+            SELECT trigger_reason, timestamp
+            FROM risk_adjustments
+            WHERE parameter_name = 'position_size_factor'
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and len(result) > 0:
+                return str(result[0]["trigger_reason"])
+            
+            return "normal"  # Default reason when no adjustments
+            
+        except Exception as e:
+            logger.error(f"Error getting dynamic risk reason: {e}")
+            return "normal"
+
+    def _get_dynamic_risk_active(self) -> bool:
+        """Check if dynamic risk adjustments are currently active"""
+        try:
+            # Check if there are recent risk adjustments (within last hour)
+            query = """
+            SELECT COUNT(*) as count
+            FROM risk_adjustments
+            WHERE parameter_name = 'position_size_factor'
+            AND adjustment_factor != 1.0
+            AND timestamp > NOW() - INTERVAL '1 hour'
+            """
+            result = self.db_manager.execute_query(query)
+            
+            if result and len(result) > 0:
+                return int(result[0]["count"]) > 0
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking dynamic risk status: {e}")
+            return False
+
     def _get_system_health_status(self) -> str:
         """Get overall system health status"""
         try:
             # Check recent activity
             query = """
-            SELECT timestamp 
-            FROM account_history 
-            ORDER BY timestamp DESC 
+            SELECT timestamp
+            FROM account_history
+            ORDER BY timestamp DESC
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
@@ -681,9 +809,9 @@ class MonitoringDashboard:
         """Get count of recent errors (last 24 hours)"""
         try:
             query = """
-            SELECT COUNT(*) as count 
-            FROM system_events 
-            WHERE event_type = 'ERROR' 
+            SELECT COUNT(*) as count
+            FROM system_events
+            WHERE event_type = 'ERROR'
             AND timestamp > NOW() - INTERVAL '1 day'
             """
             result = self.db_manager.execute_query(query)
@@ -696,9 +824,9 @@ class MonitoringDashboard:
         """Get current active strategy"""
         try:
             query = """
-            SELECT strategy_name 
-            FROM trading_sessions 
-            ORDER BY start_time DESC 
+            SELECT strategy_name
+            FROM trading_sessions
+            ORDER BY start_time DESC
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
@@ -716,8 +844,8 @@ class MonitoringDashboard:
         """Get number of signals generated today"""
         try:
             query = """
-            SELECT COUNT(*) as count 
-            FROM trades 
+            SELECT COUNT(*) as count
+            FROM trades
             WHERE DATE(entry_time) = CURRENT_DATE
             """
             result = self.db_manager.execute_query(query)
@@ -826,9 +954,9 @@ class MonitoringDashboard:
         try:
             # Check when we last received data
             query = """
-            SELECT timestamp 
-            FROM account_history 
-            ORDER BY timestamp DESC 
+            SELECT timestamp
+            FROM account_history
+            ORDER BY timestamp DESC
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
@@ -854,10 +982,10 @@ class MonitoringDashboard:
         """Get error rate over the last hour"""
         try:
             query = """
-            SELECT 
+            SELECT
                 COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
                 COUNT(*) as total
-            FROM system_events 
+            FROM system_events
             WHERE timestamp > NOW() - INTERVAL '1 hour'
             """
             result = self.db_manager.execute_query(query)
@@ -932,8 +1060,8 @@ class MonitoringDashboard:
         """Get P&L for today"""
         try:
             query = """
-            SELECT COALESCE(SUM(pnl), 0) as daily_pnl 
-            FROM trades 
+            SELECT COALESCE(SUM(pnl), 0) as daily_pnl
+            FROM trades
             WHERE DATE(exit_time) = CURRENT_DATE
             AND exit_time IS NOT NULL
             """
@@ -947,8 +1075,8 @@ class MonitoringDashboard:
         """Get P&L for the last 7 days"""
         try:
             query = """
-            SELECT COALESCE(SUM(pnl), 0) as weekly_pnl 
-            FROM trades 
+            SELECT COALESCE(SUM(pnl), 0) as weekly_pnl
+            FROM trades
             WHERE exit_time > NOW() - INTERVAL '7 days'
             AND exit_time IS NOT NULL
             """
@@ -997,9 +1125,9 @@ class MonitoringDashboard:
             # This would need to be tracked in order execution logs
             # For now, calculate based on successful vs failed trades
             query = """
-            SELECT 
+            SELECT
                 COUNT(*) as total_orders,
-                COUNT(CASE WHEN status = 'FILLED' THEN 1 END) as filled_orders
+                COUNT(CASE WHEN status::text = 'filled' THEN 1 END) as filled_orders
             FROM positions
             WHERE entry_time > NOW() - INTERVAL '24 hours'
             """
@@ -1018,11 +1146,11 @@ class MonitoringDashboard:
             # Calculate slippage as difference between expected and actual execution price
             # This is a simplified calculation - in practice you'd track intended vs actual prices
             query = """
-            SELECT 
+            SELECT
                 entry_price,
                 exit_price,
                 side
-            FROM trades 
+            FROM trades
             WHERE exit_time > NOW() - INTERVAL '24 hours'
             AND exit_time IS NOT NULL
             LIMIT 50
@@ -1172,7 +1300,7 @@ class MonitoringDashboard:
         try:
             query = """
             SELECT pnl
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             ORDER BY exit_time DESC
             LIMIT 10
@@ -1199,10 +1327,10 @@ class MonitoringDashboard:
         """Get profit factor (gross profit / gross loss)"""
         try:
             query = """
-            SELECT 
+            SELECT
                 SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END) as gross_profit,
                 SUM(CASE WHEN pnl < 0 THEN ABS(pnl) ELSE 0 END) as gross_loss
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -1226,10 +1354,10 @@ class MonitoringDashboard:
         """Get average win to loss ratio"""
         try:
             query = """
-            SELECT 
+            SELECT
                 AVG(CASE WHEN pnl > 0 THEN pnl END) as avg_win,
                 AVG(CASE WHEN pnl < 0 THEN ABS(pnl) END) as avg_loss
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             """
             result = self.db_manager.execute_query(query)
@@ -1293,12 +1421,28 @@ class MonitoringDashboard:
                                 else None
                             ),
                             "order_id": pos.get("order_id"),
+                            # Partial operations data
+                            "original_size": self._safe_float(pos.get("original_size")),
+                            "current_size": self._safe_float(pos.get("current_size")),
+                            "partial_exits_taken": pos.get("partial_exits_taken"),
+                            "scale_ins_taken": pos.get("scale_ins_taken"),
+                            "last_partial_exit_price": self._safe_float(pos.get("last_partial_exit_price")),
+                            "last_scale_in_price": self._safe_float(pos.get("last_scale_in_price")),
+                            # Trailing stops and MFE/MAE tracking
+                            "trailing_stop_activated": bool(pos.get("trailing_stop_activated", False)),
+                            "trailing_stop_price": (
+                                self._safe_float(pos.get("trailing_stop_price"))
+                                if pos.get("trailing_stop_price") is not None
+                                else None
+                            ),
+                            "breakeven_triggered": bool(pos.get("breakeven_triggered", False)),
+                            "mfe": self._safe_float(pos.get("mfe")) if pos.get("mfe") is not None else 0.0,
+                            "mae": self._safe_float(pos.get("mae")) if pos.get("mae") is not None else 0.0,
                         }
                     )
                 )
 
             return positions
-
         except Exception as e:
             logger.error(f"Error getting current positions: {e}")
             return []
@@ -1307,10 +1451,10 @@ class MonitoringDashboard:
         """Get recent completed trades"""
         try:
             query = """
-            SELECT 
+            SELECT
                 symbol, side, entry_price, exit_price, quantity,
                 entry_time, exit_time, pnl, exit_reason
-            FROM trades 
+            FROM trades
             WHERE exit_time IS NOT NULL
             ORDER BY exit_time DESC
             LIMIT %s
@@ -1349,6 +1493,49 @@ class MonitoringDashboard:
             return trades
         except Exception as e:
             logger.error(f"Error getting recent trades: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return []
+
+    def _get_partial_trades(self, limit: int = 50) -> list[dict]:
+        """Get recent partial trades (partial exits and scale-ins)"""
+        try:
+            query = """
+            SELECT
+                pt.operation_type, pt.size, pt.price, pt.pnl, pt.target_level, pt.timestamp,
+                p.symbol, p.side, p.entry_price
+            FROM partial_trades pt
+            JOIN positions p ON pt.position_id = p.id
+            ORDER BY pt.timestamp DESC
+            LIMIT %s
+            """
+            result = self.db_manager.execute_query(query, (limit,))
+            logger.info(f"Partial trades query returned {len(result)} rows")
+
+            partial_trades: list[dict] = []
+            for row in result or []:
+                try:
+                    trade = {
+                        "operation_type": str(row.get("operation_type", "")),
+                        "symbol": str(row.get("symbol", "")),
+                        "side": str(row.get("side", "")),
+                        "entry_price": float(row.get("entry_price", 0)),
+                        "operation_price": float(row.get("price", 0)),
+                        "size": float(row.get("size", 0)),
+                        "pnl": float(row.get("pnl", 0)) if row.get("pnl") is not None else None,
+                        "target_level": row.get("target_level"),
+                        "timestamp": row.get("timestamp"),
+                    }
+                    partial_trades.append(trade)
+                except Exception as e:
+                    logger.error(f"Error converting partial trade row: {e}")
+                    logger.error(f"Row data: {row}")
+
+            logger.info(f"Successfully converted {len(partial_trades)} partial trades")
+            return partial_trades
+        except Exception as e:
+            logger.error(f"Error getting partial trades: {e}")
             import traceback
 
             traceback.print_exc()
@@ -1407,7 +1594,7 @@ class MonitoringDashboard:
         """Get timestamp of last trade"""
         try:
             query = """
-            SELECT MAX(entry_time) as last_trade 
+            SELECT MAX(entry_time) as last_trade
             FROM trades
             """
             result = self.db_manager.execute_query(query)
@@ -1434,10 +1621,10 @@ class MonitoringDashboard:
         """Get error rate over last hour"""
         try:
             query = """
-            SELECT 
+            SELECT
                 COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
                 COUNT(*) as total
-            FROM system_events 
+            FROM system_events
             WHERE timestamp > NOW() - INTERVAL '1 hour'
             """
             result = self.db_manager.execute_query(query)
@@ -1566,7 +1753,7 @@ class MonitoringDashboard:
         self.start_monitoring()
         try:
             self.socketio.run(
-                self.app, host=host, port=port, debug=debug, use_reloader=False, log_output=True
+                self.app, host=host, port=port, debug=debug, use_reloader=False, log_output=True, allow_unsafe_werkzeug=True
             )
             # If we ever return from run(), log why
             logger.warning(

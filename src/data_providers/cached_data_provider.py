@@ -7,9 +7,8 @@ from typing import Optional
 
 import pandas as pd
 
-from config.paths import get_cache_dir
-
-from .data_provider import DataProvider
+from src.config.paths import get_cache_dir
+from src.data_providers.data_provider import DataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +36,37 @@ class CachedDataProvider(DataProvider):
         super().__init__()
         self.data_provider = data_provider
         self.provider = data_provider  # Add this alias for backward compatibility
-        self.cache_dir = cache_dir or str(get_cache_dir())
         self.cache_ttl_hours = cache_ttl_hours
         self.cache: dict[str, pd.DataFrame] = {}
 
+        # Try to use the provided cache directory or get the default one
+        if cache_dir:
+            self.cache_dir = cache_dir
+        else:
+            try:
+                # Try to use the default cache directory
+                self.cache_dir = str(get_cache_dir())
+            except (PermissionError, OSError):
+                # Fallback to a temporary directory if we can't access the default location
+                import tempfile
+                self.cache_dir = os.path.join(tempfile.gettempdir(), "ai_trading_bot_cache")
+                logger.warning(f"Could not access default cache directory, using fallback: {self.cache_dir}")
+
         # Create cache directory if it doesn't exist
-        os.makedirs(self.cache_dir, exist_ok=True)
+        try:
+            os.makedirs(self.cache_dir, exist_ok=True)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Could not create cache directory {self.cache_dir}: {e}")
+            # Use a temporary directory as final fallback
+            import tempfile
+            self.cache_dir = os.path.join(tempfile.gettempdir(), "ai_trading_bot_cache_fallback")
+            try:
+                os.makedirs(self.cache_dir, exist_ok=True)
+                logger.info(f"Using fallback cache directory: {self.cache_dir}")
+            except Exception as fallback_error:
+                logger.error(f"Could not create any cache directory: {fallback_error}")
+                # Disable caching by setting cache_dir to None
+                self.cache_dir = None
 
     def _generate_year_cache_key(self, symbol: str, timeframe: str, year: int) -> str:
         """
@@ -59,8 +83,10 @@ class CachedDataProvider(DataProvider):
         request_str = f"{symbol}_{timeframe}_{year}"
         return hashlib.sha256(request_str.encode()).hexdigest()
 
-    def _get_cache_path(self, cache_key: str) -> str:
+    def _get_cache_path(self, cache_key: str) -> Optional[str]:
         """Get the full path for a cache file."""
+        if self.cache_dir is None:
+            return None
         return os.path.join(self.cache_dir, f"{cache_key}.pkl")
 
     def _is_cache_valid(self, cache_path: str, year: Optional[int] = None) -> bool:
@@ -113,14 +139,17 @@ class CachedDataProvider(DataProvider):
             logger.warning(f"Failed to load cache from {cache_path}: {e}")
             return None
 
-    def _save_to_cache(self, cache_path: str, data: pd.DataFrame):
+    def _save_to_cache(self, cache_path: Optional[str], data: pd.DataFrame):
         """
         Save data to cache file.
 
         Args:
-            cache_path: Path to the cache file
+            cache_path: Path to the cache file (None if caching is disabled)
             data: DataFrame to cache
         """
+        if cache_path is None:
+            return
+            
         try:
             with open(cache_path, "wb") as f:
                 pickle.dump(data, f)  # nosec B301: writing trusted, locally-used cache files
@@ -182,7 +211,7 @@ class CachedDataProvider(DataProvider):
         cache_path = self._get_cache_path(cache_key)
 
         # Try to load from cache first
-        if self._is_cache_valid(cache_path, year):
+        if cache_path and self._is_cache_valid(cache_path, year):
             cached_data = self._load_from_cache(cache_path)
             if cached_data is not None:
                 logger.debug(f"Loaded {year} data from cache for {symbol} {timeframe}")
@@ -284,7 +313,7 @@ class CachedDataProvider(DataProvider):
             cache_key = self._generate_year_cache_key(symbol, timeframe, year)
             cache_path = self._get_cache_path(cache_key)
 
-            if self._is_cache_valid(cache_path, year):
+            if cache_path and self._is_cache_valid(cache_path, year):
                 cached_years.append(year)
             else:
                 missing_years.append(year)
@@ -363,6 +392,9 @@ class CachedDataProvider(DataProvider):
             timeframe: If specified, only clear cache for this timeframe
             year: If specified, only clear cache for this year
         """
+        if self.cache_dir is None:
+            return
+
         if not os.path.exists(self.cache_dir):
             return
 
@@ -402,6 +434,15 @@ class CachedDataProvider(DataProvider):
         Returns:
             Dictionary with cache statistics
         """
+        if self.cache_dir is None:
+            return {
+                "total_files": 0,
+                "total_size_mb": 0,
+                "oldest_file": None,
+                "newest_file": None,
+                "years_cached": [],
+            }
+
         if not os.path.exists(self.cache_dir):
             return {
                 "total_files": 0,

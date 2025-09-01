@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pandas as pd
 
-from performance.metrics import (
+from src.performance.metrics import (
     cagr as perf_cagr,
 )
-from performance.metrics import (
+from src.performance.metrics import (
     max_drawdown as perf_max_drawdown,
 )
-from performance.metrics import (
+from src.performance.metrics import (
     sharpe as perf_sharpe,
 )
-from performance.metrics import (
+from src.performance.metrics import (
     total_return as perf_total_return,
 )
 
