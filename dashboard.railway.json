@@ -4,7 +4,7 @@
       "builder": "dockerfile"
     },
     "deploy": {
-      "startCommand": "make migrate && make dashboard-monitoring",
+      "startCommand": "atb db verify --apply-migrations && atb dashboards run monitoring",
       "healthcheckPath": "/health",
       "healthcheckTimeout": 30,
       "restartPolicyType": "ON_FAILURE",
