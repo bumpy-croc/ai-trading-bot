@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-# --- Ensure greenlet/eventlet is configured BEFORE any other imports.
-# This is critical because eventlet.monkey_patch() must be called before
+# --- Ensure gevent is configured BEFORE any other imports.
+# This is critical because gevent.monkey.patch_all() must be called before
 # importing any network-related modules like Flask, requests, etc.
 import os
 
-_WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
-if _WEB_SERVER_USE_EVENTLET:
-    import eventlet
+_WEB_SERVER_USE_GEVENT = os.environ.get("WEB_SERVER_USE_GEVENT", "0") == "1"
+
+if _WEB_SERVER_USE_GEVENT:
+    import gevent.monkey
     # Full monkey patching for production WSGI server
-    eventlet.monkey_patch()
-    _ASYNC_MODE = "eventlet"
+    gevent.monkey.patch_all()
+    _ASYNC_MODE = "gevent"
 else:
     _ASYNC_MODE = "threading"
 
@@ -222,15 +223,15 @@ class MarketPredictionDashboard:
     def run(self, host: str = "127.0.0.1", port: int = 8002, debug: bool = False):
         logger.info("MarketPredictionDashboard available at http://%s:%d", host, port)
 
-        # Decide server kwargs based on whether eventlet is enabled.
-        # With eventlet enabled, Flask runs a production-safe eventlet server.
-        # Without eventlet, allow Werkzeug only for local development.
+        # Decide server kwargs based on whether gevent is enabled.
+        # With gevent enabled, Flask runs a production-safe gevent server.
+        # Without gevent, allow Werkzeug only for local development.
         server_kwargs = {
             "host": host,
             "port": port,
             "debug": debug,
         }
-        if not _WEB_SERVER_USE_EVENTLET:
+        if not _WEB_SERVER_USE_GEVENT:
             server_kwargs["allow_unsafe_werkzeug"] = True
 
         self.app.run(**server_kwargs)

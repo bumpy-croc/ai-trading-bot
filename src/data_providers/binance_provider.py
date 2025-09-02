@@ -10,6 +10,7 @@ providing a single interface for all Binance operations including:
 """
 
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -119,22 +120,13 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         try:
             logger.debug(f"Attempting to create Binance client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}")
             
-            # Check if a pre-initialized client is available (from dashboard pre-init)
-            from src.dashboards.monitoring.dashboard import _global_binance_client
-            if (_global_binance_client is not None and 
-                self.api_key and self.api_secret and 
-                hasattr(_global_binance_client, 'API_KEY') and
-                _global_binance_client.API_KEY == self.api_key):
-                logger.debug("Using pre-initialized Binance client from dashboard")
-                self._client = _global_binance_client
+            # Direct client creation (works well with gevent, standard environments)
+            if self.api_key and self.api_secret:
+                logger.debug("Creating authenticated Binance client...")
+                self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
             else:
-                # Standard initialization
-                if self.api_key and self.api_secret:
-                    logger.debug("Creating authenticated Binance client...")
-                    self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
-                else:
-                    logger.debug("Creating public Binance client...")
-                    self._client = Client()
+                logger.debug("Creating public Binance client...")
+                self._client = Client()
             
             logger.info(
                 f"Binance client initialized successfully "
