@@ -116,11 +116,39 @@ def _apply_migrations(cfg: Config) -> bool:
     try:
         from alembic import command  # type: ignore
 
+        print("🔄 Applying migrations to head...")
         command.upgrade(cfg, "head")
-        print("✅ Alembic migrations applied to head.")
+        print("✅ Alembic migrations applied successfully to head.")
+
+        # Verify migration status after applying
+        from alembic.runtime.migration import MigrationContext  # type: ignore
+        script = ScriptDirectory.from_config(cfg)
+        db_url = cfg.get_main_option("sqlalchemy.url")
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:post-migration-verify"},
+        )
+        try:
+            with engine.connect() as conn:
+                ctx = MigrationContext.configure(conn)
+                current = ctx.get_current_revision()
+                heads = list(script.get_heads())
+                if current in heads:
+                    print("✅ Migration verification: database is at head revision")
+                else:
+                    print(f"⚠️  Migration verification: current={current}, expected one of {heads}")
+        finally:
+            engine.dispose()
+
         return True
     except Exception as exc:  # noqa: BLE001
         print(f"❌ Failed to apply migrations: {exc}")
+        print("\n💡 Troubleshooting tips:")
+        print("   • Check if columns/tables already exist (duplicate column error)")
+        print("   • Verify database permissions")
+        print("   • Check database connectivity")
+        print("   • Review recent schema changes")
         traceback.print_exc()
         return False
 
@@ -489,16 +517,55 @@ def _verify(ns: argparse.Namespace) -> int:
         else:
             print("✅ Alembic state consistent.")
 
-        if pending and ns.apply_migrations:
+        # Check if database schema is actually out of sync before applying migrations
+        schema_out_of_sync = False
+        if pending:
+            print("\n🔍 Checking if schema is actually out of sync...")
+            try:
+                # Quick check: see if we have missing tables or columns that migrations should create
+                expected = _expected_schema_from_models()
+                verify_result = _verify_schema(db_url)
+
+                # Check for significant schema differences
+                if (verify_result.get("missing_tables") or
+                    verify_result.get("missing_columns") or
+                    verify_result.get("type_mismatches")):
+                    schema_out_of_sync = True
+                    print("⚠️  Schema is out of sync with models - migrations needed")
+                else:
+                    print("✅ Schema appears consistent - migrations may be redundant")
+                    print("   (This prevents duplicate column errors from re-running migrations)")
+
+            except Exception as e:
+                print(f"⚠️  Could not verify schema state: {e}")
+                # If we can't verify, assume migrations are needed for safety
+                schema_out_of_sync = True
+
+        if pending and ns.apply_migrations and (schema_out_of_sync or ns.force_migrations):
+            if ns.force_migrations and not schema_out_of_sync:
+                print("⚠️  Forcing migrations despite schema appearing up-to-date")
             print("\nApplying Migrations")
             print("-------------------")
             ok = _apply_migrations(cfg)
             if not ok:
                 return 1
+        elif pending and ns.apply_migrations and not schema_out_of_sync and not ns.force_migrations:
+            print("ℹ️  Skipping migrations - schema appears up to date")
+            print("   (Use --force-migrations to override this check)")
         elif pending and not ns.apply_migrations:
-            print(
-                "ℹ️  Pending migrations detected. To apply automatically, pass --apply-migrations or set ATB_AUTO_APPLY_MIGRATIONS=true."
-            )
+            auto_apply = _safe_bool_env("ATB_AUTO_APPLY_MIGRATIONS", False)
+            if auto_apply:
+                print("ℹ️  Auto-applying migrations (ATB_AUTO_APPLY_MIGRATIONS=true)")
+                if schema_out_of_sync:
+                    ok = _apply_migrations(cfg)
+                    if not ok:
+                        return 1
+                else:
+                    print("ℹ️  Skipping migrations - schema appears up to date")
+            else:
+                print(
+                    "ℹ️  Pending migrations detected. To apply automatically, pass --apply-migrations or set ATB_AUTO_APPLY_MIGRATIONS=true."
+                )
 
         print("\nSchema Verification Against Models")
         print("----------------------------------")
@@ -739,16 +806,21 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     # Import railway commands
     from cli.commands import railway
 
-    p_verify = sub.add_parser("verify", help="Verify database integrity and migrations")
+    p_verify = sub.add_parser("verify", help="Verify database integrity, migrations, and schema sync status")
     p_verify.add_argument(
         "--apply-migrations",
         action="store_true",
-        help="Apply Alembic migrations to head if pending",
+        help="Apply Alembic migrations to head if pending and schema is out of sync",
     )
     p_verify.add_argument(
         "--apply-fixes",
         action="store_true",
         help="Apply safe schema fixes (non-unique indexes, JSON→JSONB, nullable columns)",
+    )
+    p_verify.add_argument(
+        "--force-migrations",
+        action="store_true",
+        help="Force apply migrations even if schema appears up-to-date (bypasses duplicate column prevention)",
     )
     p_verify.set_defaults(func=_verify)
 
