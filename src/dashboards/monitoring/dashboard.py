@@ -8,9 +8,9 @@ positions, risk metrics, and system health.
 
 from __future__ import annotations
 
-# --- Ensure greenlet/eventlet is configured BEFORE any other imports.
-# This is critical because eventlet.monkey_patch() must be called before
-# importing any network-related modules like Flask, requests, etc.
+# --- CRITICAL: Eventlet monkey patching MUST happen BEFORE ANY other imports
+# This prevents "RLock(s) were not greened" errors by ensuring all threading
+# primitives are patched before any modules that use them are imported
 import os
 
 _WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
@@ -21,40 +21,40 @@ if _WEB_SERVER_USE_EVENTLET:
 else:
     _ASYNC_MODE = "threading"
 
-# Now we can safely import other modules after monkey patching
+# --- ALL imports must happen AFTER monkey patching to avoid threading issues ---
+
+# Standard library imports
 import argparse
 import logging
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, TypedDict
 
+# Third-party imports
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 
 # Ensure absolute imports resolve when running as a module or script
-try:
-    from src.performance.metrics import max_drawdown as perf_max_drawdown
-    from src.performance.metrics import sharpe as perf_sharpe
-except ModuleNotFoundError:
-    # Add project root and src to sys.path dynamically as a last resort
-    import sys
+# This must happen after monkey patching to avoid RLock issues
+from src.utils.project_paths import get_project_root
 
-    from src.utils.project_paths import get_project_root
-    project_root = get_project_root()
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-    src_path = project_root / "src"
-    if str(src_path) not in sys.path:
-        sys.path.insert(1, str(src_path))
-    from src.performance.metrics import max_drawdown as perf_max_drawdown
-    from src.performance.metrics import sharpe as perf_sharpe
+project_root = get_project_root()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(1, str(src_path))
 
+# Project imports - all must happen after monkey patching
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.database.manager import DatabaseManager
+from src.performance.metrics import max_drawdown as perf_max_drawdown
+from src.performance.metrics import sharpe as perf_sharpe
 
 # Configure logging via centralized config (set by entry points)
 logger = logging.getLogger(__name__)

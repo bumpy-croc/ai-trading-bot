@@ -18,12 +18,15 @@ if _WEB_SERVER_USE_EVENTLET:
 else:
     _ASYNC_MODE = "threading"
 
-# Now we can safely import other modules after monkey patching
+# --- ALL imports must happen AFTER monkey patching to avoid threading issues ---
+
+# Standard library imports
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
+# Third-party imports
 from flask import Flask, jsonify, render_template, request
 
 logger = logging.getLogger(__name__)

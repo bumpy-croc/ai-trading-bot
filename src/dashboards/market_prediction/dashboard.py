@@ -13,17 +13,20 @@ if _WEB_SERVER_USE_EVENTLET:
 else:
     _ASYNC_MODE = "threading"
 
-# Now we can safely import other modules after monkey patching
+# --- ALL imports must happen AFTER monkey patching to avoid threading issues ---
+
+# Standard library imports
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+# Third-party imports
 import numpy as np
 import pandas as pd
 from flask import Flask, jsonify, render_template
 
-# Lazy import – these modules exist inside the project
+# Project imports - all must happen after monkey patching
 try:
     from src.data_providers.binance_provider import BinanceProvider
 except Exception:  # pragma: no cover – fallback when deps unavailable
