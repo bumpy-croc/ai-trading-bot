@@ -5,24 +5,36 @@
 #   python -m dashboards.backtesting.dashboard
 from __future__ import annotations
 
+# --- Ensure gevent is configured BEFORE any other imports.
+# This is critical because gevent.monkey.patch_all() must be called before
+# --- Gevent monkey patching is now handled early in CLI entry point
+# This detects the async mode based on whether gevent was already patched
+import os
+import sys
+
+_WEB_SERVER_USE_GEVENT = os.environ.get("WEB_SERVER_USE_GEVENT", "0") == "1"
+
+# Detect if gevent monkey patching was already applied
+if _WEB_SERVER_USE_GEVENT and 'gevent' in sys.modules:
+    _ASYNC_MODE = "gevent"
+elif _WEB_SERVER_USE_GEVENT:
+    # Fallback: apply monkey patching if not done yet (for standalone imports)
+    import gevent.monkey
+    gevent.monkey.patch_all()
+    _ASYNC_MODE = "gevent"
+else:
+    _ASYNC_MODE = "threading"
+
+# --- ALL imports must happen AFTER monkey patching to avoid threading issues ---
+
+# Standard library imports
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
+# Third-party imports
 from flask import Flask, jsonify, render_template, request
-
-# --- Ensure greenlet/eventlet is configured before importing network libs.
-# Default to threading to avoid monkey-patching during imports/tests.
-_WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
-if _WEB_SERVER_USE_EVENTLET:
-    import eventlet
-
-    eventlet.monkey_patch()
-    _ASYNC_MODE = "eventlet"
-else:
-    _ASYNC_MODE = "threading"
 
 logger = logging.getLogger(__name__)
 
@@ -128,15 +140,15 @@ class BacktestDashboard:
     def run(self, host: str = "127.0.0.1", port: int = 8001, debug: bool = False):
         logger.info(f"BacktestDashboard available at http://{host}:{port}")
 
-        # Decide server kwargs based on whether eventlet is enabled.
-        # With eventlet enabled, Flask runs a production-safe eventlet server.
-        # Without eventlet, allow Werkzeug only for local development.
+        # Decide server kwargs based on whether gevent is enabled.
+        # With gevent enabled, Flask runs a production-safe gevent server.
+        # Without gevent, allow Werkzeug only for local development.
         server_kwargs = {
             "host": host,
             "port": port,
             "debug": debug,
         }
-        if not _WEB_SERVER_USE_EVENTLET:
+        if not _WEB_SERVER_USE_GEVENT:
             server_kwargs["allow_unsafe_werkzeug"] = True
 
         self.app.run(**server_kwargs)

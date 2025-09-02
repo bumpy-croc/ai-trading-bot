@@ -5,7 +5,7 @@
     },
     "deploy": {
       "preDeployCommand": "atb db verify --apply-migrations",
-      "startCommand": "WEB_SERVER_USE_EVENTLET=1 atb dashboards run monitoring --host 0.0.0.0",
+      "startCommand": "atb dashboards run monitoring --host 0.0.0.0",
       "healthcheckPath": "/health",
       "healthcheckTimeout": 60,
       "restartPolicyType": "ON_FAILURE",
