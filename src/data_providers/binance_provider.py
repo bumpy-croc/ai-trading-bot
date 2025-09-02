@@ -88,6 +88,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         # Initialize ExchangeInterface
         if api_key and api_secret:
+            # ExchangeInterface.__init__ will call self._initialize_client()
             ExchangeInterface.__init__(self, api_key, api_secret, testnet)
         else:
             # Initialize with dummy credentials for data-only operations
@@ -96,8 +97,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.testnet = testnet
             self._client = None
 
-        # Initialize the client
-        self._initialize_client()
+        # Only initialize the client here when ExchangeInterface was NOT initialized
+        # (i.e., when running without credentials in public/data-only mode)
+        if not (api_key and api_secret):
+            self._initialize_client()
 
         if not api_key or not api_secret:
             logger.warning(
