@@ -55,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
         dev,
         live,
         live_health,
+        logs,
         optimizer,
         tests,
         train,
@@ -72,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     dev.register(subparsers)
     train.register(subparsers)
     tests.register(subparsers)
+    logs.register(subparsers)
 
     return parser
 

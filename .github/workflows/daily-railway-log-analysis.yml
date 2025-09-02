@@ -1,0 +1,180 @@
+name: Daily Railway Log Analysis
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # 06:00 UTC daily (after trading day)
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Railway environment to analyze'
+        required: false
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - development
+      hours:
+        description: 'Hours of logs to analyze'
+        required: false
+        default: '24'
+        type: string
+      dry_run:
+        description: 'Dry run (analyze only, no fixes)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: daily-railway-log-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze-logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Railway CLI
+        run: |
+          curl -fsSL https://railway.app/install.sh | sh
+          echo "$HOME/.railway/bin" >> $GITHUB_PATH
+
+      - name: Install GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Authenticate with Railway
+        run: |
+          # * Railway login is handled via environment variables
+          railway whoami || echo "Railway authentication will use environment variables"
+
+      - name: Set analysis parameters
+        id: params
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment || 'production' }}"
+          HOURS="${{ github.event.inputs.hours || '24' }}"
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          
+          echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
+          echo "hours=${HOURS}" >> $GITHUB_OUTPUT
+          echo "dry_run=${DRY_RUN}" >> $GITHUB_OUTPUT
+          
+          echo "Analyzing ${ENVIRONMENT} environment for ${HOURS} hours (dry_run: ${DRY_RUN})"
+
+      - name: Run Railway log analysis
+        id: analysis
+        run: |
+          TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
+          RESULTS_FILE="railway_analysis_results_${TIMESTAMP}.json"
+          
+          # * Configure git for potential commits
+          git config --global user.name "Railway Log Analyzer"
+          git config --global user.email "noreply@github.com"
+          
+          # * Run the analysis
+          python scripts/railway_log_analyzer.py \
+            --environment "${{ steps.params.outputs.environment }}" \
+            --hours "${{ steps.params.outputs.hours }}" \
+            ${{ steps.params.outputs.dry_run == 'true' && '--dry-run' || '' }} \
+            --output-json "${RESULTS_FILE}"
+          
+          echo "results_file=${RESULTS_FILE}" >> $GITHUB_OUTPUT
+
+      - name: Upload analysis results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: railway-log-analysis-results
+          path: |
+            railway_analysis_results_*.json
+            logs/analysis_reports/*.md
+            logs/railway/**/*.log
+          retention-days: 30
+
+      - name: Create summary comment
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ -f "${{ steps.analysis.outputs.results_file }}" ]; then
+            echo "## Railway Log Analysis Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # * Extract key metrics from results
+            python -c "
+import json
+import sys
+
+try:
+    with open('${{ steps.analysis.outputs.results_file }}', 'r') as f:
+        results = json.load(f)
+    
+    print(f\"**Environment:** {results.get('environment', 'N/A')}\")
+    print(f\"**Analysis Period:** {results.get('analysis_hours', 'N/A')} hours\")
+    print(f\"**Success:** {'✅' if results.get('success') else '❌'}\")
+    print()
+    
+    if 'steps' in results and 'analysis' in results['steps']:
+        analysis = results['steps']['analysis']
+        print(f\"**Log Entries:** {analysis.get('total_entries', 0):,}\")
+        print(f\"**Errors:** {analysis.get('error_count', 0)}\")
+        print(f\"**Warnings:** {analysis.get('warning_count', 0)}\")
+        print(f\"**Patterns Found:** {analysis.get('patterns_found', 0)}\")
+        print()
+    
+    if 'steps' in results and 'auto_fix' in results['steps']:
+        fixes = results['steps']['auto_fix']
+        if not fixes.get('skipped'):
+            print(f\"**Fixes Generated:** {fixes.get('fixes_generated', 0)}\")
+            print(f\"**Fixes Applied:** {fixes.get('fixes_applied', 0)}\")
+            print(f\"**PRs Created:** {len(fixes.get('pull_requests', []))}\")
+            print()
+    
+    if 'overview' in results:
+        print(\"## Overview\")
+        print(\"```\")
+        print(results['overview'])
+        print(\"```\")
+
+except Exception as e:
+    print(f\"Error generating summary: {e}\")
+    sys.exit(1)
+            " >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Analysis results file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Daily Railway log analysis failed"
+          echo "Check the workflow logs for details"
+          
+          # * Could add Slack/Discord notification here
+          # * Example: curl -X POST -H 'Content-type: application/json' --data '{"text":"Railway log analysis failed"}' $SLACK_WEBHOOK_URL
