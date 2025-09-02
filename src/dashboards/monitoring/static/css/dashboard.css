@@ -479,3 +479,18 @@ body {
     50% { opacity: 0.5; }
     100% { opacity: 1; }
 }
+
+/* Enhanced no positions message */
+.no-positions-message {
+    padding: 2rem 1rem;
+    color: #6c757d;
+}
+
+.no-positions-message .text-primary {
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.no-positions-message .text-primary:hover {
+    text-decoration: underline;
+}

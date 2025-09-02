@@ -104,7 +104,7 @@ class TestAccountSynchronizer:
         db_manager = Mock()
         db_manager.get_current_balance.return_value = 10000.0
         db_manager.get_active_positions.return_value = []
-        db_manager.get_open_orders.return_value = []
+        db_manager.get_pending_orders.return_value = []
         db_manager.get_trades_by_symbol_and_date.return_value = []
         db_manager.log_position.return_value = 1
         db_manager.log_trade.return_value = 1
@@ -297,7 +297,7 @@ class TestAccountSynchronizer:
         assert result["total_exchange_orders"] == 1
 
         # Test order status update
-        mock_db_manager.get_open_orders.return_value = [
+        mock_db_manager.get_pending_orders.return_value = [
             {"id": 1, "order_id": "test_order_123", "symbol": "BTCUSDT"}
         ]
         orders[0].status = ExchangeOrderStatus.FILLED
@@ -416,7 +416,7 @@ class TestAccountSynchronizer:
 
         # Test order sync exception
         with patch.object(
-            synchronizer.db_manager, "get_open_orders", side_effect=Exception("DB error")
+            synchronizer.db_manager, "get_pending_orders", side_effect=Exception("DB error")
         ):
             result = synchronizer._sync_orders([])
             assert result["synced"] is False
@@ -502,7 +502,7 @@ class TestAccountSynchronizerIntegration:
         )
         db_manager.get_current_balance.return_value = 10000.0
         db_manager.get_active_positions.return_value = []
-        db_manager.get_open_orders.return_value = []
+        db_manager.get_pending_orders.return_value = []
         db_manager.log_position.return_value = 1
         db_manager.log_trade.return_value = 1
         return AccountSynchronizer(exchange, db_manager, session_id=1)

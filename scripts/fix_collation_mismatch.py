@@ -10,11 +10,11 @@ Usage:
     python scripts/fix_collation_mismatch.py --fix
 """
 
+import argparse
 import os
 import sys
-import argparse
+
 import psycopg2
-from urllib.parse import urlparse
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))

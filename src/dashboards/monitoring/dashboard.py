@@ -401,6 +401,67 @@ class MonitoringDashboard:
             except Exception as e:
                 return jsonify({"items": [], "error": str(e)}), 200
 
+        @self.app.route("/api/debug/positions")
+        def debug_positions():
+            """Debug endpoint showing positions by all statuses for troubleshooting."""
+            try:
+                # * Get positions by status for debugging
+                query = """
+                SELECT 
+                    status,
+                    COUNT(*) as count,
+                    array_agg(
+                        json_build_object(
+                            'id', id,
+                            'symbol', symbol,
+                            'order_id', order_id,
+                            'entry_price', entry_price,
+                            'quantity', quantity,
+                            'entry_time', entry_time
+                        )
+                    ) as positions
+                FROM positions 
+                GROUP BY status
+                ORDER BY status
+                """
+                results = self.db_manager.execute_query(query)
+                
+                # * Also get validation results
+                validation = self.db_manager.validate_position_status_consistency()
+                
+                return jsonify({
+                    "positions_by_status": results,
+                    "validation": validation,
+                    "timestamp": datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Debug positions endpoint error: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/debug/fix-positions", methods=["POST"])
+        def fix_position_inconsistencies():
+            """Endpoint to manually trigger position status fixes."""
+            try:
+                fixes = self.db_manager.fix_position_status_inconsistencies()
+                return jsonify({
+                    "success": True,
+                    "fixes_applied": fixes,
+                    "timestamp": datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Fix positions endpoint error: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        @self.app.route("/api/pending-orders")
+        def get_pending_orders():
+            """Get current pending orders (orders not yet filled)."""
+            try:
+                pending_orders = self.db_manager.get_pending_orders()
+                return jsonify(pending_orders)
+            except Exception as e:
+                logger.error(f"Error getting pending orders: {e}")
+                return jsonify({"error": str(e)}), 500
+
     def _setup_websocket_handlers(self):
         """Setup WebSocket event handlers"""
 

@@ -308,7 +308,7 @@ class AccountSynchronizer:
             logger.info(f"Syncing {len(exchange_orders)} orders from exchange")
 
             # Get current open orders from database
-            db_orders = self.db_manager.get_open_orders(self.session_id)
+            db_orders = self.db_manager.get_pending_orders(self.session_id)
 
             synced_orders = []
             new_orders = []
@@ -330,9 +330,18 @@ class AccountSynchronizer:
                             f"Order status changed: {exchange_order.order_id} - {exchange_order.status.value}"
                         )
                         # Update order status in database
-                        self.db_manager.update_order_status(
-                            db_order["id"], exchange_order.status.value
-                        )
+                        if exchange_order.status == ExchangeOrderStatus.FILLED:
+                            # * Use specialized method for order fills to properly transition PENDING -> OPEN
+                            self.db_manager.fill_pending_order(
+                                db_order["order_id"], 
+                                filled_price=getattr(exchange_order, 'average_price', None),
+                                filled_quantity=getattr(exchange_order, 'filled_quantity', None)
+                            )
+                        else:
+                            # * For other status changes (CANCELLED, FAILED, etc.)
+                            self.db_manager.update_order_status(
+                                db_order["id"], exchange_order.status.value
+                            )
 
                     synced_orders.append(
                         {

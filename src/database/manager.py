@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
+import sqlalchemy as sa
 from sqlalchemy import and_, create_engine, text  # type: ignore
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError  # type: ignore
 from sqlalchemy.orm import Session, sessionmaker  # type: ignore
@@ -866,8 +867,8 @@ class DatabaseManager:
             logger.info(f"Closed position #{position_id}")
             return True
 
-    def get_open_orders(self, session_id: int | None = None) -> list[dict]:
-        """Get all open orders for a session."""
+    def get_pending_orders(self, session_id: int | None = None) -> list[dict]:
+        """Get all pending orders for a session."""
         session_id = session_id or self._current_session_id
         if not session_id:
             return []
@@ -902,14 +903,123 @@ class DatabaseManager:
 
             try:
                 normalized = self._normalize_order_status(status)
+                old_status = order.status
                 order.status = normalized
                 order.last_update = datetime.utcnow()
                 session.commit()
-                logger.info(f"Updated order {order_id} status to {normalized.value}")
+                logger.info(f"Updated order {order_id} status from {old_status.value} to {normalized.value}")
                 return True
             except ValueError as exc:
                 logger.error(f"Invalid order status: {status} ({exc})")
                 return False
+
+    def fill_pending_order(self, order_id: str, filled_price: float | None = None, filled_quantity: float | None = None) -> bool:
+        """Transition a pending order to open (filled) status with execution details."""
+        with self.get_session() as session:
+            position = session.query(Position).filter_by(order_id=order_id).first()
+            if not position:
+                logger.error(f"Position with order_id {order_id} not found")
+                return False
+
+            if position.status != OrderStatus.PENDING:
+                logger.warning(f"Position {order_id} is not in PENDING status (current: {position.status.value})")
+                return False
+
+            try:
+                # * Transition to OPEN status indicating the order has been filled
+                position.status = OrderStatus.OPEN
+                position.last_update = datetime.utcnow()
+                
+                # * Update execution details if provided
+                if filled_price is not None:
+                    position.entry_price = filled_price
+                if filled_quantity is not None:
+                    position.quantity = filled_quantity
+                
+                session.commit()
+                logger.info(f"Filled pending order {order_id} -> status now OPEN")
+                return True
+            except Exception as exc:
+                logger.error(f"Failed to fill pending order {order_id}: {exc}")
+                return False
+
+    def validate_position_status_consistency(self) -> dict[str, int]:
+        """Validate and report position status consistency issues."""
+        with self.get_session() as session:
+            # * Find positions that might have inconsistent status
+            inconsistent_pending = session.execute(
+                sa.text("""
+                    SELECT COUNT(*) as count 
+                    FROM positions 
+                    WHERE status = 'PENDING' 
+                    AND entry_price IS NOT NULL 
+                    AND quantity IS NOT NULL 
+                    AND quantity > 0
+                """)
+            ).fetchone()
+            
+            orphaned_positions = session.execute(
+                sa.text("""
+                    SELECT COUNT(*) as count 
+                    FROM positions 
+                    WHERE status = 'OPEN' 
+                    AND (entry_price IS NULL OR quantity IS NULL OR quantity <= 0)
+                """)
+            ).fetchone()
+            
+            total_pending = session.execute(
+                sa.text("SELECT COUNT(*) as count FROM positions WHERE status = 'PENDING'")
+            ).fetchone()
+            
+            total_open = session.execute(
+                sa.text("SELECT COUNT(*) as count FROM positions WHERE status = 'OPEN'")
+            ).fetchone()
+            
+            return {
+                "inconsistent_pending": inconsistent_pending[0] if inconsistent_pending else 0,
+                "orphaned_open": orphaned_positions[0] if orphaned_positions else 0,
+                "total_pending": total_pending[0] if total_pending else 0,
+                "total_open": total_open[0] if total_open else 0,
+            }
+
+    def fix_position_status_inconsistencies(self) -> dict[str, int]:
+        """Fix position status inconsistencies and return count of fixes applied."""
+        with self.get_session() as session:
+            # * Fix positions stuck in PENDING with filled data
+            result_pending = session.execute(
+                sa.text("""
+                    UPDATE positions 
+                    SET status = 'OPEN', last_update = NOW()
+                    WHERE status = 'PENDING' 
+                    AND entry_price IS NOT NULL 
+                    AND quantity IS NOT NULL 
+                    AND quantity > 0
+                """)
+            )
+            
+            # * Fix positions marked as OPEN but missing data (mark as FAILED)
+            result_orphaned = session.execute(
+                sa.text("""
+                    UPDATE positions 
+                    SET status = 'FAILED', last_update = NOW()
+                    WHERE status = 'OPEN' 
+                    AND (entry_price IS NULL OR quantity IS NULL OR quantity <= 0)
+                """)
+            )
+            
+            session.commit()
+            
+            fixes_applied = {
+                "pending_to_open": result_pending.rowcount,
+                "orphaned_to_failed": result_orphaned.rowcount,
+            }
+            
+            if fixes_applied["pending_to_open"] > 0:
+                logger.info(f"Fixed {fixes_applied['pending_to_open']} positions from PENDING to OPEN")
+            if fixes_applied["orphaned_to_failed"] > 0:
+                logger.info(f"Fixed {fixes_applied['orphaned_to_failed']} orphaned positions to FAILED")
+                
+            return fixes_applied
 
     def get_trades_by_symbol_and_date(
         self, symbol: str, start_date: datetime, session_id: int | None = None
