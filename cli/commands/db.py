@@ -736,6 +736,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("db", help="Database utilities")
     sub = p.add_subparsers(dest="db_cmd", required=True)
 
+    # Import railway commands
+    from cli.commands import railway
+
     p_verify = sub.add_parser("verify", help="Verify database integrity and migrations")
     p_verify.add_argument(
         "--apply-migrations",
@@ -769,3 +772,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_setup.add_argument("--verify", action="store_true")
     p_setup.add_argument("--check-local", action="store_true")
     p_setup.set_defaults(func=_setup_railway)
+
+    # Register railway subcommands
+    railway.register(sub)
