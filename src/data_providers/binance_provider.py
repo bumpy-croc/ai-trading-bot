@@ -109,21 +109,44 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     def _initialize_client(self):
         """Initialize Binance client with error handling"""
+        logger.debug(f"_initialize_client called - BINANCE_AVAILABLE: {BINANCE_AVAILABLE}")
+        
         if not BINANCE_AVAILABLE:
             logger.warning("Binance library not available - using mock client")
             self._client = self._create_offline_client()
             return
 
         try:
-            if self.api_key and self.api_secret:
-                self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
-                logger.info(
-                    f"Binance client initialized with credentials (testnet: {self.testnet})"
-                )
+            logger.debug(f"Attempting to create Binance client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}")
+            
+            # Check if a pre-initialized client is available (from dashboard pre-init)
+            from src.dashboards.monitoring.dashboard import _global_binance_client
+            if (_global_binance_client is not None and 
+                self.api_key and self.api_secret and 
+                hasattr(_global_binance_client, 'API_KEY') and
+                _global_binance_client.API_KEY == self.api_key):
+                logger.debug("Using pre-initialized Binance client from dashboard")
+                self._client = _global_binance_client
             else:
-                # Public client for data-only operations
-                self._client = Client()
-                logger.info("Binance public client initialized (data-only mode)")
+                # Standard initialization
+                if self.api_key and self.api_secret:
+                    logger.debug("Creating authenticated Binance client...")
+                    self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
+                else:
+                    logger.debug("Creating public Binance client...")
+                    self._client = Client()
+            
+            logger.info(
+                f"Binance client initialized successfully "
+                f"({'with credentials' if self.api_key and self.api_secret else 'public mode'}, "
+                f"testnet: {self.testnet})"
+            )
+                
+            # Test the client with a simple operation
+            logger.debug("Testing client with server time request...")
+            test_response = self._client.get_server_time()
+            logger.debug(f"Server time test successful: {test_response}")
+            
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)

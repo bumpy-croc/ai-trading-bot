@@ -8,6 +8,7 @@ import os
 _WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
 if _WEB_SERVER_USE_EVENTLET:
     import eventlet
+    # Full monkey patching for production WSGI server
     eventlet.monkey_patch()
     _ASYNC_MODE = "eventlet"
 else:

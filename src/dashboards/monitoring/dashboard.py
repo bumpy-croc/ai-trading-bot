@@ -8,13 +8,34 @@ positions, risk metrics, and system health.
 
 from __future__ import annotations
 
-# --- CRITICAL: Eventlet monkey patching MUST happen BEFORE ANY other imports
-# This prevents "RLock(s) were not greened" errors by ensuring all threading
-# primitives are patched before any modules that use them are imported
+# --- CRITICAL: Check if we need eventlet monkey patching
+# This must happen BEFORE any imports to avoid threading issues
 import os
 
 _WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
+
+# Pre-initialize Binance client before eventlet monkey patching to avoid DNS issues
+_global_binance_client = None
 if _WEB_SERVER_USE_EVENTLET:
+    # Initialize Binance client with original socket functions BEFORE monkey patching
+    import sys
+    sys.path.insert(0, 'src')
+    from src.config.config_manager import get_config
+    
+    config = get_config()
+    api_key = config.get("BINANCE_API_KEY")
+    api_secret = config.get("BINANCE_API_SECRET") 
+    testnet = config.get("BINANCE_TESTNET", False)
+    
+    if api_key and api_secret:
+        from binance.client import Client
+        try:
+            _global_binance_client = Client(api_key, api_secret, testnet=testnet)
+            print(f"✅ Pre-initialized Binance client before eventlet (testnet: {testnet})")
+        except Exception as e:
+            print(f"⚠️ Pre-initialization failed: {e}")
+    
+    # Now apply monkey patching for Flask-SocketIO WebSocket support
     import eventlet
     eventlet.monkey_patch()
     _ASYNC_MODE = "eventlet"
