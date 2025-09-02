@@ -1752,9 +1752,20 @@ class MonitoringDashboard:
         logger.info("-----------------------------------------------")
         self.start_monitoring()
         try:
-            self.socketio.run(
-                self.app, host=host, port=port, debug=debug, use_reloader=False, log_output=True, allow_unsafe_werkzeug=True
-            )
+            # Decide server kwargs based on whether eventlet is enabled.
+            # With eventlet enabled, Flask-SocketIO runs a production-safe eventlet server.
+            # Without eventlet, allow Werkzeug only for local development.
+            server_kwargs = {
+                "host": host,
+                "port": port,
+                "debug": debug,
+                "use_reloader": False,
+                "log_output": True,
+            }
+            if not _USE_EVENTLET:
+                server_kwargs["allow_unsafe_werkzeug"] = True
+
+            self.socketio.run(self.app, **server_kwargs)
             # If we ever return from run(), log why
             logger.warning(
                 "Flask-SocketIO server exited normally (this usually means shutdown was requested)."
