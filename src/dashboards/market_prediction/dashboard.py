@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,17 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from flask import Flask, jsonify, render_template
+
+# --- Ensure greenlet/eventlet is configured before importing network libs.
+# Default to threading to avoid monkey-patching during imports/tests.
+_WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
+if _WEB_SERVER_USE_EVENTLET:
+    import eventlet
+
+    eventlet.monkey_patch()
+    _ASYNC_MODE = "eventlet"
+else:
+    _ASYNC_MODE = "threading"
 
 # Lazy import – these modules exist inside the project
 try:
@@ -203,7 +215,19 @@ class MarketPredictionDashboard:
     # ------------------------------------------------------------------
     def run(self, host: str = "127.0.0.1", port: int = 8002, debug: bool = False):
         logger.info("MarketPredictionDashboard available at http://%s:%d", host, port)
-        self.app.run(host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+
+        # Decide server kwargs based on whether eventlet is enabled.
+        # With eventlet enabled, Flask runs a production-safe eventlet server.
+        # Without eventlet, allow Werkzeug only for local development.
+        server_kwargs = {
+            "host": host,
+            "port": port,
+            "debug": debug,
+        }
+        if not _WEB_SERVER_USE_EVENTLET:
+            server_kwargs["allow_unsafe_werkzeug"] = True
+
+        self.app.run(**server_kwargs)
 
 
 if __name__ == "__main__":
