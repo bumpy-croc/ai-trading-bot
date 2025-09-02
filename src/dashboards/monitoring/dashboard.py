@@ -8,51 +8,58 @@ positions, risk metrics, and system health.
 
 from __future__ import annotations
 
+# --- Gevent monkey patching is now handled early in CLI entry point
+# This detects the async mode based on whether gevent was already patched
+import os
+import sys
+
+_WEB_SERVER_USE_GEVENT = os.environ.get("WEB_SERVER_USE_GEVENT", "0") == "1"
+
+# Detect if gevent monkey patching was already applied
+if _WEB_SERVER_USE_GEVENT and 'gevent' in sys.modules:
+    _ASYNC_MODE = "gevent"
+elif _WEB_SERVER_USE_GEVENT:
+    # Fallback: apply monkey patching if not done yet (for standalone imports)
+    import gevent.monkey
+    gevent.monkey.patch_all()
+    _ASYNC_MODE = "gevent"
+else:
+    _ASYNC_MODE = "threading"
+
+# --- ALL imports must happen AFTER monkey patching to avoid threading issues ---
+
+# Standard library imports
 import argparse
 import logging
-import os
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, TypedDict
 
-# --- Ensure greenlet/eventlet is configured before importing network libs.
-# Default to threading to avoid monkey-patching during imports/tests.
-_WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
-if _WEB_SERVER_USE_EVENTLET:
-    import eventlet
-
-    eventlet.monkey_patch()
-    _ASYNC_MODE = "eventlet"
-else:
-    _ASYNC_MODE = "threading"
-
+# Third-party imports
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 
 # Ensure absolute imports resolve when running as a module or script
-try:
-    from src.performance.metrics import max_drawdown as perf_max_drawdown
-    from src.performance.metrics import sharpe as perf_sharpe
-except ModuleNotFoundError:
-    # Add project root and src to sys.path dynamically as a last resort
-    import sys
+# This must happen after monkey patching to avoid RLock issues
+from src.utils.project_paths import get_project_root
 
-    from src.utils.project_paths import get_project_root
-    project_root = get_project_root()
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-    src_path = project_root / "src"
-    if str(src_path) not in sys.path:
-        sys.path.insert(1, str(src_path))
-    from src.performance.metrics import max_drawdown as perf_max_drawdown
-    from src.performance.metrics import sharpe as perf_sharpe
+project_root = get_project_root()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+src_path = project_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(1, str(src_path))
 
+# Project imports - all must happen after monkey patching
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.database.manager import DatabaseManager
+from src.performance.metrics import max_drawdown as perf_max_drawdown
+from src.performance.metrics import sharpe as perf_sharpe
 
 # Configure logging via centralized config (set by entry points)
 logger = logging.getLogger(__name__)
@@ -106,7 +113,11 @@ class MonitoringDashboard:
     """
 
     def __init__(self, db_url: str | None = None, update_interval: int = 3600):
-        self.app = Flask(__name__, template_folder="templates", static_folder="static")
+        # Calculate absolute paths for templates and static files
+        templates_path = src_path / "dashboards" / "monitoring" / "templates"
+        static_path = src_path / "dashboards" / "monitoring" / "static"
+
+        self.app = Flask(__name__, template_folder=str(templates_path), static_folder=str(static_path))
         from src.utils.secrets import get_secret_key
 
         self.app.config["SECRET_KEY"] = get_secret_key()
@@ -1752,9 +1763,9 @@ class MonitoringDashboard:
         logger.info("-----------------------------------------------")
         self.start_monitoring()
         try:
-            # Decide server kwargs based on whether eventlet is enabled.
-            # With eventlet enabled, Flask-SocketIO runs a production-safe eventlet server.
-            # Without eventlet, allow Werkzeug only for local development.
+            # Decide server kwargs based on whether gevent is enabled.
+            # With gevent enabled, Flask-SocketIO runs a production-safe server.
+            # Without gevent, allow Werkzeug only for local development.
             server_kwargs = {
                 "host": host,
                 "port": port,
@@ -1762,7 +1773,7 @@ class MonitoringDashboard:
                 "use_reloader": False,
                 "log_output": True,
             }
-            if not _WEB_SERVER_USE_EVENTLET:
+            if not _WEB_SERVER_USE_GEVENT:
                 server_kwargs["allow_unsafe_werkzeug"] = True
 
             self.socketio.run(self.app, **server_kwargs)

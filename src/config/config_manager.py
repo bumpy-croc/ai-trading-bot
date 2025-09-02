@@ -4,6 +4,7 @@ Configuration management system.
 This module provides centralized configuration management.
 """
 
+import threading
 from typing import Any, Optional
 
 from .providers.base import ConfigProvider
@@ -193,6 +194,7 @@ class ConfigManager:
 
 # Global configuration instance
 _config_instance: Optional[ConfigManager] = None
+_config_lock: Optional[threading.Lock] = None
 
 
 def get_config() -> ConfigManager:
@@ -202,9 +204,19 @@ def get_config() -> ConfigManager:
     Returns:
         Global ConfigManager instance
     """
-    global _config_instance
+    global _config_instance, _config_lock
+
+    # Initialize lock if not already done (thread-safe)
+    if _config_lock is None:
+        _config_lock = threading.Lock()
+
+    # Thread-safe singleton creation
     if _config_instance is None:
-        _config_instance = ConfigManager()
+        with _config_lock:
+            # Double-check pattern to avoid race condition
+            if _config_instance is None:
+                _config_instance = ConfigManager()
+
     return _config_instance
 
 

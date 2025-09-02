@@ -9,6 +9,25 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# * Apply gevent monkey patching BEFORE any other imports if needed
+def _apply_very_early_gevent_patching() -> None:
+    """Apply gevent monkey patching at the very start, before any imports."""
+    import os
+    
+    # Check if this will be a dashboard command and gevent is requested
+    if "WEB_SERVER_USE_GEVENT" in os.environ and os.environ["WEB_SERVER_USE_GEVENT"] == "1":
+        # Check if this looks like a dashboard command
+        if len(sys.argv) >= 3 and sys.argv[1] == "dashboards" and sys.argv[2] == "run":
+            try:
+                import gevent.monkey
+                gevent.monkey.patch_all()
+                print("✅ Applied very early gevent monkey patching for dashboard command")
+            except ImportError:
+                print("⚠️ Gevent not available for very early monkey patching")
+
+# Apply gevent patching immediately if needed
+_apply_very_early_gevent_patching()
+
 from src.utils.logging_config import configure_logging
 
 
@@ -74,6 +93,9 @@ def build_parser() -> argparse.ArgumentParser:
     tests.register(subparsers)
 
     return parser
+
+
+
 
 
 def main(argv: list[str] | None = None) -> int:

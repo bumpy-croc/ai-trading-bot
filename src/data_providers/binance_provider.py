@@ -10,7 +10,8 @@ providing a single interface for all Binance operations including:
 """
 
 import logging
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import pandas as pd
@@ -88,6 +89,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         # Initialize ExchangeInterface
         if api_key and api_secret:
+            # ExchangeInterface.__init__ will call self._initialize_client()
             ExchangeInterface.__init__(self, api_key, api_secret, testnet)
         else:
             # Initialize with dummy credentials for data-only operations
@@ -96,8 +98,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.testnet = testnet
             self._client = None
 
-        # Initialize the client
-        self._initialize_client()
+        # Only initialize the client here when ExchangeInterface was NOT initialized
+        # (i.e., when running without credentials in public/data-only mode)
+        if not (api_key and api_secret):
+            self._initialize_client()
 
         if not api_key or not api_secret:
             logger.warning(
@@ -106,25 +110,55 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     def _initialize_client(self):
         """Initialize Binance client with error handling"""
+        logger.debug(f"_initialize_client called - BINANCE_AVAILABLE: {BINANCE_AVAILABLE}")
+        
         if not BINANCE_AVAILABLE:
             logger.warning("Binance library not available - using mock client")
             self._client = self._create_offline_client()
             return
 
         try:
+            logger.debug(f"Attempting to create Binance client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}")
+            
+            # Direct client creation (works well with gevent, standard environments)
             if self.api_key and self.api_secret:
+                logger.debug("Creating authenticated Binance client...")
                 self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
-                logger.info(
-                    f"Binance client initialized with credentials (testnet: {self.testnet})"
-                )
             else:
-                # Public client for data-only operations
+                logger.debug("Creating public Binance client...")
                 self._client = Client()
-                logger.info("Binance public client initialized (data-only mode)")
-        except Exception as e:
-            logger.warning(
-                f"Binance Client initialization failed ({e}). Falling back to offline stub."
+            
+            logger.info(
+                f"Binance client initialized successfully "
+                f"({'with credentials' if self.api_key and self.api_secret else 'public mode'}, "
+                f"testnet: {self.testnet})"
             )
+                
+            # Test the client with a simple operation
+            logger.debug("Testing client with server time request...")
+            test_response = self._client.get_server_time()
+            logger.debug(f"Server time test successful: {test_response}")
+            
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+
+            # Log detailed error information (never log credentials)
+            logger.error(
+                f"Binance Client initialization failed with {error_type}: {error_msg}. "
+                f"Credentials available: {bool(self.api_key and self.api_secret)}, "
+                f"Testnet mode: {self.testnet}. "
+                f"Falling back to offline stub."
+            )
+
+            # Log additional context if it's a recursion error
+            if "recursion" in error_msg.lower() or "maximum recursion" in error_msg.lower():
+                logger.error(
+                    "Recursion error detected during Binance client initialization. "
+                    "This may indicate a circular dependency or infinite loop in the initialization process. "
+                    "Check for circular imports or dependencies in the configuration system."
+                )
+
             self._client = self._create_offline_client()
 
     def _create_offline_client(self):
@@ -207,11 +241,22 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             if len(df) > 0:
                 logger.info(f"Fetched {len(df)} candles from {df.index.min()} to {df.index.max()}")
             else:
-                logger.info(f"Fetched 0 candles from {start} to {end}")
+                # Check if this is expected (future dates) or an error
+                current_time = datetime.now()
+                if end > current_time:
+                    logger.info(f"No data available for future dates: requested {start} to {end}, current time is {current_time}")
+                elif end > current_time - timedelta(hours=1):
+                    logger.info(f"No recent data available yet: requested {start} to {end}, current time is {current_time}")
+                else:
+                    logger.warning(f"No data returned for {symbol} {timeframe} from {start} to {end}")
             return df
 
         except Exception as e:
-            logger.error(f"Error fetching historical data: {str(e)}")
+            error_type = type(e).__name__
+            logger.error(
+                f"Error fetching historical data for {symbol} {timeframe} "
+                f"from {start} to {end}: {error_type}: {str(e)}"
+            )
             raise
 
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
@@ -225,7 +270,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return df
 
         except Exception as e:
-            logger.error(f"Error fetching live data: {str(e)}")
+            error_type = type(e).__name__
+            logger.error(
+                f"Error fetching live data for {symbol} {timeframe} "
+                f"(limit: {limit}): {error_type}: {str(e)}"
+            )
             raise
 
     def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -250,7 +299,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return self.data
 
         except Exception as e:
-            logger.error(f"Error updating live data: {str(e)}")
+            error_type = type(e).__name__
+            logger.error(
+                f"Error updating live data for {symbol} {timeframe}: {error_type}: {str(e)}"
+            )
             raise
 
     def get_current_price(self, symbol: str) -> float:
@@ -259,7 +311,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             ticker = self._client.get_symbol_ticker(symbol=symbol)
             return float(ticker["price"])
         except Exception as e:
-            logger.error(f"Error fetching current price: {e}")
+            error_type = type(e).__name__
+            logger.error(
+                f"Error fetching current price for {symbol}: {error_type}: {str(e)}"
+            )
             return 0.0
 
     # ========================================

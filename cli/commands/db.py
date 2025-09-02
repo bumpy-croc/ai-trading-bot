@@ -413,6 +413,127 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
         except Exception:
             pass
 
+
+def _verify_enum_types(db_url: str) -> list[str]:
+    """Verify that critical enum types exist and have required values.
+    
+    Returns:
+        List of issues found (empty list if all checks pass)
+    """
+    issues = []
+    
+    engine = create_engine(
+        db_url,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:enum-verify"},
+    )
+    
+    try:
+        with engine.connect() as conn:
+            # * Critical enum verification - orderstatus
+            print("🔍 Checking orderstatus enum...")
+            
+            # Check if orderstatus enum exists
+            result = conn.execute(text("""
+                SELECT t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder) as labels
+                FROM pg_type t
+                JOIN pg_enum e ON t.oid = e.enumtypid
+                WHERE t.typname = 'orderstatus'
+                GROUP BY t.typname
+            """))
+            
+            enum_info = result.fetchall()
+            if not enum_info:
+                issues.append("orderstatus enum does not exist")
+                return issues
+            
+            enum_name, labels = enum_info[0]
+            required_values = ['PENDING', 'OPEN', 'FILLED', 'CANCELLED', 'FAILED']
+            missing_values = [val for val in required_values if val not in labels]
+            
+            if missing_values:
+                issues.append(f"orderstatus enum missing required values: {missing_values}")
+                print(f"  ❌ Missing values: {missing_values}")
+                print(f"  📋 Current values: {list(labels)}")
+                print(f"  🔧 Fix: ALTER TYPE orderstatus ADD VALUE 'VALUE_NAME';")
+            else:
+                print(f"  ✅ All required values present: {list(labels)}")
+            
+            # Check which enum the positions table actually uses
+            result = conn.execute(text("""
+                SELECT column_name, udt_name
+                FROM information_schema.columns 
+                WHERE table_name = 'positions' AND column_name = 'status'
+            """))
+            
+            column_info = result.fetchall()
+            if column_info:
+                actual_enum = column_info[0][1]
+                if actual_enum != 'orderstatus':
+                    issues.append(f"positions.status uses '{actual_enum}' instead of 'orderstatus'")
+                    print(f"  ❌ positions.status uses wrong enum type: {actual_enum}")
+                else:
+                    print(f"  ✅ positions.status correctly uses orderstatus enum")
+            else:
+                issues.append("positions.status column not found")
+            
+            # Test enum value acceptance
+            print("🧪 Testing enum value acceptance...")
+            test_values = ['PENDING', 'OPEN', 'FILLED', 'CANCELLED', 'FAILED']
+            
+            for test_val in test_values:
+                try:
+                    # Use string formatting for enum type casting (safe with known enum values)
+                    result = conn.execute(text(f"SELECT '{test_val}'::orderstatus as test"))
+                    converted = result.fetchone()[0]
+                    print(f"  ✅ '{test_val}' -> {converted}")
+                except Exception as e:
+                    error_msg = str(e)
+                    if "invalid input value for enum orderstatus" in error_msg:
+                        issues.append(f"orderstatus enum rejects '{test_val}' value")
+                        print(f"  ❌ '{test_val}' -> REJECTED: {error_msg[:100]}...")
+                        if test_val == 'OPEN':
+                            print(f"  🎯 CRITICAL: This explains the production error!")
+                    else:
+                        print(f"  ⚠️  '{test_val}' -> Unexpected error: {error_msg[:100]}...")
+            
+            # Check for conflicting enum types (use separate connection to avoid transaction issues)
+            print("🔍 Checking for conflicting enum types...")
+            try:
+                with engine.connect() as conn2:
+                    result = conn2.execute(text("""
+                        SELECT t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder) as labels
+                        FROM pg_type t
+                        JOIN pg_enum e ON t.oid = e.enumtypid
+                        WHERE t.typname LIKE '%orderstatus%'
+                        GROUP BY t.typname
+                        ORDER BY t.typname
+                    """))
+                    
+                    all_enum_types = result.fetchall()
+                    if len(all_enum_types) > 1:
+                        print(f"  ⚠️  Multiple orderstatus-related enum types found:")
+                        for enum_name, enum_labels in all_enum_types:
+                            print(f"    - {enum_name}: {list(enum_labels)}")
+                            if enum_name != 'orderstatus' and 'OPEN' not in enum_labels:
+                                issues.append(f"Conflicting enum '{enum_name}' missing OPEN value")
+                    else:
+                        print(f"  ✅ Only one orderstatus enum type found")
+            except Exception as e:
+                print(f"  ⚠️  Could not check for conflicting enums: {e}")
+                
+    except Exception as e:
+        issues.append(f"Enum verification failed: {e}")
+        print(f"  ❌ Enum verification error: {e}")
+    finally:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
+    
+    return issues
+
+
 def _migrate(ns: argparse.Namespace) -> int:
     """Run database migrations"""
     
@@ -573,6 +694,18 @@ def _verify(ns: argparse.Namespace) -> int:
         verify = _verify_schema(db_url)
         if verify.get("ok"):
             print("✅ Schema matches SQLAlchemy models.")
+            
+            # Add enum verification for successful schema checks too
+            print("\nEnum Type Verification")
+            print("----------------------")
+            enum_issues = _verify_enum_types(db_url)
+            if enum_issues:
+                print("❌ Enum type issues detected:")
+                for issue in enum_issues:
+                    print(f"  • {issue}")
+                return 1
+            else:
+                print("✅ Enum types verified successfully.")
             return 0
         else:
             print("❌ Schema deviations detected:")
@@ -622,6 +755,17 @@ def _verify(ns: argparse.Namespace) -> int:
                     traceback.print_exc()
                     return 1
             else:
+                # Add enum verification before returning failure
+                print("\nEnum Type Verification")
+                print("----------------------")
+                enum_issues = _verify_enum_types(db_url)
+                if enum_issues:
+                    print("❌ Enum type issues detected:")
+                    for issue in enum_issues:
+                        print(f"  • {issue}")
+                    return 1
+                else:
+                    print("✅ Enum types verified successfully.")
                 return 1
     except Exception as e:
         print(f"❌ Database verification failed: {e}")
