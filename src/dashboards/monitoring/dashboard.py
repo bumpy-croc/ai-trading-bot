@@ -19,8 +19,8 @@ from typing import Any, TypedDict
 
 # --- Ensure greenlet/eventlet is configured before importing network libs.
 # Default to threading to avoid monkey-patching during imports/tests.
-_USE_EVENTLET = os.environ.get("USE_EVENTLET", "0") == "1"
-if _USE_EVENTLET:
+_WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
+if _WEB_SERVER_USE_EVENTLET:
     import eventlet
 
     eventlet.monkey_patch()
@@ -1762,7 +1762,7 @@ class MonitoringDashboard:
                 "use_reloader": False,
                 "log_output": True,
             }
-            if not _USE_EVENTLET:
+            if not _WEB_SERVER_USE_EVENTLET:
                 server_kwargs["allow_unsafe_werkzeug"] = True
 
             self.socketio.run(self.app, **server_kwargs)
