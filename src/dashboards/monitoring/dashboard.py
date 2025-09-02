@@ -8,16 +8,19 @@ positions, risk metrics, and system health.
 
 from __future__ import annotations
 
-# --- CRITICAL: Gevent monkey patching MUST happen BEFORE ANY other imports
-# This prevents "RLock(s) were not greened" errors by ensuring all threading
-# primitives are patched before any modules that use them are imported
+# --- Gevent monkey patching is now handled early in CLI entry point
+# This detects the async mode based on whether gevent was already patched
 import os
+import sys
 
 _WEB_SERVER_USE_GEVENT = os.environ.get("WEB_SERVER_USE_GEVENT", "0") == "1"
 
-if _WEB_SERVER_USE_GEVENT:
+# Detect if gevent monkey patching was already applied
+if _WEB_SERVER_USE_GEVENT and 'gevent' in sys.modules:
+    _ASYNC_MODE = "gevent"
+elif _WEB_SERVER_USE_GEVENT:
+    # Fallback: apply monkey patching if not done yet (for standalone imports)
     import gevent.monkey
-    # Full monkey patching required for Flask-SocketIO WebSocket support
     gevent.monkey.patch_all()
     _ASYNC_MODE = "gevent"
 else:

@@ -38,4 +38,4 @@ scripts/start_dashboard.py  # Launcher script
 - Database: PostgreSQL only
 - Uses WebSocket (Flask-SocketIO) for live updates
 - Responsive UI for desktop and mobile
-- Production: Set `WEB_SERVER_USE_EVENTLET=1` for production-safe server (Railway deployment does this automatically)
+- Production: Set `WEB_SERVER_USE_GEVENT=1` for production-safe server (Railway deployment does this automatically)
