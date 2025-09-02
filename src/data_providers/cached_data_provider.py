@@ -245,10 +245,17 @@ class CachedDataProvider(DataProvider):
                 # Return only the requested range
                 if hasattr(year_data.index, "to_pydatetime"):
                     mask = (year_data.index >= year_start) & (year_data.index <= year_end)
-                    return year_data[mask]
+                    filtered_data = year_data[mask]
+                    logger.info(f"Returning {len(filtered_data)} candles for {symbol} {timeframe} in {year} (range: {year_start} to {year_end})")
+                    return filtered_data
                 return year_data
             else:
-                logger.warning(f"No data returned for {symbol} {timeframe} in {year}")
+                # Check if this is expected (future data) or an actual error
+                current_time = datetime.now()
+                if fetch_end > current_time - timedelta(hours=1):  # Within last hour
+                    logger.info(f"No recent data available for {symbol} {timeframe} in {year} (fetch_end: {fetch_end}, current_time: {current_time})")
+                else:
+                    logger.warning(f"No data returned for {symbol} {timeframe} in {year} (fetch range: {fetch_start} to {fetch_end})")
                 return None
 
         except Exception as e:

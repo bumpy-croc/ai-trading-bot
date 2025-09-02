@@ -10,7 +10,7 @@ providing a single interface for all Binance operations including:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import pandas as pd
@@ -122,9 +122,25 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 self._client = Client()
                 logger.info("Binance public client initialized (data-only mode)")
         except Exception as e:
-            logger.warning(
-                f"Binance Client initialization failed ({e}). Falling back to offline stub."
+            error_type = type(e).__name__
+            error_msg = str(e)
+
+            # Log detailed error information (never log credentials)
+            logger.error(
+                f"Binance Client initialization failed with {error_type}: {error_msg}. "
+                f"Credentials available: {bool(self.api_key and self.api_secret)}, "
+                f"Testnet mode: {self.testnet}. "
+                f"Falling back to offline stub."
             )
+
+            # Log additional context if it's a recursion error
+            if "recursion" in error_msg.lower() or "maximum recursion" in error_msg.lower():
+                logger.error(
+                    "Recursion error detected during Binance client initialization. "
+                    "This may indicate a circular dependency or infinite loop in the initialization process. "
+                    "Check for circular imports or dependencies in the configuration system."
+                )
+
             self._client = self._create_offline_client()
 
     def _create_offline_client(self):
@@ -207,11 +223,22 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             if len(df) > 0:
                 logger.info(f"Fetched {len(df)} candles from {df.index.min()} to {df.index.max()}")
             else:
-                logger.info(f"Fetched 0 candles from {start} to {end}")
+                # Check if this is expected (future dates) or an error
+                current_time = datetime.now()
+                if end > current_time:
+                    logger.info(f"No data available for future dates: requested {start} to {end}, current time is {current_time}")
+                elif end > current_time - timedelta(hours=1):
+                    logger.info(f"No recent data available yet: requested {start} to {end}, current time is {current_time}")
+                else:
+                    logger.warning(f"No data returned for {symbol} {timeframe} from {start} to {end}")
             return df
 
         except Exception as e:
-            logger.error(f"Error fetching historical data: {str(e)}")
+            error_type = type(e).__name__
+            logger.error(
+                f"Error fetching historical data for {symbol} {timeframe} "
+                f"from {start} to {end}: {error_type}: {str(e)}"
+            )
             raise
 
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
@@ -225,7 +252,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return df
 
         except Exception as e:
-            logger.error(f"Error fetching live data: {str(e)}")
+            error_type = type(e).__name__
+            logger.error(
+                f"Error fetching live data for {symbol} {timeframe} "
+                f"(limit: {limit}): {error_type}: {str(e)}"
+            )
             raise
 
     def update_live_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -250,7 +281,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return self.data
 
         except Exception as e:
-            logger.error(f"Error updating live data: {str(e)}")
+            error_type = type(e).__name__
+            logger.error(
+                f"Error updating live data for {symbol} {timeframe}: {error_type}: {str(e)}"
+            )
             raise
 
     def get_current_price(self, symbol: str) -> float:
@@ -259,7 +293,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             ticker = self._client.get_symbol_ticker(symbol=symbol)
             return float(ticker["price"])
         except Exception as e:
-            logger.error(f"Error fetching current price: {e}")
+            error_type = type(e).__name__
+            logger.error(
+                f"Error fetching current price for {symbol}: {error_type}: {str(e)}"
+            )
             return 0.0
 
     # ========================================
