@@ -875,7 +875,7 @@ class DatabaseManager:
         with self.get_session() as session:
             orders = (
                 session.query(Position)
-                .filter(Position.session_id == session_id, Position.status == OrderStatus.PENDING)
+                .filter(Position.session_id == session_id, Position.status == "PENDING")
                 .all()
             )
 
@@ -1100,7 +1100,8 @@ class DatabaseManager:
     def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions."""
         with self.get_session() as session:
-            query = session.query(Position).filter(Position.status == OrderStatus.OPEN)
+            # Use string comparison for robustness against enum issues
+            query = session.query(Position).filter(Position.status == "OPEN")
 
             if session_id:
                 query = query.filter(Position.session_id == session_id)
