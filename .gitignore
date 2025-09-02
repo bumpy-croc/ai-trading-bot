@@ -6,6 +6,7 @@ __pycache__
 logs/
 .cursor/mcp.json
 bandit-report.json
+backups/
 
 .DS_Store
 
