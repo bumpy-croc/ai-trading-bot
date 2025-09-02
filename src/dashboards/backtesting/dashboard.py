@@ -5,24 +5,26 @@
 #   python -m dashboards.backtesting.dashboard
 from __future__ import annotations
 
-import json
-import logging
+# --- Ensure greenlet/eventlet is configured BEFORE any other imports.
+# This is critical because eventlet.monkey_patch() must be called before
+# importing any network-related modules like Flask, requests, etc.
 import os
-from pathlib import Path
-from typing import Any
 
-from flask import Flask, jsonify, render_template, request
-
-# --- Ensure greenlet/eventlet is configured before importing network libs.
-# Default to threading to avoid monkey-patching during imports/tests.
 _WEB_SERVER_USE_EVENTLET = os.environ.get("WEB_SERVER_USE_EVENTLET", "0") == "1"
 if _WEB_SERVER_USE_EVENTLET:
     import eventlet
-
     eventlet.monkey_patch()
     _ASYNC_MODE = "eventlet"
 else:
     _ASYNC_MODE = "threading"
+
+# Now we can safely import other modules after monkey patching
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from flask import Flask, jsonify, render_template, request
 
 logger = logging.getLogger(__name__)
 
