@@ -3,12 +3,9 @@ Unit tests for Railway log analyzer.
 """
 
 import json
-from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
-import pytest
-
-from src.monitoring.log_analyzer import LogEntry, RailwayLogAnalyzer
+from src.monitoring.log_analyzer import RailwayLogAnalyzer
 
 
 class TestRailwayLogAnalyzer:
@@ -21,7 +18,7 @@ class TestRailwayLogAnalyzer:
     def test_parse_json_log_line(self):
         """Test parsing structured JSON log lines."""
         json_log = json.dumps({
-            "timestamp": "2025-01-09T12:00:00Z",
+            "timestamp": "2025-09-02T12:00:00Z",
             "level": "ERROR", 
             "logger": "atb.trading_engine",
             "message": "API rate limit exceeded",
@@ -38,7 +35,7 @@ class TestRailwayLogAnalyzer:
 
     def test_parse_plain_text_log_line(self):
         """Test parsing plain text log lines."""
-        plain_log = "2025-01-09 12:00:00 ERROR atb.trading_engine: Connection timeout to exchange"
+        plain_log = "2025-09-02 12:00:00 ERROR atb.trading_engine: Connection timeout to exchange"
         
         entry = self.analyzer.parse_log_line(plain_log)
         
@@ -50,9 +47,9 @@ class TestRailwayLogAnalyzer:
     def test_detect_api_rate_limit_pattern(self):
         """Test detection of API rate limit errors."""
         log_content = "\n".join([
-            '{"timestamp": "2025-01-09T12:00:00Z", "level": "ERROR", "message": "API rate limit exceeded"}',
-            '{"timestamp": "2025-01-09T12:01:00Z", "level": "ERROR", "message": "429 Too Many Requests"}',
-            '{"timestamp": "2025-01-09T12:02:00Z", "level": "WARNING", "message": "Rate limit approaching"}'
+            '{"timestamp": "2025-09-02T12:00:00Z", "level": "ERROR", "message": "API rate limit exceeded"}',
+            '{"timestamp": "2025-09-02T12:01:00Z", "level": "ERROR", "message": "429 Too Many Requests"}',
+            '{"timestamp": "2025-09-02T12:02:00Z", "level": "WARNING", "message": "Rate limit approaching"}'
         ])
         
         report = self.analyzer.analyze_logs(log_content, 24)
@@ -68,8 +65,8 @@ class TestRailwayLogAnalyzer:
     def test_detect_database_connection_pattern(self):
         """Test detection of database connection errors."""
         log_content = "\n".join([
-            '{"timestamp": "2025-01-09T12:00:00Z", "level": "CRITICAL", "message": "Database connection refused"}',
-            '{"timestamp": "2025-01-09T12:01:00Z", "level": "ERROR", "message": "psycopg2 connection timeout"}'
+            '{"timestamp": "2025-09-02T12:00:00Z", "level": "CRITICAL", "message": "Database connection refused"}',
+            '{"timestamp": "2025-09-02T12:01:00Z", "level": "ERROR", "message": "psycopg2 connection timeout"}'
         ])
         
         report = self.analyzer.analyze_logs(log_content, 24)
@@ -85,12 +82,12 @@ class TestRailwayLogAnalyzer:
     def test_performance_issue_detection(self):
         """Test detection of performance issues."""
         log_content = "\n".join([
-            '{"timestamp": "2025-01-09T12:00:00Z", "level": "WARNING", "message": "Memory usage high"}',
-            '{"timestamp": "2025-01-09T12:01:00Z", "level": "WARNING", "message": "Memory usage critical"}',
-            '{"timestamp": "2025-01-09T12:02:00Z", "level": "WARNING", "message": "High memory consumption detected"}',
-            '{"timestamp": "2025-01-09T12:03:00Z", "level": "WARNING", "message": "Memory threshold exceeded"}',
-            '{"timestamp": "2025-01-09T12:04:00Z", "level": "WARNING", "message": "Memory usage alert"}',
-            '{"timestamp": "2025-01-09T12:05:00Z", "level": "WARNING", "message": "Memory pressure detected"}'
+            '{"timestamp": "2025-09-02T12:00:00Z", "level": "WARNING", "message": "Memory usage high"}',
+            '{"timestamp": "2025-09-02T12:01:00Z", "level": "WARNING", "message": "Memory usage critical"}',
+            '{"timestamp": "2025-09-02T12:02:00Z", "level": "WARNING", "message": "High memory consumption detected"}',
+            '{"timestamp": "2025-09-02T12:03:00Z", "level": "WARNING", "message": "Memory threshold exceeded"}',
+            '{"timestamp": "2025-09-02T12:04:00Z", "level": "WARNING", "message": "Memory usage alert"}',
+            '{"timestamp": "2025-09-02T12:05:00Z", "level": "WARNING", "message": "Memory pressure detected"}'
         ])
         
         report = self.analyzer.analyze_logs(log_content, 24)
@@ -102,11 +99,11 @@ class TestRailwayLogAnalyzer:
     def test_generate_recommendations(self):
         """Test recommendation generation."""
         log_content = "\n".join([
-            '{"timestamp": "2025-01-09T12:00:00Z", "level": "ERROR", "message": "API rate limit exceeded"}',
-            '{"timestamp": "2025-01-09T12:01:00Z", "level": "ERROR", "message": "Rate limit hit again"}',
-            '{"timestamp": "2025-01-09T12:02:00Z", "level": "ERROR", "message": "Too many requests"}',
-            '{"timestamp": "2025-01-09T12:03:00Z", "level": "ERROR", "message": "429 error received"}',
-            '{"timestamp": "2025-01-09T12:04:00Z", "level": "ERROR", "message": "Rate limiting active"}'
+            '{"timestamp": "2025-09-02T12:00:00Z", "level": "ERROR", "message": "API rate limit exceeded"}',
+            '{"timestamp": "2025-09-02T12:01:00Z", "level": "ERROR", "message": "Rate limit hit again"}',
+            '{"timestamp": "2025-09-02T12:02:00Z", "level": "ERROR", "message": "Too many requests"}',
+            '{"timestamp": "2025-09-02T12:03:00Z", "level": "ERROR", "message": "429 error received"}',
+            '{"timestamp": "2025-09-02T12:04:00Z", "level": "ERROR", "message": "Rate limiting active"}'
         ])
         
         report = self.analyzer.analyze_logs(log_content, 24)
@@ -127,7 +124,7 @@ class TestRailwayLogAnalyzer:
 
     def test_markdown_report_generation(self):
         """Test markdown report generation."""
-        log_content = '{"timestamp": "2025-01-09T12:00:00Z", "level": "ERROR", "message": "Test error"}'
+        log_content = '{"timestamp": "2025-09-02T12:00:00Z", "level": "ERROR", "message": "Test error"}'
         
         report = self.analyzer.analyze_logs(log_content, 24)
         markdown = self.analyzer.generate_report_markdown(report)
@@ -146,7 +143,7 @@ class TestRailwayLogAnalyzer:
         
         analyzer = RailwayLogAnalyzer(mock_db_instance)
         
-        log_content = '{"timestamp": "2025-01-09T12:00:00Z", "level": "ERROR", "message": "Test error"}'
+        log_content = '{"timestamp": "2025-09-02T12:00:00Z", "level": "ERROR", "message": "Test error"}'
         report = analyzer.analyze_logs(log_content, 24)
         
         event_id = analyzer.save_analysis_to_db(report)

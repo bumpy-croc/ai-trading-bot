@@ -12,7 +12,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.database.manager import DatabaseManager
@@ -88,7 +88,7 @@ class RailwayLogAnalyzer:
                 "auto_fixable": True,
             },
             "database_connection": {
-                "pattern": r"(?i)database.*(connection|timeout|refused)|psycopg2.*connection",
+                "pattern": r"(?i)database.*(connection|timeout|refused)|psycopg2.*(connection|connect|operational)",
                 "severity": "critical",
                 "fix_suggestion": "Check database connection pool settings and health",
                 "auto_fixable": False,
@@ -175,7 +175,7 @@ class RailwayLogAnalyzer:
                 else:
                     # * Fallback: treat as unstructured message
                     return LogEntry(
-                        timestamp=datetime.now(),
+                        timestamp=datetime.now(timezone.utc),
                         level="INFO",
                         logger_name="unstructured",
                         message=line
@@ -187,24 +187,38 @@ class RailwayLogAnalyzer:
 
     def _parse_timestamp(self, timestamp_str: str) -> datetime:
         """Parse timestamp with multiple format support."""
-        formats = [
+        # * Timezone-aware formats
+        timezone_formats = [
             "%Y-%m-%dT%H:%M:%S.%fZ",
             "%Y-%m-%dT%H:%M:%SZ", 
-            "%Y-%m-%d %H:%M:%S.%f",
-            "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%dT%H:%M:%S.%f%z",
             "%Y-%m-%dT%H:%M:%S%z",
         ]
         
-        for fmt in formats:
+        # * Timezone-naive formats (assume UTC)
+        naive_formats = [
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+        ]
+        
+        # * Try timezone-aware formats first
+        for fmt in timezone_formats:
             try:
                 return datetime.strptime(timestamp_str, fmt)
+            except ValueError:
+                continue
+        
+        # * Try naive formats and add UTC timezone
+        for fmt in naive_formats:
+            try:
+                dt = datetime.strptime(timestamp_str, fmt)
+                return dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
                 
         # * Fallback to current time if parsing fails
         logger.warning(f"Could not parse timestamp: {timestamp_str}")
-        return datetime.now()
+        return datetime.now(timezone.utc)
 
     def analyze_logs(self, log_content: str, period_hours: int = 24) -> LogAnalysisReport:
         """
@@ -231,7 +245,7 @@ class RailwayLogAnalyzer:
             return self._create_empty_report()
             
         # * Filter entries within the analysis period
-        cutoff_time = datetime.now() - timedelta(hours=period_hours)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=period_hours)
         recent_entries = [e for e in log_entries if e.timestamp >= cutoff_time]
         
         # * Categorize by severity
@@ -312,7 +326,7 @@ class RailwayLogAnalyzer:
         issues = []
         
         # * Check for high memory usage warnings
-        memory_warnings = [e for e in log_entries if re.search(r"memory.*high|memory.*usage", e.message, re.IGNORECASE)]
+        memory_warnings = [e for e in log_entries if re.search(r"memory.*(high|usage|critical|consumption|threshold|alert|pressure)", e.message, re.IGNORECASE)]
         if len(memory_warnings) > 5:
             issues.append(f"High memory usage detected ({len(memory_warnings)} warnings)")
         

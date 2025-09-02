@@ -2,9 +2,7 @@
 Integration tests for Railway log analysis system.
 """
 
-import json
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -22,11 +20,11 @@ class TestRailwayLogSystem:
         """Test the complete log analysis pipeline with mock data."""
         # * Create sample log content
         sample_logs = "\n".join([
-            '{"timestamp": "2025-01-09T12:00:00Z", "level": "ERROR", "logger": "atb.trading", "message": "API rate limit exceeded", "component": "binance_provider"}',
-            '{"timestamp": "2025-01-09T12:01:00Z", "level": "WARNING", "logger": "atb.risk", "message": "High volatility detected", "component": "risk_manager"}',
-            '{"timestamp": "2025-01-09T12:02:00Z", "level": "ERROR", "logger": "atb.database", "message": "Database connection timeout", "component": "db_manager"}',
-            '{"timestamp": "2025-01-09T12:03:00Z", "level": "INFO", "logger": "atb.strategy", "message": "Signal generated", "component": "ml_basic"}',
-            '{"timestamp": "2025-01-09T12:04:00Z", "level": "CRITICAL", "logger": "atb.trading", "message": "Memory usage critical", "component": "trading_engine"}'
+            '{"timestamp": "2025-09-02T12:00:00Z", "level": "ERROR", "logger": "atb.trading", "message": "API rate limit exceeded", "component": "binance_provider"}',
+            '{"timestamp": "2025-09-02T12:01:00Z", "level": "WARNING", "logger": "atb.risk", "message": "High volatility detected", "component": "risk_manager"}',
+            '{"timestamp": "2025-09-02T12:02:00Z", "level": "ERROR", "logger": "atb.database", "message": "Database connection timeout", "component": "db_manager"}',
+            '{"timestamp": "2025-09-02T12:03:00Z", "level": "INFO", "logger": "atb.strategy", "message": "Signal generated", "component": "ml_basic"}',
+            '{"timestamp": "2025-09-02T12:04:00Z", "level": "CRITICAL", "logger": "atb.trading", "message": "Memory usage critical", "component": "trading_engine"}'
         ])
         
         # * Analyze logs
@@ -55,7 +53,7 @@ class TestRailwayLogSystem:
         """Test Railway log fetcher with mocked subprocess calls."""
         # * Mock successful Railway CLI response
         mock_subprocess.return_value.returncode = 0
-        mock_subprocess.return_value.stdout = "2025-01-09 12:00:00 INFO: Test log entry\n"
+        mock_subprocess.return_value.stdout = "2025-09-02 12:00:00 INFO: Test log entry\n"
         mock_subprocess.return_value.stderr = ""
         
         # * Mock environment variables
@@ -68,7 +66,7 @@ class TestRailwayLogSystem:
             # * Test log fetching
             log_content = fetcher.fetch_logs(hours=1, environment="staging")
             
-            assert log_content == "2025-01-09 12:00:00 INFO: Test log entry\n"
+            assert log_content == "2025-09-02 12:00:00 INFO: Test log entry\n"
             
             # * Verify Railway CLI was called correctly
             mock_subprocess.assert_called_once()
@@ -82,19 +80,19 @@ class TestRailwayLogSystem:
         """Test accuracy of error pattern detection with realistic log data."""
         # * Create realistic log scenarios
         rate_limit_logs = [
-            '{"timestamp": "2025-01-09T12:00:00Z", "level": "ERROR", "message": "binance.exceptions.ClientError: APIError(code=-1003): Too many requests"}',
-            '{"timestamp": "2025-01-09T12:01:00Z", "level": "ERROR", "message": "Rate limit exceeded, waiting 60 seconds"}',
-            '{"timestamp": "2025-01-09T12:02:00Z", "level": "WARNING", "message": "HTTP 429 received from API endpoint"}'
+            '{"timestamp": "2025-09-02T12:00:00Z", "level": "ERROR", "message": "binance.exceptions.ClientError: APIError(code=-1003): Too many requests"}',
+            '{"timestamp": "2025-09-02T12:01:00Z", "level": "ERROR", "message": "Rate limit exceeded, waiting 60 seconds"}',
+            '{"timestamp": "2025-09-02T12:02:00Z", "level": "WARNING", "message": "HTTP 429 received from API endpoint"}'
         ]
         
         db_connection_logs = [
-            '{"timestamp": "2025-01-09T12:05:00Z", "level": "CRITICAL", "message": "psycopg2.OperationalError: could not connect to server"}',
-            '{"timestamp": "2025-01-09T12:06:00Z", "level": "ERROR", "message": "Database connection pool exhausted"}'
+            '{"timestamp": "2025-09-02T12:05:00Z", "level": "CRITICAL", "message": "psycopg2.OperationalError: could not connect to server"}',
+            '{"timestamp": "2025-09-02T12:06:00Z", "level": "ERROR", "message": "Database connection pool exhausted"}'
         ]
         
         json_parsing_logs = [
-            '{"timestamp": "2025-01-09T12:10:00Z", "level": "ERROR", "message": "json.decoder.JSONDecodeError: Expecting value: line 1 column 1"}',
-            '{"timestamp": "2025-01-09T12:11:00Z", "level": "ERROR", "message": "Invalid JSON response from API endpoint"}'
+            '{"timestamp": "2025-09-02T12:10:00Z", "level": "ERROR", "message": "json.decoder.JSONDecodeError: Expecting value: line 1 column 1"}',
+            '{"timestamp": "2025-09-02T12:11:00Z", "level": "ERROR", "message": "Invalid JSON response from API endpoint"}'
         ]
         
         all_logs = "\n".join(rate_limit_logs + db_connection_logs + json_parsing_logs)
@@ -121,7 +119,7 @@ class TestRailwayLogSystem:
 
     def test_report_persistence_and_retrieval(self):
         """Test saving and retrieving analysis reports."""
-        sample_logs = '{"timestamp": "2025-01-09T12:00:00Z", "level": "ERROR", "message": "Test error for persistence"}'
+        sample_logs = '{"timestamp": "2025-09-02T12:00:00Z", "level": "ERROR", "message": "Test error for persistence"}'
         
         # * Create analyzer with mock database
         mock_db = Mock()
@@ -154,9 +152,9 @@ class TestRailwayLogSystem:
     def test_markdown_report_format_compliance(self):
         """Test that generated markdown reports follow expected format."""
         sample_logs = "\n".join([
-            '{"timestamp": "2025-01-09T12:00:00Z", "level": "ERROR", "message": "API rate limit exceeded"}',
-            '{"timestamp": "2025-01-09T12:01:00Z", "level": "WARNING", "message": "Memory usage high"}',
-            '{"timestamp": "2025-01-09T12:02:00Z", "level": "INFO", "message": "Normal operation"}'
+            '{"timestamp": "2025-09-02T12:00:00Z", "level": "ERROR", "message": "API rate limit exceeded"}',
+            '{"timestamp": "2025-09-02T12:01:00Z", "level": "WARNING", "message": "Memory usage high"}',
+            '{"timestamp": "2025-09-02T12:02:00Z", "level": "INFO", "message": "Normal operation"}'
         ])
         
         analyzer = RailwayLogAnalyzer(db_manager=Mock())
@@ -206,7 +204,8 @@ class TestRailwayLogSystem:
         sample_content = "Test log content\nSecond line\nThird line"
         
         with tempfile.TemporaryDirectory() as temp_dir:
-            fetcher = RailwayLogFetcher()
+            # * Provide required project ID for the fetcher
+            fetcher = RailwayLogFetcher(project_id="test-project-id")
             log_file = fetcher.save_logs_to_file(sample_content, temp_dir)
             
             # * Verify file was created
@@ -216,6 +215,6 @@ class TestRailwayLogSystem:
             assert log_file.suffix == ".log"
             
             # * Verify content
-            with open(log_file, 'r') as f:
+            with open(log_file) as f:
                 saved_content = f.read()
             assert saved_content == sample_content
