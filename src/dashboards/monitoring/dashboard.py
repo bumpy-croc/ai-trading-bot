@@ -108,7 +108,11 @@ class MonitoringDashboard:
     """
 
     def __init__(self, db_url: str | None = None, update_interval: int = 3600):
-        self.app = Flask(__name__, template_folder="templates", static_folder="static")
+        # Calculate absolute paths for templates and static files
+        templates_path = src_path / "dashboards" / "monitoring" / "templates"
+        static_path = src_path / "dashboards" / "monitoring" / "static"
+
+        self.app = Flask(__name__, template_folder=str(templates_path), static_folder=str(static_path))
         from src.utils.secrets import get_secret_key
 
         self.app.config["SECRET_KEY"] = get_secret_key()
