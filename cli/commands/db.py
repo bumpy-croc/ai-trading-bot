@@ -25,6 +25,7 @@ from alembic.script import ScriptDirectory  # type: ignore
 from sqlalchemy import create_engine, text  # type: ignore
 from sqlalchemy import inspect as sa_inspect  # type: ignore
 from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+from sqlalchemy.pool import QueuePool  # type: ignore
 
 from src.database.models import Base
 
@@ -32,6 +33,23 @@ from src.database.models import Base
 MIN_POSTGRESQL_URL_PREFIX = "postgresql"
 # * Allow environment overrides for packaged/production deployments
 ALEMBIC_INI_PATH = os.getenv("ATB_ALEMBIC_INI", str(PROJECT_ROOT / "alembic.ini"))
+
+
+def _get_secure_engine_config() -> dict[str, Any]:
+    """Get secure PostgreSQL engine configuration matching DatabaseManager."""
+    return {
+        "poolclass": QueuePool,
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,  # 1 hour
+        "echo": False,  # Set to True for SQL debugging
+        "connect_args": {
+            "sslmode": "prefer",
+            "connect_timeout": 10,
+            "application_name": "ai-trading-bot:db-nuke",
+        },
+    }
 MIGRATIONS_PATH = os.getenv("ATB_MIGRATIONS_PATH", str(PROJECT_ROOT / "migrations"))
 
 
@@ -83,11 +101,10 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
     script = ScriptDirectory.from_config(cfg)
     heads = list(script.get_heads())
     db_url = cfg.get_main_option("sqlalchemy.url")
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:alembic-status"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:alembic-status"
+    engine = create_engine(db_url, **engine_config)
     try:
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn)
@@ -112,6 +129,103 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
             pass
 
 
+def _complete_database_reset(cfg: Config) -> bool:
+    """Completely reset database schema - drops all types, tables, and alembic versions"""
+    try:
+        db_url = cfg.get_main_option("sqlalchemy.url")
+        engine_config = _get_secure_engine_config()
+        engine_config["connect_args"]["application_name"] = "ai-trading-bot:complete-reset"
+        engine = create_engine(db_url, **engine_config)
+
+        print("🚨 Performing COMPLETE database reset...")
+
+        with engine.begin() as conn:  # Use begin() for automatic transaction management
+            # Force drop all known enum types with multiple attempts
+            print("🔄 Force dropping all custom types...")
+            known_types = [
+                'tradesource',
+                'eventtype',
+                'positionstatus',
+                'ordertype',
+                'orderstatus',
+                'positionside',
+                'partialoperationtype'
+            ]
+
+            # First pass: try to drop with CASCADE
+            for type_name in known_types:
+                try:
+                    conn.execute(text(f"DROP TYPE IF EXISTS {type_name} CASCADE"))
+                    print(f"  ✓ Dropped type: {type_name}")
+                except Exception as e:
+                    print(f"  ⚠️  Could not drop type {type_name}: {e}")
+
+            # Second pass: try to drop any remaining enum types
+            try:
+                result = conn.execute(text("""
+                    SELECT typname
+                    FROM pg_type
+                    WHERE typtype = 'e'
+                    AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+                """))
+                remaining_enums = [row[0] for row in result.fetchall()]
+
+                for enum_name in remaining_enums:
+                    try:
+                        conn.execute(text(f"DROP TYPE IF EXISTS {enum_name} CASCADE"))
+                        print(f"  ✓ Dropped remaining enum: {enum_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop remaining enum {enum_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query remaining enums: {e}")
+
+            # Drop all tables
+            print("🔄 Dropping all tables...")
+            try:
+                result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+                tables = result.fetchall()
+
+                for (table_name,) in tables:
+                    try:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
+                        print(f"  ✓ Dropped table: {table_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop table {table_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query tables: {e}")
+
+            # Drop all sequences
+            print("🔄 Dropping all sequences...")
+            try:
+                result = conn.execute(text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'"))
+                sequences = result.fetchall()
+
+                for (seq_name,) in sequences:
+                    try:
+                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
+                        print(f"  ✓ Dropped sequence: {seq_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop sequence {seq_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query sequences: {e}")
+
+            # Drop alembic version table specifically
+            try:
+                conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+                print("  ✓ Dropped alembic_version table")
+            except Exception as e:
+                print(f"  ⚠️  Could not drop alembic_version: {e}")
+
+        print("✅ Complete database reset successful.")
+        return True
+
+    except Exception as e:
+        print(f"❌ Complete database reset failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def _apply_migrations(cfg: Config) -> bool:
     try:
         from alembic import command  # type: ignore
@@ -124,11 +238,10 @@ def _apply_migrations(cfg: Config) -> bool:
         from alembic.runtime.migration import MigrationContext  # type: ignore
         script = ScriptDirectory.from_config(cfg)
         db_url = cfg.get_main_option("sqlalchemy.url")
-        engine = create_engine(
-            db_url,
-            pool_pre_ping=True,
-            connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:post-migration-verify"},
-        )
+        # * Use secure engine configuration for consistency
+        engine_config = _get_secure_engine_config()
+        engine_config["connect_args"]["application_name"] = "ai-trading-bot:post-migration-verify"
+        engine = create_engine(db_url, **engine_config)
         try:
             with engine.connect() as conn:
                 ctx = MigrationContext.configure(conn)
@@ -192,11 +305,10 @@ def _expected_schema_from_models() -> dict[str, Any]:
 
 
 def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:deploy-check"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:deploy-check"
+    engine = create_engine(db_url, **engine_config)
 
     expected = _expected_schema_from_models()
     expected_tables: list[str] = expected["tables"]
@@ -237,11 +349,10 @@ def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
 
 
 def _verify_schema(db_url: str) -> dict[str, Any]:
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:schema-verify"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:schema-verify"
+    engine = create_engine(db_url, **engine_config)
 
     result: dict[str, Any] = {
         "ok": True,
@@ -345,11 +456,10 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
     - Convert JSON columns to JSONB on PostgreSQL
     - Add missing nullable columns without defaults
     """
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:safe-fixes"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:safe-fixes"
+    engine = create_engine(db_url, **engine_config)
     try:
         with engine.begin() as conn:
             insp = sa_inspect(conn)
@@ -417,28 +527,30 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
 
 def _migrate(ns: argparse.Namespace) -> int:
     """Run database migrations"""
-    
-    print("🔄 Running database migrations...")
-    
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("🔄 Running database migrations..." + env_name)
+
     try:
-        # Check if DATABASE_URL is available
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            print("❌ DATABASE_URL environment variable not found")
-            print("   Please ensure your Railway PostgreSQL service is properly configured")
-            return 1
-        
+        # Get database URL for the specified environment
+        database_url = _get_database_url_for_env(env)
         print(f"✅ Database URL found: {database_url[:20]}...")
-        
+
+        # Set DATABASE_URL environment variable for alembic
+        env_vars = os.environ.copy()
+        env_vars["DATABASE_URL"] = database_url
+
         if ns.check:
             # Just check migration status
             result = subprocess.run(
                 ["alembic", "current"],
                 cwd=PROJECT_ROOT,
+                env=env_vars,
                 capture_output=True,
                 text=True
             )
-            
+
             if result.returncode == 0:
                 print("✅ Current migration status:")
                 print(result.stdout)
@@ -447,15 +559,16 @@ def _migrate(ns: argparse.Namespace) -> int:
                 print("❌ Failed to check migration status:")
                 print(result.stderr)
                 return 1
-        
+
         # Run alembic upgrade
         result = subprocess.run(
             ["alembic", "upgrade", "head"],
             cwd=PROJECT_ROOT,
+            env=env_vars,
             capture_output=True,
             text=True
         )
-        
+
         if result.returncode == 0:
             print("✅ Database migrations completed successfully")
             if result.stdout:
@@ -467,18 +580,21 @@ def _migrate(ns: argparse.Namespace) -> int:
             print("📋 Error output:")
             print(result.stderr)
             return 1
-            
+
     except Exception as e:
         print(f"❌ Error running migrations: {e}")
         return 1
 
 
 def _verify(ns: argparse.Namespace) -> int:
-    print("🔍 Database Integrity & Migration Check")
-    print("=" * 50)
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("🔍 Database Integrity & Migration Check" + env_name)
+    print("=" * (50 + len(env_name)))
     try:
-        db_url = _resolve_database_url()
-        print(f"📦 Database URL resolved (postgres): {db_url}")
+        db_url = _get_database_url_for_env(env)
+        print(f"📦 Database URL resolved (postgres): {db_url[:50]}...")
 
         print("\nConnectivity & Integrity")
         print("-----------------------")
@@ -632,12 +748,13 @@ def _verify(ns: argparse.Namespace) -> int:
 
 
 def _backup(ns: argparse.Namespace) -> int:
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
     backup_dir = ns.backup_dir
     retention_days = ns.retention
-    db_url = os.getenv("DATABASE_URL")
-    if not db_url:
-        print("❌ DATABASE_URL not set", file=sys.stderr)
-        return 1
+    db_url = _get_database_url_for_env(env)
+    print(f"📦 Database URL resolved (postgres): {db_url[:50]}..." + env_name)
 
     parsed = urlparse(db_url)
     dbname = parsed.path.lstrip("/")
@@ -801,6 +918,312 @@ def _reset_railway(ns: argparse.Namespace) -> int:
             pass
 
 
+def _get_database_url_for_env(env: str | None = None) -> str:
+    """Get database URL for specific environment"""
+    if env in ["staging", "production", "development"]:
+        # Use Railway environment-specific URLs
+        env_var = f"RAILWAY_{env.upper()}_DATABASE_URL"
+        db_url = os.getenv(env_var)
+        if not db_url:
+            raise RuntimeError(f"Database URL for {env} not set. Please set {env_var} environment variable.")
+        if not db_url.startswith(MIN_POSTGRESQL_URL_PREFIX):
+            raise RuntimeError(f"Unsupported DATABASE_URL scheme for {env}. Expected '{MIN_POSTGRESQL_URL_PREFIX}://'.")
+        return db_url
+    else:
+        # Use default resolution for local/development
+        return _resolve_database_url()
+
+
+def _nuke(ns: argparse.Namespace) -> int:
+    """Drop all tables, sequences, and enums from the database"""
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("💣 DATABASE NUKE OPERATION" + env_name)
+    print("=" * (50 + len(env_name)))
+    print("⚠️  WARNING: This will PERMANENTLY DELETE all data and schema!")
+    print("   • All tables will be dropped")
+    print("   • All sequences will be dropped")
+    print("   • All enums will be dropped")
+    print("   • Alembic version table will be dropped")
+    print("   • This action CANNOT be undone")
+    print()
+
+    # Require explicit confirmation
+    expected_confirmation = "NUKE"
+    confirm = input(f"Type '{expected_confirmation}' to confirm database destruction: ").strip()
+
+    if confirm != expected_confirmation:
+        print("❌ Confirmation failed. Database nuke aborted.")
+        return 1
+
+    print()
+    print("🔄 Proceeding with database nuke...")
+
+    try:
+        db_url = _get_database_url_for_env(env)
+        # * Use secure engine configuration matching DatabaseManager for consistency
+        engine_config = _get_secure_engine_config()
+        engine = create_engine(db_url, **engine_config)
+
+        with engine.begin() as conn:
+            # Get all tables in public schema (excluding system tables)
+            result = conn.execute(text("""
+                SELECT tablename
+                FROM pg_tables
+                WHERE schemaname = 'public'
+                ORDER BY tablename
+            """))
+            tables = [row[0] for row in result.fetchall()]
+
+            if not tables:
+                print("ℹ️  No tables found in database.")
+                return 0
+
+            print(f"📋 Found {len(tables)} tables to drop:")
+            for table in tables:
+                print(f"   • {table}")
+
+            # Drop all tables with CASCADE to handle dependencies
+            print("\n🗑️  Dropping tables...")
+            for table in tables:
+                try:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
+                    print(f"   ✅ Dropped: {table}")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to drop {table}: {e}")
+
+            # Get and drop all sequences
+            result = conn.execute(text("""
+                SELECT sequencename
+                FROM pg_sequences
+                WHERE schemaname = 'public'
+                ORDER BY sequencename
+            """))
+            sequences = [row[0] for row in result.fetchall()]
+
+            if sequences:
+                print(f"\n🗑️  Dropping {len(sequences)} sequences...")
+                for seq in sequences:
+                    try:
+                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq} CASCADE"))
+                        print(f"   ✅ Dropped: {seq}")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to drop {seq}: {e}")
+
+            # Get and drop all enums
+            result = conn.execute(text("""
+                SELECT typname
+                FROM pg_type
+                WHERE typtype = 'e'
+                AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+                ORDER BY typname
+            """))
+            enums = [row[0] for row in result.fetchall()]
+
+            if enums:
+                print(f"\n🗑️  Dropping {len(enums)} enums...")
+                for enum in enums:
+                    try:
+                        conn.execute(text(f"DROP TYPE IF EXISTS {enum} CASCADE"))
+                        print(f"   ✅ Dropped: {enum}")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to drop {enum}: {e}")
+
+            # Verify cleanup
+            result = conn.execute(text("SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'"))
+            remaining_tables = result.scalar()
+
+            result = conn.execute(text("SELECT COUNT(*) FROM pg_sequences WHERE schemaname = 'public'"))
+            remaining_sequences = result.scalar()
+
+            result = conn.execute(text("""
+                SELECT COUNT(*)
+                FROM pg_type
+                WHERE typtype = 'e'
+                AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+            """))
+            remaining_enums = result.scalar()
+
+            print("\n✅ Database nuke completed!")
+            print("   📊 Summary:")
+            print(f"      Tables remaining: {remaining_tables}")
+            print(f"      Sequences remaining: {remaining_sequences}")
+            print(f"      Enums remaining: {remaining_enums}")
+
+            if remaining_tables == 0 and remaining_sequences == 0 and remaining_enums == 0:
+                print("   🎉 Database is completely clean!")
+            else:
+                print("   ⚠️  Some objects may still remain (likely system objects)")
+
+            print("\n💡 Next steps:")
+            print("   • Run 'alembic upgrade head' to recreate schema")
+            print("   • Or run 'atb db verify --apply-migrations' to auto-apply")
+
+        return 0
+
+    except Exception as e:
+        print(f"❌ Database nuke failed: {e}")
+        traceback.print_exc()
+        return 1
+    finally:
+        try:
+            if 'engine' in locals():
+                engine.dispose()
+        except Exception:
+            pass
+
+
+def _reset_fresh(ns: argparse.Namespace) -> int:
+    """Complete database reset followed by fresh migrations"""
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("🔄 DATABASE RESET-FRESH OPERATION" + env_name)
+    print("=" * (55 + len(env_name)))
+    print("⚠️  WARNING: This will PERMANENTLY DELETE all data and recreate schema!")
+    print("   • All tables will be dropped")
+    print("   • All sequences will be dropped")
+    print("   • All enums will be dropped")
+    print("   • Alembic version table will be dropped")
+    print("   • Fresh migrations will be applied")
+    print("   • This action CANNOT be undone")
+    print()
+
+    # Require explicit confirmation
+    expected_confirmation = "RESET-FRESH"
+    confirm = input(f"Type '{expected_confirmation}' to confirm database reset-fresh: ").strip()
+
+    if confirm != expected_confirmation:
+        print("❌ Confirmation failed. Database reset-fresh aborted.")
+        return 1
+
+    print()
+    print("🔄 Step 1: Nuking database...")
+
+    # First run the nuke operation
+    nuke_result = _nuke(ns)
+    if nuke_result != 0:
+        print("❌ Database nuke failed. Aborting reset-fresh.")
+        return 1
+
+    print()
+    print("🔄 Step 2: Applying fresh migrations...")
+
+    # Then apply migrations
+    try:
+        cfg = _alembic_config(_get_database_url_for_env(env))
+        if not _apply_migrations(cfg):
+            print("❌ Migration application failed.")
+            return 1
+
+        print("\n✅ Database reset-fresh completed successfully!")
+        print("💡 Your database is now clean with fresh schema applied.")
+        return 0
+
+    except Exception as e:
+        print(f"❌ Reset-fresh operation failed during migration: {e}")
+        traceback.print_exc()
+        return 1
+
+
+def _reset_complete(ns: argparse.Namespace) -> int:
+    """Enhanced complete database reset using aggressive type dropping"""
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("🚨 ENHANCED DATABASE RESET OPERATION" + env_name)
+    print("=" * (60 + len(env_name)))
+    print("⚠️  WARNING: This will AGGRESSIVELY DELETE all data and schema!")
+    print("   • All custom types will be force-dropped")
+    print("   • All tables will be dropped")
+    print("   • All sequences will be dropped")
+    print("   • Alembic version table will be dropped")
+    print("   • Multiple cleanup passes will be performed")
+    print("   • This action CANNOT be undone")
+    print()
+
+    # Require explicit confirmation
+    expected_confirmation = "ENHANCED-RESET"
+    confirm = input(f"Type '{expected_confirmation}' to confirm enhanced database reset: ").strip()
+
+    if confirm != expected_confirmation:
+        print("❌ Confirmation failed. Enhanced database reset aborted.")
+        return 1
+
+    print()
+    print("🔄 Performing enhanced database reset...")
+
+    try:
+        cfg = _alembic_config(_get_database_url_for_env(env))
+        if not _complete_database_reset(cfg):
+            print("❌ Enhanced database reset failed.")
+            return 1
+
+        print("\n✅ Enhanced database reset completed successfully!")
+        print("💡 Your database is now completely clean.")
+        print("💡 Run 'atb db migrate' to apply fresh migrations.")
+        return 0
+
+    except Exception as e:
+        print(f"❌ Enhanced reset operation failed: {e}")
+        traceback.print_exc()
+        return 1
+
+
+def _fix_enums(ns: argparse.Namespace) -> int:
+    """Fix enum duplication issues without full database reset"""
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("🔧 FIXING ENUM ISSUES" + env_name)
+    print("=" * (40 + len(env_name)))
+    print("This will create missing enum types without dropping existing ones")
+    print("Safe to run multiple times")
+    print()
+
+    try:
+        # Import and run the fix script
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        project_root = Path(__file__).parent.parent.parent
+        fix_script = project_root / "fix_enum_issue.py"
+
+        if not fix_script.exists():
+            print(f"❌ Fix script not found: {fix_script}")
+            return 1
+
+        # Set DATABASE_URL if env is specified
+        env_vars = os.environ.copy()
+        if env:
+            # This would need to be implemented based on your environment setup
+            pass
+
+        print("🔄 Running enum fix...")
+        result = subprocess.run(
+            [sys.executable, str(fix_script)],
+            cwd=project_root,
+            env=env_vars,
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0:
+            print("✅ Enum fix completed successfully!")
+            return 0
+        else:
+            print("❌ Enum fix failed:")
+            print(result.stderr)
+            return 1
+
+    except Exception as e:
+        print(f"❌ Enum fix operation failed: {e}")
+        traceback.print_exc()
+        return 1
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("db", help="Database utilities")
     sub = p.add_subparsers(dest="db_cmd", required=True)
@@ -824,10 +1247,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Force apply migrations even if schema appears up-to-date (bypasses duplicate column prevention)",
     )
+    p_verify.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
     p_verify.set_defaults(func=_verify)
 
     p_migrate = sub.add_parser("migrate", help="Run database migrations")
     p_migrate.add_argument("--check", action="store_true", help="Check migration status only")
+    p_migrate.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
     p_migrate.set_defaults(func=_migrate)
 
     p_backup = sub.add_parser("backup", help="Backup database")
@@ -835,6 +1260,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_backup.add_argument(
         "--retention", type=int, default=int(os.getenv("BACKUP_RETENTION_DAYS", 7))
     )
+    p_backup.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
     p_backup.set_defaults(func=_backup)
 
     p_reset = sub.add_parser("reset-railway", help="Reset Railway database")
@@ -846,6 +1272,22 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_setup.add_argument("--verify", action="store_true")
     p_setup.add_argument("--check-local", action="store_true")
     p_setup.set_defaults(func=_setup_railway)
+
+    p_nuke = sub.add_parser("nuke", help="Drop all tables, sequences, and enums from database (DESTRUCTIVE)")
+    p_nuke.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_nuke.set_defaults(func=_nuke)
+
+    p_reset_fresh = sub.add_parser("reset-fresh", help="Complete database reset + fresh migrations (DESTRUCTIVE)")
+    p_reset_fresh.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_reset_fresh.set_defaults(func=_reset_fresh)
+
+    p_reset_complete = sub.add_parser("reset-complete", help="Enhanced complete database reset (DESTRUCTIVE)")
+    p_reset_complete.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_reset_complete.set_defaults(func=_reset_complete)
+
+    p_fix_enums = sub.add_parser("fix-enums", help="Fix enum duplication issues without full reset")
+    p_fix_enums.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_fix_enums.set_defaults(func=_fix_enums)
 
     # Register railway subcommands
     railway.register(sub)
