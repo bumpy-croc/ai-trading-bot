@@ -447,7 +447,7 @@ class TestAccountSynchronizer:
 
         # Test account sync exception
         mock_exchange.sync_account_data.side_effect = Exception("Exchange error")
-        result = real_synchronizer.sync_account_data()
+        result = synchronizer.sync_account_data()
         assert result.success is False
         assert "error" in result.message.lower()
         assert "Exchange error" in result.message
@@ -527,7 +527,7 @@ class TestAccountSynchronizer:
             )
         ]
 
-        real_synchronizer.exchange.sync_account_data = Mock(return_value={
+        synchronizer.exchange.sync_account_data = Mock(return_value={
             "sync_successful": True,
             "balances": [],
             "positions": [],
@@ -535,7 +535,7 @@ class TestAccountSynchronizer:
         })
 
         # * Perform sync
-        result = real_synchronizer.sync_account_data()
+        result = synchronizer.sync_account_data()
         assert result.success is True
 
         # * Verify both orders were processed
@@ -644,7 +644,7 @@ class TestAccountSynchronizerIntegration:
 
         # * Create a legacy position (manually set to not auto-create order for testing)
         # * We'll simulate this by creating a position directly in the DB
-        legacy_position_id = mock_db_manager.log_position(
+        legacy_position_id = real_synchronizer.db_manager.log_position(
             symbol="ETHUSDT",
             side="SHORT",
             entry_price=3000.0,
@@ -656,7 +656,7 @@ class TestAccountSynchronizerIntegration:
         )
 
         # * Create a new position with Order table (normal flow)
-        new_position_id = mock_db_manager.log_position(
+        new_position_id = real_synchronizer.db_manager.log_position(
             symbol="BTCUSDT",
             side="LONG",
             entry_price=50000.0,
@@ -703,6 +703,34 @@ class TestAccountSynchronizerIntegration:
                 create_time=datetime.utcnow(),
                 update_time=datetime.utcnow()
             )
+        ]
+
+        # * Mock database to return pending orders for sync comparison
+        real_synchronizer.db_manager.get_pending_orders_new.return_value = [
+            {
+                "id": 1,
+                "position_id": legacy_position_id,
+                "order_type": "LIMIT",
+                "status": "PENDING",
+                "exchange_order_id": "legacy_order_444",
+                "internal_order_id": None,
+                "symbol": "ETHUSDT",
+                "side": "SELL",
+                "quantity": 0.01,
+                "price": 3000.0,
+            },
+            {
+                "id": 2,
+                "position_id": new_position_id,
+                "order_type": "LIMIT",
+                "status": "PENDING",
+                "exchange_order_id": "new_order_555",
+                "internal_order_id": None,
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "quantity": 0.001,
+                "price": 50000.0,
+            }
         ]
 
         real_synchronizer.exchange.sync_account_data = Mock(return_value={
