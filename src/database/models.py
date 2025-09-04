@@ -49,8 +49,8 @@ Base = declarative_base()
 class PositionSide(enum.Enum):
     """Position side enumeration"""
 
-    LONG = "long"
-    SHORT = "short"
+    LONG = "LONG"
+    SHORT = "SHORT"
 
 
 class OrderStatus(enum.Enum):
@@ -81,23 +81,23 @@ class OrderType(enum.Enum):
 class TradeSource(enum.Enum):
     """Source of the trade"""
 
-    LIVE = "live"
-    BACKTEST = "backtest"
-    PAPER = "paper"
+    LIVE = "LIVE"
+    BACKTEST = "BACKTEST"
+    PAPER = "PAPER"
 
 
 class EventType(enum.Enum):
     """System event types"""
 
-    ENGINE_START = "engine_start"
-    ENGINE_STOP = "engine_stop"
-    STRATEGY_CHANGE = "strategy_change"
-    MODEL_UPDATE = "model_update"
-    ERROR = "error"
-    WARNING = "warning"
-    ALERT = "alert"
-    BALANCE_ADJUSTMENT = "balance_adjustment"
-    TEST = "test"  # Added for verification scripts and development diagnostics
+    ENGINE_START = "ENGINE_START"
+    ENGINE_STOP = "ENGINE_STOP"
+    STRATEGY_CHANGE = "STRATEGY_CHANGE"
+    MODEL_UPDATE = "MODEL_UPDATE"
+    ERROR = "ERROR"
+    WARNING = "WARNING"
+    ALERT = "ALERT"
+    BALANCE_ADJUSTMENT = "BALANCE_ADJUSTMENT"
+    TEST = "TEST"  # Added for verification scripts and development diagnostics
 
 
 class Trade(Base):
@@ -282,8 +282,8 @@ class Order(Base):
 
 
 class PartialOperationType(enum.Enum):
-    PARTIAL_EXIT = "partial_exit"
-    SCALE_IN = "scale_in"
+    PARTIAL_EXIT = "PARTIAL_EXIT"
+    SCALE_IN = "SCALE_IN"
 
 
 class PartialTrade(Base):

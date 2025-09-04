@@ -919,309 +919,37 @@ def _reset_railway(ns: argparse.Namespace) -> int:
 
 
 def _get_database_url_for_env(env: str | None = None) -> str:
-    """Get database URL for specific environment"""
-    if env in ["staging", "production", "development"]:
-        # Use Railway environment-specific URLs
-        env_var = f"RAILWAY_{env.upper()}_DATABASE_URL"
-        db_url = os.getenv(env_var)
-        if not db_url:
-            raise RuntimeError(f"Database URL for {env} not set. Please set {env_var} environment variable.")
-        if not db_url.startswith(MIN_POSTGRESQL_URL_PREFIX):
-            raise RuntimeError(f"Unsupported DATABASE_URL scheme for {env}. Expected '{MIN_POSTGRESQL_URL_PREFIX}://'.")
-        return db_url
-    else:
-        # Use default resolution for local/development
-        return _resolve_database_url()
+    """Get database URL for the specified environment."""
+    from src.config.config_manager import get_config
 
+    cfg = get_config()
 
-def _nuke(ns: argparse.Namespace) -> int:
-    """Drop all tables, sequences, and enums from the database"""
-    env = getattr(ns, 'env', None)
-    env_name = f" ({env})" if env else " (default)"
+    # If no environment specified, use default DATABASE_URL
+    if env is None:
+        database_url = cfg.get("DATABASE_URL") or os.getenv("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError("DATABASE_URL is required but not set.")
+        return database_url
 
-    print("💣 DATABASE NUKE OPERATION" + env_name)
-    print("=" * (50 + len(env_name)))
-    print("⚠️  WARNING: This will PERMANENTLY DELETE all data and schema!")
-    print("   • All tables will be dropped")
-    print("   • All sequences will be dropped")
-    print("   • All enums will be dropped")
-    print("   • Alembic version table will be dropped")
-    print("   • This action CANNOT be undone")
-    print()
+    # Environment-specific database URLs
+    env_var_map = {
+        "development": "DATABASE_URL",
+        "staging": "RAILWAY_STAGING_DATABASE_URL",
+        "production": "RAILWAY_PRODUCTION_DATABASE_URL"
+    }
 
-    # Require explicit confirmation
-    expected_confirmation = "NUKE"
-    confirm = input(f"Type '{expected_confirmation}' to confirm database destruction: ").strip()
+    env_var = env_var_map.get(env)
+    if not env_var:
+        raise ValueError(f"Invalid environment: {env}")
 
-    if confirm != expected_confirmation:
-        print("❌ Confirmation failed. Database nuke aborted.")
-        return 1
+    database_url = cfg.get(env_var) or os.getenv(env_var)
+    if not database_url:
+        raise RuntimeError(f"{env_var} is required for {env} environment but not set.")
 
-    print()
-    print("🔄 Proceeding with database nuke...")
+    if not database_url.startswith("postgresql"):
+        raise RuntimeError(f"Invalid database URL scheme for {env}. Expected 'postgresql://'.")
 
-    try:
-        db_url = _get_database_url_for_env(env)
-        # * Use secure engine configuration matching DatabaseManager for consistency
-        engine_config = _get_secure_engine_config()
-        engine = create_engine(db_url, **engine_config)
-
-        with engine.begin() as conn:
-            # Get all tables in public schema (excluding system tables)
-            result = conn.execute(text("""
-                SELECT tablename
-                FROM pg_tables
-                WHERE schemaname = 'public'
-                ORDER BY tablename
-            """))
-            tables = [row[0] for row in result.fetchall()]
-
-            if not tables:
-                print("ℹ️  No tables found in database.")
-                return 0
-
-            print(f"📋 Found {len(tables)} tables to drop:")
-            for table in tables:
-                print(f"   • {table}")
-
-            # Drop all tables with CASCADE to handle dependencies
-            print("\n🗑️  Dropping tables...")
-            for table in tables:
-                try:
-                    conn.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
-                    print(f"   ✅ Dropped: {table}")
-                except Exception as e:
-                    print(f"   ⚠️  Failed to drop {table}: {e}")
-
-            # Get and drop all sequences
-            result = conn.execute(text("""
-                SELECT sequencename
-                FROM pg_sequences
-                WHERE schemaname = 'public'
-                ORDER BY sequencename
-            """))
-            sequences = [row[0] for row in result.fetchall()]
-
-            if sequences:
-                print(f"\n🗑️  Dropping {len(sequences)} sequences...")
-                for seq in sequences:
-                    try:
-                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq} CASCADE"))
-                        print(f"   ✅ Dropped: {seq}")
-                    except Exception as e:
-                        print(f"   ⚠️  Failed to drop {seq}: {e}")
-
-            # Get and drop all enums
-            result = conn.execute(text("""
-                SELECT typname
-                FROM pg_type
-                WHERE typtype = 'e'
-                AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
-                ORDER BY typname
-            """))
-            enums = [row[0] for row in result.fetchall()]
-
-            if enums:
-                print(f"\n🗑️  Dropping {len(enums)} enums...")
-                for enum in enums:
-                    try:
-                        conn.execute(text(f"DROP TYPE IF EXISTS {enum} CASCADE"))
-                        print(f"   ✅ Dropped: {enum}")
-                    except Exception as e:
-                        print(f"   ⚠️  Failed to drop {enum}: {e}")
-
-            # Verify cleanup
-            result = conn.execute(text("SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'"))
-            remaining_tables = result.scalar()
-
-            result = conn.execute(text("SELECT COUNT(*) FROM pg_sequences WHERE schemaname = 'public'"))
-            remaining_sequences = result.scalar()
-
-            result = conn.execute(text("""
-                SELECT COUNT(*)
-                FROM pg_type
-                WHERE typtype = 'e'
-                AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
-            """))
-            remaining_enums = result.scalar()
-
-            print("\n✅ Database nuke completed!")
-            print("   📊 Summary:")
-            print(f"      Tables remaining: {remaining_tables}")
-            print(f"      Sequences remaining: {remaining_sequences}")
-            print(f"      Enums remaining: {remaining_enums}")
-
-            if remaining_tables == 0 and remaining_sequences == 0 and remaining_enums == 0:
-                print("   🎉 Database is completely clean!")
-            else:
-                print("   ⚠️  Some objects may still remain (likely system objects)")
-
-            print("\n💡 Next steps:")
-            print("   • Run 'alembic upgrade head' to recreate schema")
-            print("   • Or run 'atb db verify --apply-migrations' to auto-apply")
-
-        return 0
-
-    except Exception as e:
-        print(f"❌ Database nuke failed: {e}")
-        traceback.print_exc()
-        return 1
-    finally:
-        try:
-            if 'engine' in locals():
-                engine.dispose()
-        except Exception:
-            pass
-
-
-def _reset_fresh(ns: argparse.Namespace) -> int:
-    """Complete database reset followed by fresh migrations"""
-    env = getattr(ns, 'env', None)
-    env_name = f" ({env})" if env else " (default)"
-
-    print("🔄 DATABASE RESET-FRESH OPERATION" + env_name)
-    print("=" * (55 + len(env_name)))
-    print("⚠️  WARNING: This will PERMANENTLY DELETE all data and recreate schema!")
-    print("   • All tables will be dropped")
-    print("   • All sequences will be dropped")
-    print("   • All enums will be dropped")
-    print("   • Alembic version table will be dropped")
-    print("   • Fresh migrations will be applied")
-    print("   • This action CANNOT be undone")
-    print()
-
-    # Require explicit confirmation
-    expected_confirmation = "RESET-FRESH"
-    confirm = input(f"Type '{expected_confirmation}' to confirm database reset-fresh: ").strip()
-
-    if confirm != expected_confirmation:
-        print("❌ Confirmation failed. Database reset-fresh aborted.")
-        return 1
-
-    print()
-    print("🔄 Step 1: Nuking database...")
-
-    # First run the nuke operation
-    nuke_result = _nuke(ns)
-    if nuke_result != 0:
-        print("❌ Database nuke failed. Aborting reset-fresh.")
-        return 1
-
-    print()
-    print("🔄 Step 2: Applying fresh migrations...")
-
-    # Then apply migrations
-    try:
-        cfg = _alembic_config(_get_database_url_for_env(env))
-        if not _apply_migrations(cfg):
-            print("❌ Migration application failed.")
-            return 1
-
-        print("\n✅ Database reset-fresh completed successfully!")
-        print("💡 Your database is now clean with fresh schema applied.")
-        return 0
-
-    except Exception as e:
-        print(f"❌ Reset-fresh operation failed during migration: {e}")
-        traceback.print_exc()
-        return 1
-
-
-def _reset_complete(ns: argparse.Namespace) -> int:
-    """Enhanced complete database reset using aggressive type dropping"""
-    env = getattr(ns, 'env', None)
-    env_name = f" ({env})" if env else " (default)"
-
-    print("🚨 ENHANCED DATABASE RESET OPERATION" + env_name)
-    print("=" * (60 + len(env_name)))
-    print("⚠️  WARNING: This will AGGRESSIVELY DELETE all data and schema!")
-    print("   • All custom types will be force-dropped")
-    print("   • All tables will be dropped")
-    print("   • All sequences will be dropped")
-    print("   • Alembic version table will be dropped")
-    print("   • Multiple cleanup passes will be performed")
-    print("   • This action CANNOT be undone")
-    print()
-
-    # Require explicit confirmation
-    expected_confirmation = "ENHANCED-RESET"
-    confirm = input(f"Type '{expected_confirmation}' to confirm enhanced database reset: ").strip()
-
-    if confirm != expected_confirmation:
-        print("❌ Confirmation failed. Enhanced database reset aborted.")
-        return 1
-
-    print()
-    print("🔄 Performing enhanced database reset...")
-
-    try:
-        cfg = _alembic_config(_get_database_url_for_env(env))
-        if not _complete_database_reset(cfg):
-            print("❌ Enhanced database reset failed.")
-            return 1
-
-        print("\n✅ Enhanced database reset completed successfully!")
-        print("💡 Your database is now completely clean.")
-        print("💡 Run 'atb db migrate' to apply fresh migrations.")
-        return 0
-
-    except Exception as e:
-        print(f"❌ Enhanced reset operation failed: {e}")
-        traceback.print_exc()
-        return 1
-
-
-def _fix_enums(ns: argparse.Namespace) -> int:
-    """Fix enum duplication issues without full database reset"""
-    env = getattr(ns, 'env', None)
-    env_name = f" ({env})" if env else " (default)"
-
-    print("🔧 FIXING ENUM ISSUES" + env_name)
-    print("=" * (40 + len(env_name)))
-    print("This will create missing enum types without dropping existing ones")
-    print("Safe to run multiple times")
-    print()
-
-    try:
-        # Import and run the fix script
-        import subprocess
-        import sys
-        from pathlib import Path
-
-        project_root = Path(__file__).parent.parent.parent
-        fix_script = project_root / "fix_enum_issue.py"
-
-        if not fix_script.exists():
-            print(f"❌ Fix script not found: {fix_script}")
-            return 1
-
-        # Set DATABASE_URL if env is specified
-        env_vars = os.environ.copy()
-        if env:
-            # This would need to be implemented based on your environment setup
-            pass
-
-        print("🔄 Running enum fix...")
-        result = subprocess.run(
-            [sys.executable, str(fix_script)],
-            cwd=project_root,
-            env=env_vars,
-            capture_output=True,
-            text=True
-        )
-
-        if result.returncode == 0:
-            print("✅ Enum fix completed successfully!")
-            return 0
-        else:
-            print("❌ Enum fix failed:")
-            print(result.stderr)
-            return 1
-
-    except Exception as e:
-        print(f"❌ Enum fix operation failed: {e}")
-        traceback.print_exc()
-        return 1
+    return database_url
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -1272,22 +1000,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_setup.add_argument("--verify", action="store_true")
     p_setup.add_argument("--check-local", action="store_true")
     p_setup.set_defaults(func=_setup_railway)
-
-    p_nuke = sub.add_parser("nuke", help="Drop all tables, sequences, and enums from database (DESTRUCTIVE)")
-    p_nuke.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
-    p_nuke.set_defaults(func=_nuke)
-
-    p_reset_fresh = sub.add_parser("reset-fresh", help="Complete database reset + fresh migrations (DESTRUCTIVE)")
-    p_reset_fresh.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
-    p_reset_fresh.set_defaults(func=_reset_fresh)
-
-    p_reset_complete = sub.add_parser("reset-complete", help="Enhanced complete database reset (DESTRUCTIVE)")
-    p_reset_complete.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
-    p_reset_complete.set_defaults(func=_reset_complete)
-
-    p_fix_enums = sub.add_parser("fix-enums", help="Fix enum duplication issues without full reset")
-    p_fix_enums.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
-    p_fix_enums.set_defaults(func=_fix_enums)
 
     # Register railway subcommands
     railway.register(sub)
