@@ -13,7 +13,7 @@ def test_sync_handles_mixed_legacy_and_new_orders(synchronizer, db_manager, test
             size=0.03,
             quantity=0.01,
             strategy_name="legacy_strategy",
-            order_id="legacy_order_444",
+            entry_order_id="legacy_order_444",
             session_id=test_session
         )
         
@@ -25,7 +25,7 @@ def test_sync_handles_mixed_legacy_and_new_orders(synchronizer, db_manager, test
             size=0.02,
             quantity=0.001,
             strategy_name="new_strategy",
-            order_id="new_order_555",
+            entry_order_id="new_order_555",
             session_id=test_session
         )
         
@@ -35,7 +35,7 @@ def test_sync_handles_mixed_legacy_and_new_orders(synchronizer, db_manager, test
         
         mock_orders = [
             ExchangeOrder(
-                order_id="legacy_order_444",
+                entry_order_id="legacy_order_444",
                 symbol="ETHUSDT",
                 side=ExchangeOrderSide.SELL,
                 quantity=0.01,
@@ -43,7 +43,7 @@ def test_sync_handles_mixed_legacy_and_new_orders(synchronizer, db_manager, test
                 status=ExchangeOrderStatus.FILLED
             ),
             ExchangeOrder(
-                order_id="new_order_555",
+                entry_order_id="new_order_555",
                 symbol="BTCUSDT",
                 side=ExchangeOrderSide.BUY,
                 quantity=0.001,

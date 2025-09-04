@@ -447,7 +447,7 @@ class TestAccountSynchronizer:
 
         # Test account sync exception
         mock_exchange.sync_account_data.side_effect = Exception("Exchange error")
-        result = synchronizer.sync_account_data()
+        result = real_synchronizer.sync_account_data()
         assert result.success is False
         assert "error" in result.message.lower()
         assert "Exchange error" in result.message
@@ -527,15 +527,15 @@ class TestAccountSynchronizer:
             )
         ]
 
-        synchronizer.exchange.sync_account_data.return_value = {
+        real_synchronizer.exchange.sync_account_data = Mock(return_value={
             "sync_successful": True,
             "balances": [],
             "positions": [],
             "open_orders": mock_orders
-        }
+        })
 
         # * Perform sync
-        result = synchronizer.sync_account_data()
+        result = real_synchronizer.sync_account_data()
         assert result.success is True
 
         # * Verify both orders were processed
@@ -635,6 +635,92 @@ class TestAccountSynchronizerIntegration:
         assert result.success is True
         assert "emergency_trade_recovery" in result.data
         assert mock_recover.call_count == 4  # BTCUSDT, ETHUSDT, SOLUSDT, AVAXUSDT
+
+
+    def test_sync_handles_mixed_legacy_and_new_orders(self, real_synchronizer, mock_db_manager):
+        """Test sync with a mix of legacy positions and new Order table records."""
+        # * This test simulates the transition period where some positions
+        # * have Order records and others don't
+
+        # * Create a legacy position (manually set to not auto-create order for testing)
+        # * We'll simulate this by creating a position directly in the DB
+        legacy_position_id = mock_db_manager.log_position(
+            symbol="ETHUSDT",
+            side="SHORT",
+            entry_price=3000.0,
+            size=0.03,
+            quantity=0.01,
+            strategy_name="legacy_strategy",
+            entry_order_id="legacy_order_444",
+            session_id=1
+        )
+
+        # * Create a new position with Order table (normal flow)
+        new_position_id = mock_db_manager.log_position(
+            symbol="BTCUSDT",
+            side="LONG",
+            entry_price=50000.0,
+            size=0.02,
+            quantity=0.001,
+            strategy_name="new_strategy",
+            entry_order_id="new_order_555",
+            session_id=1
+        )
+
+        # * Mock both orders on exchange
+        from src.data_providers.exchange_interface import Order as ExchangeOrder
+        from src.data_providers.exchange_interface import OrderSide as ExchangeOrderSide
+        from src.data_providers.exchange_interface import OrderType as ExchangeOrderType
+
+        mock_orders = [
+            ExchangeOrder(
+                order_id="legacy_order_444",
+                symbol="ETHUSDT",
+                side=ExchangeOrderSide.SELL,
+                order_type=ExchangeOrderType.LIMIT,
+                quantity=0.01,
+                price=3000.0,
+                status=ExchangeOrderStatus.FILLED,
+                filled_quantity=0.01,
+                average_price=3000.0,
+                commission=0.0,
+                commission_asset="USDT",
+                create_time=datetime.utcnow(),
+                update_time=datetime.utcnow()
+            ),
+            ExchangeOrder(
+                order_id="new_order_555",
+                symbol="BTCUSDT",
+                side=ExchangeOrderSide.BUY,
+                order_type=ExchangeOrderType.LIMIT,
+                quantity=0.001,
+                price=50000.0,
+                status=ExchangeOrderStatus.FILLED,
+                filled_quantity=0.001,
+                average_price=50000.0,
+                commission=0.0,
+                commission_asset="USDT",
+                create_time=datetime.utcnow(),
+                update_time=datetime.utcnow()
+            )
+        ]
+
+        real_synchronizer.exchange.sync_account_data = Mock(return_value={
+            "sync_successful": True,
+            "balances": [],
+            "positions": [],
+            "open_orders": mock_orders
+        })
+
+        # * Perform sync
+        result = real_synchronizer.sync_account_data()
+        assert result.success is True
+
+        # * Verify both orders were processed
+        order_sync_data = result.data["order_sync"]
+        assert order_sync_data["synced"] is True
+        assert order_sync_data["total_exchange_orders"] == 2
+        assert order_sync_data["synced_orders"] == 2
 
 
 if __name__ == "__main__":
