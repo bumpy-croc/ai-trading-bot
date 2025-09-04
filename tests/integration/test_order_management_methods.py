@@ -5,11 +5,11 @@ Tests the Phase 2 methods: create_order, update_order_status_new,
 get_orders_for_position, get_pending_orders_new.
 """
 
-import pytest
-from datetime import datetime
 
-from src.database.models import OrderStatus, OrderType, PositionSide
+import pytest
+
 from src.database.manager import DatabaseManager
+from src.database.models import OrderStatus, OrderType, PositionSide
 
 
 @pytest.mark.integration
@@ -21,23 +21,29 @@ class TestOrderManagementMethods:
         """Create a database manager for testing."""
         return DatabaseManager()
 
-    @pytest.fixture  
+    @pytest.fixture
     def test_position(self, db_manager):
         """Create a test position for order testing."""
+        import random
+        import time
+
         session_id = db_manager.create_trading_session(
             "test_strategy", "BTCUSDT", "1h", "live", 10000.0
         )
-        
+
+        # * Generate unique entry_order_id to avoid unique constraint violations
+        unique_id = f"test_position_{int(time.time() * 1000000)}_{random.randint(1000, 9999)}"
+
         position_id = db_manager.log_position(
             symbol="BTCUSDT",
             side="LONG",
             entry_price=50000.0,
             size=0.02,
             strategy_name="test_strategy",
-            entry_order_id="test_position_123",
+            entry_order_id=unique_id,
             session_id=session_id
         )
-        
+
         return {"position_id": position_id, "session_id": session_id}
 
     def test_create_order_basic(self, db_manager, test_position):
@@ -168,7 +174,7 @@ class TestOrderManagementMethods:
     def test_get_orders_for_position(self, db_manager, test_position):
         """Test retrieving all orders for a position."""
         # * Create multiple orders for the same position
-        entry_order = db_manager.create_order(
+        db_manager.create_order(
             position_id=test_position["position_id"],
             order_type=OrderType.ENTRY,
             symbol="BTCUSDT",
@@ -177,8 +183,8 @@ class TestOrderManagementMethods:
             strategy_name="test_strategy",
             session_id=test_position["session_id"]
         )
-        
-        partial_exit_order = db_manager.create_order(
+
+        db_manager.create_order(
             position_id=test_position["position_id"],
             order_type=OrderType.PARTIAL_EXIT,
             symbol="BTCUSDT",
@@ -188,19 +194,20 @@ class TestOrderManagementMethods:
             session_id=test_position["session_id"],
             target_level=1
         )
-        
+
         # * Retrieve all orders
         orders = db_manager.get_orders_for_position(test_position["position_id"])
-        
-        assert len(orders) == 2
-        
+
+        # * Note: log_position automatically creates 1 ENTRY order, plus 2 created here = 3 total
+        assert len(orders) == 3
+
         # * Check order types
         order_types = [order["order_type"] for order in orders]
         assert "ENTRY" in order_types
         assert "PARTIAL_EXIT" in order_types
-        
+
         # * Orders should be sorted by creation time
-        assert orders[0]["created_at"] <= orders[1]["created_at"]
+        assert orders[0]["created_at"] <= orders[1]["created_at"] <= orders[2]["created_at"]
 
     def test_get_pending_orders_new(self, db_manager, test_position):
         """Test retrieving pending orders for a session."""
@@ -249,7 +256,7 @@ class TestOrderManagementMethods:
         """Test that duplicate internal order IDs are handled gracefully."""
         # * Create order with specific internal ID
         internal_id = "test_duplicate_id_123"
-        
+
         order1_id = db_manager.create_order(
             position_id=test_position["position_id"],
             order_type=OrderType.ENTRY,
@@ -260,7 +267,7 @@ class TestOrderManagementMethods:
             session_id=test_position["session_id"],
             internal_order_id=internal_id
         )
-        
+
         # * Try to create another order with same internal ID
         order2_id = db_manager.create_order(
             position_id=test_position["position_id"],
@@ -272,14 +279,18 @@ class TestOrderManagementMethods:
             session_id=test_position["session_id"],
             internal_order_id=internal_id  # Same ID
         )
-        
+
         # * Both should succeed with different internal IDs
         assert order1_id != order2_id
-        
+
         orders = db_manager.get_orders_for_position(test_position["position_id"])
-        assert len(orders) == 2
-        
+        # * Note: log_position automatically creates 1 ENTRY order, plus 2 created here = 3 total
+        assert len(orders) == 3
+
+        # * Filter out the auto-created ENTRY order to focus on the manually created ones
+        manual_orders = [o for o in orders if o["id"] in [order1_id, order2_id]]
+
         # * One should have original ID, other should have modified ID
-        internal_ids = [order["internal_order_id"] for order in orders]
+        internal_ids = [order["internal_order_id"] for order in manual_orders]
         assert internal_id in internal_ids
         assert any(id != internal_id for id in internal_ids)
