@@ -4,18 +4,18 @@ Integration tests for the Order table with the database.
 Tests that the Order table works correctly with the database and Position relationships.
 """
 
-import pytest
 from datetime import datetime
 
-from src.database.models import (
-    Order, 
-    Position, 
-    PositionStatus, 
-    OrderStatus, 
-    OrderType,
-    PositionSide
-)
+import pytest
+
 from src.database.manager import DatabaseManager
+from src.database.models import (
+    Order,
+    OrderStatus,
+    OrderType,
+    Position,
+    PositionSide,
+)
 
 
 @pytest.mark.integration
@@ -27,23 +27,29 @@ class TestOrderTableIntegration:
         """Create a database manager for testing."""
         return DatabaseManager()
 
-    @pytest.fixture  
+    @pytest.fixture
     def test_position(self, db_manager):
         """Create a test position for order testing."""
+        import random
+        import time
+
         session_id = db_manager.create_trading_session(
             "test_strategy", "BTCUSDT", "1h", "live", 10000.0
         )
-        
+
+        # * Generate unique entry_order_id to avoid unique constraint violations
+        unique_id = f"test_position_{int(time.time() * 1000000)}_{random.randint(1000, 9999)}"
+
         position_id = db_manager.log_position(
             symbol="BTCUSDT",
-            side="LONG", 
+            side="LONG",
             entry_price=50000.0,
             size=0.02,
             strategy_name="test_strategy",
-            entry_order_id="test_position_123",
+            entry_order_id=unique_id,
             session_id=session_id
         )
-        
+
         return {"position_id": position_id, "session_id": session_id}
 
     def test_create_order_in_database(self, db_manager, test_position):
@@ -114,8 +120,9 @@ class TestOrderTableIntegration:
             
             # * Test the relationship
             session.refresh(position)
-            assert len(position.orders) == 2
-            
+            # * Note: log_position automatically creates 1 ENTRY order, plus 2 created here = 3 total
+            assert len(position.orders) == 3
+
             # * Check order types
             order_types = [order.order_type for order in position.orders]
             assert OrderType.ENTRY in order_types
@@ -138,8 +145,7 @@ class TestOrderTableIntegration:
             
             session.add(order)
             session.commit()
-            order_id = order.id
-            
+
             # * Update to filled
             order.status = OrderStatus.FILLED
             order.filled_quantity = 0.001
@@ -213,5 +219,6 @@ class TestOrderTableIntegration:
             session.add(order2)
             
             # * This should raise an integrity error due to unique constraint
-            with pytest.raises(Exception):  # Could be IntegrityError or similar
+            from sqlalchemy.exc import IntegrityError
+            with pytest.raises(IntegrityError):
                 session.commit()
