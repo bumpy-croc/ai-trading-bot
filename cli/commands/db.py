@@ -25,6 +25,7 @@ from alembic.script import ScriptDirectory  # type: ignore
 from sqlalchemy import create_engine, text  # type: ignore
 from sqlalchemy import inspect as sa_inspect  # type: ignore
 from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+from sqlalchemy.pool import QueuePool  # type: ignore
 
 from src.database.models import Base
 
@@ -32,6 +33,23 @@ from src.database.models import Base
 MIN_POSTGRESQL_URL_PREFIX = "postgresql"
 # * Allow environment overrides for packaged/production deployments
 ALEMBIC_INI_PATH = os.getenv("ATB_ALEMBIC_INI", str(PROJECT_ROOT / "alembic.ini"))
+
+
+def _get_secure_engine_config() -> dict[str, Any]:
+    """Get secure PostgreSQL engine configuration matching DatabaseManager."""
+    return {
+        "poolclass": QueuePool,
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,  # 1 hour
+        "echo": False,  # Set to True for SQL debugging
+        "connect_args": {
+            "sslmode": "prefer",
+            "connect_timeout": 10,
+            "application_name": "ai-trading-bot:db-nuke",
+        },
+    }
 MIGRATIONS_PATH = os.getenv("ATB_MIGRATIONS_PATH", str(PROJECT_ROOT / "migrations"))
 
 
@@ -83,11 +101,10 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
     script = ScriptDirectory.from_config(cfg)
     heads = list(script.get_heads())
     db_url = cfg.get_main_option("sqlalchemy.url")
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:alembic-status"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:alembic-status"
+    engine = create_engine(db_url, **engine_config)
     try:
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn)
@@ -124,11 +141,10 @@ def _apply_migrations(cfg: Config) -> bool:
         from alembic.runtime.migration import MigrationContext  # type: ignore
         script = ScriptDirectory.from_config(cfg)
         db_url = cfg.get_main_option("sqlalchemy.url")
-        engine = create_engine(
-            db_url,
-            pool_pre_ping=True,
-            connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:post-migration-verify"},
-        )
+        # * Use secure engine configuration for consistency
+        engine_config = _get_secure_engine_config()
+        engine_config["connect_args"]["application_name"] = "ai-trading-bot:post-migration-verify"
+        engine = create_engine(db_url, **engine_config)
         try:
             with engine.connect() as conn:
                 ctx = MigrationContext.configure(conn)
@@ -192,11 +208,10 @@ def _expected_schema_from_models() -> dict[str, Any]:
 
 
 def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:deploy-check"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:deploy-check"
+    engine = create_engine(db_url, **engine_config)
 
     expected = _expected_schema_from_models()
     expected_tables: list[str] = expected["tables"]
@@ -237,11 +252,10 @@ def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
 
 
 def _verify_schema(db_url: str) -> dict[str, Any]:
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:schema-verify"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:schema-verify"
+    engine = create_engine(db_url, **engine_config)
 
     result: dict[str, Any] = {
         "ok": True,
@@ -345,11 +359,10 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
     - Convert JSON columns to JSONB on PostgreSQL
     - Add missing nullable columns without defaults
     """
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:safe-fixes"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:safe-fixes"
+    engine = create_engine(db_url, **engine_config)
     try:
         with engine.begin() as conn:
             insp = sa_inspect(conn)
@@ -845,11 +858,9 @@ def _nuke(ns: argparse.Namespace) -> int:
 
     try:
         db_url = _get_database_url_for_env(env)
-        engine = create_engine(
-            db_url,
-            pool_pre_ping=True,
-            connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:db-nuke"},
-        )
+        # * Use secure engine configuration matching DatabaseManager for consistency
+        engine_config = _get_secure_engine_config()
+        engine = create_engine(db_url, **engine_config)
 
         with engine.begin() as conn:
             # Get all tables in public schema (excluding system tables)
