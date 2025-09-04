@@ -640,7 +640,7 @@ class DatabaseManager:
             session.add(trade)
             try:
                 session.commit()
-            except IntegrityError as dup:
+            except IntegrityError:
                 # Handle any integrity errors
                 raise
 
@@ -720,17 +720,18 @@ class DatabaseManager:
             if breakeven_triggered is not None:
                 position.breakeven_triggered = bool(breakeven_triggered)
 
+            # * Phase 1: Create and commit position first
             session.add(position)
             try:
                 session.commit()
-            except IntegrityError as dup:
+            except IntegrityError:
                 # Handle any integrity errors (no order_id constraint to worry about anymore)
                 raise
 
             logger.info(
                 f"Logged position #{position.id}: {symbol} {side.value} @ ${entry_price:.2f}"
             )
-            
+
             # * Phase 2: Auto-create ENTRY order for the position within same session
             try:
                 # Use the entry_order_id as exchange_order_id
@@ -751,17 +752,17 @@ class DatabaseManager:
                     strategy_name=strategy_name,
                     session_id=position.session_id,
                 )
-                
+
                 session.add(entry_order)
-                session.commit()  # Commit the order along with position
-                
+                session.commit()  # Commit the order
+
                 logger.info(f"Auto-created ENTRY order #{entry_order.id} for position #{position.id}")
-                
+
             except Exception as exc:
                 # Don't fail position creation if order creation fails
-                session.rollback()  # Rollback the order creation, keep the position
-                session.commit()  # Commit just the position
+                # Position is already committed, so we log the failure but don't rollback
                 logger.warning(f"Failed to auto-create ENTRY order for position #{position.id}: {exc}")
+                # Note: No rollback needed since position was committed separately
             
             return position.id
 
