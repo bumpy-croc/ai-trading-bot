@@ -85,52 +85,53 @@ class TestOrderStatusMethods:
     def test_validate_position_status_consistency(self):
         """Test position status consistency validation."""
         db_manager = DatabaseManager()
-        
-        # * Mock query results
+
+        # * Mock query results for current implementation
+        # orphaned_positions (OPEN positions with missing data)
+        # total_open (all OPEN positions)
+        # total_closed (all CLOSED positions)
         mock_results = [
-            (2,),  # inconsistent_pending
-            (1,),  # orphaned_positions  
-            (5,),  # total_pending
-            (10,), # total_open
+            (3,),  # orphaned_open (OPEN positions with NULL/0 data)
+            (8,),  # total_open
+            (12,), # total_closed
         ]
-        
+
         with patch.object(db_manager, 'get_session') as mock_get_session:
             mock_session = Mock()
             mock_get_session.return_value.__enter__.return_value = mock_session
-            
-            # * Set up multiple execute calls
+
+            # * Set up execute calls for the 3 queries in current implementation
             mock_session.execute.side_effect = [
-                Mock(fetchone=lambda: mock_results[0]),
-                Mock(fetchone=lambda: mock_results[1]), 
-                Mock(fetchone=lambda: mock_results[2]),
-                Mock(fetchone=lambda: mock_results[3]),
+                Mock(fetchone=lambda: mock_results[0]),  # orphaned_positions
+                Mock(fetchone=lambda: mock_results[1]),  # total_open
+                Mock(fetchone=lambda: mock_results[2]),  # total_closed
             ]
-            
+
             result = db_manager.validate_position_status_consistency()
-            
+
             expected = {
-                "orphaned_open": 2,
-                "total_open": 1,
-                "total_closed": 5,
+                "orphaned_open": 3,
+                "total_open": 8,
+                "total_closed": 12,
             }
             assert result == expected
 
     def test_fix_position_status_inconsistencies(self):
         """Test fixing position status inconsistencies."""
         db_manager = DatabaseManager()
-        
+
         with patch.object(db_manager, 'get_session') as mock_get_session:
             mock_session = Mock()
             mock_get_session.return_value.__enter__.return_value = mock_session
-            
-            # * Mock update results
-            mock_result_orphaned = Mock(rowcount=3)
+
+            # * Mock update result for orphaned positions fix
+            mock_result_orphaned = Mock(rowcount=5)
             mock_session.execute.return_value = mock_result_orphaned
-            
+
             result = db_manager.fix_position_status_inconsistencies()
-            
+
             expected = {
-                "orphaned_to_closed": 3,
+                "orphaned_to_closed": 5,
             }
             assert result == expected
             mock_session.commit.assert_called_once()
