@@ -19,7 +19,16 @@ depends_on = None
 def upgrade() -> None:
     """Create complete schema from current SQLAlchemy models"""
 
-    # Create enums first
+    # Drop existing enums if they exist
+    op.execute("DROP TYPE IF EXISTS positionside CASCADE")
+    op.execute("DROP TYPE IF EXISTS positionstatus CASCADE")
+    op.execute("DROP TYPE IF EXISTS ordertype CASCADE")
+    op.execute("DROP TYPE IF EXISTS orderstatus CASCADE")
+    op.execute("DROP TYPE IF EXISTS tradesource CASCADE")
+    op.execute("DROP TYPE IF EXISTS eventtype CASCADE")
+    op.execute("DROP TYPE IF EXISTS partialoperationtype CASCADE")
+
+    # Create enums
     op.execute("CREATE TYPE positionside AS ENUM ('LONG', 'SHORT')")
     op.execute("CREATE TYPE positionstatus AS ENUM ('OPEN', 'CLOSED')")
     op.execute("CREATE TYPE ordertype AS ENUM ('ENTRY', 'PARTIAL_EXIT', 'SCALE_IN', 'FULL_EXIT')")

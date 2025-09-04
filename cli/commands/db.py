@@ -801,6 +801,164 @@ def _reset_railway(ns: argparse.Namespace) -> int:
             pass
 
 
+def _get_database_url_for_env(env: str | None = None) -> str:
+    """Get database URL for specific environment"""
+    if env in ["staging", "production", "development"]:
+        # Use Railway environment-specific URLs
+        env_var = f"RAILWAY_{env.upper()}_DATABASE_URL"
+        db_url = os.getenv(env_var)
+        if not db_url:
+            raise RuntimeError(f"Database URL for {env} not set. Please set {env_var} environment variable.")
+        if not db_url.startswith(MIN_POSTGRESQL_URL_PREFIX):
+            raise RuntimeError(f"Unsupported DATABASE_URL scheme for {env}. Expected '{MIN_POSTGRESQL_URL_PREFIX}://'.")
+        return db_url
+    else:
+        # Use default resolution for local/development
+        return _resolve_database_url()
+
+
+def _nuke(ns: argparse.Namespace) -> int:
+    """Drop all tables, sequences, and enums from the database"""
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("💣 DATABASE NUKE OPERATION" + env_name)
+    print("=" * (50 + len(env_name)))
+    print("⚠️  WARNING: This will PERMANENTLY DELETE all data and schema!")
+    print("   • All tables will be dropped")
+    print("   • All sequences will be dropped")
+    print("   • All enums will be dropped")
+    print("   • Alembic version table will be dropped")
+    print("   • This action CANNOT be undone")
+    print()
+
+    # Require explicit confirmation
+    expected_confirmation = "NUKE"
+    confirm = input(f"Type '{expected_confirmation}' to confirm database destruction: ").strip()
+
+    if confirm != expected_confirmation:
+        print("❌ Confirmation failed. Database nuke aborted.")
+        return 1
+
+    print()
+    print("🔄 Proceeding with database nuke...")
+
+    try:
+        db_url = _get_database_url_for_env(env)
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:db-nuke"},
+        )
+
+        with engine.begin() as conn:
+            # Get all tables in public schema (excluding system tables)
+            result = conn.execute(text("""
+                SELECT tablename
+                FROM pg_tables
+                WHERE schemaname = 'public'
+                ORDER BY tablename
+            """))
+            tables = [row[0] for row in result.fetchall()]
+
+            if not tables:
+                print("ℹ️  No tables found in database.")
+                return 0
+
+            print(f"📋 Found {len(tables)} tables to drop:")
+            for table in tables:
+                print(f"   • {table}")
+
+            # Drop all tables with CASCADE to handle dependencies
+            print("\n🗑️  Dropping tables...")
+            for table in tables:
+                try:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
+                    print(f"   ✅ Dropped: {table}")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to drop {table}: {e}")
+
+            # Get and drop all sequences
+            result = conn.execute(text("""
+                SELECT sequencename
+                FROM pg_sequences
+                WHERE schemaname = 'public'
+                ORDER BY sequencename
+            """))
+            sequences = [row[0] for row in result.fetchall()]
+
+            if sequences:
+                print(f"\n🗑️  Dropping {len(sequences)} sequences...")
+                for seq in sequences:
+                    try:
+                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq} CASCADE"))
+                        print(f"   ✅ Dropped: {seq}")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to drop {seq}: {e}")
+
+            # Get and drop all enums
+            result = conn.execute(text("""
+                SELECT typname
+                FROM pg_type
+                WHERE typtype = 'e'
+                AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+                ORDER BY typname
+            """))
+            enums = [row[0] for row in result.fetchall()]
+
+            if enums:
+                print(f"\n🗑️  Dropping {len(enums)} enums...")
+                for enum in enums:
+                    try:
+                        conn.execute(text(f"DROP TYPE IF EXISTS {enum} CASCADE"))
+                        print(f"   ✅ Dropped: {enum}")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to drop {enum}: {e}")
+
+            # Verify cleanup
+            result = conn.execute(text("SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'"))
+            remaining_tables = result.scalar()
+
+            result = conn.execute(text("SELECT COUNT(*) FROM pg_sequences WHERE schemaname = 'public'"))
+            remaining_sequences = result.scalar()
+
+            result = conn.execute(text("""
+                SELECT COUNT(*)
+                FROM pg_type
+                WHERE typtype = 'e'
+                AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+            """))
+            remaining_enums = result.scalar()
+
+            print("\n✅ Database nuke completed!")
+            print("   📊 Summary:")
+            print(f"      Tables remaining: {remaining_tables}")
+            print(f"      Sequences remaining: {remaining_sequences}")
+            print(f"      Enums remaining: {remaining_enums}")
+
+            if remaining_tables == 0 and remaining_sequences == 0 and remaining_enums == 0:
+                print("   🎉 Database is completely clean!")
+            else:
+                print("   ⚠️  Some objects may still remain (likely system objects)")
+
+            print("\n💡 Next steps:")
+            print("   • Run 'alembic upgrade head' to recreate schema")
+            print("   • Or run 'atb db verify --apply-migrations' to auto-apply")
+
+        return 0
+
+    except Exception as e:
+        print(f"❌ Database nuke failed: {e}")
+        traceback.print_exc()
+        return 1
+    finally:
+        try:
+            if 'engine' in locals():
+                engine.dispose()
+        except Exception:
+            pass
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("db", help="Database utilities")
     sub = p.add_subparsers(dest="db_cmd", required=True)
@@ -846,6 +1004,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_setup.add_argument("--verify", action="store_true")
     p_setup.add_argument("--check-local", action="store_true")
     p_setup.set_defaults(func=_setup_railway)
+
+    p_nuke = sub.add_parser("nuke", help="Drop all tables, sequences, and enums from database (DESTRUCTIVE)")
+    p_nuke.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_nuke.set_defaults(func=_nuke)
 
     # Register railway subcommands
     railway.register(sub)
