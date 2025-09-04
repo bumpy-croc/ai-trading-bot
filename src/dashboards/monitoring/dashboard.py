@@ -79,7 +79,8 @@ class PositionDict(TypedDict):
     entry_time: Any
     stop_loss: float | None
     take_profit: float | None
-    order_id: str | None
+    # Order information (replaces order_id)
+    orders: list[dict[str, Any]]
     # Partial operations tracking
     original_size: float | None
     current_size: float | None
@@ -263,6 +264,25 @@ class MonitoringDashboard:
             positions = self._get_current_positions()
             return jsonify(positions)
 
+        @self.app.route("/api/positions/<int:position_id>/orders")
+        def get_position_orders(position_id):
+            """Get order history for a specific position"""
+            try:
+                query = """
+                SELECT
+                    id, order_type, status, exchange_order_id, internal_order_id,
+                    symbol, side, quantity, price, filled_quantity, filled_price,
+                    commission, created_at, filled_at, cancelled_at
+                FROM orders
+                WHERE position_id = %s
+                ORDER BY created_at DESC
+                """
+                orders = self.db_manager.execute_query(query, (position_id,))
+                return jsonify({"position_id": position_id, "orders": orders})
+            except Exception as e:
+                logger.error(f"Error getting orders for position {position_id}: {e}")
+                return jsonify({"error": str(e)}), 500
+
         @self.app.route("/api/trades")
         def get_recent_trades():
             """Get recent trades"""
@@ -407,20 +427,20 @@ class MonitoringDashboard:
             try:
                 # * Get positions by status for debugging
                 query = """
-                SELECT 
+                SELECT
                     status,
                     COUNT(*) as count,
                     array_agg(
                         json_build_object(
                             'id', id,
                             'symbol', symbol,
-                            'order_id', order_id,
                             'entry_price', entry_price,
                             'quantity', quantity,
-                            'entry_time', entry_time
+                            'entry_time', entry_time,
+                            'order_count', (SELECT COUNT(*) FROM orders WHERE position_id = positions.id)
                         )
                     ) as positions
-                FROM positions 
+                FROM positions
                 GROUP BY status
                 ORDER BY status
                 """
@@ -1449,9 +1469,37 @@ class MonitoringDashboard:
             return 0.0
 
     def _get_current_positions(self) -> list[PositionDict]:
-        """Get current active positions"""
+        """Get current active positions with order history"""
         try:
-            positions_data = self.db_manager.get_active_positions()
+            # Get positions with their orders using a join query
+            query = """
+            SELECT
+                p.*,
+                json_agg(
+                    json_build_object(
+                        'id', o.id,
+                        'order_type', o.order_type,
+                        'status', o.status,
+                        'exchange_order_id', o.exchange_order_id,
+                        'internal_order_id', o.internal_order_id,
+                        'side', o.side,
+                        'quantity', o.quantity,
+                        'price', o.price,
+                        'filled_quantity', o.filled_quantity,
+                        'filled_price', o.filled_price,
+                        'commission', o.commission,
+                        'created_at', o.created_at,
+                        'filled_at', o.filled_at,
+                        'cancelled_at', o.cancelled_at
+                    ) ORDER BY o.created_at
+                ) as orders
+            FROM positions p
+            LEFT JOIN orders o ON p.id = o.position_id
+            WHERE p.status = 'OPEN'
+            GROUP BY p.id
+            ORDER BY p.entry_time DESC
+            """
+            positions_data = self.db_manager.execute_query(query)
 
             positions: list[PositionDict] = []
             price_cache: dict[str, float] = {}
@@ -1471,6 +1519,13 @@ class MonitoringDashboard:
                     unrealized_pnl = (current_price - entry_price) * quantity
                 else:
                     unrealized_pnl = (entry_price - current_price) * quantity
+
+                # Parse orders JSON (will be None if no orders)
+                orders_json = pos.get("orders")
+                if orders_json and orders_json != [None]:  # json_agg returns [null] for no orders
+                    orders = orders_json
+                else:
+                    orders = []
 
                 positions.append(
                     PositionDict(
@@ -1492,7 +1547,7 @@ class MonitoringDashboard:
                                 if pos.get("take_profit") is not None
                                 else None
                             ),
-                            "order_id": pos.get("order_id"),
+                            "orders": orders,  # Order history for this position
                             # Partial operations data
                             "original_size": self._safe_float(pos.get("original_size")),
                             "current_size": self._safe_float(pos.get("current_size")),

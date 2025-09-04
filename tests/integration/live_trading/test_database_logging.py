@@ -48,7 +48,7 @@ class TestDatabaseLogging:
             "exit_reason": "take_profit",
             "strategy_name": "TestStrategy",
             "source": TradeSource.PAPER,
-            "order_id": "test_order_001",
+            "exit_order_id": "test_order_001",
             "session_id": session_id,
         }
         trade_id = db_manager.log_trade(**trade_data)
@@ -124,7 +124,7 @@ class TestDatabaseLogging:
             "entry_price": 50000.0,
             "size": 0.1,
             "strategy_name": "TestStrategy",
-            "order_id": "test_position_001",
+            "entry_order_id": "test_position_001",
             "stop_loss": 49000.0,
             "take_profit": 52000.0,
             "confidence_score": 0.75,
