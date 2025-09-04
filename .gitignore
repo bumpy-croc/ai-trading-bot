@@ -7,6 +7,7 @@ logs/
 .cursor/mcp.json
 bandit-report.json
 backups/
+todo.txt
 
 .DS_Store
 

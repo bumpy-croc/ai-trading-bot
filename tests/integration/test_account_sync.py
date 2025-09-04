@@ -105,12 +105,14 @@ class TestAccountSynchronizer:
         db_manager.get_current_balance.return_value = 10000.0
         db_manager.get_active_positions.return_value = []
         db_manager.get_pending_orders.return_value = []
+        db_manager.get_pending_orders_new.return_value = []
         db_manager.get_trades_by_symbol_and_date.return_value = []
         db_manager.log_position.return_value = 1
         db_manager.log_trade.return_value = 1
         db_manager.update_balance.return_value = True
         db_manager.update_position.return_value = True
         db_manager.update_order_status.return_value = True
+        db_manager.update_order_status_new.return_value = True
         db_manager.close_position.return_value = True
         return db_manager
 
@@ -297,8 +299,21 @@ class TestAccountSynchronizer:
         assert result["total_exchange_orders"] == 1
 
         # Test order status update
-        mock_db_manager.get_pending_orders.return_value = [
-            {"id": 1, "order_id": "test_order_123", "symbol": "BTCUSDT"}
+        mock_db_manager.get_pending_orders_new.return_value = [
+            {
+                "id": 1,
+                "position_id": 1,
+                "order_type": "PARTIAL_EXIT",
+                "status": "PENDING",
+                "order_id": "test_order_123",
+                "exchange_order_id": "test_order_123",
+                "internal_order_id": None,
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "quantity": 0.1,
+                "price": 51000.0,
+                "created_at": datetime.utcnow(),
+            }
         ]
         orders[0].status = ExchangeOrderStatus.FILLED
         orders[0].filled_quantity = 0.1
@@ -307,14 +322,14 @@ class TestAccountSynchronizer:
         result = synchronizer._sync_orders(orders)
         assert result["synced"] is True
         assert result["synced_orders"] == 1
-        mock_db_manager.update_order_status.assert_called_once()
+        mock_db_manager.update_order_status_new.assert_called_once()
 
         # Test order cancelled
         result = synchronizer._sync_orders([])
         assert result["synced"] is True
         assert result["cancelled_orders"] == 1
-        mock_db_manager.update_order_status.assert_called_with(
-            1, ExchangeOrderStatus.CANCELLED.value
+        mock_db_manager.update_order_status_new.assert_called_with(
+            order_id=1, status="CANCELLED"
         )
 
     def test_recover_missing_trades_comprehensive(
@@ -416,7 +431,7 @@ class TestAccountSynchronizer:
 
         # Test order sync exception
         with patch.object(
-            synchronizer.db_manager, "get_pending_orders", side_effect=Exception("DB error")
+            synchronizer.db_manager, "get_pending_orders_new", side_effect=Exception("DB error")
         ):
             result = synchronizer._sync_orders([])
             assert result["synced"] is False
@@ -436,6 +451,98 @@ class TestAccountSynchronizer:
         assert result.success is False
         assert "error" in result.message.lower()
         assert "Exchange error" in result.message
+
+    def test_sync_handles_mixed_legacy_and_new_orders(self, synchronizer, mock_db_manager):
+        """Test sync with a mix of legacy positions and new Order table records."""
+        # * This test simulates the transition period where some positions
+        # * have Order records and others don't
+
+        # * Mock database having pending orders for sync
+        mock_db_manager.get_pending_orders_new.return_value = [
+            {
+                "id": 1,
+                "position_id": 1,
+                "order_type": "ENTRY",
+                "status": "PENDING",
+                "order_id": "legacy_order_444",
+                "exchange_order_id": "legacy_order_444",
+                "internal_order_id": None,
+                "symbol": "ETHUSDT",
+                "side": "SELL",
+                "quantity": 0.01,
+                "price": 3000.0,
+                "created_at": datetime.utcnow(),
+            },
+            {
+                "id": 2,
+                "position_id": 2,
+                "order_type": "ENTRY",
+                "status": "PENDING",
+                "order_id": "new_order_555",
+                "exchange_order_id": "new_order_555",
+                "internal_order_id": None,
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "quantity": 0.001,
+                "price": 50000.0,
+                "created_at": datetime.utcnow(),
+            }
+        ]
+
+        # * Mock both orders on exchange
+        from src.data_providers.exchange_interface import Order as ExchangeOrder
+        from src.data_providers.exchange_interface import OrderSide as ExchangeOrderSide
+        from src.data_providers.exchange_interface import OrderType as ExchangeOrderType
+
+        mock_orders = [
+            ExchangeOrder(
+                order_id="legacy_order_444",
+                symbol="ETHUSDT",
+                side=ExchangeOrderSide.SELL,
+                order_type=ExchangeOrderType.LIMIT,
+                quantity=0.01,
+                price=3000.0,
+                status=ExchangeOrderStatus.FILLED,
+                filled_quantity=0.01,
+                average_price=3000.0,
+                commission=0.0,
+                commission_asset="USDT",
+                create_time=datetime.utcnow(),
+                update_time=datetime.utcnow()
+            ),
+            ExchangeOrder(
+                order_id="new_order_555",
+                symbol="BTCUSDT",
+                side=ExchangeOrderSide.BUY,
+                order_type=ExchangeOrderType.LIMIT,
+                quantity=0.001,
+                price=50000.0,
+                status=ExchangeOrderStatus.FILLED,
+                filled_quantity=0.001,
+                average_price=50000.0,
+                commission=0.0,
+                commission_asset="USDT",
+                create_time=datetime.utcnow(),
+                update_time=datetime.utcnow()
+            )
+        ]
+
+        synchronizer.exchange.sync_account_data.return_value = {
+            "sync_successful": True,
+            "balances": [],
+            "positions": [],
+            "open_orders": mock_orders
+        }
+
+        # * Perform sync
+        result = synchronizer.sync_account_data()
+        assert result.success is True
+
+        # * Verify both orders were processed
+        order_sync_data = result.data["order_sync"]
+        assert order_sync_data["synced"] is True
+        assert order_sync_data["total_exchange_orders"] == 2
+        assert order_sync_data["synced_orders"] == 2
 
 
 class TestAccountSynchronizerIntegration:
@@ -503,6 +610,7 @@ class TestAccountSynchronizerIntegration:
         db_manager.get_current_balance.return_value = 10000.0
         db_manager.get_active_positions.return_value = []
         db_manager.get_pending_orders.return_value = []
+        db_manager.get_pending_orders_new.return_value = []
         db_manager.log_position.return_value = 1
         db_manager.log_trade.return_value = 1
         return AccountSynchronizer(exchange, db_manager, session_id=1)

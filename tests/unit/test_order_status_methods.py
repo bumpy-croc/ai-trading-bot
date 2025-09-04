@@ -4,6 +4,7 @@ Unit tests for order status management methods in DatabaseManager.
 Tests the new methods for handling order status transitions and validation.
 """
 
+from datetime import datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -20,63 +21,66 @@ class TestOrderStatusMethods:
         """Create a mock database manager for unit testing."""
         return Mock(spec=DatabaseManager)
 
-    def test_fill_pending_order_success(self):
-        """Test successful filling of a pending order."""
+    def test_update_order_status_new_success(self):
+        """Test successful updating of order status using new Order table."""
         db_manager = DatabaseManager()
-        
-        # * Mock the database session and position
-        mock_position = Mock()
-        mock_position.status = OrderStatus.PENDING
-        mock_position.entry_price = 50000.0
-        mock_position.quantity = 0.001
-        
+
+        # * Mock the database session and order
+        mock_order = Mock()
+        mock_order.status = OrderStatus.PENDING
+        mock_order.filled_quantity = None
+        mock_order.filled_price = None
+
         with patch.object(db_manager, 'get_session') as mock_get_session:
             mock_session = Mock()
             mock_get_session.return_value.__enter__.return_value = mock_session
-            mock_session.query.return_value.filter_by.return_value.first.return_value = mock_position
-            
+            mock_session.query.return_value.filter_by.return_value.first.return_value = mock_order
+
             # * Test the method
-            result = db_manager.fill_pending_order(
-                order_id="test_order",
-                filled_price=50100.0,
-                filled_quantity=0.0015
+            result = db_manager.update_order_status_new(
+                order_id=1,
+                status=OrderStatus.FILLED,
+                filled_quantity=0.001,
+                filled_price=50100.0
             )
-            
+
             # * Verify success
             assert result is True
-            assert mock_position.status == OrderStatus.OPEN
-            assert mock_position.entry_price == 50100.0
-            assert mock_position.quantity == 0.0015
+            assert mock_order.status == OrderStatus.FILLED
+            assert float(mock_order.filled_quantity) == 0.001  # Convert Decimal to float
+            assert float(mock_order.filled_price) == 50100.0    # Convert Decimal to float
             mock_session.commit.assert_called_once()
 
-    def test_fill_pending_order_not_found(self):
-        """Test filling order when position not found."""
+    def test_update_order_status_new_not_found(self):
+        """Test updating order when not found."""
         db_manager = DatabaseManager()
-        
+
         with patch.object(db_manager, 'get_session') as mock_get_session:
             mock_session = Mock()
             mock_get_session.return_value.__enter__.return_value = mock_session
             mock_session.query.return_value.filter_by.return_value.first.return_value = None
-            
-            result = db_manager.fill_pending_order("nonexistent_order")
-            
+
+            result = db_manager.update_order_status_new(order_id=999, status=OrderStatus.FILLED)
+
             assert result is False
 
-    def test_fill_pending_order_wrong_status(self):
-        """Test filling order that's not in PENDING status."""
+    def test_update_order_status_new_already_filled(self):
+        """Test updating order that's already filled (should still succeed)."""
         db_manager = DatabaseManager()
-        
-        mock_position = Mock()
-        mock_position.status = OrderStatus.OPEN  # ! Already filled
-        
+
+        mock_order = Mock()
+        mock_order.status = OrderStatus.FILLED  # Already filled
+        mock_order.filled_at = datetime.utcnow()  # Already has filled timestamp
+
         with patch.object(db_manager, 'get_session') as mock_get_session:
             mock_session = Mock()
             mock_get_session.return_value.__enter__.return_value = mock_session
-            mock_session.query.return_value.filter_by.return_value.first.return_value = mock_position
-            
-            result = db_manager.fill_pending_order("already_filled_order")
-            
-            assert result is False
+            mock_session.query.return_value.filter_by.return_value.first.return_value = mock_order
+
+            result = db_manager.update_order_status_new(order_id=1, status=OrderStatus.FILLED)
+
+            # The method doesn't prevent updating already filled orders
+            assert result is True
 
     def test_validate_position_status_consistency(self):
         """Test position status consistency validation."""
@@ -105,10 +109,9 @@ class TestOrderStatusMethods:
             result = db_manager.validate_position_status_consistency()
             
             expected = {
-                "inconsistent_pending": 2,
-                "orphaned_open": 1,
-                "total_pending": 5,
-                "total_open": 10,
+                "orphaned_open": 2,
+                "total_open": 1,
+                "total_closed": 5,
             }
             assert result == expected
 
@@ -121,15 +124,13 @@ class TestOrderStatusMethods:
             mock_get_session.return_value.__enter__.return_value = mock_session
             
             # * Mock update results
-            mock_result_pending = Mock(rowcount=3)
-            mock_result_orphaned = Mock(rowcount=1)
-            mock_session.execute.side_effect = [mock_result_pending, mock_result_orphaned]
+            mock_result_orphaned = Mock(rowcount=3)
+            mock_session.execute.return_value = mock_result_orphaned
             
             result = db_manager.fix_position_status_inconsistencies()
             
             expected = {
-                "pending_to_open": 3,
-                "orphaned_to_failed": 1,
+                "orphaned_to_closed": 3,
             }
             assert result == expected
             mock_session.commit.assert_called_once()
@@ -193,41 +194,44 @@ class TestOrderStatusMethods:
         with pytest.raises(ValueError):
             db_manager._normalize_order_status("INVALID_STATUS")
 
-    def test_fill_pending_order_partial_parameters(self):
-        """Test fill_pending_order with only some parameters provided."""
+    def test_update_order_status_new_partial_parameters(self):
+        """Test update_order_status_new with only some parameters provided."""
         db_manager = DatabaseManager()
-        
-        mock_position = Mock()
-        mock_position.status = OrderStatus.PENDING
-        mock_position.entry_price = 50000.0
-        mock_position.quantity = 0.001
-        
+
+        mock_order = Mock()
+        mock_order.status = OrderStatus.PENDING
+        mock_order.filled_quantity = None
+        mock_order.filled_price = None
+
         with patch.object(db_manager, 'get_session') as mock_get_session:
             mock_session = Mock()
             mock_get_session.return_value.__enter__.return_value = mock_session
-            mock_session.query.return_value.filter_by.return_value.first.return_value = mock_position
-            
+            mock_session.query.return_value.filter_by.return_value.first.return_value = mock_order
+
             # * Test with only filled_price
-            result = db_manager.fill_pending_order(
-                order_id="test_order",
+            result = db_manager.update_order_status_new(
+                order_id=1,
+                status=OrderStatus.FILLED,
                 filled_price=50200.0
             )
-            
+
             assert result is True
-            assert mock_position.status == OrderStatus.OPEN
-            assert mock_position.entry_price == 50200.0
-            assert mock_position.quantity == 0.001  # Unchanged
-            
+            assert mock_order.status == OrderStatus.FILLED
+            assert float(mock_order.filled_price) == 50200.0
+            assert mock_order.filled_quantity is None  # Unchanged
+
             # * Reset for next test
-            mock_position.status = OrderStatus.PENDING
-            
-            # * Test with only filled_quantity  
-            result = db_manager.fill_pending_order(
-                order_id="test_order",
+            mock_order.status = OrderStatus.PENDING
+            mock_order.filled_quantity = None
+
+            # * Test with only filled_quantity
+            result = db_manager.update_order_status_new(
+                order_id=1,
+                status=OrderStatus.FILLED,
                 filled_quantity=0.002
             )
-            
+
             assert result is True
-            assert mock_position.status == OrderStatus.OPEN
-            assert mock_position.entry_price == 50200.0  # Unchanged from previous
-            assert mock_position.quantity == 0.002  # Updated
+            assert mock_order.status == OrderStatus.FILLED
+            assert float(mock_order.filled_price) == 50200.0  # Unchanged from previous
+            assert float(mock_order.filled_quantity) == 0.002  # Updated

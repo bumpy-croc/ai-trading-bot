@@ -28,12 +28,15 @@ from .models import (
     DynamicPerformanceMetrics,
     EventType,
     OptimizationCycle,
+    Order,
     OrderStatus,
+    OrderType,
     PartialOperationType,
     PartialTrade,
     PerformanceMetrics,
     Position,
     PositionSide,
+    PositionStatus,
     RiskAdjustment,
     StrategyExecution,
     SystemEvent,
@@ -569,7 +572,7 @@ class DatabaseManager:
         source: str | TradeSource = TradeSource.LIVE,
         stop_loss: float | None = None,
         take_profit: float | None = None,
-        order_id: str | None = None,
+        exit_order_id: str | None = None,
         confidence_score: float | None = None,
         strategy_config: dict | None = None,
         session_id: int | None = None,
@@ -622,7 +625,7 @@ class DatabaseManager:
                 strategy_name=strategy_name,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                order_id=order_id,
+                order_id=exit_order_id,
                 confidence_score=confidence_score,
                 strategy_config=strategy_config,
                 session_id=session_id or self._current_session_id,
@@ -638,14 +641,8 @@ class DatabaseManager:
             try:
                 session.commit()
             except IntegrityError as dup:
-                # Handle duplicate order_id by adding a unique suffix and retrying once
-                if "order_id" in str(dup).lower():
-                    session.rollback()
-                    trade.order_id = f"{order_id}_{int(datetime.utcnow().timestamp() * 1000)}"
-                    session.add(trade)
-                    session.commit()
-                else:
-                    raise
+                # Handle any integrity errors
+                raise
 
             logger.info(
                 f"Logged trade #{trade.id}: {symbol} {side.value} P&L: ${pnl:.2f} ({pnl_percent:.2f}%)"
@@ -665,7 +662,7 @@ class DatabaseManager:
         entry_price: float,
         size: float,
         strategy_name: str,
-        order_id: str,
+        entry_order_id: str,
         stop_loss: float | None = None,
         take_profit: float | None = None,
         confidence_score: float | None = None,
@@ -684,6 +681,9 @@ class DatabaseManager:
         """
         Log a new position to the database.
 
+        Args:
+            entry_order_id: Exchange order ID for the entry order (will be used to create an ENTRY order)
+
         Returns:
             Position ID
         """
@@ -695,7 +695,7 @@ class DatabaseManager:
             position = Position(
                 symbol=symbol,
                 side=side,
-                status=OrderStatus.OPEN,
+                status=PositionStatus.OPEN,  # * Use PositionStatus enum
                 entry_price=entry_price,
                 size=size,
                 quantity=quantity,
@@ -704,7 +704,6 @@ class DatabaseManager:
                 entry_time=datetime.utcnow(),
                 strategy_name=strategy_name,
                 confidence_score=confidence_score,
-                order_id=order_id,
                 session_id=session_id or self._current_session_id,
                 mfe=mfe,
                 mae=mae,
@@ -725,17 +724,45 @@ class DatabaseManager:
             try:
                 session.commit()
             except IntegrityError as dup:
-                if "order_id" in str(dup).lower():
-                    session.rollback()
-                    position.order_id = f"{order_id}_{int(datetime.utcnow().timestamp() * 1000)}"
-                    session.add(position)
-                    session.commit()
-                else:
-                    raise
+                # Handle any integrity errors (no order_id constraint to worry about anymore)
+                raise
 
             logger.info(
                 f"Logged position #{position.id}: {symbol} {side.value} @ ${entry_price:.2f}"
             )
+            
+            # * Phase 2: Auto-create ENTRY order for the position within same session
+            try:
+                # Use the entry_order_id as exchange_order_id
+
+                entry_order = Order(
+                    position_id=position.id,
+                    order_type=OrderType.ENTRY,
+                    status=OrderStatus.FILLED,  # Already filled since position exists
+                    exchange_order_id=entry_order_id,  # Use the entry_order_id
+                    internal_order_id=f"entry_{position.id}_{int(datetime.utcnow().timestamp())}",
+                    symbol=symbol,
+                    side=side,
+                    quantity=Decimal(str(quantity or size)),
+                    price=Decimal(str(entry_price)),
+                    filled_quantity=Decimal(str(quantity or size)),
+                    filled_price=Decimal(str(entry_price)),
+                    filled_at=datetime.utcnow(),
+                    strategy_name=strategy_name,
+                    session_id=position.session_id,
+                )
+                
+                session.add(entry_order)
+                session.commit()  # Commit the order along with position
+                
+                logger.info(f"Auto-created ENTRY order #{entry_order.id} for position #{position.id}")
+                
+            except Exception as exc:
+                # Don't fail position creation if order creation fails
+                session.rollback()  # Rollback the order creation, keep the position
+                session.commit()  # Commit just the position
+                logger.warning(f"Failed to auto-create ENTRY order for position #{position.id}: {exc}")
+            
             return position.id
 
     def update_position(
@@ -853,7 +880,7 @@ class DatabaseManager:
                 logger.error(f"Position {position_id} not found")
                 return False
 
-            position.status = OrderStatus.FILLED
+            position.status = PositionStatus.CLOSED
             position.last_update = exit_time or datetime.utcnow()
             
             # Update position with exit details if provided
@@ -913,112 +940,56 @@ class DatabaseManager:
                 logger.error(f"Invalid order status: {status} ({exc})")
                 return False
 
-    def fill_pending_order(self, order_id: str, filled_price: float | None = None, filled_quantity: float | None = None) -> bool:
-        """Transition a pending order to open (filled) status with execution details."""
-        with self.get_session() as session:
-            position = session.query(Position).filter_by(order_id=order_id).first()
-            if not position:
-                logger.error(f"Position with order_id {order_id} not found")
-                return False
-
-            if position.status != OrderStatus.PENDING:
-                logger.warning(f"Position {order_id} is not in PENDING status (current: {position.status.value})")
-                return False
-
-            try:
-                # * Transition to OPEN status indicating the order has been filled
-                position.status = OrderStatus.OPEN
-                position.last_update = datetime.utcnow()
-                
-                # * Update execution details if provided
-                if filled_price is not None:
-                    position.entry_price = filled_price
-                if filled_quantity is not None:
-                    position.quantity = filled_quantity
-                
-                session.commit()
-                logger.info(f"Filled pending order {order_id} -> status now OPEN")
-                return True
-            except Exception as exc:
-                logger.error(f"Failed to fill pending order {order_id}: {exc}")
-                return False
 
     def validate_position_status_consistency(self) -> dict[str, int]:
         """Validate and report position status consistency issues."""
         with self.get_session() as session:
-            # * Find positions that might have inconsistent status
-            inconsistent_pending = session.execute(
-                sa.text("""
-                    SELECT COUNT(*) as count 
-                    FROM positions 
-                    WHERE status = 'PENDING' 
-                    AND entry_price IS NOT NULL 
-                    AND quantity IS NOT NULL 
-                    AND quantity > 0
-                """)
-            ).fetchone()
-            
+            # * Find positions that might have inconsistent data
             orphaned_positions = session.execute(
                 sa.text("""
-                    SELECT COUNT(*) as count 
-                    FROM positions 
-                    WHERE status = 'OPEN' 
+                    SELECT COUNT(*) as count
+                    FROM positions
+                    WHERE status = 'OPEN'
                     AND (entry_price IS NULL OR quantity IS NULL OR quantity <= 0)
                 """)
             ).fetchone()
-            
-            total_pending = session.execute(
-                sa.text("SELECT COUNT(*) as count FROM positions WHERE status = 'PENDING'")
-            ).fetchone()
-            
+
             total_open = session.execute(
                 sa.text("SELECT COUNT(*) as count FROM positions WHERE status = 'OPEN'")
             ).fetchone()
-            
+
+            total_closed = session.execute(
+                sa.text("SELECT COUNT(*) as count FROM positions WHERE status = 'CLOSED'")
+            ).fetchone()
+
             return {
-                "inconsistent_pending": inconsistent_pending[0] if inconsistent_pending else 0,
                 "orphaned_open": orphaned_positions[0] if orphaned_positions else 0,
-                "total_pending": total_pending[0] if total_pending else 0,
                 "total_open": total_open[0] if total_open else 0,
+                "total_closed": total_closed[0] if total_closed else 0,
             }
 
     def fix_position_status_inconsistencies(self) -> dict[str, int]:
         """Fix position status inconsistencies and return count of fixes applied."""
         with self.get_session() as session:
-            # * Fix positions stuck in PENDING with filled data
-            result_pending = session.execute(
-                sa.text("""
-                    UPDATE positions 
-                    SET status = 'OPEN', last_update = NOW()
-                    WHERE status = 'PENDING' 
-                    AND entry_price IS NOT NULL 
-                    AND quantity IS NOT NULL 
-                    AND quantity > 0
-                """)
-            )
-            
-            # * Fix positions marked as OPEN but missing data (mark as FAILED)
+            # * Fix positions marked as OPEN but missing data (mark as CLOSED)
             result_orphaned = session.execute(
                 sa.text("""
-                    UPDATE positions 
-                    SET status = 'FAILED', last_update = NOW()
-                    WHERE status = 'OPEN' 
+                    UPDATE positions
+                    SET status = 'CLOSED', last_update = NOW()
+                    WHERE status = 'OPEN'
                     AND (entry_price IS NULL OR quantity IS NULL OR quantity <= 0)
                 """)
             )
-            
+
             session.commit()
-            
+
             fixes_applied = {
-                "pending_to_open": result_pending.rowcount,
-                "orphaned_to_failed": result_orphaned.rowcount,
+                "orphaned_to_closed": result_orphaned.rowcount,
             }
-            
-            if fixes_applied["pending_to_open"] > 0:
-                logger.info(f"Fixed {fixes_applied['pending_to_open']} positions from PENDING to OPEN")
-            if fixes_applied["orphaned_to_failed"] > 0:
-                logger.info(f"Fixed {fixes_applied['orphaned_to_failed']} orphaned positions to FAILED")
-                
+
+            if fixes_applied["orphaned_to_closed"] > 0:
+                logger.info(f"Fixed {fixes_applied['orphaned_to_closed']} orphaned positions to CLOSED")
+
             return fixes_applied
 
     def get_trades_by_symbol_and_date(
@@ -2166,3 +2137,238 @@ class DatabaseManager:
             position.last_scale_in_price = Decimal(str(price))
             position.last_update = datetime.utcnow()
             session.commit()
+
+    # ==========================================
+    # Order Management Methods (Phase 2)
+    # ==========================================
+
+    def create_order(
+        self,
+        position_id: int,
+        order_type: OrderType | str,
+        symbol: str,
+        side: PositionSide | str,
+        quantity: float,
+        strategy_name: str,
+        session_id: int | None = None,
+        price: float | None = None,
+        exchange_order_id: str | None = None,
+        internal_order_id: str | None = None,
+        target_level: int | None = None,
+        size_fraction: float | None = None,
+    ) -> int:
+        """Create a new order record associated with a position.
+        
+        Args:
+            position_id: ID of the position this order belongs to
+            order_type: Type of order (ENTRY, PARTIAL_EXIT, SCALE_IN, FULL_EXIT)
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            side: Order side (LONG for buy, SHORT for sell)
+            quantity: Order quantity
+            strategy_name: Name of the strategy creating the order
+            session_id: Trading session ID (optional)
+            price: Limit price (optional, None for market orders)
+            exchange_order_id: Order ID from the exchange (optional)
+            internal_order_id: Our internal order reference (generated if not provided)
+            target_level: For partial exits/scale-ins, which level this targets
+            size_fraction: For partial operations, fraction of original position
+            
+        Returns:
+            Order ID
+        """
+        with self.get_session() as session:
+            # * Convert string enums if necessary
+            if isinstance(order_type, str):
+                order_type = OrderType[order_type.upper()]
+            if isinstance(side, str):
+                side = PositionSide[side.upper()]
+                
+            # * Generate internal order ID if not provided
+            if internal_order_id is None:
+                timestamp = int(datetime.utcnow().timestamp() * 1000)
+                internal_order_id = f"{order_type.value.lower()}_{position_id}_{timestamp}"
+            
+            order = Order(
+                position_id=position_id,
+                order_type=order_type,
+                status=OrderStatus.PENDING,  # * New orders start as PENDING
+                exchange_order_id=exchange_order_id,
+                internal_order_id=internal_order_id,
+                symbol=symbol,
+                side=side,
+                quantity=Decimal(str(quantity)),
+                price=Decimal(str(price)) if price is not None else None,
+                strategy_name=strategy_name,
+                session_id=session_id or self._current_session_id,
+                target_level=target_level,
+                size_fraction=Decimal(str(size_fraction)) if size_fraction is not None else None,
+            )
+            
+            session.add(order)
+            try:
+                session.commit()
+                logger.info(
+                    f"Created {order_type.value} order #{order.id}: {symbol} {side.value} qty={quantity}"
+                )
+                return order.id
+            except IntegrityError as exc:
+                session.rollback()
+                if "internal_order_id" in str(exc).lower():
+                    # * Handle duplicate internal order ID
+                    retry_timestamp = int(datetime.utcnow().timestamp() * 1000000)  # microseconds
+                    order.internal_order_id = f"{order_type.value.lower()}_{position_id}_{retry_timestamp}"
+                    session.add(order)
+                    session.commit()
+                    logger.info(f"Created order #{order.id} with retry internal_order_id")
+                    return order.id
+                else:
+                    raise
+
+    def update_order_status_new(
+        self,
+        order_id: int,
+        status: OrderStatus | str,
+        filled_quantity: float | None = None,
+        filled_price: float | None = None,
+        exchange_order_id: str | None = None,
+        commission: float | None = None,
+    ) -> bool:
+        """Update an order's status and execution details.
+        
+        Args:
+            order_id: Order ID to update
+            status: New order status
+            filled_quantity: Quantity that was filled (optional)
+            filled_price: Price at which order was filled (optional)
+            exchange_order_id: Exchange order ID if not set before (optional)
+            commission: Trading commission/fees (optional)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        with self.get_session() as session:
+            order = session.query(Order).filter_by(id=order_id).first()
+            if not order:
+                logger.error(f"Order {order_id} not found")
+                return False
+                
+            try:
+                # * Convert string enum if necessary
+                if isinstance(status, str):
+                    status = OrderStatus[status.upper()]
+                    
+                old_status = order.status
+                order.status = status
+                order.last_update = datetime.utcnow()
+                
+                # * Update execution details if provided
+                if filled_quantity is not None:
+                    order.filled_quantity = Decimal(str(filled_quantity))
+                if filled_price is not None:
+                    order.filled_price = Decimal(str(filled_price))
+                if exchange_order_id is not None:
+                    order.exchange_order_id = exchange_order_id
+                if commission is not None:
+                    order.commission = Decimal(str(commission))
+                    
+                # * Set timestamps based on status
+                if status == OrderStatus.FILLED and order.filled_at is None:
+                    order.filled_at = datetime.utcnow()
+                elif status == OrderStatus.CANCELLED and order.cancelled_at is None:
+                    order.cancelled_at = datetime.utcnow()
+                    
+                session.commit()
+                logger.info(
+                    f"Updated order {order_id} status: {old_status.value} → {status.value}"
+                )
+                return True
+                
+            except ValueError as exc:
+                logger.error(f"Invalid order status: {status} ({exc})")
+                return False
+            except Exception as exc:
+                session.rollback()
+                logger.error(f"Failed to update order {order_id}: {exc}")
+                return False
+
+    def get_orders_for_position(self, position_id: int) -> list[dict]:
+        """Get all orders associated with a position.
+        
+        Args:
+            position_id: Position ID to get orders for
+            
+        Returns:
+            List of order dictionaries
+        """
+        with self.get_session() as session:
+            orders = (
+                session.query(Order)
+                .filter(Order.position_id == position_id)
+                .order_by(Order.created_at.asc())
+                .all()
+            )
+            
+            return [
+                {
+                    "id": order.id,
+                    "order_type": order.order_type.value,
+                    "status": order.status.value,
+                    "exchange_order_id": order.exchange_order_id,
+                    "internal_order_id": order.internal_order_id,
+                    "symbol": order.symbol,
+                    "side": order.side.value,
+                    "quantity": float(order.quantity),
+                    "price": float(order.price) if order.price else None,
+                    "filled_quantity": float(order.filled_quantity) if order.filled_quantity else 0.0,
+                    "filled_price": float(order.filled_price) if order.filled_price else None,
+                    "commission": float(order.commission) if order.commission else 0.0,
+                    "created_at": order.created_at,
+                    "filled_at": order.filled_at,
+                    "cancelled_at": order.cancelled_at,
+                    "target_level": order.target_level,
+                    "size_fraction": float(order.size_fraction) if order.size_fraction else None,
+                }
+                for order in orders
+            ]
+
+    def get_pending_orders_new(self, session_id: int | None = None) -> list[dict]:
+        """Get all pending orders for a session (using new Order table).
+        
+        Args:
+            session_id: Trading session ID (uses current if not provided)
+            
+        Returns:
+            List of pending order dictionaries
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            return []
+            
+        with self.get_session() as session:
+            orders = (
+                session.query(Order)
+                .filter(
+                    Order.session_id == session_id,
+                    Order.status == OrderStatus.PENDING
+                )
+                .order_by(Order.created_at.asc())
+                .all()
+            )
+            
+            return [
+                {
+                    "id": order.id,
+                    "position_id": order.position_id,
+                    "order_type": order.order_type.value,
+                    "status": order.status.value,
+                    "order_id": order.exchange_order_id or order.internal_order_id,
+                    "exchange_order_id": order.exchange_order_id,
+                    "internal_order_id": order.internal_order_id,
+                    "symbol": order.symbol,
+                    "side": order.side.value,
+                    "quantity": float(order.quantity),
+                    "price": float(order.price) if order.price else None,
+                    "created_at": order.created_at,
+                }
+                for order in orders
+            ]
