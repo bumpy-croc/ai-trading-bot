@@ -17,7 +17,7 @@ sys.path.insert(
 )
 
 from src.database.manager import DatabaseManager
-from src.database.models import OrderStatus, PositionSide
+from src.database.models import OrderStatus, PositionSide, PositionStatus
 
 pytestmark = pytest.mark.unit
 
@@ -257,7 +257,7 @@ class TestTradeLogging(TestDatabaseManager):
                 entry_price=45000.0,
                 size=0.1,
                 strategy_name="TestStrategy",
-                order_id="test_order_123",
+                entry_order_id="test_order_123",
             )
 
             assert position_id == 789
@@ -291,7 +291,7 @@ class TestTradeLogging(TestDatabaseManager):
         result = mock_postgresql_db.close_position(789)
 
         assert result is True
-        assert mock_position.status == OrderStatus.FILLED
+        assert mock_position.status == PositionStatus.CLOSED
         mock_postgresql_db._mock_session.commit.assert_called()
 
 

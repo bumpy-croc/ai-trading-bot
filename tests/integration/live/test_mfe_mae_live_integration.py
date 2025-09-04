@@ -55,6 +55,7 @@ def test_live_engine_records_mfe_mae():
         enable_live_trading=False,
         log_trades=True,
         account_snapshot_interval=0,  # disable snapshots for speed
+        resume_from_last_balance=False,  # disable session recovery for test isolation
         # Use default PostgreSQL test container via DatabaseManager
         database_url=None,
         enable_dynamic_risk=False,

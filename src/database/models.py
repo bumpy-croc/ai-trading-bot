@@ -64,6 +64,20 @@ class OrderStatus(enum.Enum):
     FAILED = "FAILED"
 
 
+class PositionStatus(enum.Enum):
+    """Status of a trading position (distinct from order status)."""
+    OPEN = "OPEN"      # Position is active and being held
+    CLOSED = "CLOSED"  # Position has been closed/exited
+
+
+class OrderType(enum.Enum):
+    """Type of order in relation to its position."""
+    ENTRY = "ENTRY"              # Initial order that creates the position
+    PARTIAL_EXIT = "PARTIAL_EXIT"  # Order that partially closes position
+    SCALE_IN = "SCALE_IN"        # Order that adds to existing position  
+    FULL_EXIT = "FULL_EXIT"      # Order that completely closes position
+
+
 class TradeSource(enum.Enum):
     """Source of the trade"""
 
@@ -158,7 +172,7 @@ class Position(Base):
     symbol = Column(String(20), nullable=False, index=True)
     side = Column(Enum(PositionSide), nullable=False)
     status = Column(
-        Enum(OrderStatus, name="orderstatus"), nullable=False, default=OrderStatus.OPEN
+        Enum(PositionStatus, name="positionstatus"), nullable=False, default=PositionStatus.OPEN
     )
 
     # Position details
@@ -202,17 +216,16 @@ class Position(Base):
     strategy_name = Column(String(100), nullable=False)
     confidence_score = Column(Numeric(18, 8))
 
-    # Order information
-    order_id = Column(String(100))
+    # Exchange information
     exchange = Column(String(50), default="binance")
 
     # Relationships
     trades = relationship("Trade", backref="position")
     partial_trades = relationship("PartialTrade", backref="position")
+    orders = relationship("Order", backref="position", cascade="all, delete-orphan")
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
 
     created_at = Column(DateTime, default=datetime.utcnow)
-    __table_args__ = (UniqueConstraint("order_id", "session_id", name="uq_position_order_session"),)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Time-based exit fields
@@ -220,6 +233,52 @@ class Position(Base):
     end_of_day_exit = Column(Boolean, default=False)
     weekend_exit = Column(Boolean, default=False)
     time_restriction_group = Column(String(50))
+
+
+class Order(Base):
+    """Individual orders table - tracks all orders associated with positions."""
+    
+    __tablename__ = "orders"
+    
+    id = Column(Integer, primary_key=True)
+    position_id = Column(Integer, ForeignKey("positions.id"), nullable=False, index=True)
+    order_type = Column(Enum(OrderType), nullable=False)
+    status = Column(Enum(OrderStatus), nullable=False)
+    
+    # Order identification
+    exchange_order_id = Column(String(100), unique=True, index=True)  # From exchange
+    internal_order_id = Column(String(100), nullable=False, index=True)  # Our reference
+    
+    # Order details
+    symbol = Column(String(20), nullable=False)
+    side = Column(Enum(PositionSide), nullable=False)  # BUY/SELL
+    quantity = Column(Numeric(18, 8), nullable=False)
+    price = Column(Numeric(18, 8))  # Limit price (null for market orders)
+    
+    # Execution details
+    filled_quantity = Column(Numeric(18, 8), default=0)
+    filled_price = Column(Numeric(18, 8))
+    commission = Column(Numeric(18, 8), default=0)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    filled_at = Column(DateTime)
+    cancelled_at = Column(DateTime)
+    last_update = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Strategy context
+    strategy_name = Column(String(100), nullable=False)
+    session_id = Column(Integer, ForeignKey("trading_sessions.id"))
+    
+    # Partial operation context (if applicable)
+    target_level = Column(Integer)  # For partial exits/scale-ins
+    size_fraction = Column(Numeric(18, 8))  # Fraction of original position
+    
+    __table_args__ = (
+        Index("idx_order_position_type", "position_id", "order_type"),
+        Index("idx_order_status_created", "status", "created_at"),
+        UniqueConstraint("internal_order_id", "session_id", name="uq_order_internal_session"),
+    )
 
 
 class PartialOperationType(enum.Enum):
