@@ -21,7 +21,7 @@ def test_log_position_with_mfe_mae(sqlite_memory_db_url: str = "sqlite:///:memor
         entry_price=100.0,
         size=0.1,
         strategy_name="TestStrategy",
-        order_id="order-1",
+        entry_order_id="order-1",
         session_id=session_id,
         mfe=0.02,
         mae=-0.01,
@@ -47,7 +47,7 @@ def test_update_position_mfe_mae():
         entry_price=200.0,
         size=0.2,
         strategy_name="TestStrategy",
-        order_id="order-2",
+        entry_order_id="order-2",
         session_id=session_id,
     )
     now = datetime.utcnow()

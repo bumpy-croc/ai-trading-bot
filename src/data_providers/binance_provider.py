@@ -10,7 +10,6 @@ providing a single interface for all Binance operations including:
 """
 
 import logging
-import os
 from datetime import datetime, timedelta
 from typing import Any, Optional
 

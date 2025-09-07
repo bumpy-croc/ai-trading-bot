@@ -452,7 +452,7 @@ def mock_db_manager():
     # Setup default return values
     db_manager.get_current_balance.return_value = 10000.0
     db_manager.get_active_positions.return_value = []
-    db_manager.get_open_orders.return_value = []
+    db_manager.get_pending_orders.return_value = []
     db_manager.get_trades_by_symbol_and_date.return_value = []
 
     # Setup method return values

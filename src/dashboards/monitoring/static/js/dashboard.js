@@ -454,7 +454,25 @@ class TradingDashboard {
         if (!tbody) return;
 
         if (!positions || positions.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="${this.positionsTableColumnCount}" class="text-center">No active positions</td></tr>`;
+            // * Enhanced no positions message with debugging help
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="${this.positionsTableColumnCount}" class="text-center">
+                        <div class="no-positions-message">
+                            <i class="fas fa-info-circle text-muted me-2"></i>
+                            No active positions found
+                            <div class="mt-2">
+                                <small class="text-muted">
+                                    Active positions have "OPEN" status. 
+                                    <a href="/api/debug/positions" target="_blank" class="text-primary">
+                                        Debug positions
+                                    </a>
+                                </small>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            `;
             return;
         }
 

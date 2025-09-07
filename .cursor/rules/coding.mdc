@@ -30,6 +30,7 @@ alwaysApply: true
 
 # Code Quality
 - Run linting checks with `ruff` on the files changed before finishing any job`
+- Don't ever use words like "new", "updated", etc in comments or filenames. 
 
 ## 2. Security & Sensitive Information
 
