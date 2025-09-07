@@ -20,6 +20,7 @@ from .exchange_interface import (
     ExchangeInterface,
     Order,
     OrderSide,
+    OrderStatus,
     OrderType,
     Position,
     Trade,
@@ -206,7 +207,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                         order_type=self._convert_order_type(od.get("type")),
                         quantity=float(od.get("size", 0)),
                         price=float(od.get("price")) if od.get("price") else None,
-                        status=self._convert_order_status(od.get("status")),
+                        status=self._convert_order_status(od.get("status"), od.get("done_reason")),
                         filled_quantity=float(od.get("filled_size", 0)),
                         average_price=(
                             (float(od.get("executed_value", 0)) / float(od.get("filled_size", 0)))
@@ -240,7 +241,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 order_type=self._convert_order_type(od.get("type")),
                 quantity=float(od.get("size", 0)),
                 price=float(od.get("price")) if od.get("price") else None,
-                status=self._convert_order_status(od.get("status")),
+                status=self._convert_order_status(od.get("status"), od.get("done_reason")),
                 filled_quantity=float(od.get("filled_size", 0)),
                 average_price=(
                     (float(od.get("executed_value", 0)) / float(od.get("filled_size", 0)))
@@ -484,24 +485,39 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     # --------------------------- DataProvider --------------------------
 
-    def _convert_order_type(self, order_type: str) -> str:
-        """Convert Coinbase order type to internal order type."""
+    def _convert_order_type(self, order_type: str) -> OrderType:
+        """Convert Coinbase order type to internal OrderType enum."""
         mapping = {
-            "market": "market",
-            "limit": "limit",
-            "stop": "stop",
+            "market": OrderType.MARKET,
+            "limit": OrderType.LIMIT,
+            "stop": OrderType.STOP_LOSS,
         }
-        return mapping.get(order_type, "unknown")
+        return mapping.get(order_type, OrderType.MARKET)
 
-    def _convert_order_status(self, status: str) -> str:
-        """Convert Coinbase order status to internal order status."""
-        mapping = {
-            "open": "open",
-            "pending": "pending",
-            "done": "closed",
-            "active": "active",
-        }
-        return mapping.get(status, "unknown")
+    def _convert_order_status(self, status: str, done_reason: str = None) -> OrderStatus:
+        """Convert Coinbase order status to internal OrderStatus enum.
+        
+        Args:
+            status: Coinbase order status
+            done_reason: For 'done' orders, the reason (filled, cancelled, etc.)
+        """
+        if status == "open":
+            return OrderStatus.PENDING           # Order is live but not filled
+        elif status == "pending":
+            return OrderStatus.PENDING           # Order submission pending  
+        elif status == "active":
+            return OrderStatus.PARTIALLY_FILLED  # Order partially executed
+        elif status == "done":
+            # For done orders, check the reason to determine if filled or cancelled
+            if done_reason == "filled":
+                return OrderStatus.FILLED
+            elif done_reason in ["cancelled", "canceled"]:
+                return OrderStatus.CANCELLED
+            else:
+                # Default to filled for unknown done reasons
+                return OrderStatus.FILLED
+        else:
+            return OrderStatus.PENDING
 
     def _convert_to_cb_type(self, order_type: str) -> str:
         """Convert internal order type to Coinbase order type."""

@@ -25,6 +25,7 @@ from alembic.script import ScriptDirectory  # type: ignore
 from sqlalchemy import create_engine, text  # type: ignore
 from sqlalchemy import inspect as sa_inspect  # type: ignore
 from sqlalchemy.exc import SQLAlchemyError  # type: ignore
+from sqlalchemy.pool import QueuePool  # type: ignore
 
 from src.database.models import Base
 
@@ -32,6 +33,23 @@ from src.database.models import Base
 MIN_POSTGRESQL_URL_PREFIX = "postgresql"
 # * Allow environment overrides for packaged/production deployments
 ALEMBIC_INI_PATH = os.getenv("ATB_ALEMBIC_INI", str(PROJECT_ROOT / "alembic.ini"))
+
+
+def _get_secure_engine_config() -> dict[str, Any]:
+    """Get secure PostgreSQL engine configuration matching DatabaseManager."""
+    return {
+        "poolclass": QueuePool,
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,  # 1 hour
+        "echo": False,  # Set to True for SQL debugging
+        "connect_args": {
+            "sslmode": "prefer",
+            "connect_timeout": 10,
+            "application_name": "ai-trading-bot:db-nuke",
+        },
+    }
 MIGRATIONS_PATH = os.getenv("ATB_MIGRATIONS_PATH", str(PROJECT_ROOT / "migrations"))
 
 
@@ -83,11 +101,10 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
     script = ScriptDirectory.from_config(cfg)
     heads = list(script.get_heads())
     db_url = cfg.get_main_option("sqlalchemy.url")
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:alembic-status"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:alembic-status"
+    engine = create_engine(db_url, **engine_config)
     try:
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn)
@@ -112,6 +129,103 @@ def _get_alembic_status(cfg: Config) -> dict[str, Any]:
             pass
 
 
+def _complete_database_reset(cfg: Config) -> bool:
+    """Completely reset database schema - drops all types, tables, and alembic versions"""
+    try:
+        db_url = cfg.get_main_option("sqlalchemy.url")
+        engine_config = _get_secure_engine_config()
+        engine_config["connect_args"]["application_name"] = "ai-trading-bot:complete-reset"
+        engine = create_engine(db_url, **engine_config)
+
+        print("🚨 Performing COMPLETE database reset...")
+
+        with engine.begin() as conn:  # Use begin() for automatic transaction management
+            # Force drop all known enum types with multiple attempts
+            print("🔄 Force dropping all custom types...")
+            known_types = [
+                'tradesource',
+                'eventtype',
+                'positionstatus',
+                'ordertype',
+                'orderstatus',
+                'positionside',
+                'partialoperationtype'
+            ]
+
+            # First pass: try to drop with CASCADE
+            for type_name in known_types:
+                try:
+                    conn.execute(text(f"DROP TYPE IF EXISTS {type_name} CASCADE"))
+                    print(f"  ✓ Dropped type: {type_name}")
+                except Exception as e:
+                    print(f"  ⚠️  Could not drop type {type_name}: {e}")
+
+            # Second pass: try to drop any remaining enum types
+            try:
+                result = conn.execute(text("""
+                    SELECT typname
+                    FROM pg_type
+                    WHERE typtype = 'e'
+                    AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+                """))
+                remaining_enums = [row[0] for row in result.fetchall()]
+
+                for enum_name in remaining_enums:
+                    try:
+                        conn.execute(text(f"DROP TYPE IF EXISTS {enum_name} CASCADE"))
+                        print(f"  ✓ Dropped remaining enum: {enum_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop remaining enum {enum_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query remaining enums: {e}")
+
+            # Drop all tables
+            print("🔄 Dropping all tables...")
+            try:
+                result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+                tables = result.fetchall()
+
+                for (table_name,) in tables:
+                    try:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
+                        print(f"  ✓ Dropped table: {table_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop table {table_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query tables: {e}")
+
+            # Drop all sequences
+            print("🔄 Dropping all sequences...")
+            try:
+                result = conn.execute(text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'"))
+                sequences = result.fetchall()
+
+                for (seq_name,) in sequences:
+                    try:
+                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
+                        print(f"  ✓ Dropped sequence: {seq_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop sequence {seq_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query sequences: {e}")
+
+            # Drop alembic version table specifically
+            try:
+                conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+                print("  ✓ Dropped alembic_version table")
+            except Exception as e:
+                print(f"  ⚠️  Could not drop alembic_version: {e}")
+
+        print("✅ Complete database reset successful.")
+        return True
+
+    except Exception as e:
+        print(f"❌ Complete database reset failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def _apply_migrations(cfg: Config) -> bool:
     try:
         from alembic import command  # type: ignore
@@ -124,11 +238,10 @@ def _apply_migrations(cfg: Config) -> bool:
         from alembic.runtime.migration import MigrationContext  # type: ignore
         script = ScriptDirectory.from_config(cfg)
         db_url = cfg.get_main_option("sqlalchemy.url")
-        engine = create_engine(
-            db_url,
-            pool_pre_ping=True,
-            connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:post-migration-verify"},
-        )
+        # * Use secure engine configuration for consistency
+        engine_config = _get_secure_engine_config()
+        engine_config["connect_args"]["application_name"] = "ai-trading-bot:post-migration-verify"
+        engine = create_engine(db_url, **engine_config)
         try:
             with engine.connect() as conn:
                 ctx = MigrationContext.configure(conn)
@@ -192,11 +305,10 @@ def _expected_schema_from_models() -> dict[str, Any]:
 
 
 def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:deploy-check"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:deploy-check"
+    engine = create_engine(db_url, **engine_config)
 
     expected = _expected_schema_from_models()
     expected_tables: list[str] = expected["tables"]
@@ -237,11 +349,10 @@ def _basic_integrity_checks(db_url: str) -> dict[str, Any]:
 
 
 def _verify_schema(db_url: str) -> dict[str, Any]:
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:schema-verify"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:schema-verify"
+    engine = create_engine(db_url, **engine_config)
 
     result: dict[str, Any] = {
         "ok": True,
@@ -345,11 +456,10 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
     - Convert JSON columns to JSONB on PostgreSQL
     - Add missing nullable columns without defaults
     """
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:safe-fixes"},
-    )
+    # * Use secure engine configuration for consistency
+    engine_config = _get_secure_engine_config()
+    engine_config["connect_args"]["application_name"] = "ai-trading-bot:safe-fixes"
+    engine = create_engine(db_url, **engine_config)
     try:
         with engine.begin() as conn:
             insp = sa_inspect(conn)
@@ -414,150 +524,33 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
             pass
 
 
-def _verify_enum_types(db_url: str) -> list[str]:
-    """Verify that critical enum types exist and have required values.
-    
-    Returns:
-        List of issues found (empty list if all checks pass)
-    """
-    issues = []
-    
-    engine = create_engine(
-        db_url,
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 10, "application_name": "ai-trading-bot:enum-verify"},
-    )
-    
-    try:
-        with engine.connect() as conn:
-            # * Critical enum verification - orderstatus
-            print("🔍 Checking orderstatus enum...")
-            
-            # Check if orderstatus enum exists
-            result = conn.execute(text("""
-                SELECT t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder) as labels
-                FROM pg_type t
-                JOIN pg_enum e ON t.oid = e.enumtypid
-                WHERE t.typname = 'orderstatus'
-                GROUP BY t.typname
-            """))
-            
-            enum_info = result.fetchall()
-            if not enum_info:
-                issues.append("orderstatus enum does not exist")
-                return issues
-            
-            enum_name, labels = enum_info[0]
-            required_values = ['PENDING', 'OPEN', 'FILLED', 'CANCELLED', 'FAILED']
-            missing_values = [val for val in required_values if val not in labels]
-            
-            if missing_values:
-                issues.append(f"orderstatus enum missing required values: {missing_values}")
-                print(f"  ❌ Missing values: {missing_values}")
-                print(f"  📋 Current values: {list(labels)}")
-                print(f"  🔧 Fix: ALTER TYPE orderstatus ADD VALUE 'VALUE_NAME';")
-            else:
-                print(f"  ✅ All required values present: {list(labels)}")
-            
-            # Check which enum the positions table actually uses
-            result = conn.execute(text("""
-                SELECT column_name, udt_name
-                FROM information_schema.columns 
-                WHERE table_name = 'positions' AND column_name = 'status'
-            """))
-            
-            column_info = result.fetchall()
-            if column_info:
-                actual_enum = column_info[0][1]
-                if actual_enum != 'orderstatus':
-                    issues.append(f"positions.status uses '{actual_enum}' instead of 'orderstatus'")
-                    print(f"  ❌ positions.status uses wrong enum type: {actual_enum}")
-                else:
-                    print(f"  ✅ positions.status correctly uses orderstatus enum")
-            else:
-                issues.append("positions.status column not found")
-            
-            # Test enum value acceptance
-            print("🧪 Testing enum value acceptance...")
-            test_values = ['PENDING', 'OPEN', 'FILLED', 'CANCELLED', 'FAILED']
-            
-            for test_val in test_values:
-                try:
-                    # Use string formatting for enum type casting (safe with known enum values)
-                    result = conn.execute(text(f"SELECT '{test_val}'::orderstatus as test"))
-                    converted = result.fetchone()[0]
-                    print(f"  ✅ '{test_val}' -> {converted}")
-                except Exception as e:
-                    error_msg = str(e)
-                    if "invalid input value for enum orderstatus" in error_msg:
-                        issues.append(f"orderstatus enum rejects '{test_val}' value")
-                        print(f"  ❌ '{test_val}' -> REJECTED: {error_msg[:100]}...")
-                        if test_val == 'OPEN':
-                            print(f"  🎯 CRITICAL: This explains the production error!")
-                    else:
-                        print(f"  ⚠️  '{test_val}' -> Unexpected error: {error_msg[:100]}...")
-            
-            # Check for conflicting enum types (use separate connection to avoid transaction issues)
-            print("🔍 Checking for conflicting enum types...")
-            try:
-                with engine.connect() as conn2:
-                    result = conn2.execute(text("""
-                        SELECT t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder) as labels
-                        FROM pg_type t
-                        JOIN pg_enum e ON t.oid = e.enumtypid
-                        WHERE t.typname LIKE '%orderstatus%'
-                        GROUP BY t.typname
-                        ORDER BY t.typname
-                    """))
-                    
-                    all_enum_types = result.fetchall()
-                    if len(all_enum_types) > 1:
-                        print(f"  ⚠️  Multiple orderstatus-related enum types found:")
-                        for enum_name, enum_labels in all_enum_types:
-                            print(f"    - {enum_name}: {list(enum_labels)}")
-                            if enum_name != 'orderstatus' and 'OPEN' not in enum_labels:
-                                issues.append(f"Conflicting enum '{enum_name}' missing OPEN value")
-                    else:
-                        print(f"  ✅ Only one orderstatus enum type found")
-            except Exception as e:
-                print(f"  ⚠️  Could not check for conflicting enums: {e}")
-                
-    except Exception as e:
-        issues.append(f"Enum verification failed: {e}")
-        print(f"  ❌ Enum verification error: {e}")
-    finally:
-        try:
-            engine.dispose()
-        except Exception:
-            pass
-    
-    return issues
-
 
 def _migrate(ns: argparse.Namespace) -> int:
     """Run database migrations"""
-    
-    print("🔄 Running database migrations...")
-    
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("🔄 Running database migrations..." + env_name)
+
     try:
-        # Check if DATABASE_URL is available
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            print("❌ DATABASE_URL environment variable not found")
-            print("   Please ensure your Railway PostgreSQL service is properly configured")
-            return 1
-        
+        # Get database URL for the specified environment
+        database_url = _get_database_url_for_env(env)
         print(f"✅ Database URL found: {database_url[:20]}...")
-        
+
+        # Set DATABASE_URL environment variable for alembic
+        env_vars = os.environ.copy()
+        env_vars["DATABASE_URL"] = database_url
+
         if ns.check:
             # Just check migration status
             result = subprocess.run(
                 ["alembic", "current"],
                 cwd=PROJECT_ROOT,
+                env=env_vars,
                 capture_output=True,
                 text=True
             )
-            
+
             if result.returncode == 0:
                 print("✅ Current migration status:")
                 print(result.stdout)
@@ -566,15 +559,16 @@ def _migrate(ns: argparse.Namespace) -> int:
                 print("❌ Failed to check migration status:")
                 print(result.stderr)
                 return 1
-        
+
         # Run alembic upgrade
         result = subprocess.run(
             ["alembic", "upgrade", "head"],
             cwd=PROJECT_ROOT,
+            env=env_vars,
             capture_output=True,
             text=True
         )
-        
+
         if result.returncode == 0:
             print("✅ Database migrations completed successfully")
             if result.stdout:
@@ -586,18 +580,21 @@ def _migrate(ns: argparse.Namespace) -> int:
             print("📋 Error output:")
             print(result.stderr)
             return 1
-            
+
     except Exception as e:
         print(f"❌ Error running migrations: {e}")
         return 1
 
 
 def _verify(ns: argparse.Namespace) -> int:
-    print("🔍 Database Integrity & Migration Check")
-    print("=" * 50)
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    print("🔍 Database Integrity & Migration Check" + env_name)
+    print("=" * (50 + len(env_name)))
     try:
-        db_url = _resolve_database_url()
-        print(f"📦 Database URL resolved (postgres): {db_url}")
+        db_url = _get_database_url_for_env(env)
+        print(f"📦 Database URL resolved (postgres): {db_url[:50]}...")
 
         print("\nConnectivity & Integrity")
         print("-----------------------")
@@ -694,18 +691,6 @@ def _verify(ns: argparse.Namespace) -> int:
         verify = _verify_schema(db_url)
         if verify.get("ok"):
             print("✅ Schema matches SQLAlchemy models.")
-            
-            # Add enum verification for successful schema checks too
-            print("\nEnum Type Verification")
-            print("----------------------")
-            enum_issues = _verify_enum_types(db_url)
-            if enum_issues:
-                print("❌ Enum type issues detected:")
-                for issue in enum_issues:
-                    print(f"  • {issue}")
-                return 1
-            else:
-                print("✅ Enum types verified successfully.")
             return 0
         else:
             print("❌ Schema deviations detected:")
@@ -755,17 +740,6 @@ def _verify(ns: argparse.Namespace) -> int:
                     traceback.print_exc()
                     return 1
             else:
-                # Add enum verification before returning failure
-                print("\nEnum Type Verification")
-                print("----------------------")
-                enum_issues = _verify_enum_types(db_url)
-                if enum_issues:
-                    print("❌ Enum type issues detected:")
-                    for issue in enum_issues:
-                        print(f"  • {issue}")
-                    return 1
-                else:
-                    print("✅ Enum types verified successfully.")
                 return 1
     except Exception as e:
         print(f"❌ Database verification failed: {e}")
@@ -774,12 +748,13 @@ def _verify(ns: argparse.Namespace) -> int:
 
 
 def _backup(ns: argparse.Namespace) -> int:
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
     backup_dir = ns.backup_dir
     retention_days = ns.retention
-    db_url = os.getenv("DATABASE_URL")
-    if not db_url:
-        print("❌ DATABASE_URL not set", file=sys.stderr)
-        return 1
+    db_url = _get_database_url_for_env(env)
+    print(f"📦 Database URL resolved (postgres): {db_url[:50]}..." + env_name)
 
     parsed = urlparse(db_url)
     dbname = parsed.path.lstrip("/")
@@ -943,6 +918,217 @@ def _reset_railway(ns: argparse.Namespace) -> int:
             pass
 
 
+def _get_database_url_for_env(env: str | None = None) -> str:
+    """Get database URL for the specified environment."""
+    from src.config.config_manager import get_config
+
+    cfg = get_config()
+
+    # If no environment specified, use default DATABASE_URL
+    if env is None:
+        database_url = cfg.get("DATABASE_URL") or os.getenv("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError("DATABASE_URL is required but not set.")
+        return database_url
+
+    # Environment-specific database URLs
+    env_var_map = {
+        "development": "RAILWAY_DEVELOPMENT_DATABASE_URL",
+        "staging": "RAILWAY_STAGING_DATABASE_URL",
+        "production": "RAILWAY_PRODUCTION_DATABASE_URL"
+    }
+
+    env_var = env_var_map.get(env)
+    if not env_var:
+        raise ValueError(f"Invalid environment: {env}")
+
+    database_url = cfg.get(env_var) or os.getenv(env_var)
+    if not database_url:
+        raise RuntimeError(f"{env_var} is required for {env} environment but not set.")
+
+    if not database_url.startswith("postgresql"):
+        raise RuntimeError(f"Invalid database URL scheme for {env}. Expected 'postgresql://'.")
+
+    return database_url
+
+
+def _confirm_nuke_operation(env: str | None, db_url: str) -> bool:
+    """Require multiple confirmations for the dangerous nuke operation."""
+    print("\n" + "🚨" * 60)
+    print("⚠️  DANGER: DATABASE NUKE OPERATION DETECTED")
+    print("🚨" * 60)
+    print(f"Target Environment: {env or 'default'}")
+    print(f"Database URL: {db_url[:50]}...")
+    print("\nThis operation will:")
+    print("  • Drop ALL tables in the database")
+    print("  • Drop ALL custom types (enums)")
+    print("  • Drop ALL sequences")
+    print("  • Remove ALL data permanently")
+    print("  • Reset the database to an empty state")
+    print("\n❌ THIS ACTION CANNOT BE UNDONE!")
+    print("💡 Consider creating a backup first with: atb db backup --env", env or "development")
+
+    # First confirmation
+    confirm1 = input(f"\nType 'NUKE' to confirm you want to destroy the {env or 'default'} database: ").strip()
+    if confirm1 != "NUKE":
+        print("❌ First confirmation failed. Operation cancelled.")
+        return False
+
+    # Second confirmation
+    env_indicator = env.upper() if env else "DEFAULT"
+    confirm2 = input(f"Type '{env_indicator}' to confirm this is the correct environment: ").strip()
+    if confirm2 != env_indicator:
+        print("❌ Second confirmation failed. Operation cancelled.")
+        return False
+
+    # Final confirmation
+    confirm3 = input("Type 'I UNDERSTAND THE CONSEQUENCES' to proceed: ").strip()
+    if confirm3 != "I UNDERSTAND THE CONSEQUENCES":
+        print("❌ Final confirmation failed. Operation cancelled.")
+        return False
+
+    return True
+
+
+def _nuke_database(db_url: str) -> bool:
+    """Completely nuke the database - drops everything."""
+    try:
+        engine_config = _get_secure_engine_config()
+        engine_config["connect_args"]["application_name"] = "ai-trading-bot:db-nuke"
+        engine = create_engine(db_url, **engine_config)
+
+        print("🔥 Starting database nuke operation...")
+
+        with engine.begin() as conn:
+            # Step 1: Force drop all known enum types
+            print("🔄 Step 1: Dropping custom types...")
+            known_types = [
+                'tradesource',
+                'eventtype',
+                'positionstatus',
+                'ordertype',
+                'orderstatus',
+                'positionside',
+                'partialoperationtype'
+            ]
+
+            for type_name in known_types:
+                try:
+                    conn.execute(text(f"DROP TYPE IF EXISTS {type_name} CASCADE"))
+                    print(f"  ✓ Dropped type: {type_name}")
+                except Exception as e:
+                    print(f"  ⚠️  Could not drop type {type_name}: {e}")
+
+            # Step 2: Drop any remaining enum types
+            try:
+                result = conn.execute(text("""
+                    SELECT typname
+                    FROM pg_type
+                    WHERE typtype = 'e'
+                    AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+                """))
+                remaining_enums = [row[0] for row in result.fetchall()]
+
+                for enum_name in remaining_enums:
+                    try:
+                        conn.execute(text(f"DROP TYPE IF EXISTS {enum_name} CASCADE"))
+                        print(f"  ✓ Dropped remaining enum: {enum_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop remaining enum {enum_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query remaining enums: {e}")
+
+            # Step 3: Drop all tables
+            print("🔄 Step 2: Dropping all tables...")
+            try:
+                result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+                tables = result.fetchall()
+
+                for (table_name,) in tables:
+                    try:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
+                        print(f"  ✓ Dropped table: {table_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop table {table_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query tables: {e}")
+
+            # Step 4: Drop all sequences
+            print("🔄 Step 3: Dropping all sequences...")
+            try:
+                result = conn.execute(text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'"))
+                sequences = result.fetchall()
+
+                for (seq_name,) in sequences:
+                    try:
+                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
+                        print(f"  ✓ Dropped sequence: {seq_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop sequence {seq_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query sequences: {e}")
+
+            # Step 5: Drop alembic version table specifically
+            try:
+                conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+                print("  ✓ Dropped alembic_version table")
+            except Exception as e:
+                print(f"  ⚠️  Could not drop alembic_version: {e}")
+
+        print("✅ Database nuke operation completed successfully!")
+        print("💡 The database is now completely empty.")
+        print("💡 Run 'atb db verify' to check the current state.")
+        return True
+
+    except Exception as e:
+        print(f"❌ Database nuke operation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        try:
+            if 'engine' in locals():
+                engine.dispose()
+        except Exception:
+            pass
+
+
+def _nuke(ns: argparse.Namespace) -> int:
+    """Handle database nuke command."""
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    _print_header(f"Database Nuke Operation{env_name}")
+
+    try:
+        # Get database URL
+        db_url = _get_database_url_for_env(env)
+        print(f"📦 Database URL resolved: {db_url[:50]}...{env_name}")
+
+        # Multiple safety confirmations
+        if not _confirm_nuke_operation(env, db_url):
+            return 1
+
+        print("\n🔄 Proceeding with database nuke...")
+
+        # Perform the nuke operation
+        success = _nuke_database(db_url)
+
+        if success:
+            print("\n🎉 Database successfully nuked!")
+            print("💡 Consider running migrations to recreate the schema:")
+            print(f"     atb db verify --env {env or 'development'} --apply-migrations")
+            return 0
+        else:
+            print("\n❌ Database nuke failed!")
+            return 1
+
+    except Exception as e:
+        print(f"❌ Error during database nuke: {e}")
+        traceback.print_exc()
+        return 1
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("db", help="Database utilities")
     sub = p.add_subparsers(dest="db_cmd", required=True)
@@ -966,10 +1152,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Force apply migrations even if schema appears up-to-date (bypasses duplicate column prevention)",
     )
+    p_verify.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
     p_verify.set_defaults(func=_verify)
 
     p_migrate = sub.add_parser("migrate", help="Run database migrations")
     p_migrate.add_argument("--check", action="store_true", help="Check migration status only")
+    p_migrate.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
     p_migrate.set_defaults(func=_migrate)
 
     p_backup = sub.add_parser("backup", help="Backup database")
@@ -977,6 +1165,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_backup.add_argument(
         "--retention", type=int, default=int(os.getenv("BACKUP_RETENTION_DAYS", 7))
     )
+    p_backup.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
     p_backup.set_defaults(func=_backup)
 
     p_reset = sub.add_parser("reset-railway", help="Reset Railway database")
@@ -988,6 +1177,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_setup.add_argument("--verify", action="store_true")
     p_setup.add_argument("--check-local", action="store_true")
     p_setup.set_defaults(func=_setup_railway)
+
+    p_nuke = sub.add_parser("nuke", help="⚠️  DANGEROUS: Completely destroy and reset database")
+    p_nuke.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_nuke.set_defaults(func=_nuke)
 
     # Register railway subcommands
     railway.register(sub)
