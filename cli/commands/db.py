@@ -933,7 +933,7 @@ def _get_database_url_for_env(env: str | None = None) -> str:
 
     # Environment-specific database URLs
     env_var_map = {
-        "development": "DATABASE_URL",
+        "development": "RAILWAY_DEVELOPMENT_DATABASE_URL",
         "staging": "RAILWAY_STAGING_DATABASE_URL",
         "production": "RAILWAY_PRODUCTION_DATABASE_URL"
     }
@@ -950,6 +950,183 @@ def _get_database_url_for_env(env: str | None = None) -> str:
         raise RuntimeError(f"Invalid database URL scheme for {env}. Expected 'postgresql://'.")
 
     return database_url
+
+
+def _confirm_nuke_operation(env: str | None, db_url: str) -> bool:
+    """Require multiple confirmations for the dangerous nuke operation."""
+    print("\n" + "🚨" * 60)
+    print("⚠️  DANGER: DATABASE NUKE OPERATION DETECTED")
+    print("🚨" * 60)
+    print(f"Target Environment: {env or 'default'}")
+    print(f"Database URL: {db_url[:50]}...")
+    print("\nThis operation will:")
+    print("  • Drop ALL tables in the database")
+    print("  • Drop ALL custom types (enums)")
+    print("  • Drop ALL sequences")
+    print("  • Remove ALL data permanently")
+    print("  • Reset the database to an empty state")
+    print("\n❌ THIS ACTION CANNOT BE UNDONE!")
+    print("💡 Consider creating a backup first with: atb db backup --env", env or "development")
+
+    # First confirmation
+    confirm1 = input(f"\nType 'NUKE' to confirm you want to destroy the {env or 'default'} database: ").strip()
+    if confirm1 != "NUKE":
+        print("❌ First confirmation failed. Operation cancelled.")
+        return False
+
+    # Second confirmation
+    env_indicator = env.upper() if env else "DEFAULT"
+    confirm2 = input(f"Type '{env_indicator}' to confirm this is the correct environment: ").strip()
+    if confirm2 != env_indicator:
+        print("❌ Second confirmation failed. Operation cancelled.")
+        return False
+
+    # Final confirmation
+    confirm3 = input("Type 'I UNDERSTAND THE CONSEQUENCES' to proceed: ").strip()
+    if confirm3 != "I UNDERSTAND THE CONSEQUENCES":
+        print("❌ Final confirmation failed. Operation cancelled.")
+        return False
+
+    return True
+
+
+def _nuke_database(db_url: str) -> bool:
+    """Completely nuke the database - drops everything."""
+    try:
+        engine_config = _get_secure_engine_config()
+        engine_config["connect_args"]["application_name"] = "ai-trading-bot:db-nuke"
+        engine = create_engine(db_url, **engine_config)
+
+        print("🔥 Starting database nuke operation...")
+
+        with engine.begin() as conn:
+            # Step 1: Force drop all known enum types
+            print("🔄 Step 1: Dropping custom types...")
+            known_types = [
+                'tradesource',
+                'eventtype',
+                'positionstatus',
+                'ordertype',
+                'orderstatus',
+                'positionside',
+                'partialoperationtype'
+            ]
+
+            for type_name in known_types:
+                try:
+                    conn.execute(text(f"DROP TYPE IF EXISTS {type_name} CASCADE"))
+                    print(f"  ✓ Dropped type: {type_name}")
+                except Exception as e:
+                    print(f"  ⚠️  Could not drop type {type_name}: {e}")
+
+            # Step 2: Drop any remaining enum types
+            try:
+                result = conn.execute(text("""
+                    SELECT typname
+                    FROM pg_type
+                    WHERE typtype = 'e'
+                    AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+                """))
+                remaining_enums = [row[0] for row in result.fetchall()]
+
+                for enum_name in remaining_enums:
+                    try:
+                        conn.execute(text(f"DROP TYPE IF EXISTS {enum_name} CASCADE"))
+                        print(f"  ✓ Dropped remaining enum: {enum_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop remaining enum {enum_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query remaining enums: {e}")
+
+            # Step 3: Drop all tables
+            print("🔄 Step 2: Dropping all tables...")
+            try:
+                result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+                tables = result.fetchall()
+
+                for (table_name,) in tables:
+                    try:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
+                        print(f"  ✓ Dropped table: {table_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop table {table_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query tables: {e}")
+
+            # Step 4: Drop all sequences
+            print("🔄 Step 3: Dropping all sequences...")
+            try:
+                result = conn.execute(text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'"))
+                sequences = result.fetchall()
+
+                for (seq_name,) in sequences:
+                    try:
+                        conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
+                        print(f"  ✓ Dropped sequence: {seq_name}")
+                    except Exception as e:
+                        print(f"  ⚠️  Could not drop sequence {seq_name}: {e}")
+            except Exception as e:
+                print(f"  ⚠️  Could not query sequences: {e}")
+
+            # Step 5: Drop alembic version table specifically
+            try:
+                conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+                print("  ✓ Dropped alembic_version table")
+            except Exception as e:
+                print(f"  ⚠️  Could not drop alembic_version: {e}")
+
+        print("✅ Database nuke operation completed successfully!")
+        print("💡 The database is now completely empty.")
+        print("💡 Run 'atb db verify' to check the current state.")
+        return True
+
+    except Exception as e:
+        print(f"❌ Database nuke operation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        try:
+            if 'engine' in locals():
+                engine.dispose()
+        except Exception:
+            pass
+
+
+def _nuke(ns: argparse.Namespace) -> int:
+    """Handle database nuke command."""
+    env = getattr(ns, 'env', None)
+    env_name = f" ({env})" if env else " (default)"
+
+    _print_header(f"Database Nuke Operation{env_name}")
+
+    try:
+        # Get database URL
+        db_url = _get_database_url_for_env(env)
+        print(f"📦 Database URL resolved: {db_url[:50]}...{env_name}")
+
+        # Multiple safety confirmations
+        if not _confirm_nuke_operation(env, db_url):
+            return 1
+
+        print("\n🔄 Proceeding with database nuke...")
+
+        # Perform the nuke operation
+        success = _nuke_database(db_url)
+
+        if success:
+            print("\n🎉 Database successfully nuked!")
+            print("💡 Consider running migrations to recreate the schema:")
+            print(f"     atb db verify --env {env or 'development'} --apply-migrations")
+            return 0
+        else:
+            print("\n❌ Database nuke failed!")
+            return 1
+
+    except Exception as e:
+        print(f"❌ Error during database nuke: {e}")
+        traceback.print_exc()
+        return 1
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -1000,6 +1177,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_setup.add_argument("--verify", action="store_true")
     p_setup.add_argument("--check-local", action="store_true")
     p_setup.set_defaults(func=_setup_railway)
+
+    p_nuke = sub.add_parser("nuke", help="⚠️  DANGEROUS: Completely destroy and reset database")
+    p_nuke.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_nuke.set_defaults(func=_nuke)
 
     # Register railway subcommands
     railway.register(sub)
