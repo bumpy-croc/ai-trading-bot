@@ -1481,7 +1481,7 @@ class LiveTradingEngine:
                     entry_price=price,
                     size=size,
                     strategy_name=self.strategy.__class__.__name__,
-                    order_id=order_id,
+                    entry_order_id=order_id,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
                     quantity=position_value / price,  # Calculate actual quantity
