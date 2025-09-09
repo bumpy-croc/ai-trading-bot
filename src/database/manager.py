@@ -1180,7 +1180,7 @@ class DatabaseManager:
             session.commit()
 
     def get_active_positions(self, session_id: int | None = None) -> list[dict]:
-        """Get all active positions."""
+        """Get all active positions with their associated orders."""
         with self.get_session() as session:
             # Use string comparison for robustness against enum issues
             query = session.query(Position).filter(Position.status == "OPEN")
@@ -1192,8 +1192,39 @@ class DatabaseManager:
 
             positions = query.all()
 
-            return [
-                {
+            result = []
+            for p in positions:
+                # Get orders for this position
+                orders = (
+                    session.query(Order)
+                    .filter(Order.position_id == p.id)
+                    .order_by(Order.created_at.asc())
+                    .all()
+                )
+                
+                orders_data = [
+                    {
+                        "id": order.id,
+                        "order_type": order.order_type.value,
+                        "status": order.status.value,
+                        "exchange_order_id": order.exchange_order_id,
+                        "internal_order_id": order.internal_order_id,
+                        "side": order.side.value,
+                        "quantity": float(order.quantity),
+                        "price": float(order.price) if order.price else None,
+                        "filled_quantity": float(order.filled_quantity) if order.filled_quantity else 0.0,
+                        "filled_price": float(order.filled_price) if order.filled_price else None,
+                        "commission": float(order.commission) if order.commission else 0.0,
+                        "created_at": order.created_at,
+                        "filled_at": order.filled_at,
+                        "cancelled_at": order.cancelled_at,
+                        "target_level": order.target_level,
+                        "size_fraction": float(order.size_fraction) if order.size_fraction else None,
+                    }
+                    for order in orders
+                ]
+
+                result.append({
                     "id": p.id,
                     "symbol": p.symbol,
                     "side": p.side.value,
@@ -1216,9 +1247,18 @@ class DatabaseManager:
                     "mae_price": p.mae_price,
                     "mfe_time": p.mfe_time,
                     "mae_time": p.mae_time,
-                }
-                for p in positions
-            ]
+                    # * Include order information for consistency with dashboard
+                    "orders": orders_data,
+                    # * Include partial operations tracking
+                    "original_size": p.original_size,
+                    "current_size": p.current_size,
+                    "partial_exits_taken": p.partial_exits_taken,
+                    "scale_ins_taken": p.scale_ins_taken,
+                    "last_partial_exit_price": p.last_partial_exit_price,
+                    "last_scale_in_price": p.last_scale_in_price,
+                })
+            
+            return result
 
     def get_recent_trades(self, limit: int = 50, session_id: int | None = None) -> list[dict]:
         """Get recent trades."""

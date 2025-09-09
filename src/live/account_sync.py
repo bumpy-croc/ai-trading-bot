@@ -249,7 +249,7 @@ class AccountSynchronizer:
                         entry_price=exchange_pos.entry_price,
                         size=exchange_pos.size,
                         strategy_name="exchange_sync",
-                        order_id=exchange_pos.order_id
+                        entry_order_id=exchange_pos.order_id
                         or f"sync_{int(datetime.utcnow().timestamp())}",
                         session_id=self.session_id,
                     )
