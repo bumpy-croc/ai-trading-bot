@@ -10,14 +10,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.data_providers.exchange_interface import (
-    OrderStatus as ExchangeOrderStatus,
-    OrderSide,
-    OrderType as ExchangeOrderType,
-    Order
-)
+from src.data_providers.exchange_interface import Order, OrderSide
+from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
+from src.data_providers.exchange_interface import OrderType as ExchangeOrderType
 from src.database.manager import DatabaseManager
-from src.database.models import OrderStatus, PositionSide, PositionStatus, OrderType
+from src.database.models import OrderStatus, OrderType, PositionSide, PositionStatus
 from src.live.account_sync import AccountSynchronizer
 
 
@@ -199,7 +196,6 @@ class TestOrderLifecycle:
         )
         
         # * Mock exchange returning filled order
-        from src.data_providers.exchange_interface import Order
         filled_order = Order(
             order_id="sync_test_exit_order",
             symbol="BTCUSDT",

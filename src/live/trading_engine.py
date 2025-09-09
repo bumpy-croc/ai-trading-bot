@@ -1066,16 +1066,14 @@ class LiveTradingEngine:
                     should_exit = True
                     exit_reason = "Take profit"
                 else:
-                    # Time-based exits remain active
+                    # * Time-based exits only when policy is specified
                     hit_time_exit = False
                     reason = None
                     if self.time_exit_policy is not None:
                         hit_time_exit, reason = self.time_exit_policy.check_time_exit_conditions(
                             position.entry_time, datetime.utcnow()
                         )
-                    else:
-                        hit_time_exit = (datetime.utcnow() - position.entry_time).total_seconds() > 86400
-                        reason = "Time limit"
+                    # * No time exit policy means no time-based exits
                     if hit_time_exit:
                         should_exit = True
                         exit_reason = reason or "Time exit"
@@ -1260,7 +1258,7 @@ class LiveTradingEngine:
                 should_exit = True
                 exit_reason = "Take profit"
 
-            # Check time-based exits via policy (fallback to 24h if not provided)
+            # * Time-based exits only when policy is specified
             else:
                 hit_time_exit = False
                 reason = None
@@ -1268,10 +1266,7 @@ class LiveTradingEngine:
                     hit_time_exit, reason = self.time_exit_policy.check_time_exit_conditions(
                         position.entry_time, datetime.utcnow()
                     )
-                else:
-                    # Use UTC consistently to avoid timezone drift with naive datetimes
-                    hit_time_exit = (datetime.utcnow() - position.entry_time).total_seconds() > 86400
-                    reason = "Time limit"
+                # * No time exit policy means no time-based exits
                 if hit_time_exit:
                     should_exit = True
                     exit_reason = reason or "Time exit"
@@ -1486,7 +1481,7 @@ class LiveTradingEngine:
                     entry_price=price,
                     size=size,
                     strategy_name=self.strategy.__class__.__name__,
-                    order_id=order_id,
+                    entry_order_id=order_id,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
                     quantity=position_value / price,  # Calculate actual quantity

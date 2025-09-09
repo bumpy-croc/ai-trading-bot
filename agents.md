@@ -4,9 +4,11 @@ A modular cryptocurrency trading system focused on long-term, risk-balanced tren
 
 ## Project Overview
 
-**Tech Stack**: Python 3.9+, PostgreSQL, Flask, TensorFlow/ONNX, pandas, scikit-learn
-**Philosophy**: Trade with the trend, protect capital above all else
-**Architecture**: Modular components with pluggable data providers, strategies, and risk management
+## Operating rules
+
+- Always follow the coding standards in `docs/CODE_QUALITY.md`
+- Run non-interactive merge and rebase commands so that my input is not required
+- Never commit secrets. Use environment variables; see `src/utils/secrets.py`.
 
 ## Quick Setup
 
