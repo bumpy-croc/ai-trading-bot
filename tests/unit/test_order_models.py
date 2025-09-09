@@ -4,16 +4,15 @@ Unit tests for Order table and PositionStatus enum.
 Tests the Order table, PositionStatus enum, and OrderType enum.
 """
 
-import pytest
 from datetime import datetime
 
 from src.database.models import (
-    Order, 
-    Position, 
-    PositionStatus, 
-    OrderStatus, 
+    Order,
+    OrderStatus,
     OrderType,
-    PositionSide
+    Position,
+    PositionSide,
+    PositionStatus,
 )
 
 

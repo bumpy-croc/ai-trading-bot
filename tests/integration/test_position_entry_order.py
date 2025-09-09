@@ -6,8 +6,8 @@ Tests that log_position automatically creates a filled ENTRY order for each posi
 
 import pytest
 
-from src.database.models import OrderStatus, OrderType, PositionSide, PositionStatus
 from src.database.manager import DatabaseManager
+from src.database.models import PositionSide, PositionStatus
 
 
 @pytest.mark.integration

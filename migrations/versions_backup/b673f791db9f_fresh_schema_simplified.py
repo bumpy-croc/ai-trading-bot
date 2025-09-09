@@ -5,8 +5,8 @@ Revises: 5dd66bc421f8
 Create Date: 2025-09-02 21:42:41.247000
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 
 def upgrade() -> None:
