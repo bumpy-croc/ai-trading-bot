@@ -56,7 +56,8 @@ Data Providers → Indicators → Strategies → Risk Manager → Execution Laye
 ## Available Strategies (as implemented)
 - `MlBasic` (`src/strategies/ml_basic.py`)
 - `MlAdaptive` (`src/strategies/ml_adaptive.py`)
-- `MlWithSentiment` (`src/strategies/ml_with_sentiment.py`)
+- `Bull` (`src/strategies/bull.py`)
+- `Bear` (`src/strategies/bear.py`)
 Registry exports in `src/strategies/__init__.py`.
 
 ---
@@ -126,13 +127,13 @@ python tests/run_tests.py smoke
 ### Production
 ```bash
 # Production backtest
-python scripts/run_backtest.py ml_with_sentiment --days 365
+atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 365
 
 # Live trading (requires confirmation)
-python scripts/run_live_trading.py ml_with_sentiment --live-trading --i-understand-the-risks
+atb live ml_adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
 
 # Monitor dashboard
-python scripts/start_dashboard.py
+atb dashboards run monitoring --port 8000
 ```
 
 ### Safety

@@ -32,7 +32,7 @@ atb --help
 ```
 src/
 ├── data_providers/    # Market & sentiment data (Binance, SentiCrypt, cached)
-├── strategies/        # Trading logic (ml_basic, ml_adaptive, ml_with_sentiment)
+├── strategies/        # Trading logic (ml_basic, ml_adaptive, bull, bear)
 ├── risk/             # Position sizing, stop-loss, exposure limits
 ├── live/             # Live trading engine with hot-swapping
 ├── backtesting/      # Vectorized historical simulation
