@@ -166,9 +166,15 @@ atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30  # Test function
 
 ### Railway Deployment
 ```bash
-./bin/railway-setup.sh       # Initial setup (requires Railway CLI)
+# Install Railway CLI
+npm install -g @railway/cli
+
+# Initialize and deploy
+railway init
+railway add postgresql  # Add database
+railway up              # Deploy
+
 # Set environment variables in Railway dashboard
-./bin/railway-deploy.sh      # Deploy
 ```
 
 ### Performance & Monitoring

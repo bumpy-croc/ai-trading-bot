@@ -56,7 +56,8 @@ Data Providers → Indicators → Strategies → Risk Manager → Execution Laye
 ## Available Strategies (as implemented)
 - `MlBasic` (`src/strategies/ml_basic.py`)
 - `MlAdaptive` (`src/strategies/ml_adaptive.py`)
-- `MlWithSentiment` (`src/strategies/ml_with_sentiment.py`)
+- `Bull` (`src/strategies/bull.py`)
+- `Bear` (`src/strategies/bear.py`)
 Registry exports in `src/strategies/__init__.py`.
 
 ---
@@ -92,10 +93,10 @@ max_drawdown = 0.20
 ### Emergency Procedures
 ```bash
 # Stop live trading immediately
-python scripts/run_live_trading.py --stop
+atb live-control emergency-stop
 
-# Check current positions
-python scripts/health_check.py --positions
+# Check current positions and health
+atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading
 
 # Emergency database backup
 python scripts/backup_database.py --emergency
@@ -114,10 +115,10 @@ python scripts/backup_database.py --emergency
 ### Quick Development
 ```bash
 # Quick backtest (development)
-python scripts/run_backtest.py adaptive --days 30 --no-db
+atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 30
 
 # Paper trading (safe)
-python scripts/run_live_trading.py adaptive --paper-trading
+atb live ml_adaptive --symbol BTCUSDT --paper-trading
 
 # Quick tests
 python tests/run_tests.py smoke
@@ -126,13 +127,13 @@ python tests/run_tests.py smoke
 ### Production
 ```bash
 # Production backtest
-python scripts/run_backtest.py ml_with_sentiment --days 365
+atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 365
 
 # Live trading (requires confirmation)
-python scripts/run_live_trading.py ml_with_sentiment --live-trading --i-understand-the-risks
+atb live ml_adaptive --symbol BTCUSDT --live-trading --i-understand-the-risks
 
 # Monitor dashboard
-python scripts/start_dashboard.py
+atb dashboards run monitoring --port 8000
 ```
 
 ### Safety
@@ -144,7 +145,7 @@ python scripts/health_check.py
 python tests/run_tests.py critical
 
 # Emergency stop
-python scripts/run_live_trading.py --stop
+atb live-control emergency-stop
 ```
 
 ---
@@ -158,19 +159,19 @@ python scripts/run_live_trading.py --stop
 - "run all tests" → `python tests/run_tests.py all`
 
 ### Backtesting
-- "run backtest" → `python scripts/run_backtest.py ml_basic --days 30 --no-db`
-- "run backtest for [strategy]" → `python scripts/run_backtest.py [strategy] --days 30 --no-db`
-- "run production backtest" → `python scripts/run_backtest.py ml_basic --days 30`
+- "run backtest" → `atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30`
+- "run backtest for [strategy]" → `atb backtest [strategy] --symbol BTCUSDT --timeframe 1h --days 30`
+- "run production backtest" → `atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 365`
 
 ### Live Trading
-- "start paper trading" → `python scripts/run_live_trading.py ml_basic --paper-trading`
-- "start live trading" → `python scripts/run_live_trading.py ml_basic --live-trading --i-understand-the-risks`
-- "start dashboard" → `python scripts/start_dashboard.py`
+- "start paper trading" → `atb live ml_basic --symbol BTCUSDT --paper-trading`
+- "start live trading" → `atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks`
+- "start dashboard" → `atb dashboards run monitoring --port 8000`
 
 ### Health & Monitoring
-- "check health" → `python scripts/health_check.py`
-- "check positions" → `python scripts/health_check.py --positions`
-- "check cache" → `python scripts/cache_manager.py --check`
+- "check health" → `atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading`
+- "check positions" → `atb db verify`
+- "check cache" → `atb data cache-manager info`
 
 ---
 

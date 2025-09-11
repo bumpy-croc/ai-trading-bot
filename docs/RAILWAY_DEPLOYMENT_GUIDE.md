@@ -23,16 +23,20 @@ This guide walks you through deploying the AI Trading Bot to [Railway](https://r
 
 ## Quick Start
 
-The fastest way to get started is using our setup script:
+The Railway deployment process involves these steps:
 
 ```bash
-# 1. Run the setup script
-./bin/railway-setup.sh
+# 1. Install Railway CLI
+npm install -g @railway/cli
 
-# 2. Set your API keys in Railway dashboard
-# (Visit the provided URL and update environment variables)
+# 2. Login and create project
+railway login
+railway init
 
-# 3. Deploy your application
+# 3. Set your API keys in Railway dashboard
+# (Visit the Railway dashboard and update environment variables)
+
+# 4. Deploy your application
 ./bin/railway-deploy.sh -p your-project-name -e staging
 ```
 

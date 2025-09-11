@@ -19,4 +19,4 @@ alwaysApply: false
 ### Add a strategy
 - Create `src/strategies/my_strategy.py` extending `BaseStrategy`.
 - Register exports in `src/strategies/__init__.py`.
-- Backtest: `python scripts/run_backtest.py my_strategy --days 30 --no-db`.
+- Backtest: `atb backtest my_strategy --symbol BTCUSDT --timeframe 1h --days 30`.

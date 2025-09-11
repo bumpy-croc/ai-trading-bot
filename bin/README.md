@@ -1,22 +1,31 @@
-# Railway Deployment Scripts
+# Development Scripts
 
-Helper scripts for Railway setup and deployment.
+Helper scripts for development and quality assurance.
 
 ## Scripts
-- `railway-setup.sh`: Installs CLI, configures project, deploys services
+- `run_mypy.py`: Type checking script with project-specific configuration
 
 Usage:
 ```bash
-./bin/railway-setup.sh
+python bin/run_mypy.py
 ```
 
-Features:
-- Error handling and timestamped logging
-- CLI installation and project linking
-- Deployment and health verification
-- Detailed diagnostics on failure
+## Railway Deployment
 
-Security:
-- Scripts download pinned commits
-- Non-root execution where possible
-- Logged operations for audit
+For Railway deployment, use the Railway CLI directly:
+
+```bash
+# Install Railway CLI
+npm install -g @railway/cli
+
+# Initialize project
+railway init
+
+# Add database
+railway add postgresql
+
+# Deploy
+railway up
+```
+
+See `docs/RAILWAY_QUICKSTART.md` for detailed deployment instructions.
