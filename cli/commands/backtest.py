@@ -105,6 +105,9 @@ def _handle(ns: argparse.Namespace) -> int:
             max_drawdown=ns.max_drawdown,
         )
 
+        # Default to no database logging for performance, unless explicitly enabled
+        enable_db_logging = ns.log_to_db
+        
         backtester = Backtester(
             strategy=strategy,
             data_provider=data_provider,
@@ -112,7 +115,7 @@ def _handle(ns: argparse.Namespace) -> int:
             risk_parameters=risk_params,
             initial_balance=ns.initial_balance,
             enable_short_trading=ns.enable_short_trading,
-            log_to_database=not ns.no_db,
+            log_to_database=enable_db_logging,
         )
 
         trading_symbol = (
@@ -133,7 +136,7 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Timeframe: {ns.timeframe}")
         print(f"Using Sentiment: {ns.use_sentiment}")
         print(f"Using Cache: {not ns.no_cache}")
-        print(f"Database Logging: {not ns.no_db}")
+        print(f"Database Logging: {enable_db_logging}")
         print("-" * 50)
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
@@ -144,7 +147,7 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print("=" * 50)
 
-        if not ns.no_db and results.get("session_id"):
+        if enable_db_logging and results.get("session_id"):
             print(f"Database Session ID: {results['session_id']}")
             print("=" * 50)
 
@@ -184,7 +187,7 @@ def _handle(ns: argparse.Namespace) -> int:
                         "initial_balance": ns.initial_balance,
                         "use_sentiment": ns.use_sentiment,
                         "use_cache": not ns.no_cache,
-                        "database_logging": not ns.no_db,
+                        "database_logging": enable_db_logging,
                         "results": results,
                     },
                     _f,
@@ -225,42 +228,42 @@ def _handle(ns: argparse.Namespace) -> int:
 
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("backtest", help="Run strategy backtest")
-    p.add_argument("strategy", help="Strategy name (e.g., ml_basic)")
+    p.add_argument("strategy", help="Strategy name - e.g., ml_basic")
     p.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol")
     p.add_argument("--timeframe", default="1h", help="Candle timeframe")
     p.add_argument("--days", type=int, default=30, help="Number of days to backtest")
-    p.add_argument("--start", help="Start date (YYYY-MM-DD)")
-    p.add_argument("--end", help="End date (YYYY-MM-DD)")
+    p.add_argument("--start", help="Start date - YYYY-MM-DD")
+    p.add_argument("--end", help="End date - YYYY-MM-DD")
     from src.config.constants import DEFAULT_INITIAL_BALANCE
 
     p.add_argument(
         "--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
     )
-    p.add_argument("--risk-per-trade", type=float, default=0.01, help="Risk per trade (1% = 0.01)")
+    p.add_argument("--risk-per-trade", type=float, default=0.01, help="Risk per trade - 1 percent equals 0.01")
     p.add_argument("--max-risk-per-trade", type=float, default=0.02, help="Maximum risk per trade")
     p.add_argument(
         "--use-sentiment", action="store_true", help="Use sentiment analysis in backtest"
     )
     p.add_argument("--no-cache", action="store_true", help="Disable data caching")
-    p.add_argument("--cache-ttl", type=int, default=24, help="Cache TTL in hours (default: 24)")
+    p.add_argument("--cache-ttl", type=int, default=24, help="Cache TTL in hours - default: 24")
     p.add_argument(
-        "--no-db", action="store_true", help="Disable database logging for this backtest"
+        "--log-to-db", action="store_true", help="Enable database logging for this backtest - slower but provides detailed logs"
     )
     p.add_argument(
         "--provider",
         choices=["coinbase", "binance"],
         default="binance",
-        help="Exchange provider to use (default: binance)",
+        help="Exchange provider to use - default: binance",
     )
     p.add_argument(
         "--enable-short-trading",
         action="store_true",
-        help="Enable short entries (recommended for bear strategy)",
+        help="Enable short entries - recommended for bear strategy",
     )
     p.add_argument(
         "--max-drawdown",
         type=float,
         default=0.5,
-        help="Maximum drawdown before stopping (default: 0.5 = 50%)",
+        help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
     )
     p.set_defaults(func=_handle)
