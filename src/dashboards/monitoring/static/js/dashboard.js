@@ -75,6 +75,7 @@ class TradingDashboard {
             const positions = await positionsResponse.json();
             // Resolve per-symbol prices to avoid BTC defaulting
             await this.hydratePositionsWithPrices(positions);
+            
             this.updatePositions(positions);
 
             // Load trades
@@ -858,7 +859,7 @@ class TradingDashboard {
         const targets = [];
         
         // * Take Profit target (if enabled)
-        if (this.closeTargetConfig.showTakeProfit && takeProfit && this._isValidTarget(side, takeProfit, entryPrice, 'TP')) {
+        if (this.closeTargetConfig?.showTakeProfit !== false && takeProfit && this._isValidTarget(side, takeProfit, entryPrice, 'TP')) {
             targets.push({
                 price: takeProfit,
                 type: 'TP',
@@ -869,10 +870,10 @@ class TradingDashboard {
         }
         
         // * Stop Loss target (consider trailing stop, if enabled)
-        if (this.closeTargetConfig.showStopLoss || this.closeTargetConfig.showTrailingStop) {
+        if (this.closeTargetConfig?.showStopLoss !== false || this.closeTargetConfig?.showTrailingStop !== false) {
             const effectiveStopLoss = trailingStopActivated && trailingStopPrice ? trailingStopPrice : stopLoss;
-            const shouldShowStopLoss = !trailingStopActivated && this.closeTargetConfig.showStopLoss;
-            const shouldShowTrailingStop = trailingStopActivated && this.closeTargetConfig.showTrailingStop;
+            const shouldShowStopLoss = !trailingStopActivated && this.closeTargetConfig?.showStopLoss !== false;
+            const shouldShowTrailingStop = trailingStopActivated && this.closeTargetConfig?.showTrailingStop !== false;
             
             if (effectiveStopLoss && (shouldShowStopLoss || shouldShowTrailingStop) && this._isValidTarget(side, effectiveStopLoss, entryPrice, 'SL')) {
                 targets.push({
@@ -888,7 +889,7 @@ class TradingDashboard {
         }
 
         // * Partial exit targets (if available and enabled)
-        if (this.closeTargetConfig.showPartialExits) {
+        if (this.closeTargetConfig?.showPartialExits !== false) {
             const partialTargets = this._calculatePartialExitTargets(position, currentPrice, calculatePnL);
             targets.push(...partialTargets);
         }
@@ -1101,14 +1102,14 @@ class TradingDashboard {
         }
         
         // * Add time in position (if enabled)
-        if (this.closeTargetConfig.showTimeInPosition && position.entry_time) {
+        if (this.closeTargetConfig?.showTimeInPosition !== false && position.entry_time) {
             const entryTime = new Date(position.entry_time);
             const timeInPosition = this._formatTimeInPosition(entryTime);
             tooltip += `\n⏰ Time in position: ${timeInPosition}`;
         }
         
         // * Add risk-reward ratio if we have both TP and SL (if enabled)
-        if (this.closeTargetConfig.showRiskReward) {
+        if (this.closeTargetConfig?.showRiskReward !== false) {
             const riskReward = this._calculateRiskRewardRatio(position);
             if (riskReward) {
                 tooltip += `\n⚖️ Risk:Reward = 1:${riskReward.toFixed(1)}`;
@@ -1116,7 +1117,7 @@ class TradingDashboard {
         }
         
         // * Truncate tooltip if too long
-        if (tooltip.length > this.closeTargetConfig.maxTooltipLength) {
+        if (tooltip.length > (this.closeTargetConfig?.maxTooltipLength || 200)) {
             tooltip = tooltip.substring(0, this.closeTargetConfig.maxTooltipLength - 3) + '...';
         }
         
@@ -1202,22 +1203,37 @@ class TradingDashboard {
     }
 
     updatePositions(positions) {
-        // * Performance optimization: Debounce rapid updates
+        // * Performance optimization: Debounce rapid updates, but not for initial load
         if (this.debounceTimeout) {
             clearTimeout(this.debounceTimeout);
         }
         
-        this.debounceTimeout = setTimeout(() => {
+        // * Check if this is an initial load (no existing positions in DOM)
+        const tbody = document.querySelector('#positionsTable tbody');
+        const isInitialLoad = !tbody || tbody.querySelector('tr[role="row"]') === null;
+        
+        if (isInitialLoad) {
+            // * For initial load, update immediately without debounce
             this._updatePositionsInternal(positions);
-        }, 100); // 100ms debounce
+        } else {
+            // * For subsequent updates, use debounce
+            this.debounceTimeout = setTimeout(() => {
+                this._updatePositionsInternal(positions);
+            }, 100); // 100ms debounce
+        }
     }
 
     _updatePositionsInternal(positions) {
         const tbody = document.querySelector('#positionsTable tbody');
         if (!tbody) return;
 
-        // * Show loading state while processing
-        this._showPositionsLoading();
+        // * Check if this is an initial load (no existing positions in DOM)
+        const isInitialLoad = !tbody.querySelector('tr[role="row"]');
+        
+        if (!isInitialLoad) {
+            // * Show loading state while processing (only for updates, not initial load)
+            this._showPositionsLoading();
+        }
 
         // * Use requestAnimationFrame for smooth updates
         requestAnimationFrame(() => {
@@ -1247,7 +1263,8 @@ class TradingDashboard {
         const tbody = document.querySelector('#positionsTable tbody');
         if (!tbody) return;
 
-        if (!positions || positions.length === 0) {
+        try {
+            if (!positions || positions.length === 0) {
             // * Enhanced no positions message with debugging help
             tbody.innerHTML = `
                 <tr>
@@ -1279,7 +1296,13 @@ class TradingDashboard {
             const beBadge = position.breakeven_triggered ? '<span class="badge bg-info">BE</span>' : '';
             const mfe = typeof position.mfe === 'number' ? position.mfe : 0.0;
             const mae = typeof position.mae === 'number' ? position.mae : 0.0;
-            const closeTarget = this.calculateCloseTarget(position);
+            let closeTarget;
+            try {
+                closeTarget = this.calculateCloseTarget(position);
+            } catch (error) {
+                console.error('Error calculating close target for position:', position.symbol, error);
+                closeTarget = { text: 'Error', type: 'neutral', tooltip: 'Error calculating close target', error: true };
+            }
             return `
             <tr role="row" aria-label="Position ${position.symbol} ${position.side}">
                 <td role="cell" aria-label="Symbol">${position.symbol}</td>
@@ -1311,11 +1334,23 @@ class TradingDashboard {
                     aria-label="Close target: ${closeTarget.text}">
                     ${closeTarget.error ? '<i class="fas fa-exclamation-triangle me-1" aria-hidden="true"></i>' : ''}
                     ${closeTarget.text}
-                    ${this.closeTargetConfig.showMultipleTargets && closeTarget.targetCount > 1 ? '<span class="badge bg-info ms-1" title="Multiple targets available" aria-label="' + closeTarget.targetCount + ' targets available">' + closeTarget.targetCount + '</span>' : ''}
+                    ${(this.closeTargetConfig?.showMultipleTargets !== false) && closeTarget.targetCount > 1 ? '<span class="badge bg-info ms-1" title="Multiple targets available" aria-label="' + closeTarget.targetCount + ' targets available">' + closeTarget.targetCount + '</span>' : ''}
                 </td>
             </tr>
             `;
         }).join('');
+        
+        } catch (error) {
+            console.error('Error rendering positions:', error);
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="${this.positionsTableColumnCount}" class="text-center text-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        Error loading positions: ${error.message}
+                    </td>
+                </tr>
+            `;
+        }
     }
 
     updateTrades(trades) {
