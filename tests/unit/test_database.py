@@ -363,9 +363,39 @@ class TestDataRetrieval(TestDatabaseManager):
         mock_position.entry_time = datetime.utcnow()
         mock_position.strategy_name = "TestStrategy"
 
-        mock_query = Mock()
-        mock_query.filter.return_value.all.return_value = [mock_position]
-        mock_postgresql_db._mock_session.query.return_value = mock_query
+        # Mock orders for the position
+        mock_order = Mock()
+        mock_order.id = 1
+        mock_order.order_type.value = "MARKET"
+        mock_order.status.value = "FILLED"
+        mock_order.exchange_order_id = "12345"
+        mock_order.internal_order_id = "int_123"
+        mock_order.side.value = "BUY"
+        mock_order.quantity = 0.1
+        mock_order.price = 45000.0
+        mock_order.filled_quantity = 0.1
+        mock_order.filled_price = 45000.0
+        mock_order.commission = 0.0
+        mock_order.created_at = datetime.utcnow()
+        mock_order.filled_at = datetime.utcnow()
+        mock_order.cancelled_at = None
+        mock_order.target_level = None
+        mock_order.size_fraction = None
+
+        # Set up the mock session to return different results for different queries
+        def mock_query_side_effect(model):
+            if model.__name__ == "Position":
+                mock_positions_query = Mock()
+                mock_positions_query.filter.return_value.all.return_value = [mock_position]
+                return mock_positions_query
+            elif model.__name__ == "Order":
+                mock_orders_query = Mock()
+                mock_orders_query.filter.return_value.order_by.return_value.all.return_value = [mock_order]
+                return mock_orders_query
+            else:
+                return Mock()
+
+        mock_postgresql_db._mock_session.query.side_effect = mock_query_side_effect
 
         positions = mock_postgresql_db.get_active_positions()
 
