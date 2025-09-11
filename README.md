@@ -2,7 +2,7 @@
 
 A modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live), ML-driven models (price and sentiment), PostgreSQL logging, and optional Railway deployment.
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/LOCAL_POSTGRESQL_SETUP.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/LOCAL_POSTGRESQL_SETUP.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
 ---
 
@@ -192,7 +192,6 @@ See `docs/CONFIGURATION_SYSTEM_SUMMARY.md`.
 ## Deployment
 
 - Railway: see `docs/RAILWAY_QUICKSTART.md` and `docs/RAILWAY_DEPLOYMENT_GUIDE.md` (includes DB setup and app start commands)
-- Quick helper: `./bin/railway-setup.sh`
 
 ---
 

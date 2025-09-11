@@ -166,7 +166,7 @@ Lines that are too long are difficult to read and navigate, especially on smalle
 
 ### Languages it applies to: all
 
-Unresolved TODO and FIXME comments indicate incomplete work that can accumulate over time.
+Unresolved TODO and FIXME comments indicate incomplete work that can accumulate over time. While these are useful during development, production code should avoid lingering placeholders.
 
 ## Remove unreachable dead code
 

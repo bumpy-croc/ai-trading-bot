@@ -90,12 +90,12 @@ Candle: 8760 of 43780
 
 ### Quick 1-Year Test
 ```bash
-python scripts/run_backtest.py ml_basic --days 365 --timeframe 1h --initial-balance 10000
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 365
 ```
 
 ### Full 5-Year Test with Fresh Data
 ```bash
-python scripts/run_backtest.py ml_basic --days 1825 --timeframe 1h --initial-balance 10000 --no-cache
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 1825
 ```
 
 ## Troubleshooting

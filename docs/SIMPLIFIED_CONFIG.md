@@ -52,11 +52,11 @@ class MyStrategy(BaseStrategy):
 ## Usage Examples
 
 ```bash
-# Uses strategy's default trading pair
-python scripts/run_backtest.py ml_basic --days 100          # Uses ETH-USD
+# Uses strategy's default trading pair and CLI
+atb backtest ml_basic --symbol ETHUSD --timeframe 1h --days 100
 
 # Override with specific symbol
-python scripts/run_backtest.py ml_basic --symbol SOL-USD --days 100  # Use SymbolFactory for conversion if needed
+atb backtest ml_basic --symbol SOLUSD --timeframe 1h --days 100
 ```
 
 ## Benefits
@@ -70,7 +70,7 @@ python scripts/run_backtest.py ml_basic --symbol SOL-USD --days 100  # Use Symbo
 ## Files Modified
 
 - **UPDATED**: All strategy files - Added trading pair definitions
-- **UPDATED**: `scripts/run_backtest.py` - Uses strategy-specific trading pairs
+- **UPDATED**: CLI tool `atb` - Uses strategy-specific trading pairs
 - **UPDATED**: Data providers - Load API keys directly from environment
 - **REMOVED**: Old `config.py` and `config/settings.py` files - No longer needed
 
@@ -81,7 +81,7 @@ When creating new strategies:
 1. **Inherit from BaseStrategy**
 2. **Set trading pair** in constructor: `self.trading_pair = 'SYMBOL'`
 3. **Define parameters** directly in the class
-4. **Add to strategy map** in `scripts/run_backtest.py`
+4. **Add to strategy registry** in `src/strategies/__init__.py`
 
 Example:
 ```python

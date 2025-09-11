@@ -39,12 +39,14 @@ railway login
 git clone <your-repo-url>
 cd ai-trading-bot
 
-# Run the setup script
-./bin/railway-setup.sh
+# Initialize Railway project
+railway init
 
-# Follow the prompts:
-# - Create new project or link existing
-# - Add PostgreSQL database (recommended: yes)
+# Add PostgreSQL database
+railway add postgresql
+
+# Deploy the application
+railway up
 ```
 
 ### 4. Configure API Keys 🔑
@@ -170,4 +172,4 @@ railway variables | grep BINANCE
 
 ---
 
-**Ready to deploy?** Run `./bin/railway-setup.sh` to get started! 🚀
+**Ready to deploy?** Follow the steps above or check the [Railway Deployment Guide](RAILWAY_DEPLOYMENT_GUIDE.md) for detailed instructions! 🚀

@@ -150,7 +150,7 @@ python scripts/railway_database_setup.py --verify
 ### Performance Testing
 ```bash
 # Run backtest with database logging
-python scripts/run_backtest.py ml_basic --days 30
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30
 
 # Check database performance
 docker-compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
@@ -190,8 +190,8 @@ docker-compose up -d postgres
 python scripts/verify_database_connection.py
 
 # 3. Run your development commands
-python scripts/run_backtest.py ml_basic --days 7
-python scripts/run_live_trading.py ml_basic
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 7
+atb live ml_basic --symbol BTCUSDT --paper-trading
 ```
 
 ### PostgreSQL Configuration
