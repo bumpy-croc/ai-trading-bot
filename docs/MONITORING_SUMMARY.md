@@ -31,7 +31,7 @@ src/monitoring/
 ├── dashboard.py       # Main app
 ├── templates/         # HTML templates
 ├── static/            # CSS/JS assets
-scripts/start_dashboard.py  # Launcher script
+CLI: atb dashboards run monitoring --port 8000  # Launcher command
 ```
 
 ## Notes
