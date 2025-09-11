@@ -120,31 +120,44 @@
             <!-- Active Positions -->
             <div class="col-md-6 mb-4">
                 <div class="table-container">
-                    <h5 class="section-title p-3 mb-0">
-                        <i class="fas fa-wallet"></i>
-                        Active Positions
+                    <h5 class="section-title p-3 mb-0 d-flex justify-content-between align-items-center">
+                        <span>
+                            <i class="fas fa-wallet"></i>
+                            Active Positions
+                        </span>
+                        <div class="btn-group" role="group" aria-label="Close target display options">
+                            <button id="toggleCloseTargetDisplay" class="btn btn-sm btn-outline-secondary" title="Toggle between currency and percentage display">
+                                <i class="fas fa-percentage"></i>
+                            </button>
+                            <button id="closeTargetConfigBtn" class="btn btn-sm btn-outline-secondary" title="Configure close target display options">
+                                <i class="fas fa-cog"></i>
+                            </button>
+                        </div>
                     </h5>
-                    <table class="table" id="positionsTable">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th>Side</th>
-                                <th>Size</th>
-                                <th>Entry</th>
-                                <th>Current</th>
-                                <th>P&L</th>
-                                <th>Trail SL</th>
-                                <th>BE</th>
-                                <th>MFE</th>
-                                <th>MAE</th>
-                            </tr>
-                        </thead>
+                    <div class="table-responsive">
+                        <table class="table table-hover" id="positionsTable" role="table" aria-label="Active trading positions">
+                            <thead>
+                                <tr>
+                                    <th scope="col" aria-label="Trading symbol">Symbol</th>
+                                    <th scope="col" aria-label="Position side">Side</th>
+                                    <th scope="col" aria-label="Position size">Size</th>
+                                    <th scope="col" aria-label="Entry price">Entry</th>
+                                    <th scope="col" aria-label="Current price">Current</th>
+                                    <th scope="col" aria-label="Unrealized profit and loss">P&L</th>
+                                    <th scope="col" aria-label="Trailing stop loss">Trail SL</th>
+                                    <th scope="col" aria-label="Breakeven status">BE</th>
+                                    <th scope="col" aria-label="Maximum favorable excursion">MFE</th>
+                                    <th scope="col" aria-label="Maximum adverse excursion">MAE</th>
+                                    <th scope="col" aria-label="Close target information">Close Target</th>
+                                </tr>
+                            </thead>
                         <tbody>
                             <tr>
-                                <td colspan="10" class="text-center">Loading...</td>
+                                <td colspan="11" class="text-center">Loading...</td>
                             </tr>
                         </tbody>
-                    </table>
+                        </table>
+                    </div>
                 </div>
             </div>
 
@@ -172,6 +185,85 @@
                             </tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Close Target Configuration Modal -->
+    <div class="modal fade" id="closeTargetConfigModal" tabindex="-1" aria-labelledby="closeTargetConfigModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="closeTargetConfigModalLabel">Close Target Display Options</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="closeTargetConfigForm">
+                        <div class="mb-3">
+                            <h6>Display Options</h6>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showTakeProfit" checked>
+                                <label class="form-check-label" for="showTakeProfit">
+                                    Show Take Profit targets
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showStopLoss" checked>
+                                <label class="form-check-label" for="showStopLoss">
+                                    Show Stop Loss targets
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showTrailingStop" checked>
+                                <label class="form-check-label" for="showTrailingStop">
+                                    Show Trailing Stop targets
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showPartialExits" checked>
+                                <label class="form-check-label" for="showPartialExits">
+                                    Show Partial Exit targets
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <h6>Tooltip Information</h6>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showRiskReward" checked>
+                                <label class="form-check-label" for="showRiskReward">
+                                    Show Risk:Reward ratios
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showTimeInPosition" checked>
+                                <label class="form-check-label" for="showTimeInPosition">
+                                    Show time in position
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showMultipleTargets" checked>
+                                <label class="form-check-label" for="showMultipleTargets">
+                                    Show multiple target indicators
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="maxTooltipLength" class="form-label">Maximum tooltip length (characters)</label>
+                            <input type="number" class="form-control" id="maxTooltipLength" value="200" min="50" max="500">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="refreshInterval" class="form-label">Refresh interval (milliseconds)</label>
+                            <input type="number" class="form-control" id="refreshInterval" value="5000" min="1000" max="30000" step="1000">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="saveCloseTargetConfig">Save Changes</button>
                 </div>
             </div>
         </div>
