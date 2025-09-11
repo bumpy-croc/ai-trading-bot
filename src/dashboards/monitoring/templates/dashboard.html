@@ -115,10 +115,9 @@
             </div>
         </div>
 
-        <!-- Positions and Trades -->
-        <div class="row">
-            <!-- Active Positions -->
-            <div class="col-md-6 mb-4">
+        <!-- Active Positions -->
+        <div class="row mb-4">
+            <div class="col-12">
                 <div class="table-container">
                     <h5 class="section-title p-3 mb-0 d-flex justify-content-between align-items-center">
                         <span>
@@ -160,31 +159,35 @@
                     </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Recent Trades -->
-            <div class="col-md-6 mb-4">
+        <!-- Recent Trades -->
+        <div class="row mb-4">
+            <div class="col-12">
                 <div class="table-container">
                     <h5 class="section-title p-3 mb-0">
                         <i class="fas fa-exchange-alt"></i>
                         Recent Trades
                     </h5>
-                    <table class="table" id="tradesTable">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th>Side</th>
-                                <th>Quantity</th>
-                                <th>Entry</th>
-                                <th>Exit</th>
-                                <th>P&L</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td colspan="6" class="text-center">Loading...</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div class="table-responsive">
+                        <table class="table table-hover" id="tradesTable">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Quantity</th>
+                                    <th>Entry</th>
+                                    <th>Exit</th>
+                                    <th>P&L</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td colspan="6" class="text-center">Loading...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
