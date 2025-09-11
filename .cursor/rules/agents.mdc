@@ -1,0 +1,75 @@
+---
+description: Agent rules for interacting with the project
+globs:
+alwaysApply: true
+---
+
+# Operating Rules for agents
+
+- use the `atb` cli for interacting with the application. (`atb --help`)
+- Delete all temporary scripts before the end of a chat.
+
+
+## Code Quality
+
+Follow code quality guidelines in `.cursor/rules/code-all`.
+
+## Core Architecture
+
+```
+src/
+├── data_providers/    # Market & sentiment data (Binance, SentiCrypt, cached)
+├── strategies/        # Trading logic (ml_basic, ml_adaptive, ml_with_sentiment)
+├── risk/              # Position sizing, stop-loss, exposure limits
+├── live/              # Live trading engine with hot-swapping
+├── backtesting/       # Vectorized historical simulation
+├── prediction/        # ONNX model registry and caching
+├── database/          # PostgreSQL models and management
+├── monitoring/        # Real-time Flask dashboards
+└── ml/                # Trained models (.onnx/.keras) + metadata
+```
+
+## Essential Commands
+
+```bash
+# Quick backtest (development)
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30
+
+# Run tests
+python tests/run_tests.py unit          # Unit tests
+python tests/run_tests.py integration   # Integration tests
+
+# Code quality
+ruff check . --fix
+black .
+
+# Live trading (paper mode)
+atb live ml_basic --symbol BTCUSDT --paper-trading
+
+# Run monitoring Dashboard
+atb dashboards run monitoring
+
+```
+
+
+## Github
+
+### Interactions
+
+For interactions with Github:
+- If available prefer the GitHub MCP server for interacting with GitHub
+- If GitHub MCP server is not available, use the Github CLI. Authenticate with the GITHUB_TOKEN env variable.
+
+### Pull Requests (PRs)
+
+#### Reviews
+- Investigate unresolved existing comments and address the feedback where appropriate. If you disagree with a comment, say so and why instead of making the change.
+- Review the pull request like you were a senior software engineer. Add a github review (via mcp or the cli `gh pr review` command) with your comments, and summarize the changes requested for me before implementing anything.
+
+#### Creating PRs
+- When you create a new PR, add a concise markdown description, with proper heading, describing the background, overview of the issue and what was achieved
+
+## Logging
+- Use Python logging module, not print
+- Levels: DEBUG (dev), INFO (events), WARNING (issues), ERROR (failures)
+- Include context in messages

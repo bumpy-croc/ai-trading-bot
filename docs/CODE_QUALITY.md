@@ -1,6 +1,6 @@
 # Code Quality standards
 
-##Remove debugging and temporary code before commits
+## Remove debugging and temporary code before commits
 
 ### Languages it applies to: all
 
@@ -191,3 +191,9 @@ Dynamic variable names (variable variables) can lead to hard to maintain code an
 ### Languages it applies to: PHP
 
 Functions like array_filter() preserve original keys, which can cause bugs when code expects sequential numeric indexes starting from 0.
+
+## Type hints for public APIs
+
+### Language it applies to: All
+
+Avoid `Any` where possible in type systems and type definitions properly, especially when dealing with public APIs
