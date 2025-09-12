@@ -72,11 +72,11 @@ class PersistentCacheManager:
         
     def _get_cache_path(self, cache_key: str) -> Path:
         """Get the file path for a cache key."""
-        return self.cache_dir / f"{cache_key}.pkl"
+        return Path(self.cache_dir) / f"{cache_key}.pkl"
     
     def _get_metadata_path(self, cache_key: str) -> Path:
         """Get the metadata file path for a cache key."""
-        return self.cache_dir / f"{cache_key}.meta"
+        return Path(self.cache_dir) / f"{cache_key}.meta"
     
     def _is_cache_expired(self, cache_key: str) -> bool:
         """Check if a cache entry has expired."""
@@ -1359,8 +1359,8 @@ class Backtester:
                     if cache_stats['expired_files'] > 0:
                         logger.info(f"Expired cache files: {cache_stats['expired_files']}")
             
-            # Clear feature cache to free memory
-            self._clear_feature_cache()
+            # Note: Cache is preserved after backtest completion to allow inspection
+            # and potential reuse in subsequent operations
 
             return {
                 "total_trades": total_trades,

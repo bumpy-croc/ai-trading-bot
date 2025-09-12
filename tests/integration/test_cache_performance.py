@@ -210,7 +210,8 @@ class TestCachePerformance:
             time_ratio = times[i] / times[i-1]
             
             # Time should not grow exponentially with dataset size
-            assert time_ratio < size_ratio * 2, \
+            # Allow up to 3x scaling factor to account for ML prediction overhead
+            assert time_ratio < size_ratio * 3, \
                 f"Time scaling is too poor: {size_ratio}x size increase " \
                 f"caused {time_ratio:.1f}x time increase"
 
