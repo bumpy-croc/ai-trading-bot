@@ -1965,21 +1965,9 @@ class Backtester:
         # Ensure data hash is set - if not available and df provided, generate it
         if self._data_hash is None and df is not None:
             self._get_data_hash(df)
-            # Fallback to data hash for compatibility
-            data_hash = self._data_hash or "unknown"
-            return f"{model_version}_{data_hash}_{index}"
-=======
-    def _get_cache_key(self, index: int, df: Optional[pd.DataFrame] = None) -> str:
-        """Generate a cache key that includes model version and data hash."""
-        model_version = self._get_model_version()
-        
-        # Ensure data hash is set - if not available and df provided, generate it
-        if self._data_hash is None and df is not None:
-            self._get_data_hash(df)
         
         data_hash = self._data_hash or "unknown"
         return f"{model_version}_{data_hash}_{index}"
->>>>>>> 7c764cd (Fix cache key mismatch and improve cache scaling performance)
 
     def _get_persistent_cache_key(self, cache_type: str) -> str:
         """Generate a persistent cache key for the entire dataset."""
