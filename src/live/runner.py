@@ -26,7 +26,7 @@ configure_logging()
 logger = logging.getLogger("live_trading")
 
 
-def load_strategy(strategy_name: str):
+def load_strategy(strategy_name: str, enable_short_selling: bool = False):
     """Load a strategy by name"""
     strategies = {
         "ml_basic": MlBasic,
@@ -49,7 +49,7 @@ def load_strategy(strategy_name: str):
 
     try:
         strategy_class = strategies[strategy_name]
-        strategy = strategy_class() if callable(strategy_class) else strategy_class()
+        strategy = strategy_class(enable_short_selling=enable_short_selling) if callable(strategy_class) else strategy_class()
         logger.info(f"Loaded strategy: {strategy.name}")
         return strategy
     except Exception as e:
@@ -143,6 +143,13 @@ def parse_args():
     parser.add_argument(
         "--use-sentiment", action="store_true", help="Enable sentiment analysis"
     )
+    
+    # Short selling
+    parser.add_argument(
+        "--with-short-sell",
+        action="store_true",
+        help="Enable short selling for this strategy - default: disabled",
+    )
 
     return parser.parse_args()
 
@@ -165,7 +172,7 @@ def validate_configuration(args):
 
     # Validate strategy exists
     try:
-        load_strategy(args.strategy)
+        load_strategy(args.strategy, args.with_short_sell)
     except Exception:
         return False
 
@@ -194,7 +201,7 @@ def main():
             sys.exit(1)
 
         # Load strategy
-        strategy = load_strategy(args.strategy)
+        strategy = load_strategy(args.strategy, args.with_short_sell)
 
         # Show startup information
         print_startup_info(args, strategy)

@@ -294,6 +294,25 @@ class Backtester:
         if self.balance > self.peak_balance:
             self.peak_balance = self.balance
 
+    def _should_enter_position(self, df: pd.DataFrame, index: int) -> tuple[bool, str]:
+        """
+        Determine if we should enter a position and which side (long/short).
+        
+        Returns:
+            tuple: (should_enter, side) where side is 'long' or 'short'
+        """
+        # Check long entry conditions first
+        if self.strategy.check_entry_conditions(df, index):
+            return True, "long"
+        
+        # Check short entry conditions if short selling is enabled
+        if (self.strategy.is_short_selling_enabled() and 
+            hasattr(self.strategy, 'check_short_entry_conditions') and
+            self.strategy.check_short_entry_conditions(df, index)):
+            return True, "short"
+        
+        return False, None
+
     def run(
         self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
     ) -> dict:
@@ -756,7 +775,8 @@ class Backtester:
                             break
 
                 # Check for entry if not in position
-                elif self.strategy.check_entry_conditions(df, i):
+                elif self._should_enter_position(df, i)[0]:
+                    should_enter, side = self._should_enter_position(df, i)
                     # Calculate position size (as fraction of balance)
                     try:
                         overrides = (
@@ -831,7 +851,7 @@ class Backtester:
                             strategy_name=self.strategy.__class__.__name__,
                             symbol=symbol,
                             signal_type="entry",
-                            action_taken="opened_long" if size_fraction > 0 else "no_action",
+                            action_taken=f"opened_{side}" if size_fraction > 0 else "no_action",
                             price=current_price,
                             timeframe=timeframe,
                             signal_strength=1.0 if size_fraction > 0 else 0.0,
@@ -841,7 +861,7 @@ class Backtester:
                             ml_predictions=ml_predictions if ml_predictions else None,
                             position_size=size_fraction if size_fraction > 0 else None,
                             reasons=[
-                                "entry_conditions_met",
+                                f"{side}_entry_conditions_met",
                                 (
                                     f"position_size_{size_fraction:.4f}"
                                     if size_fraction > 0
@@ -873,7 +893,7 @@ class Backtester:
                                 df=df,
                                 index=sl_index,
                                 entry_price=current_price,
-                                side="long",
+                                side=side,
                                 strategy_overrides=overrides,
                             )
                             if take_profit is None:
@@ -882,155 +902,47 @@ class Backtester:
                                     if self.default_take_profit_pct is not None
                                     else getattr(self.strategy, "take_profit_pct", 0.04)
                                 )
+                                if side == "long":
+                                    take_profit = current_price * (1 + tp_pct)
+                                else:
+                                    take_profit = current_price * (1 - tp_pct)
+                        else:
+                            stop_loss = self.strategy.calculate_stop_loss(
+                                df, sl_index, current_price, side
+                            )
+                            tp_pct = (
+                                self.default_take_profit_pct
+                                if self.default_take_profit_pct is not None
+                                else getattr(self.strategy, "take_profit_pct", 0.04)
+                            )
+                            if side == "long":
                                 take_profit = current_price * (1 + tp_pct)
-                        else:
-                            stop_loss = self.strategy.calculate_stop_loss(
-                                df, sl_index, current_price, "long"
-                            )
-                            tp_pct = (
-                                self.default_take_profit_pct
-                                if self.default_take_profit_pct is not None
-                                else getattr(self.strategy, "take_profit_pct", 0.04)
-                            )
-                            take_profit = current_price * (1 + tp_pct)
-                        self.current_trade = ActiveTrade(
-                            symbol=symbol,
-                            side="long",
-                            entry_price=current_price,
-                            entry_time=current_time,
-                            size=size_fraction,
-                            stop_loss=stop_loss,
-                            take_profit=take_profit,
-                        )
-                        logger.info(f"Entered long position at {current_price}")
-
-                        # Update risk manager with opened position to track daily risk usage
-                        try:
-                            self.risk_manager.update_position(
-                                symbol=symbol,
-                                side="long",
-                                size=size_fraction,
-                                entry_price=current_price,
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to update risk manager for opened long on {symbol}: {e}"
-                            )
-
-                # Short entry if supported by strategy
-                elif (
-                    hasattr(self.strategy, "check_short_entry_conditions")
-                    and self.strategy.check_short_entry_conditions(df, i)
-                ):
-                    try:
-                        overrides = (
-                            self.strategy.get_risk_overrides()
-                            if hasattr(self.strategy, "get_risk_overrides")
-                            else None
-                        )
-                    except Exception:
-                        overrides = None
-                    if overrides and overrides.get("position_sizer"):
-                        size_fraction = self.risk_manager.calculate_position_fraction(
-                            df=df,
-                            index=i,
-                            balance=self.balance,
-                            price=current_price,
-                            indicators=self._extract_indicators(df, i),
-                            strategy_overrides=overrides,
-                        )
-                    else:
-                        size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
-
-                    # Apply dynamic risk adjustments
-                    if size_fraction > 0 and self.enable_dynamic_risk:
-                        size_fraction = self._get_dynamic_risk_adjusted_size(
-                            size_fraction, current_time
-                        )
-
-                    if self.log_to_database and self.db_manager:
-                        indicators = self._extract_indicators(df, i)
-                        sentiment_data = self._extract_sentiment_data(df, i)
-                        ml_predictions = self._extract_ml_predictions(df, i)
-                        self.db_manager.log_strategy_execution(
-                            strategy_name=self.strategy.__class__.__name__,
-                            symbol=symbol,
-                            signal_type="entry",
-                            action_taken="opened_short" if size_fraction > 0 else "no_action",
-                            price=current_price,
-                            timeframe=timeframe,
-                            signal_strength=1.0 if size_fraction > 0 else 0.0,
-                            confidence_score=indicators.get("prediction_confidence", 0.5),
-                            indicators=indicators,
-                            sentiment_data=sentiment_data if sentiment_data else None,
-                            ml_predictions=ml_predictions if ml_predictions else None,
-                            position_size=size_fraction if size_fraction > 0 else None,
-                            reasons=[
-                                "short_entry_conditions_met",
-                                (
-                                    f"position_size_{size_fraction:.4f}"
-                                    if size_fraction > 0
-                                    else "no_position_size"
-                                ),
-                                f"balance_{self.balance:.2f}",
-                            ],
-                            volume=indicators.get("volume"),
-                            volatility=indicators.get("volatility"),
-                            session_id=self.trading_session_id,
-                        )
-
-                    if size_fraction > 0:
-                        sl_index = (len(df) - 1) if self.legacy_stop_loss_indexing else i
-                        if overrides and (
-                            ("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)
-                        ):
-                            stop_loss, take_profit = self.risk_manager.compute_sl_tp(
-                                df=df,
-                                index=sl_index,
-                                entry_price=current_price,
-                                side="short",
-                                strategy_overrides=overrides,
-                            )
-                            if take_profit is None:
-                                tp_pct = (
-                                    self.default_take_profit_pct
-                                    if self.default_take_profit_pct is not None
-                                    else getattr(self.strategy, "take_profit_pct", 0.04)
-                                )
+                            else:
                                 take_profit = current_price * (1 - tp_pct)
-                        else:
-                            stop_loss = self.strategy.calculate_stop_loss(
-                                df, sl_index, current_price, "short"
-                            )
-                            tp_pct = (
-                                self.default_take_profit_pct
-                                if self.default_take_profit_pct is not None
-                                else getattr(self.strategy, "take_profit_pct", 0.04)
-                            )
-                            take_profit = current_price * (1 - tp_pct)
                         self.current_trade = ActiveTrade(
                             symbol=symbol,
-                            side="short",
+                            side=side,
                             entry_price=current_price,
                             entry_time=current_time,
                             size=size_fraction,
                             stop_loss=stop_loss,
                             take_profit=take_profit,
                         )
-                        logger.info(f"Entered short position at {current_price}")
+                        logger.info(f"Entered {side} position at {current_price}")
 
                         # Update risk manager with opened position to track daily risk usage
                         try:
                             self.risk_manager.update_position(
                                 symbol=symbol,
-                                side="short",
+                                side=side,
                                 size=size_fraction,
                                 entry_price=current_price,
                             )
                         except Exception as e:
                             logger.warning(
-                                f"Failed to update risk manager for opened short on {symbol}: {e}"
+                                f"Failed to update risk manager for opened {side} on {symbol}: {e}"
                             )
+
 
                 # Log no-action cases (when no position and no entry signal)
                 else:

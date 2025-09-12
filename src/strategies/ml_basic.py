@@ -49,8 +49,9 @@ class MlBasic(BaseStrategy):
         sequence_length=120,
         use_prediction_engine: Optional[bool] = None,
         model_name: Optional[str] = None,
+        enable_short_selling: bool = False,
     ):
-        super().__init__(name)
+        super().__init__(name, enable_short_selling)
 
         # Set strategy-specific trading pair - ML model trained on BTC
         self.trading_pair = "BTCUSDT"
@@ -366,8 +367,8 @@ class MlBasic(BaseStrategy):
         )
 
     def get_parameters(self) -> dict:
-        return {
-            "name": self.name,
+        base_params = self.get_base_parameters()
+        strategy_params = {
             "model_path": self.model_path,
             "sequence_length": self.sequence_length,
             "stop_loss_pct": self.stop_loss_pct,
@@ -375,6 +376,7 @@ class MlBasic(BaseStrategy):
             "use_prediction_engine": self.use_prediction_engine,
             "engine_model_name": self.model_name,
         }
+        return {**base_params, **strategy_params}
 
     def calculate_stop_loss(self, df, index, price, side) -> float:
         """Calculate stop loss price"""

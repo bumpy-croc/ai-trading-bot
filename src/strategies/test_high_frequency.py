@@ -4,8 +4,8 @@ from src.strategies.base import BaseStrategy
 
 
 class TestHighFrequencyStrategy(BaseStrategy):
-    def __init__(self, name: str = "test_high_frequency"):
-        super().__init__(name)
+    def __init__(self, name: str = "test_high_frequency", enable_short_selling: bool = False):
+        super().__init__(name, enable_short_selling)
         self.trading_pair = "BTCUSDT"
         self.position_size_pct = 0.01  # 1% of balance
         self.stop_loss_pct = 0.01  # 1% stop loss
@@ -46,8 +46,9 @@ class TestHighFrequencyStrategy(BaseStrategy):
             return price * (1 + self.stop_loss_pct)
 
     def get_parameters(self) -> dict:
-        return {
-            "name": self.name,
+        base_params = self.get_base_parameters()
+        strategy_params = {
             "position_size_pct": self.position_size_pct,
             "stop_loss_pct": self.stop_loss_pct,
         }
+        return {**base_params, **strategy_params}

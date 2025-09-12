@@ -60,8 +60,9 @@ class MlAdaptive(BaseStrategy):
         sequence_length=120,
         use_prediction_engine: Optional[bool] = None,
         model_name: Optional[str] = None,
+        enable_short_selling: bool = False,
     ):
-        super().__init__(name)
+        super().__init__(name, enable_short_selling)
 
         # Set strategy-specific trading pair - ML model trained on BTC
         self.trading_pair = "BTCUSDT"
@@ -455,7 +456,8 @@ class MlAdaptive(BaseStrategy):
 
     def get_parameters(self) -> dict:
         """Return strategy parameters for logging"""
-        return {
+        base_params = self.get_base_parameters()
+        strategy_params = {
             "model_path": self.model_path,
             "sequence_length": self.sequence_length,
             "stop_loss_pct": self.stop_loss_pct,
@@ -463,6 +465,7 @@ class MlAdaptive(BaseStrategy):
             "use_prediction_engine": self.use_prediction_engine,
             "model_name": self.model_name,
         }
+        return {**base_params, **strategy_params}
 
     def get_risk_overrides(self) -> Optional[dict[str, Any]]:
         """

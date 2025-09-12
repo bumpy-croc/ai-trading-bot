@@ -15,12 +15,15 @@ class BaseStrategy(ABC):
 
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, enable_short_selling: bool = False):
         self.name = name
         self.logger = logging.getLogger(name)
 
         # Default trading pair - strategies can override this
         self.trading_pair = "BTCUSDT"
+
+        # Short selling configuration
+        self.enable_short_selling = enable_short_selling
 
         # Strategy execution logging
         self.db_manager = None
@@ -106,6 +109,10 @@ class BaseStrategy(ABC):
         """Set the trading pair for this strategy"""
         self.trading_pair = trading_pair
 
+    def is_short_selling_enabled(self) -> bool:
+        """Check if short selling is enabled for this strategy"""
+        return self.enable_short_selling
+
     @abstractmethod
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate strategy-specific indicators on the data"""
@@ -132,6 +139,14 @@ class BaseStrategy(ABC):
     ) -> float:
         """Calculate stop loss level for a position"""
         pass
+
+    def get_base_parameters(self) -> dict:
+        """Return base strategy parameters for logging"""
+        return {
+            "name": self.name,
+            "trading_pair": self.trading_pair,
+            "enable_short_selling": self.enable_short_selling,
+        }
 
     @abstractmethod
     def get_parameters(self) -> dict:

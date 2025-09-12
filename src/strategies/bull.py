@@ -34,8 +34,8 @@ class Bull(BaseStrategy):
     MIN_POSITION_SIZE_RATIO = 0.05
     MAX_POSITION_SIZE_RATIO = 0.25
 
-    def __init__(self, name: str = "Bull"):
-        super().__init__(name)
+    def __init__(self, name: str = "Bull", enable_short_selling: bool = False):
+        super().__init__(name, enable_short_selling)
         self.trading_pair = "BTCUSDT"
 
         # Stop loss / take profit tuned for bull trends
@@ -210,8 +210,8 @@ class Bull(BaseStrategy):
             return price * (1 + atr_stop_pct)
 
     def get_parameters(self) -> dict:
-        return {
-            "name": self.name,
+        base_params = self.get_base_parameters()
+        strategy_params = {
             "stop_loss_pct": self.stop_loss_pct,
             "take_profit_pct": self.take_profit_pct,
             "base_position_size": self.BASE_POSITION_SIZE,
@@ -222,3 +222,4 @@ class Bull(BaseStrategy):
             "max_atr_pct_for_full_size": self.max_atr_pct_for_full_size,
             "min_atr_pct_for_entry": self.min_atr_pct_for_entry,
         }
+        return {**base_params, **strategy_params}

@@ -30,8 +30,9 @@ class BearStrategy(BaseStrategy):
         take_profit_pct: float = 0.04,  # 4% default TP
         atr_period: int = 14,
         atr_multiplier: float = 2.0,
+        enable_short_selling: bool = False,
     ):
-        super().__init__(name)
+        super().__init__(name, enable_short_selling)
         self.trading_pair = "BTCUSDT"
         self.short_ma_period = short_ma_period
         self.long_ma_period = long_ma_period
@@ -149,8 +150,8 @@ class BearStrategy(BaseStrategy):
             return price * (1 - self.stop_loss_pct)
 
     def get_parameters(self) -> dict:
-        return {
-            "name": self.name,
+        base_params = self.get_base_parameters()
+        strategy_params = {
             "short_ma_period": self.short_ma_period,
             "long_ma_period": self.long_ma_period,
             "stop_loss_pct": self.stop_loss_pct,
@@ -158,3 +159,4 @@ class BearStrategy(BaseStrategy):
             "atr_period": self.atr_period,
             "atr_multiplier": self.atr_multiplier,
         }
+        return {**base_params, **strategy_params}

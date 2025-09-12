@@ -22,24 +22,24 @@ from src.utils.symbol_factory import SymbolFactory
 logger = logging.getLogger("atb.backtest")
 
 
-def _load_strategy(strategy_name: str):
+def _load_strategy(strategy_name: str, enable_short_selling: bool = False):
     try:
         if strategy_name == "ml_basic":
             from src.strategies.ml_basic import MlBasic
 
-            return MlBasic()
+            return MlBasic(enable_short_selling=enable_short_selling)
         if strategy_name == "bear":
             from src.strategies.bear import BearStrategy
 
-            return BearStrategy()
+            return BearStrategy(enable_short_selling=enable_short_selling)
         if strategy_name == "bull":
             from src.strategies.bull import Bull
 
-            return Bull()
+            return Bull(enable_short_selling=enable_short_selling)
         if strategy_name == "ml_adaptive":
             from src.strategies.ml_adaptive import MlAdaptive
 
-            return MlAdaptive()
+            return MlAdaptive(enable_short_selling=enable_short_selling)
         print(f"Unknown strategy: {strategy_name}")
         print("Available strategies: ml_basic, ml_adaptive, bear, bull")
         raise SystemExit(1)
@@ -73,7 +73,7 @@ def _handle(ns: argparse.Namespace) -> int:
         configure_logging()
 
         start_date, end_date = _get_date_range(ns)
-        strategy = _load_strategy(ns.strategy)
+        strategy = _load_strategy(ns.strategy, ns.with_short_sell)
         logger.info(f"Loaded strategy: {strategy.name}")
 
         # Provider
@@ -140,6 +140,7 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Using Sentiment: {ns.use_sentiment}")
         print(f"Using Cache: {not ns.no_cache}")
         print(f"Database Logging: {enable_db_logging}")
+        print(f"Short Selling: {'Enabled' if ns.with_short_sell else 'Disabled'}")
         print("-" * 50)
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
@@ -263,5 +264,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=0.5,
         help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
+    )
+    p.add_argument(
+        "--with-short-sell",
+        action="store_true",
+        help="Enable short selling for this strategy - default: disabled",
     )
     p.set_defaults(func=_handle)
