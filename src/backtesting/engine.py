@@ -241,6 +241,8 @@ class Backtester:
         trailing_stop_policy: Optional[TrailingStopPolicy] = None,
         # Partial operations
         partial_manager: Optional[Any] = None,
+        # Internal caching control
+        disable_results_cache: bool = False,  # Disable internal feature/strategy/ML caching
     ):
         self.strategy = strategy
         self.data_provider = data_provider
@@ -254,6 +256,7 @@ class Backtester:
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
         self.trailing_stop_policy = trailing_stop_policy
         self.partial_manager = partial_manager
+        self.disable_results_cache = disable_results_cache
         
         # Performance optimization: feature extraction caching
         self._feature_cache: dict[str, dict] = {}  # Cache for indicators, sentiment, ML data per candle
@@ -1454,6 +1457,11 @@ class Backtester:
 
     def _precompute_features(self, df: pd.DataFrame) -> None:
         """Pre-compute all feature extractions for the entire DataFrame to avoid redundant calculations."""
+        # Skip pre-computation if caching is disabled
+        if self.disable_results_cache:
+            logger.debug("Skipping feature pre-computation - results cache disabled")
+            return
+            
         logger.debug(f"Pre-computing features for {len(df)} candles")
         
         # Generate data hash for this dataset
@@ -1501,6 +1509,11 @@ class Backtester:
 
     def _precompute_strategy_calculations(self, df: pd.DataFrame) -> None:
         """Pre-compute strategy calculations to avoid redundant operations during backtesting."""
+        # Skip pre-computation if caching is disabled
+        if self.disable_results_cache:
+            logger.debug("Skipping strategy pre-computation - results cache disabled")
+            return
+            
         logger.debug(f"Pre-computing strategy calculations for {len(df)} candles")
         
         # Try to load from persistent cache first
@@ -1551,6 +1564,11 @@ class Backtester:
 
     def _precompute_ml_predictions(self, df: pd.DataFrame) -> None:
         """Pre-compute ML predictions to avoid expensive inference during backtesting."""
+        # Skip pre-computation if caching is disabled
+        if self.disable_results_cache:
+            logger.debug("Skipping ML predictions pre-computation - results cache disabled")
+            return
+            
         logger.debug(f"Pre-computing ML predictions for {len(df)} candles")
         
         # Only pre-compute if the strategy uses ML predictions
@@ -1672,6 +1690,15 @@ class Backtester:
 
     def _check_exit_conditions_cached(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Optimized exit conditions check using cached data."""
+        # If caching is disabled, call the strategy method directly
+        if self.disable_results_cache:
+            if hasattr(self.strategy, 'check_exit_conditions'):
+                try:
+                    return self.strategy.check_exit_conditions(df, index, entry_price)
+                except Exception:
+                    return False
+            return False
+        
         cache_key = self._get_cache_key(index)
         
         # Try to use cached data first
@@ -1713,6 +1740,15 @@ class Backtester:
 
     def _check_entry_conditions_cached(self, df: pd.DataFrame, index: int) -> bool:
         """Optimized entry conditions check using cached data."""
+        # If caching is disabled, call the strategy method directly
+        if self.disable_results_cache:
+            if hasattr(self.strategy, 'check_entry_conditions'):
+                try:
+                    return self.strategy.check_entry_conditions(df, index)
+                except Exception:
+                    return False
+            return False
+        
         cache_key = self._get_cache_key(index)
         
         # Try to use cached data first
@@ -1754,6 +1790,15 @@ class Backtester:
 
     def _check_short_entry_conditions_cached(self, df: pd.DataFrame, index: int) -> bool:
         """Optimized short entry conditions check using cached data."""
+        # If caching is disabled, call the strategy method directly
+        if self.disable_results_cache:
+            if hasattr(self.strategy, 'check_short_entry_conditions'):
+                try:
+                    return self.strategy.check_short_entry_conditions(df, index)
+                except Exception:
+                    return False
+            return False
+        
         cache_key = self._get_cache_key(index)
         
         # Try to use cached data first
@@ -1796,6 +1841,15 @@ class Backtester:
 
     def _calculate_position_size_cached(self, df: pd.DataFrame, index: int, balance: float) -> float:
         """Optimized position size calculation using cached data."""
+        # If caching is disabled, call the strategy method directly
+        if self.disable_results_cache:
+            if hasattr(self.strategy, 'calculate_position_size'):
+                try:
+                    return self.strategy.calculate_position_size(df, index, balance)
+                except Exception:
+                    return 0.0
+            return 0.0
+        
         cache_key = self._get_cache_key(index)
         
         # Try to use cached data first

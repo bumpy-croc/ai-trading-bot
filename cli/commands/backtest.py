@@ -81,9 +81,9 @@ def _handle(ns: argparse.Namespace) -> int:
             from src.data_providers.binance_provider import BinanceProvider
 
             provider = BinanceProvider()
-        if ns.no_cache:
+        if ns.no_data_provider_cache:
             data_provider = provider
-            logger.info("Data caching disabled")
+            logger.info("Data provider caching disabled")
         else:
             from src.data_providers.cached_data_provider import CachedDataProvider
 
@@ -115,6 +115,7 @@ def _handle(ns: argparse.Namespace) -> int:
             risk_parameters=risk_params,
             initial_balance=ns.initial_balance,
             log_to_database=enable_db_logging,
+            disable_results_cache=ns.no_results_cache,
         )
 
         trading_symbol = (
@@ -134,7 +135,8 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Period: {start_date.date()} to {end_date.date()}")
         print(f"Timeframe: {ns.timeframe}")
         print(f"Using Sentiment: {ns.use_sentiment}")
-        print(f"Using Cache: {not ns.no_cache}")
+        print(f"Using Data Provider Cache: {not ns.no_data_provider_cache}")
+        print(f"Using Results Cache: {not ns.no_results_cache}")
         print(f"Database Logging: {enable_db_logging}")
         print("-" * 50)
         print(f"Total Trades: {results['total_trades']}")
@@ -157,10 +159,10 @@ def _handle(ns: argparse.Namespace) -> int:
                 print(f"{year:<8} {results['yearly_returns'][year]:>12.2f}")
             print("=" * 50)
 
-        if not ns.no_cache:
+        if not ns.no_data_provider_cache:
             final_cache_info = data_provider.get_cache_info()
             logger.info(
-                f"Final cache info: {final_cache_info['total_files']} files, {final_cache_info['total_size_mb']} MB"
+                f"Final data provider cache info: {final_cache_info['total_files']} files, {final_cache_info['total_size_mb']} MB"
             )
 
         try:
@@ -185,7 +187,8 @@ def _handle(ns: argparse.Namespace) -> int:
                         "duration_years": duration_years,
                         "initial_balance": ns.initial_balance,
                         "use_sentiment": ns.use_sentiment,
-                        "use_cache": not ns.no_cache,
+                        "use_data_provider_cache": not ns.no_data_provider_cache,
+                        "use_results_cache": not ns.no_results_cache,
                         "database_logging": enable_db_logging,
                         "results": results,
                     },
@@ -243,7 +246,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--use-sentiment", action="store_true", help="Use sentiment analysis in backtest"
     )
-    p.add_argument("--no-cache", action="store_true", help="Disable data caching")
+    p.add_argument("--no-data-provider-cache", action="store_true", help="Disable data provider caching")
+    p.add_argument("--no-results-cache", action="store_true", help="Disable internal backtesting results caching")
     p.add_argument("--cache-ttl", type=int, default=24, help="Cache TTL in hours - default: 24")
     p.add_argument(
         "--log-to-db", action="store_true", help="Enable database logging for this backtest - slower but provides detailed logs"
