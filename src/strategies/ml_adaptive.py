@@ -31,16 +31,27 @@ from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.prediction.features.technical import TechnicalFeatureExtractor
+from src.regime.detector import RegimeDetector, TrendLabel, VolLabel
 from src.strategies.base import BaseStrategy
 
 
 class MlAdaptive(BaseStrategy):
     # * Strategy configuration constants
-    SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries
+    SHORT_ENTRY_THRESHOLD = -0.0005  # -0.05% threshold for short entries (base threshold)
     CONFIDENCE_MULTIPLIER = 12  # Multiplier for confidence calculation
     BASE_POSITION_SIZE = 0.2  # Base position size (20% of balance)
     MIN_POSITION_SIZE_RATIO = 0.05  # Minimum position size (5% of balance)
     MAX_POSITION_SIZE_RATIO = 0.25  # Maximum position size (25% of balance)
+    
+    # * Dynamic short entry threshold configuration
+    # Base thresholds for different market regimes (more aggressive to match original performance)
+    SHORT_THRESHOLD_TREND_UP = -0.0003  # Less conservative in uptrend (-0.03%)
+    SHORT_THRESHOLD_TREND_DOWN = -0.0007  # More conservative in downtrend (-0.07%)
+    SHORT_THRESHOLD_RANGE = -0.0005  # Standard threshold in range-bound market (-0.05%)
+    SHORT_THRESHOLD_HIGH_VOL = -0.0004  # Less conservative in high volatility (-0.04%)
+    SHORT_THRESHOLD_LOW_VOL = -0.0006  # More conservative in low volatility (-0.06%)
+    # Confidence-based adjustment (reduced impact)
+    SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER = 0.2  # Adjust threshold based on regime confidence
 
     def __init__(
         self,
@@ -82,6 +93,9 @@ class MlAdaptive(BaseStrategy):
         self._engine_warning_emitted = False
         # Optional batch inference flag (default off to preserve exact behavior)
         self.use_engine_batch = get_config().get_bool("ENGINE_BATCH_INFERENCE", default=False)
+        
+        # Initialize regime detector for dynamic threshold adjustment
+        self.regime_detector = RegimeDetector()
 
         # Initialize feature pipeline with a technical extractor matching our normalization window
         technical_extractor = TechnicalFeatureExtractor(
@@ -154,6 +168,17 @@ class MlAdaptive(BaseStrategy):
 
         # Use the prediction feature pipeline to generate normalized price features identically
         df = self.feature_pipeline.transform(df)
+        
+        # * Add regime detection for dynamic threshold adjustment
+        try:
+            df = self.regime_detector.annotate(df)
+        except Exception as e:
+            # If regime detection fails, continue without it
+            print(f"[MlAdaptive] Regime detection failed: {e}")
+            # Add default regime columns to prevent errors
+            df["trend_label"] = "range"
+            df["vol_label"] = "low_vol"
+            df["regime_confidence"] = 0.5
 
         # Prepare predictions columns
         df["onnx_pred"] = np.nan
@@ -231,6 +256,53 @@ class MlAdaptive(BaseStrategy):
                 df.at[df.index[i], "prediction_confidence"] = np.nan
 
         return df
+
+    def _calculate_dynamic_short_threshold(self, df: pd.DataFrame, index: int) -> float:
+        """
+        Calculate dynamic short entry threshold based on current market regime.
+        
+        Args:
+            df: DataFrame with regime annotations
+            index: Current index in the DataFrame
+            
+        Returns:
+            Dynamic threshold for short entries
+        """
+        if index >= len(df) or index < 0:
+            return self.SHORT_ENTRY_THRESHOLD
+            
+        # Get current regime information
+        trend_label = df["trend_label"].iloc[index] if "trend_label" in df.columns else "range"
+        vol_label = df["vol_label"].iloc[index] if "vol_label" in df.columns else "low_vol"
+        confidence = df["regime_confidence"].iloc[index] if "regime_confidence" in df.columns else 0.5
+        
+        # Start with base threshold based on trend
+        if trend_label == TrendLabel.TREND_UP.value:
+            base_threshold = self.SHORT_THRESHOLD_TREND_UP
+        elif trend_label == TrendLabel.TREND_DOWN.value:
+            base_threshold = self.SHORT_THRESHOLD_TREND_DOWN
+        else:  # range
+            base_threshold = self.SHORT_THRESHOLD_RANGE
+            
+        # Adjust for volatility
+        if vol_label == VolLabel.HIGH.value:
+            vol_adjustment = self.SHORT_THRESHOLD_HIGH_VOL
+        else:  # low_vol
+            vol_adjustment = self.SHORT_THRESHOLD_LOW_VOL
+            
+        # Combine trend and volatility adjustments (weighted average)
+        threshold = (base_threshold + vol_adjustment) / 2
+        
+        # Adjust based on regime confidence
+        # Higher confidence = more aggressive threshold (closer to 0)
+        # Lower confidence = more conservative threshold (further from 0)
+        confidence_adjustment = (1 - confidence) * self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
+        threshold = threshold * (1 - confidence_adjustment)
+        
+        # Ensure threshold is within reasonable bounds
+        threshold = max(-0.01, min(-0.0001, threshold))  # Between -1% and -0.01%
+        
+        return threshold
 
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
         # Go long if the predicted price for the next bar is higher than the current close
@@ -310,7 +382,38 @@ class MlAdaptive(BaseStrategy):
         if pd.isna(pred):
             return False
         predicted_return = (pred - close) / close if close > 0 else 0
-        return predicted_return < self.SHORT_ENTRY_THRESHOLD
+        
+        # * Use dynamic threshold based on market regime
+        dynamic_threshold = self._calculate_dynamic_short_threshold(df, index)
+        
+        # Log the dynamic threshold decision for debugging
+        trend_label = df["trend_label"].iloc[index] if "trend_label" in df.columns else "unknown"
+        vol_label = df["vol_label"].iloc[index] if "vol_label" in df.columns else "unknown"
+        confidence = df["regime_confidence"].iloc[index] if "regime_confidence" in df.columns else 0.0
+        
+        self.log_execution(
+            signal_type="short_entry",
+            action_taken="short_signal" if predicted_return < dynamic_threshold else "no_action",
+            price=close,
+            signal_strength=abs(predicted_return) if predicted_return < dynamic_threshold else 0.0,
+            confidence_score=confidence,
+            reasons=[
+                f"predicted_return_{predicted_return:.4f}",
+                f"dynamic_threshold_{dynamic_threshold:.4f}",
+                f"regime_{trend_label}_{vol_label}",
+                f"confidence_{confidence:.3f}",
+                "short_signal_met" if predicted_return < dynamic_threshold else "short_signal_not_met",
+            ],
+            additional_context={
+                "regime_trend": trend_label,
+                "regime_volatility": vol_label,
+                "regime_confidence": confidence,
+                "dynamic_threshold": dynamic_threshold,
+                "base_threshold": self.SHORT_ENTRY_THRESHOLD,
+            },
+        )
+        
+        return predicted_return < dynamic_threshold
 
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         if index < 1 or index >= len(df):

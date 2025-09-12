@@ -36,8 +36,12 @@ def _load_strategy(strategy_name: str):
             from src.strategies.bull import Bull
 
             return Bull()
+        if strategy_name == "ml_adaptive":
+            from src.strategies.ml_adaptive import MlAdaptive
+
+            return MlAdaptive()
         print(f"Unknown strategy: {strategy_name}")
-        print("Available strategies: ml_basic, bear, bull")
+        print("Available strategies: ml_basic, ml_adaptive, bear, bull")
         raise SystemExit(1)
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")
