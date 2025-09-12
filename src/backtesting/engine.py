@@ -118,6 +118,9 @@ class Backtester:
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
         self.trailing_stop_policy = trailing_stop_policy
         self.partial_manager = partial_manager
+        
+        # Performance optimization: feature extraction caching
+        self._feature_cache: dict[int, dict] = {}  # Cache for indicators, sentiment, ML data per candle
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -299,6 +302,9 @@ class Backtester:
     ) -> dict:
         """Run backtest with sentiment data if available"""
         try:
+            # Clear feature cache for new backtest
+            self._clear_feature_cache()
+            
             # Set base logging context for this backtest run
             set_context(
                 component="backtester",
@@ -376,6 +382,9 @@ class Backtester:
             # Don't drop rows just because ML predictions or sentiment data is missing
             essential_columns = ["open", "high", "low", "close", "volume"]
             df = df.dropna(subset=essential_columns)
+
+            # Pre-compute all feature extractions for performance optimization
+            self._precompute_features(df)
 
             logger.info(f"Starting backtest with {len(df)} candles")
 
@@ -1137,6 +1146,9 @@ class Backtester:
                 self.db_manager.end_trading_session(
                     session_id=self.trading_session_id, final_balance=self.balance
                 )
+            
+            # Clear feature cache to free memory
+            self._clear_feature_cache()
 
             return {
                 "total_trades": total_trades,
@@ -1231,11 +1243,42 @@ class Backtester:
                 df["sentiment_score"] = df["sentiment_score"].fillna(0)
         return df
 
+    def _precompute_features(self, df: pd.DataFrame) -> None:
+        """Pre-compute all feature extractions for the entire DataFrame to avoid redundant calculations."""
+        logger.debug(f"Pre-computing features for {len(df)} candles")
+        
+        for i in range(len(df)):
+            # Extract all features once and cache them
+            indicators = util_extract_indicators(df, i)
+            sentiment_data = util_extract_sentiment(df, i)
+            ml_predictions = util_extract_ml(df, i)
+            
+            self._feature_cache[i] = {
+                'indicators': indicators,
+                'sentiment_data': sentiment_data,
+                'ml_predictions': ml_predictions
+            }
+        
+        logger.debug(f"Pre-computed features for {len(self._feature_cache)} candles")
+
+    def _clear_feature_cache(self) -> None:
+        """Clear the feature cache to free memory."""
+        self._feature_cache.clear()
+
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
+        """Extract indicators with caching for performance."""
+        if index in self._feature_cache:
+            return self._feature_cache[index]['indicators']
         return util_extract_indicators(df, index)
 
     def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> dict:
+        """Extract sentiment data with caching for performance."""
+        if index in self._feature_cache:
+            return self._feature_cache[index]['sentiment_data']
         return util_extract_sentiment(df, index)
 
     def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> dict:
+        """Extract ML predictions with caching for performance."""
+        if index in self._feature_cache:
+            return self._feature_cache[index]['ml_predictions']
         return util_extract_ml(df, index)
