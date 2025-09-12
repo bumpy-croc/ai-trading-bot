@@ -87,10 +87,14 @@ First found value wins!
 
 ## Testing Your Configuration
 
-Run the test script to verify everything works:
+Run the CLI to verify configuration:
 
 ```bash
-python scripts/test_config_system.py
+# Test database connection (requires config)
+python scripts/verify_database_connection.py
+
+# Test the CLI loads properly
+atb --help
 ```
 
 ## Common Issues

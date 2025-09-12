@@ -129,7 +129,8 @@ bandit -c pyproject.toml -r src
 ```text
 src/
   backtesting/       # Vectorised simulation engine
-  config/            # Typed configuration loader + constants + feature flags
+  config/            # Typed configuration loader + constants + feature flags  
+  dashboards/        # Web-based monitoring and analysis dashboards
   data_providers/    # Market & sentiment providers (+ caching wrapper)
   database/          # SQLAlchemy models + DatabaseManager (PostgreSQL-only)
   database_manager/  # Flask-Admin UI for DB inspection
@@ -137,10 +138,14 @@ src/
   live/              # Live trading engine
   ml/                # Trained models (.onnx/.keras) + metadata
   monitoring/        # Real-time monitoring dashboard (Flask + Socket.IO)
+  optimizer/         # Parameter optimization and strategy tuning
   performance/       # Performance metrics utilities
+  position_management/  # Position sizing and portfolio management
   prediction/        # Centralized model registry, ONNX runtime, caching
+  regime/            # Market regime detection and analysis
   risk/              # Risk parameters and position sizing utilities
   strategies/        # Built-in strategies (ML basic only)
+  trading/           # Core trading interfaces and shared functionality
   utils/             # Shared utilities (paths, symbols, etc.)
 ```
 
@@ -215,7 +220,7 @@ Sentiment data (SentiCrypt) and ML training are supported. Pretrained models liv
 - MCP: use `mcp.example.json` and keep your local `mcp.json` untracked.
 
 ## Logging
-- Centralized logging via `utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
+- Centralized logging via `src.utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
 - JSON logs default to enabled in production-like environments (Railway or ENV/APP_ENV=production).
 - See `docs/LOGGING_GUIDE.md` for structured events, context, and operations guidance.
 
