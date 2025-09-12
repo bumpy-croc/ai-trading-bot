@@ -71,7 +71,7 @@ railway open
 
 ```bash
 # Deploy to Railway
-./bin/railway-deploy.sh
+railway up
 
 # Monitor the deployment
 railway logs
@@ -108,7 +108,7 @@ curl https://your-app.railway.app/status
 
 ```bash
 # When ready for live trading
-./bin/railway-deploy.sh -p your-project-name -e production
+railway up
 ```
 
 ### Monitor Performance

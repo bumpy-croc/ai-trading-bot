@@ -86,10 +86,10 @@ balance = config.get_int('INITIAL_BALANCE', 1000)
 
 ```bash
 # Test configuration locally
-python scripts/test_config_system.py
+python scripts/verify_database_connection.py
 
-# Test staged environment
-ENVIRONMENT=staging python scripts/test_secrets_access.py
+# Test CLI loads configuration properly
+atb --help
 ```
 
 ## Future enhancements
