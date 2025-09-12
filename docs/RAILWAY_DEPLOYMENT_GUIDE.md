@@ -37,7 +37,7 @@ railway init
 # (Visit the Railway dashboard and update environment variables)
 
 # 4. Deploy your application
-./bin/railway-deploy.sh -p your-project-name -e staging
+railway up
 ```
 
 ## Manual Setup
@@ -160,10 +160,11 @@ No manual database setup required!
 
 ```bash
 # Deploy to staging (default)
-./bin/railway-deploy.sh
+railway up
 
-# Deploy to production (requires confirmation)
-./bin/railway-deploy.sh -e production
+# Deploy to production (requires setting environment first)
+railway variables set ENVIRONMENT=production
+railway up
 ```
 
 ### Manual Deployment

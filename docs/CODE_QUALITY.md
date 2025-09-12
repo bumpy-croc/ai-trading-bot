@@ -196,4 +196,4 @@ Functions like array_filter() preserve original keys, which can cause bugs when 
 
 ### Language it applies to: All
 
-Avoid `Any` where possible in type systems and type definitions properly, especially when dealing with public APIs
+Avoid `Any` where possible in type systems and provide proper type definitions, especially when dealing with public APIs.
