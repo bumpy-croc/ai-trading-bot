@@ -82,7 +82,8 @@ alwaysApply: true
 
 ## Tests
 - **Keep tests stateless**: Use fixtures, avoid global state.
-- Unit tests should be fast and isolate 
+- When writing tests, use the Arrange - Act - Assert (AAA) pattern
+- Unit tests should be FIRST (fast, isolated, repeatable, self-validating and timely)
 
 ## Key Conventions:
 1. Prioritize **readability, simplicity, and maintainability**.

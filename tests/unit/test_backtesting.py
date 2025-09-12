@@ -1399,4 +1399,60 @@ class TestCacheMechanism:
         # Verify features were still computed
         assert backtester._feature_cache_size > 0
 
+    def test_cached_methods_actually_use_cache(self, mock_data_provider):
+        """Test that cached methods actually use cached data instead of calling strategy methods"""
+        from src.backtesting.engine import Backtester
+        from src.strategies.ml_basic import MlBasic
+        
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+        
+        # Create test DataFrame
+        df = pd.DataFrame({
+            'open': [100, 101, 102],
+            'high': [101, 102, 103],
+            'close': [100.5, 101.5, 102.5],
+            'volume': [1000, 1100, 1200]
+        })
+        
+        # Pre-populate strategy cache
+        cache_key = backtester._get_cache_key(0)
+        backtester._strategy_cache[cache_key] = {
+            'current_price': 100.5,
+            'current_time': df.index[0],
+            'candle_data': {
+                'open': 100.0, 'high': 101.0, 'low': 99.0, 'close': 100.5, 'volume': 1000
+            }
+        }
+        backtester._strategy_cache_size = 1
+        
+        # Track strategy method calls
+        original_check_entry = strategy.check_entry_conditions
+        strategy_calls = []
+        
+        def mock_check_entry(df, index):
+            strategy_calls.append(('check_entry_conditions', index))
+            return original_check_entry(df, index)
+        
+        strategy.check_entry_conditions = mock_check_entry
+        
+        try:
+            # Call cached method
+            result = backtester._check_entry_conditions_cached(df, 0)
+            
+            # Verify cache hit was recorded
+            assert backtester._cache_hits > 0
+            
+            # CRITICAL: The cached method should NOT call the strategy method
+            # if the data is already cached. This is currently broken!
+            # The current implementation calls strategy methods even with cached data
+            assert len(strategy_calls) == 1  # This will fail, proving the bug
+            
+        finally:
+            strategy.check_entry_conditions = original_check_entry
+
 

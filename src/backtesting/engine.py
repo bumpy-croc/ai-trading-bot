@@ -1127,10 +1127,7 @@ class Backtester:
                             )
 
                 # Short entry if supported by strategy
-                elif (
-                    hasattr(self.strategy, "check_short_entry_conditions")
-                    and self.strategy.check_short_entry_conditions(df, i)
-                ):
+                elif self._check_short_entry_conditions_cached(df, i):
                     try:
                         overrides = (
                             self.strategy.get_risk_overrides()
@@ -1681,27 +1678,38 @@ class Backtester:
         if cache_key in self._strategy_cache:
             self._cache_hits += 1
             cached_data = self._strategy_cache[cache_key]
-            current_price = cached_data['current_price']
+            
+            # Use cached data to avoid expensive DataFrame operations
+            if 'exit_conditions_result' in cached_data:
+                return cached_data['exit_conditions_result']
+            
+            # If not cached, compute and cache the result
+            if hasattr(self.strategy, 'check_exit_conditions'):
+                try:
+                    result = self.strategy.check_exit_conditions(df, index, entry_price)
+                    cached_data['exit_conditions_result'] = result
+                    return result
+                except Exception:
+                    cached_data['exit_conditions_result'] = False
+                    return False
+            return False
         else:
             self._cache_misses += 1
             # Fallback to original method if not cached
             if hasattr(self.strategy, 'check_exit_conditions'):
                 try:
-                    return self.strategy.check_exit_conditions(df, index, entry_price)
+                    result = self.strategy.check_exit_conditions(df, index, entry_price)
+                    # Cache the result for future use
+                    self._strategy_cache[cache_key] = {
+                        'exit_conditions_result': result,
+                        'current_price': df.iloc[index]['close'],
+                        'current_time': df.index[index]
+                    }
+                    self._strategy_cache_size = len(self._strategy_cache)
+                    return result
                 except Exception:
                     return False
             return False
-        
-        # For most strategies, we can optimize the exit check
-        # by avoiding repeated DataFrame operations
-        if hasattr(self.strategy, 'check_exit_conditions'):
-            # Try to use cached data if the strategy supports it
-            try:
-                return self.strategy.check_exit_conditions(df, index, entry_price)
-            except Exception:
-                # Fallback to original method
-                return self.strategy.check_exit_conditions(df, index, entry_price)
-        return False
 
     def _check_entry_conditions_cached(self, df: pd.DataFrame, index: int) -> bool:
         """Optimized entry conditions check using cached data."""
@@ -1710,15 +1718,39 @@ class Backtester:
         # Try to use cached data first
         if cache_key in self._strategy_cache:
             self._cache_hits += 1
+            cached_data = self._strategy_cache[cache_key]
+            
+            # Use cached data to avoid expensive DataFrame operations
+            if 'entry_conditions_result' in cached_data:
+                return cached_data['entry_conditions_result']
+            
+            # If not cached, compute and cache the result
+            if hasattr(self.strategy, 'check_entry_conditions'):
+                try:
+                    result = self.strategy.check_entry_conditions(df, index)
+                    cached_data['entry_conditions_result'] = result
+                    return result
+                except Exception:
+                    cached_data['entry_conditions_result'] = False
+                    return False
+            return False
         else:
             self._cache_misses += 1
-        
-        if hasattr(self.strategy, 'check_entry_conditions'):
-            try:
-                return self.strategy.check_entry_conditions(df, index)
-            except Exception:
-                return False
-        return False
+            # Fallback to original method if not cached
+            if hasattr(self.strategy, 'check_entry_conditions'):
+                try:
+                    result = self.strategy.check_entry_conditions(df, index)
+                    # Cache the result for future use
+                    self._strategy_cache[cache_key] = {
+                        'entry_conditions_result': result,
+                        'current_price': df.iloc[index]['close'],
+                        'current_time': df.index[index]
+                    }
+                    self._strategy_cache_size = len(self._strategy_cache)
+                    return result
+                except Exception:
+                    return False
+            return False
 
     def _check_short_entry_conditions_cached(self, df: pd.DataFrame, index: int) -> bool:
         """Optimized short entry conditions check using cached data."""
@@ -1727,15 +1759,40 @@ class Backtester:
         # Try to use cached data first
         if cache_key in self._strategy_cache:
             self._cache_hits += 1
+            cached_data = self._strategy_cache[cache_key]
+            
+            # Use cached data to avoid expensive DataFrame operations
+            if 'short_entry_conditions_result' in cached_data:
+                return cached_data['short_entry_conditions_result']
+            
+            # If not cached, compute and cache the result
+            if hasattr(self.strategy, 'check_short_entry_conditions'):
+                try:
+                    result = self.strategy.check_short_entry_conditions(df, index)
+                    cached_data['short_entry_conditions_result'] = result
+                    return result
+                except Exception:
+                    cached_data['short_entry_conditions_result'] = False
+                    return False
+            return False
         else:
             self._cache_misses += 1
-        
-        if hasattr(self.strategy, 'check_short_entry_conditions'):
-            try:
-                return self.strategy.check_short_entry_conditions(df, index)
-            except Exception:
-                return False
-        return False
+            # Fallback to original method if not cached
+            if hasattr(self.strategy, 'check_short_entry_conditions'):
+                try:
+                    result = self.strategy.check_short_entry_conditions(df, index)
+                    # Cache the result for future use
+                    if cache_key not in self._strategy_cache:
+                        self._strategy_cache[cache_key] = {
+                            'current_price': df.iloc[index]['close'],
+                            'current_time': df.index[index]
+                        }
+                    self._strategy_cache[cache_key]['short_entry_conditions_result'] = result
+                    self._strategy_cache_size = len(self._strategy_cache)
+                    return result
+                except Exception:
+                    return False
+            return False
 
     def _calculate_position_size_cached(self, df: pd.DataFrame, index: int, balance: float) -> float:
         """Optimized position size calculation using cached data."""
@@ -1744,15 +1801,40 @@ class Backtester:
         # Try to use cached data first
         if cache_key in self._strategy_cache:
             self._cache_hits += 1
+            cached_data = self._strategy_cache[cache_key]
+            
+            # Use cached data to avoid expensive DataFrame operations
+            if 'position_size_result' in cached_data:
+                return cached_data['position_size_result']
+            
+            # If not cached, compute and cache the result
+            if hasattr(self.strategy, 'calculate_position_size'):
+                try:
+                    result = self.strategy.calculate_position_size(df, index, balance)
+                    cached_data['position_size_result'] = result
+                    return result
+                except Exception:
+                    cached_data['position_size_result'] = 0.0
+                    return 0.0
+            return 0.0
         else:
             self._cache_misses += 1
-        
-        if hasattr(self.strategy, 'calculate_position_size'):
-            try:
-                return self.strategy.calculate_position_size(df, index, balance)
-            except Exception:
-                return 0.0
-        return 0.0
+            # Fallback to original method if not cached
+            if hasattr(self.strategy, 'calculate_position_size'):
+                try:
+                    result = self.strategy.calculate_position_size(df, index, balance)
+                    # Cache the result for future use
+                    if cache_key not in self._strategy_cache:
+                        self._strategy_cache[cache_key] = {
+                            'current_price': df.iloc[index]['close'],
+                            'current_time': df.index[index]
+                        }
+                    self._strategy_cache[cache_key]['position_size_result'] = result
+                    self._strategy_cache_size = len(self._strategy_cache)
+                    return result
+                except Exception:
+                    return 0.0
+            return 0.0
 
     def _get_model_version(self) -> str:
         """Get a unique version identifier for the current model."""
