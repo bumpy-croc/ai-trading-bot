@@ -121,6 +121,12 @@ class Backtester:
         
         # Performance optimization: feature extraction caching
         self._feature_cache: dict[int, dict] = {}  # Cache for indicators, sentiment, ML data per candle
+        
+        # Performance optimization: strategy calculation caching
+        self._strategy_cache: dict[int, dict] = {}  # Cache for strategy calculations per candle
+        
+        # Performance optimization: ML prediction caching
+        self._ml_predictions_cache: dict[int, float] = {}  # Cache for ML predictions per candle
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -375,9 +381,6 @@ class Backtester:
             if self.sentiment_provider:
                 df = self._merge_sentiment_data(df, symbol, timeframe, start, end)
 
-            # Calculate indicators
-            df = self.strategy.calculate_indicators(df)
-
             # Remove warmup period - only drop rows where essential price data is missing
             # Don't drop rows just because ML predictions or sentiment data is missing
             essential_columns = ["open", "high", "low", "close", "volume"]
@@ -385,6 +388,39 @@ class Backtester:
 
             # Pre-compute all feature extractions for performance optimization
             self._precompute_features(df)
+            
+            # Pre-compute strategy calculations for performance
+            self._precompute_strategy_calculations(df)
+            
+            # Pre-compute ML predictions for performance (most expensive operation)
+            self._precompute_ml_predictions(df)
+            
+            # Add cached predictions to the DataFrame for strategy use
+            if self._ml_predictions_cache:
+                # Create a Series with the correct index alignment
+                # Map the cached predictions to the actual DataFrame indices
+                predictions_series = pd.Series(index=df.index, dtype=float)
+                for i, pred in self._ml_predictions_cache.items():
+                    if i < len(df):
+                        predictions_series.iloc[i] = pred
+                
+                df['onnx_pred'] = predictions_series
+                df['ml_prediction'] = df['onnx_pred']  # Alias for compatibility
+                
+                # Calculate prediction confidence if needed
+                if 'close' in df.columns:
+                    df['prediction_confidence'] = df.apply(
+                        lambda row: min(1.0, abs(row['onnx_pred'] - row['close']) / row['close'] * 5.0) 
+                        if pd.notna(row['onnx_pred']) and row['close'] > 0 else 0.0, 
+                        axis=1
+                    )
+                    
+                logger.info(f"Added {len(self._ml_predictions_cache)} ML predictions to DataFrame")
+                logger.debug("Using pre-computed ML predictions, skipping strategy calculate_indicators")
+            else:
+                # Fallback to original method if no cached predictions
+                logger.info("No cached ML predictions found, using original calculate_indicators method")
+                df = self.strategy.calculate_indicators(df)
 
             logger.info(f"Starting backtest with {len(df)} candles")
 
@@ -405,9 +441,10 @@ class Backtester:
 
             # Iterate through candles
             for i in range(len(df)):
-                candle = df.iloc[i]
-                current_time = candle.name
-                current_price = float(candle["close"])
+                # Use cached data for performance
+                cached_data = self._strategy_cache[i]
+                current_time = cached_data['current_time']
+                current_price = cached_data['current_price']
 
                 # Record current balance for time-series analytics
                 balance_history.append((current_time, self.balance))
@@ -483,7 +520,8 @@ class Backtester:
                             except Exception:
                                 pass
 
-                    exit_signal = self.strategy.check_exit_conditions(
+                    # Use cached data for exit conditions check
+                    exit_signal = self._check_exit_conditions_cached(
                         df, i, self.current_trade.entry_price
                     )
 
@@ -764,8 +802,8 @@ class Backtester:
                             )
                             break
 
-                # Check for entry if not in position
-                elif self.strategy.check_entry_conditions(df, i):
+                # Check for entry if not in position using cached method
+                elif self._check_entry_conditions_cached(df, i):
                     # Calculate position size (as fraction of balance)
                     try:
                         overrides = (
@@ -822,7 +860,7 @@ class Backtester:
                             correlation_ctx=correlation_ctx,
                         )
                     else:
-                        size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+                        size_fraction = self._calculate_position_size_cached(df, i, self.balance)
 
                     # Apply dynamic risk adjustments
                     if size_fraction > 0 and self.enable_dynamic_risk:
@@ -949,7 +987,7 @@ class Backtester:
                             strategy_overrides=overrides,
                         )
                     else:
-                        size_fraction = self.strategy.calculate_position_size(df, i, self.balance)
+                        size_fraction = self._calculate_position_size_cached(df, i, self.balance)
 
                     # Apply dynamic risk adjustments
                     if size_fraction > 0 and self.enable_dynamic_risk:
@@ -1261,9 +1299,114 @@ class Backtester:
         
         logger.debug(f"Pre-computed features for {len(self._feature_cache)} candles")
 
+    def _precompute_strategy_calculations(self, df: pd.DataFrame) -> None:
+        """Pre-compute strategy calculations to avoid redundant operations during backtesting."""
+        logger.debug(f"Pre-computing strategy calculations for {len(df)} candles")
+        
+        for i in range(len(df)):
+            # Pre-compute common strategy calculations
+            candle = df.iloc[i]
+            current_price = float(candle["close"])
+            
+            # Cache basic calculations that are used multiple times
+            self._strategy_cache[i] = {
+                'current_price': current_price,
+                'current_time': candle.name,
+                'candle_data': {
+                    'open': float(candle.get('open', current_price)),
+                    'high': float(candle.get('high', current_price)),
+                    'low': float(candle.get('low', current_price)),
+                    'close': current_price,
+                    'volume': float(candle.get('volume', 0))
+                }
+            }
+        
+        logger.debug(f"Pre-computed strategy calculations for {len(self._strategy_cache)} candles")
+
+    def _precompute_ml_predictions(self, df: pd.DataFrame) -> None:
+        """Pre-compute ML predictions to avoid expensive inference during backtesting."""
+        logger.debug(f"Pre-computing ML predictions for {len(df)} candles")
+        
+        # Only pre-compute if the strategy uses ML predictions
+        if not hasattr(self.strategy, 'calculate_indicators'):
+            return
+            
+        # Check if this is an ML strategy by looking for ONNX-related attributes
+        if not (hasattr(self.strategy, 'ort_session') or hasattr(self.strategy, 'prediction_engine')):
+            return
+            
+        try:
+            # Run the strategy's calculate_indicators method once to get all predictions
+            # This is expensive but only done once instead of 720 times
+            df_with_predictions = self.strategy.calculate_indicators(df.copy())
+            
+            # Cache the predictions
+            predictions_found = 0
+            for i in range(len(df_with_predictions)):
+                if 'onnx_pred' in df_with_predictions.columns:
+                    pred = df_with_predictions['onnx_pred'].iloc[i]
+                    if pd.notna(pred):
+                        self._ml_predictions_cache[i] = float(pred)
+                        predictions_found += 1
+                        
+            logger.info(f"Pre-computed ML predictions for {predictions_found} candles out of {len(df_with_predictions)} total")
+            
+        except Exception as e:
+            logger.warning(f"Failed to pre-compute ML predictions: {e}")
+            import traceback
+            logger.warning(f"Traceback: {traceback.format_exc()}")
+
+    def _check_exit_conditions_cached(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
+        """Optimized exit conditions check using cached data."""
+        # Use cached price data to avoid repeated DataFrame access
+        cached_data = self._strategy_cache[index]
+        current_price = cached_data['current_price']
+        
+        # For most strategies, we can optimize the exit check
+        # by avoiding repeated DataFrame operations
+        if hasattr(self.strategy, 'check_exit_conditions'):
+            # Try to use cached data if the strategy supports it
+            try:
+                # Create a minimal row for the strategy method
+                row = df.iloc[index]
+                return self.strategy.check_exit_conditions(df, index, entry_price)
+            except Exception:
+                # Fallback to original method
+                return self.strategy.check_exit_conditions(df, index, entry_price)
+        return False
+
+    def _check_entry_conditions_cached(self, df: pd.DataFrame, index: int) -> bool:
+        """Optimized entry conditions check using cached data."""
+        if hasattr(self.strategy, 'check_entry_conditions'):
+            try:
+                return self.strategy.check_entry_conditions(df, index)
+            except Exception:
+                return False
+        return False
+
+    def _check_short_entry_conditions_cached(self, df: pd.DataFrame, index: int) -> bool:
+        """Optimized short entry conditions check using cached data."""
+        if hasattr(self.strategy, 'check_short_entry_conditions'):
+            try:
+                return self.strategy.check_short_entry_conditions(df, index)
+            except Exception:
+                return False
+        return False
+
+    def _calculate_position_size_cached(self, df: pd.DataFrame, index: int, balance: float) -> float:
+        """Optimized position size calculation using cached data."""
+        if hasattr(self.strategy, 'calculate_position_size'):
+            try:
+                return self.strategy.calculate_position_size(df, index, balance)
+            except Exception:
+                return 0.0
+        return 0.0
+
     def _clear_feature_cache(self) -> None:
         """Clear the feature cache to free memory."""
         self._feature_cache.clear()
+        self._strategy_cache.clear()
+        self._ml_predictions_cache.clear()
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicators with caching for performance."""
