@@ -476,10 +476,19 @@ class Backtester:
     ) -> dict:
         """Run backtest with sentiment data if available"""
         try:
-            # Clear feature cache for new backtest
-            self._clear_feature_cache()
-            # Reset data hash for new dataset
-            self._data_hash = None
+            # Get historical data first to check if we need to clear cache
+            df = self.data_provider.get_historical_data(
+                symbol=symbol, timeframe=timeframe, start=start, end=end
+            )
+            
+            # Only clear cache if dataset has actually changed
+            if self._should_clear_cache_for_new_dataset(df):
+                logger.debug("Dataset changed, clearing cache")
+                self._clear_feature_cache()
+                # Reset data hash for new dataset
+                self._data_hash = None
+            else:
+                logger.debug("Dataset unchanged, preserving cache for reuse")
             
             # Set base logging context for this backtest run
             set_context(
@@ -516,10 +525,7 @@ class Backtester:
                 if self.enable_dynamic_risk and self.dynamic_risk_manager and self.db_manager:
                     self.dynamic_risk_manager.db_manager = self.db_manager
 
-            # Fetch price data
-            df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
-            # Store reference for cache key generation
-            self._current_df = df
+            # Check if data is empty (df was already fetched above)
             if df.empty:
                 # Return empty results for empty data
                 return {
@@ -1938,32 +1944,42 @@ class Backtester:
         if self._data_hash is not None:
             return self._data_hash
             
-        # Create a stable hash based on data content for better cache reuse
-        # Use sample of data points rather than just endpoints for overlapping datasets
+        # Create a hash based on data characteristics that allows cache reuse
+        # for overlapping datasets (same source data, different sizes)
+        # Use columns and first row only to allow cache reuse across dataset slices
         data_info = {
             'columns': list(df.columns),
+            'first_row': df.iloc[0].to_dict() if len(df) > 0 else {},
             'index_start': str(df.index[0]) if len(df) > 0 else None,
-            # Sample data points for stable hash across overlapping datasets
-            'sample_closes': [float(df['close'].iloc[i]) for i in range(0, min(len(df), 100), max(1, len(df) // 10))] if 'close' in df.columns and len(df) > 0 else []
+            # Don't include shape or last_row to allow cache reuse for dataset slices
         }
         
         data_str = json.dumps(data_info, sort_keys=True, default=str)
         self._data_hash = hashlib.md5(data_str.encode()).hexdigest()[:16]
         return self._data_hash
 
-    def _get_cache_key(self, index: int) -> str:
-        """Generate a cache key that includes model version and candle timestamp for better cache reuse."""
+    def _get_cache_key(self, index: int, df: Optional[pd.DataFrame] = None) -> str:
+        """Generate a cache key that includes model version and data hash."""
         model_version = self._get_model_version()
         
-        # Use timestamp-based keys for better cache reuse across overlapping datasets
-        # This allows cache hits when the same time periods are processed in different runs
-        if hasattr(self, '_current_df') and self._current_df is not None and index < len(self._current_df):
-            timestamp = str(self._current_df.index[index])
-            return f"{model_version}_{timestamp}_{index}"
-        else:
+        # Ensure data hash is set - if not available and df provided, generate it
+        if self._data_hash is None and df is not None:
+            self._get_data_hash(df)
             # Fallback to data hash for compatibility
             data_hash = self._data_hash or "unknown"
             return f"{model_version}_{data_hash}_{index}"
+=======
+    def _get_cache_key(self, index: int, df: Optional[pd.DataFrame] = None) -> str:
+        """Generate a cache key that includes model version and data hash."""
+        model_version = self._get_model_version()
+        
+        # Ensure data hash is set - if not available and df provided, generate it
+        if self._data_hash is None and df is not None:
+            self._get_data_hash(df)
+        
+        data_hash = self._data_hash or "unknown"
+        return f"{model_version}_{data_hash}_{index}"
+>>>>>>> 7c764cd (Fix cache key mismatch and improve cache scaling performance)
 
     def _get_persistent_cache_key(self, cache_type: str) -> str:
         """Generate a persistent cache key for the entire dataset."""
@@ -2086,7 +2102,28 @@ class Backtester:
         self._ml_predictions_cache_size = 0
         self._cache_hits = 0
         self._cache_misses = 0
-        logger.debug("Cleared all caches and reset counters")
+        
+    def _should_clear_cache_for_new_dataset(self, df: pd.DataFrame) -> bool:
+        """Check if cache should be cleared for a new dataset."""
+        if self._data_hash is None:
+            return False  # No previous dataset, no need to clear
+            
+        # Calculate hash for new dataset
+        new_hash = self._calculate_data_hash(df)
+        
+        # Clear cache only if dataset has actually changed
+        return new_hash != self._data_hash
+    
+    def _calculate_data_hash(self, df: pd.DataFrame) -> str:
+        """Calculate data hash without storing it."""
+        data_info = {
+            'columns': list(df.columns),
+            'first_row': df.iloc[0].to_dict() if len(df) > 0 else {},
+            'index_start': str(df.index[0]) if len(df) > 0 else None,
+        }
+        
+        data_str = json.dumps(data_info, sort_keys=True, default=str)
+        return hashlib.md5(data_str.encode()).hexdigest()[:16]
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicators with caching for performance."""
