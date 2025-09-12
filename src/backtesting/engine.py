@@ -7,15 +7,14 @@ This module provides a comprehensive backtesting framework.
 import hashlib
 import json
 import logging
-import os
 import pickle
-import psutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd  # type: ignore
+import psutil
 from pandas import DataFrame  # type: ignore
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -66,9 +65,20 @@ class PersistentCacheManager:
     """Manages persistent disk-based caching for backtesting predictions."""
     
     def __init__(self, cache_dir: str = CACHE_DIR, expiry_days: int = CACHE_EXPIRY_DAYS):
-        self.cache_dir = Path(cache_dir)
+        self._cache_dir = Path(cache_dir)
         self.expiry_days = expiry_days
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    @property
+    def cache_dir(self) -> Path:
+        """Get the cache directory as a Path object."""
+        return self._cache_dir
+    
+    @cache_dir.setter
+    def cache_dir(self, value: str | Path) -> None:
+        """Set the cache directory, ensuring it's always a Path object."""
+        self._cache_dir = Path(value)
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
         
     def _get_cache_path(self, cache_key: str) -> Path:
         """Get the file path for a cache key."""
@@ -85,7 +95,7 @@ class PersistentCacheManager:
             return True
             
         try:
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path) as f:
                 metadata = json.load(f)
             created_at = datetime.fromisoformat(metadata['created_at'])
             return datetime.now() - created_at > timedelta(days=self.expiry_days)
@@ -130,7 +140,7 @@ class PersistentCacheManager:
                 json.dump(metadata, f)
                 
             return True
-        except (IOError, OSError, pickle.PickleError) as e:
+        except (OSError, pickle.PickleError) as e:
             logger.warning(f"Failed to save cache {cache_key}: {e}")
             return False
     

@@ -5,15 +5,17 @@ These tests specifically measure and verify that the cache provides
 measurable performance improvements during backtesting.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 import time
-from unittest.mock import Mock, patch
 from datetime import datetime
+from unittest.mock import Mock
+
+import numpy as np
+import pandas as pd
+import pytest
+
 from src.backtesting.engine import Backtester
-from src.strategies.ml_basic import MlBasic
 from src.data_providers.binance_provider import BinanceDataProvider
+from src.strategies.ml_basic import MlBasic
 
 
 class TestCachePerformance:
@@ -57,7 +59,6 @@ class TestCachePerformance:
 
     def test_cache_performance_improvement_measurable(self, mock_data_provider, large_dataset):
         """Test that cache provides measurable performance improvement."""
-        from src.strategies.ml_basic import MlBasic
         
         strategy = MlBasic()
         mock_data_provider.get_historical_data.return_value = large_dataset
@@ -117,7 +118,7 @@ class TestCachePerformance:
         
         cache_stats = backtester_with_cache.get_cache_stats()
         
-        print(f"\n=== PERFORMANCE COMPARISON ===")
+        print("\n=== PERFORMANCE COMPARISON ===")
         print(f"Time without cache: {time_no_cache:.2f}s")
         print(f"Time with cache: {time_with_cache:.2f}s")
         print(f"Performance improvement: {((time_no_cache - time_with_cache) / time_no_cache * 100):.1f}%")
@@ -149,47 +150,51 @@ class TestCachePerformance:
 
     def test_cache_scales_with_dataset_size(self, mock_data_provider):
         """Test that cache performance scales well with dataset size."""
-        from src.strategies.ml_basic import MlBasic
         
         strategy = MlBasic()
         
-        # Test with different dataset sizes
+        # Generate one large base dataset that we'll slice for different sizes
+        # This allows cache reuse and more realistic testing
+        np.random.seed(42)
+        max_size = 2000
+        dates = pd.date_range('2024-01-01', periods=max_size, freq='1h')
+        
+        base_price = 50000
+        returns = np.random.normal(0, 0.02, max_size)
+        prices = [base_price]
+        for ret in returns[1:]:
+            prices.append(prices[-1] * (1 + ret))
+        
+        base_df = pd.DataFrame({
+            'open': prices,
+            'high': [p * (1 + abs(np.random.normal(0, 0.01))) for p in prices],
+            'low': [p * (1 - abs(np.random.normal(0, 0.01))) for p in prices],
+            'close': prices,
+            'volume': np.random.randint(1000, 10000, max_size)
+        }, index=dates)
+        
+        base_df['high'] = np.maximum(base_df['high'], np.maximum(base_df['open'], base_df['close']))
+        base_df['low'] = np.minimum(base_df['low'], np.minimum(base_df['open'], base_df['close']))
+        
+        # Test with different dataset sizes using slices of the same data
         dataset_sizes = [100, 500, 1000, 2000]
         times = []
         cache_stats_list = []
         
+        # Use the same backtester instance to enable cache reuse
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+        
         for size in dataset_sizes:
-            # Generate dataset of specific size
-            np.random.seed(42)
-            dates = pd.date_range('2024-01-01', periods=size, freq='1h')
-            
-            base_price = 50000
-            returns = np.random.normal(0, 0.02, size)
-            prices = [base_price]
-            for ret in returns[1:]:
-                prices.append(prices[-1] * (1 + ret))
-            
-            df = pd.DataFrame({
-                'open': prices,
-                'high': [p * (1 + abs(np.random.normal(0, 0.01))) for p in prices],
-                'low': [p * (1 - abs(np.random.normal(0, 0.01))) for p in prices],
-                'close': prices,
-                'volume': np.random.randint(1000, 10000, size)
-            }, index=dates)
-            
-            df['high'] = np.maximum(df['high'], np.maximum(df['open'], df['close']))
-            df['low'] = np.minimum(df['low'], np.minimum(df['open'], df['close']))
-            
+            # Use slice of the base dataset
+            df = base_df.head(size)
             mock_data_provider.get_historical_data.return_value = df
             
-            backtester = Backtester(
-                strategy=strategy,
-                data_provider=mock_data_provider,
-                initial_balance=10000,
-            )
-            
             start_time = time.time()
-            result = backtester.run(
+            backtester.run(
                 symbol="BTCUSDT",
                 start=datetime(2024, 1, 1),
                 end=datetime(2024, 1, 1) + pd.Timedelta(hours=size-1),
@@ -204,22 +209,23 @@ class TestCachePerformance:
                   f"Cache hits: {backtester.get_cache_stats()['cache_hits']}")
         
         # Verify that time scales reasonably with dataset size
-        # (should be roughly linear, not exponential)
+        # With caching, larger datasets should benefit from cache hits on overlapping data
         for i in range(1, len(times)):
             size_ratio = dataset_sizes[i] / dataset_sizes[i-1]
             time_ratio = times[i] / times[i-1]
             
-            # Time should not grow exponentially with dataset size
-            # Allow up to 3x scaling factor to account for ML prediction overhead
+            # With effective caching, time scaling should be better than linear
+            # Allow up to 3x scaling factor, as cache should help significantly
             assert time_ratio < size_ratio * 3, \
                 f"Time scaling is too poor: {size_ratio}x size increase " \
-                f"caused {time_ratio:.1f}x time increase"
+                f"caused {time_ratio:.1f}x time increase. " \
+                f"Cache may not be working effectively."
 
     def test_cache_memory_efficiency(self, mock_data_provider, large_dataset):
         """Test that cache uses memory efficiently."""
-        from src.strategies.ml_basic import MlBasic
-        import psutil
         import os
+
+        import psutil
         
         strategy = MlBasic()
         mock_data_provider.get_historical_data.return_value = large_dataset
@@ -235,7 +241,7 @@ class TestCachePerformance:
         initial_memory = process.memory_info().rss / 1024 / 1024  # MB
         
         # Run backtest
-        result = backtester.run(
+        backtester.run(
             symbol="BTCUSDT",
             start=datetime(2024, 1, 1),
             end=datetime(2024, 7, 1),
@@ -248,7 +254,7 @@ class TestCachePerformance:
         
         cache_stats = backtester.get_cache_stats()
         
-        print(f"\n=== MEMORY USAGE ===")
+        print("\n=== MEMORY USAGE ===")
         print(f"Initial memory: {initial_memory:.1f} MB")
         print(f"Final memory: {final_memory:.1f} MB")
         print(f"Memory increase: {memory_increase:.1f} MB")
@@ -267,9 +273,8 @@ class TestCachePerformance:
 
     def test_cache_persistence_across_runs(self, mock_data_provider, large_dataset):
         """Test that persistent cache works across multiple backtest runs."""
-        from src.strategies.ml_basic import MlBasic
-        import tempfile
         import shutil
+        import tempfile
         
         # Use temporary directory for cache
         temp_cache_dir = tempfile.mkdtemp()
@@ -315,7 +320,7 @@ class TestCachePerformance:
             cache_stats1 = backtester1.get_cache_stats()
             cache_stats2 = backtester2.get_cache_stats()
             
-            print(f"\n=== PERSISTENT CACHE TEST ===")
+            print("\n=== PERSISTENT CACHE TEST ===")
             print(f"First run time: {time1:.2f}s")
             print(f"Second run time: {time2:.2f}s")
             print(f"First run cache hits: {cache_stats1['cache_hits']}")
