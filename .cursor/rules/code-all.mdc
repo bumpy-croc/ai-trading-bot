@@ -82,6 +82,7 @@ alwaysApply: true
 
 ## Tests
 - **Keep tests stateless**: Use fixtures, avoid global state.
+- Unit tests should be fast and isolate 
 
 ## Key Conventions:
 1. Prioritize **readability, simplicity, and maintainability**.

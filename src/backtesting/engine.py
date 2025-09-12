@@ -5,9 +5,14 @@ This module provides a comprehensive backtesting framework.
 """
 
 import hashlib
+import json
 import logging
+import os
+import pickle
 import psutil
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd  # type: ignore
@@ -52,6 +57,130 @@ logger = logging.getLogger(__name__)
 MAX_CACHE_SIZE = 10000  # Maximum number of candles to cache
 CHUNK_SIZE = 5000       # Process large datasets in chunks
 MEMORY_THRESHOLD = 80   # Memory usage threshold percentage
+CACHE_DIR = "cache/backtesting"  # Directory for persistent cache
+CACHE_EXPIRY_DAYS = 7   # Cache expiration in days
+PROGRESS_UPDATE_INTERVAL = 100  # Update progress every N candles
+
+
+class PersistentCacheManager:
+    """Manages persistent disk-based caching for backtesting predictions."""
+    
+    def __init__(self, cache_dir: str = CACHE_DIR, expiry_days: int = CACHE_EXPIRY_DAYS):
+        self.cache_dir = Path(cache_dir)
+        self.expiry_days = expiry_days
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+    def _get_cache_path(self, cache_key: str) -> Path:
+        """Get the file path for a cache key."""
+        return self.cache_dir / f"{cache_key}.pkl"
+    
+    def _get_metadata_path(self, cache_key: str) -> Path:
+        """Get the metadata file path for a cache key."""
+        return self.cache_dir / f"{cache_key}.meta"
+    
+    def _is_cache_expired(self, cache_key: str) -> bool:
+        """Check if a cache entry has expired."""
+        metadata_path = self._get_metadata_path(cache_key)
+        if not metadata_path.exists():
+            return True
+            
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            created_at = datetime.fromisoformat(metadata['created_at'])
+            return datetime.now() - created_at > timedelta(days=self.expiry_days)
+        except (json.JSONDecodeError, KeyError, ValueError):
+            return True
+    
+    def get(self, cache_key: str) -> Optional[dict]:
+        """Get cached data from disk."""
+        cache_path = self._get_cache_path(cache_key)
+        metadata_path = self._get_metadata_path(cache_key)
+        
+        if not cache_path.exists() or not metadata_path.exists():
+            return None
+            
+        if self._is_cache_expired(cache_key):
+            self.delete(cache_key)
+            return None
+            
+        try:
+            with open(cache_path, 'rb') as f:
+                return pickle.load(f)
+        except (pickle.PickleError, FileNotFoundError):
+            return None
+    
+    def set(self, cache_key: str, data: dict) -> bool:
+        """Save data to disk cache."""
+        try:
+            cache_path = self._get_cache_path(cache_key)
+            metadata_path = self._get_metadata_path(cache_key)
+            
+            # Save data
+            with open(cache_path, 'wb') as f:
+                pickle.dump(data, f)
+            
+            # Save metadata
+            metadata = {
+                'created_at': datetime.now().isoformat(),
+                'size': len(str(data)),
+                'cache_key': cache_key
+            }
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f)
+                
+            return True
+        except (IOError, OSError, pickle.PickleError) as e:
+            logger.warning(f"Failed to save cache {cache_key}: {e}")
+            return False
+    
+    def delete(self, cache_key: str) -> bool:
+        """Delete cached data from disk."""
+        try:
+            cache_path = self._get_cache_path(cache_key)
+            metadata_path = self._get_metadata_path(cache_key)
+            
+            if cache_path.exists():
+                cache_path.unlink()
+            if metadata_path.exists():
+                metadata_path.unlink()
+                
+            return True
+        except OSError as e:
+            logger.warning(f"Failed to delete cache {cache_key}: {e}")
+            return False
+    
+    def cleanup_expired(self) -> int:
+        """Clean up expired cache entries."""
+        cleaned = 0
+        for cache_file in self.cache_dir.glob("*.pkl"):
+            cache_key = cache_file.stem
+            if self._is_cache_expired(cache_key):
+                if self.delete(cache_key):
+                    cleaned += 1
+        return cleaned
+    
+    def get_cache_stats(self) -> dict:
+        """Get cache statistics."""
+        total_files = 0
+        total_size = 0
+        expired_files = 0
+        
+        for cache_file in self.cache_dir.glob("*.pkl"):
+            total_files += 1
+            total_size += cache_file.stat().st_size
+            
+            cache_key = cache_file.stem
+            if self._is_cache_expired(cache_key):
+                expired_files += 1
+        
+        return {
+            'total_files': total_files,
+            'total_size_bytes': total_size,
+            'total_size_mb': total_size / (1024 * 1024),
+            'expired_files': expired_files,
+            'cache_dir': str(self.cache_dir)
+        }
 
 
 class ActiveTrade:
@@ -143,6 +272,15 @@ class Backtester:
         self._use_original_method = False  # Fallback flag for when caching fails
         self._cache_hits = 0  # Track cache performance
         self._cache_misses = 0
+        
+        # Persistent caching
+        self._persistent_cache = PersistentCacheManager()
+        self._data_hash: Optional[str] = None  # Hash of current dataset
+        self._enable_persistent_cache = True  # Enable disk caching
+        
+        # Progress tracking
+        self._progress_callback: Optional[callable] = None  # Progress callback function
+        self._last_progress_update = 0  # Last progress update time
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -1209,12 +1347,17 @@ class Backtester:
                     session_id=self.trading_session_id, final_balance=self.balance
                 )
             
-            # Log cache performance statistics
+            # Log comprehensive cache performance statistics
+            cache_stats = self.get_cache_stats()
             total_cache_requests = self._cache_hits + self._cache_misses
             if total_cache_requests > 0:
-                cache_hit_rate = (self._cache_hits / total_cache_requests) * 100
-                logger.info(f"Cache performance: {self._cache_hits} hits, {self._cache_misses} misses ({cache_hit_rate:.1f}% hit rate)")
-                logger.info(f"Cache sizes: features={self._feature_cache_size}, strategy={self._strategy_cache_size}, ml_predictions={self._ml_predictions_cache_size}")
+                logger.info(f"Cache performance: {self._cache_hits} hits, {self._cache_misses} misses ({cache_stats['hit_rate']:.1f}% hit rate)")
+                logger.info(f"Memory cache sizes: features={self._feature_cache_size}, strategy={self._strategy_cache_size}, ml_predictions={self._ml_predictions_cache_size}")
+                
+                if self._enable_persistent_cache and 'total_files' in cache_stats:
+                    logger.info(f"Disk cache: {cache_stats['total_files']} files, {cache_stats['total_size_mb']:.1f}MB")
+                    if cache_stats['expired_files'] > 0:
+                        logger.info(f"Expired cache files: {cache_stats['expired_files']}")
             
             # Clear feature cache to free memory
             self._clear_feature_cache()
@@ -1316,6 +1459,20 @@ class Backtester:
         """Pre-compute all feature extractions for the entire DataFrame to avoid redundant calculations."""
         logger.debug(f"Pre-computing features for {len(df)} candles")
         
+        # Generate data hash for this dataset
+        self._get_data_hash(df)
+        
+        # Try to load from persistent cache first
+        if self._enable_persistent_cache:
+            persistent_key = self._get_persistent_cache_key("features")
+            cached_features = self._persistent_cache.get(persistent_key)
+            if cached_features:
+                logger.info(f"Loaded features from persistent cache: {len(cached_features)} candles")
+                self._feature_cache.update(cached_features)
+                self._feature_cache_size = len(self._feature_cache)
+                return
+        
+        # Pre-compute features with progress tracking
         for i in range(len(df)):
             # Extract all features once and cache them
             indicators = util_extract_indicators(df, i)
@@ -1330,9 +1487,18 @@ class Backtester:
             }
             self._feature_cache_size += 1
             
+            # Update progress
+            self._update_progress(i + 1, len(df), "Pre-computing features")
+            
             # Check if cache is getting full
             if self._is_cache_full():
                 self._cleanup_old_cache_entries()
+        
+        # Save to persistent cache
+        if self._enable_persistent_cache and self._feature_cache:
+            persistent_key = self._get_persistent_cache_key("features")
+            if self._persistent_cache.set(persistent_key, self._feature_cache):
+                logger.debug(f"Saved features to persistent cache: {len(self._feature_cache)} candles")
         
         logger.debug(f"Pre-computed features for {len(self._feature_cache)} candles")
 
@@ -1340,6 +1506,17 @@ class Backtester:
         """Pre-compute strategy calculations to avoid redundant operations during backtesting."""
         logger.debug(f"Pre-computing strategy calculations for {len(df)} candles")
         
+        # Try to load from persistent cache first
+        if self._enable_persistent_cache:
+            persistent_key = self._get_persistent_cache_key("strategy")
+            cached_strategy = self._persistent_cache.get(persistent_key)
+            if cached_strategy:
+                logger.info(f"Loaded strategy calculations from persistent cache: {len(cached_strategy)} candles")
+                self._strategy_cache.update(cached_strategy)
+                self._strategy_cache_size = len(self._strategy_cache)
+                return
+        
+        # Pre-compute strategy calculations with progress tracking
         for i in range(len(df)):
             # Pre-compute common strategy calculations
             candle = df.iloc[i]
@@ -1360,9 +1537,18 @@ class Backtester:
             }
             self._strategy_cache_size += 1
             
+            # Update progress
+            self._update_progress(i + 1, len(df), "Pre-computing strategy calculations")
+            
             # Check if cache is getting full
             if self._is_cache_full():
                 self._cleanup_old_cache_entries()
+        
+        # Save to persistent cache
+        if self._enable_persistent_cache and self._strategy_cache:
+            persistent_key = self._get_persistent_cache_key("strategy")
+            if self._persistent_cache.set(persistent_key, self._strategy_cache):
+                logger.debug(f"Saved strategy calculations to persistent cache: {len(self._strategy_cache)} candles")
         
         logger.debug(f"Pre-computed strategy calculations for {len(self._strategy_cache)} candles")
 
@@ -1378,6 +1564,16 @@ class Backtester:
         if not (hasattr(self.strategy, 'ort_session') or hasattr(self.strategy, 'prediction_engine')):
             return
         
+        # Try to load from persistent cache first
+        if self._enable_persistent_cache:
+            persistent_key = self._get_persistent_cache_key("ml_predictions")
+            cached_predictions = self._persistent_cache.get(persistent_key)
+            if cached_predictions:
+                logger.info(f"Loaded ML predictions from persistent cache: {len(cached_predictions)} candles")
+                self._ml_predictions_cache.update(cached_predictions)
+                self._ml_predictions_cache_size = len(self._ml_predictions_cache)
+                return
+        
         # Check memory usage before starting
         if not self._check_memory_usage():
             logger.warning("High memory usage detected. Skipping ML prediction pre-computation.")
@@ -1392,6 +1588,12 @@ class Backtester:
             else:
                 # Process entire dataset at once for smaller datasets
                 self._precompute_ml_predictions_single(df)
+            
+            # Save to persistent cache
+            if self._enable_persistent_cache and self._ml_predictions_cache:
+                persistent_key = self._get_persistent_cache_key("ml_predictions")
+                if self._persistent_cache.set(persistent_key, self._ml_predictions_cache):
+                    logger.debug(f"Saved ML predictions to persistent cache: {len(self._ml_predictions_cache)} candles")
                 
         except Exception as e:
             logger.warning(f"Failed to pre-compute ML predictions: {e}")
@@ -1424,17 +1626,21 @@ class Backtester:
     def _precompute_ml_predictions_chunked(self, df: pd.DataFrame) -> None:
         """Pre-compute ML predictions for large datasets using chunked processing."""
         total_predictions = 0
+        total_chunks = (len(df) + CHUNK_SIZE - 1) // CHUNK_SIZE
         
-        for start_idx in range(0, len(df), CHUNK_SIZE):
+        for chunk_idx, start_idx in enumerate(range(0, len(df), CHUNK_SIZE)):
             end_idx = min(start_idx + CHUNK_SIZE, len(df))
             chunk_df = df.iloc[start_idx:end_idx]
             
-            logger.debug(f"Processing chunk {start_idx}-{end_idx} ({len(chunk_df)} candles)")
+            logger.debug(f"Processing chunk {chunk_idx + 1}/{total_chunks} ({start_idx}-{end_idx}, {len(chunk_df)} candles)")
             
             try:
                 # Process this chunk
                 chunk_predictions = self._process_ml_chunk(chunk_df, start_idx)
                 total_predictions += chunk_predictions
+                
+                # Update progress
+                self._update_progress(chunk_idx + 1, total_chunks, "Processing ML prediction chunks")
                 
                 # Check memory usage after each chunk
                 if not self._check_memory_usage():
@@ -1576,10 +1782,56 @@ class Backtester:
         self._model_version = hashlib.md5(strategy_info.encode()).hexdigest()[:16]
         return self._model_version
 
+    def _get_data_hash(self, df: pd.DataFrame) -> str:
+        """Generate a hash for the dataset to detect changes."""
+        if self._data_hash is not None:
+            return self._data_hash
+            
+        # Create a hash based on data shape, columns, and first/last values
+        data_info = {
+            'shape': df.shape,
+            'columns': list(df.columns),
+            'first_row': df.iloc[0].to_dict() if len(df) > 0 else {},
+            'last_row': df.iloc[-1].to_dict() if len(df) > 0 else {},
+            'index_start': str(df.index[0]) if len(df) > 0 else None,
+            'index_end': str(df.index[-1]) if len(df) > 0 else None
+        }
+        
+        data_str = json.dumps(data_info, sort_keys=True, default=str)
+        self._data_hash = hashlib.md5(data_str.encode()).hexdigest()[:16]
+        return self._data_hash
+
     def _get_cache_key(self, index: int) -> str:
-        """Generate a cache key that includes model version."""
+        """Generate a cache key that includes model version and data hash."""
         model_version = self._get_model_version()
-        return f"{model_version}_{index}"
+        data_hash = self._data_hash or "unknown"
+        return f"{model_version}_{data_hash}_{index}"
+
+    def _get_persistent_cache_key(self, cache_type: str) -> str:
+        """Generate a persistent cache key for the entire dataset."""
+        model_version = self._get_model_version()
+        data_hash = self._data_hash or "unknown"
+        return f"{model_version}_{data_hash}_{cache_type}"
+
+    def _update_progress(self, current: int, total: int, operation: str) -> None:
+        """Update progress for long operations."""
+        current_time = time.time()
+        
+        # Only update if enough time has passed or it's the last item
+        if (current_time - self._last_progress_update > 1.0 or 
+            current >= total or 
+            current % PROGRESS_UPDATE_INTERVAL == 0):
+            
+            progress_pct = (current / total) * 100 if total > 0 else 0
+            logger.info(f"{operation}: {current}/{total} ({progress_pct:.1f}%)")
+            
+            if self._progress_callback:
+                try:
+                    self._progress_callback(current, total, operation)
+                except Exception as e:
+                    logger.warning(f"Progress callback failed: {e}")
+            
+            self._last_progress_update = current_time
 
     def _check_memory_usage(self) -> bool:
         """Check if memory usage is within acceptable limits."""
@@ -1633,6 +1885,38 @@ class Backtester:
                 del self._ml_predictions_cache[key]
             self._ml_predictions_cache_size = len(self._ml_predictions_cache)
             logger.debug(f"Cleaned up {entries_to_remove} ML predictions cache entries")
+
+    def set_progress_callback(self, callback: callable) -> None:
+        """Set a progress callback function for long operations."""
+        self._progress_callback = callback
+
+    def enable_persistent_cache(self, enable: bool = True) -> None:
+        """Enable or disable persistent disk caching."""
+        self._enable_persistent_cache = enable
+        logger.info(f"Persistent caching {'enabled' if enable else 'disabled'}")
+
+    def cleanup_expired_cache(self) -> int:
+        """Clean up expired cache entries from disk."""
+        if not self._enable_persistent_cache:
+            return 0
+        return self._persistent_cache.cleanup_expired()
+
+    def get_cache_stats(self) -> dict:
+        """Get comprehensive cache statistics."""
+        memory_stats = {
+            'feature_cache_size': self._feature_cache_size,
+            'strategy_cache_size': self._strategy_cache_size,
+            'ml_predictions_cache_size': self._ml_predictions_cache_size,
+            'cache_hits': self._cache_hits,
+            'cache_misses': self._cache_misses,
+            'hit_rate': (self._cache_hits / (self._cache_hits + self._cache_misses) * 100) if (self._cache_hits + self._cache_misses) > 0 else 0
+        }
+        
+        if self._enable_persistent_cache:
+            disk_stats = self._persistent_cache.get_cache_stats()
+            memory_stats.update(disk_stats)
+        
+        return memory_stats
 
     def _clear_feature_cache(self) -> None:
         """Clear the feature cache to free memory."""
