@@ -6,8 +6,11 @@ alwaysApply: true
 
 # Operating Rules for agents
 
-- use the `atb` cli for interacting with the application. (`atb --help`)
-- Delete all temporary scripts before the end of a chat.
+**Important**: There are to be followed for every job/chat:
+
+- use the `atb` cli for interacting with the application when necessary. (`atb --help`)
+- If you create temporary scripts, delete them after.
+- Make sure changes are covered by unit tests and relevant tests all pass.
 
 
 ## Code Quality
@@ -68,8 +71,3 @@ For interactions with Github:
 
 #### Creating PRs
 - When you create a new PR, add a concise markdown description, with proper heading, describing the background, overview of the issue and what was achieved
-
-## Logging
-- Use Python logging module, not print
-- Levels: DEBUG (dev), INFO (events), WARNING (issues), ERROR (failures)
-- Include context in messages
