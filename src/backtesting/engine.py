@@ -290,6 +290,7 @@ class Backtester:
         self._persistent_cache = PersistentCacheManager()
         self._data_hash: Optional[str] = None  # Hash of current dataset
         self._enable_persistent_cache = True  # Enable disk caching
+        self._current_df: Optional[pd.DataFrame] = None  # Current DataFrame for cache key generation
         
         # Progress tracking
         self._progress_callback: Optional[callable] = None  # Progress callback function
@@ -477,6 +478,8 @@ class Backtester:
         try:
             # Clear feature cache for new backtest
             self._clear_feature_cache()
+            # Reset data hash for new dataset
+            self._data_hash = None
             
             # Set base logging context for this backtest run
             set_context(
@@ -515,6 +518,8 @@ class Backtester:
 
             # Fetch price data
             df: DataFrame = self.data_provider.get_historical_data(symbol, timeframe, start, end)
+            # Store reference for cache key generation
+            self._current_df = df
             if df.empty:
                 # Return empty results for empty data
                 return {
@@ -1933,14 +1938,13 @@ class Backtester:
         if self._data_hash is not None:
             return self._data_hash
             
-        # Create a hash based on data shape, columns, and first/last values
+        # Create a stable hash based on data content for better cache reuse
+        # Use sample of data points rather than just endpoints for overlapping datasets
         data_info = {
-            'shape': df.shape,
             'columns': list(df.columns),
-            'first_row': df.iloc[0].to_dict() if len(df) > 0 else {},
-            'last_row': df.iloc[-1].to_dict() if len(df) > 0 else {},
             'index_start': str(df.index[0]) if len(df) > 0 else None,
-            'index_end': str(df.index[-1]) if len(df) > 0 else None
+            # Sample data points for stable hash across overlapping datasets
+            'sample_closes': [float(df['close'].iloc[i]) for i in range(0, min(len(df), 100), max(1, len(df) // 10))] if 'close' in df.columns and len(df) > 0 else []
         }
         
         data_str = json.dumps(data_info, sort_keys=True, default=str)
@@ -1948,10 +1952,18 @@ class Backtester:
         return self._data_hash
 
     def _get_cache_key(self, index: int) -> str:
-        """Generate a cache key that includes model version and data hash."""
+        """Generate a cache key that includes model version and candle timestamp for better cache reuse."""
         model_version = self._get_model_version()
-        data_hash = self._data_hash or "unknown"
-        return f"{model_version}_{data_hash}_{index}"
+        
+        # Use timestamp-based keys for better cache reuse across overlapping datasets
+        # This allows cache hits when the same time periods are processed in different runs
+        if hasattr(self, '_current_df') and self._current_df is not None and index < len(self._current_df):
+            timestamp = str(self._current_df.index[index])
+            return f"{model_version}_{timestamp}_{index}"
+        else:
+            # Fallback to data hash for compatibility
+            data_hash = self._data_hash or "unknown"
+            return f"{model_version}_{data_hash}_{index}"
 
     def _get_persistent_cache_key(self, cache_type: str) -> str:
         """Generate a persistent cache key for the entire dataset."""

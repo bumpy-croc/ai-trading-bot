@@ -68,6 +68,7 @@ class TestCachePerformance:
             strategy=strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
+            log_to_database=False,  # Disable database logging for performance test
         )
         
         # Disable effective caching by clearing caches frequently
@@ -104,6 +105,7 @@ class TestCachePerformance:
             strategy=strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
+            log_to_database=False,  # Disable database logging for performance test
         )
         
         # Time the backtest with caching
@@ -186,6 +188,7 @@ class TestCachePerformance:
             strategy=strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
+            log_to_database=False,  # Disable database logging for performance test
         )
         
         for size in dataset_sizes:
@@ -234,6 +237,7 @@ class TestCachePerformance:
             strategy=strategy,
             data_provider=mock_data_provider,
             initial_balance=10000,
+            log_to_database=False,  # Disable database logging for performance test
         )
         
         # Get initial memory usage
@@ -288,6 +292,7 @@ class TestCachePerformance:
                 strategy=strategy,
                 data_provider=mock_data_provider,
                 initial_balance=10000,
+                log_to_database=False,  # Disable database logging for performance test
             )
             backtester1._persistent_cache.cache_dir = temp_cache_dir
             
@@ -305,6 +310,7 @@ class TestCachePerformance:
                 strategy=strategy,
                 data_provider=mock_data_provider,
                 initial_balance=10000,
+                log_to_database=False,  # Disable database logging for performance test
             )
             backtester2._persistent_cache.cache_dir = temp_cache_dir
             
