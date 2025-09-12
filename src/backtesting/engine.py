@@ -4,7 +4,9 @@ Backtesting engine for strategy evaluation.
 This module provides a comprehensive backtesting framework.
 """
 
+import hashlib
 import logging
+import psutil
 from datetime import datetime
 from typing import Any, Optional
 
@@ -45,6 +47,11 @@ from src.utils.logging_context import set_context, update_context
 from src.utils.logging_events import log_engine_event
 
 logger = logging.getLogger(__name__)
+
+# Cache configuration constants
+MAX_CACHE_SIZE = 10000  # Maximum number of candles to cache
+CHUNK_SIZE = 5000       # Process large datasets in chunks
+MEMORY_THRESHOLD = 80   # Memory usage threshold percentage
 
 
 class ActiveTrade:
@@ -120,13 +127,22 @@ class Backtester:
         self.partial_manager = partial_manager
         
         # Performance optimization: feature extraction caching
-        self._feature_cache: dict[int, dict] = {}  # Cache for indicators, sentiment, ML data per candle
+        self._feature_cache: dict[str, dict] = {}  # Cache for indicators, sentiment, ML data per candle
+        self._feature_cache_size = 0  # Track current cache size
         
         # Performance optimization: strategy calculation caching
-        self._strategy_cache: dict[int, dict] = {}  # Cache for strategy calculations per candle
+        self._strategy_cache: dict[str, dict] = {}  # Cache for strategy calculations per candle
+        self._strategy_cache_size = 0  # Track current cache size
         
         # Performance optimization: ML prediction caching
-        self._ml_predictions_cache: dict[int, float] = {}  # Cache for ML predictions per candle
+        self._ml_predictions_cache: dict[str, float] = {}  # Cache for ML predictions per candle
+        self._ml_predictions_cache_size = 0  # Track current cache size
+        
+        # Cache management
+        self._model_version: Optional[str] = None  # Current model version
+        self._use_original_method = False  # Fallback flag for when caching fails
+        self._cache_hits = 0  # Track cache performance
+        self._cache_misses = 0
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -400,9 +416,10 @@ class Backtester:
                 # Create a Series with the correct index alignment
                 # Map the cached predictions to the actual DataFrame indices
                 predictions_series = pd.Series(index=df.index, dtype=float)
-                for i, pred in self._ml_predictions_cache.items():
-                    if i < len(df):
-                        predictions_series.iloc[i] = pred
+                for i in range(len(df)):
+                    cache_key = self._get_cache_key(i)
+                    if cache_key in self._ml_predictions_cache:
+                        predictions_series.iloc[i] = self._ml_predictions_cache[cache_key]
                 
                 df['onnx_pred'] = predictions_series
                 df['ml_prediction'] = df['onnx_pred']  # Alias for compatibility
@@ -442,9 +459,16 @@ class Backtester:
             # Iterate through candles
             for i in range(len(df)):
                 # Use cached data for performance
-                cached_data = self._strategy_cache[i]
-                current_time = cached_data['current_time']
-                current_price = cached_data['current_price']
+                cache_key = self._get_cache_key(i)
+                if cache_key in self._strategy_cache:
+                    cached_data = self._strategy_cache[cache_key]
+                    current_time = cached_data['current_time']
+                    current_price = cached_data['current_price']
+                else:
+                    # Fallback to direct DataFrame access
+                    candle = df.iloc[i]
+                    current_time = candle.name
+                    current_price = float(candle["close"])
 
                 # Record current balance for time-series analytics
                 balance_history.append((current_time, self.balance))
@@ -1185,6 +1209,13 @@ class Backtester:
                     session_id=self.trading_session_id, final_balance=self.balance
                 )
             
+            # Log cache performance statistics
+            total_cache_requests = self._cache_hits + self._cache_misses
+            if total_cache_requests > 0:
+                cache_hit_rate = (self._cache_hits / total_cache_requests) * 100
+                logger.info(f"Cache performance: {self._cache_hits} hits, {self._cache_misses} misses ({cache_hit_rate:.1f}% hit rate)")
+                logger.info(f"Cache sizes: features={self._feature_cache_size}, strategy={self._strategy_cache_size}, ml_predictions={self._ml_predictions_cache_size}")
+            
             # Clear feature cache to free memory
             self._clear_feature_cache()
 
@@ -1291,11 +1322,17 @@ class Backtester:
             sentiment_data = util_extract_sentiment(df, i)
             ml_predictions = util_extract_ml(df, i)
             
-            self._feature_cache[i] = {
+            cache_key = self._get_cache_key(i)
+            self._feature_cache[cache_key] = {
                 'indicators': indicators,
                 'sentiment_data': sentiment_data,
                 'ml_predictions': ml_predictions
             }
+            self._feature_cache_size += 1
+            
+            # Check if cache is getting full
+            if self._is_cache_full():
+                self._cleanup_old_cache_entries()
         
         logger.debug(f"Pre-computed features for {len(self._feature_cache)} candles")
 
@@ -1309,7 +1346,8 @@ class Backtester:
             current_price = float(candle["close"])
             
             # Cache basic calculations that are used multiple times
-            self._strategy_cache[i] = {
+            cache_key = self._get_cache_key(i)
+            self._strategy_cache[cache_key] = {
                 'current_price': current_price,
                 'current_time': candle.name,
                 'candle_data': {
@@ -1320,6 +1358,11 @@ class Backtester:
                     'volume': float(candle.get('volume', 0))
                 }
             }
+            self._strategy_cache_size += 1
+            
+            # Check if cache is getting full
+            if self._is_cache_full():
+                self._cleanup_old_cache_entries()
         
         logger.debug(f"Pre-computed strategy calculations for {len(self._strategy_cache)} candles")
 
@@ -1334,41 +1377,120 @@ class Backtester:
         # Check if this is an ML strategy by looking for ONNX-related attributes
         if not (hasattr(self.strategy, 'ort_session') or hasattr(self.strategy, 'prediction_engine')):
             return
+        
+        # Check memory usage before starting
+        if not self._check_memory_usage():
+            logger.warning("High memory usage detected. Skipping ML prediction pre-computation.")
+            self._use_original_method = True
+            return
             
         try:
-            # Run the strategy's calculate_indicators method once to get all predictions
-            # This is expensive but only done once instead of 720 times
-            df_with_predictions = self.strategy.calculate_indicators(df.copy())
-            
-            # Cache the predictions
-            predictions_found = 0
-            for i in range(len(df_with_predictions)):
-                if 'onnx_pred' in df_with_predictions.columns:
-                    pred = df_with_predictions['onnx_pred'].iloc[i]
-                    if pd.notna(pred):
-                        self._ml_predictions_cache[i] = float(pred)
-                        predictions_found += 1
-                        
-            logger.info(f"Pre-computed ML predictions for {predictions_found} candles out of {len(df_with_predictions)} total")
-            
+            # Use chunked processing for large datasets
+            if len(df) > MAX_CACHE_SIZE:
+                logger.info(f"Large dataset detected ({len(df)} candles). Using chunked processing.")
+                self._precompute_ml_predictions_chunked(df)
+            else:
+                # Process entire dataset at once for smaller datasets
+                self._precompute_ml_predictions_single(df)
+                
         except Exception as e:
             logger.warning(f"Failed to pre-compute ML predictions: {e}")
+            logger.warning("Falling back to original method for ML predictions.")
+            self._use_original_method = True
             import traceback
-            logger.warning(f"Traceback: {traceback.format_exc()}")
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+
+    def _precompute_ml_predictions_single(self, df: pd.DataFrame) -> None:
+        """Pre-compute ML predictions for smaller datasets."""
+        df_with_predictions = self.strategy.calculate_indicators(df.copy())
+        
+        # Cache the predictions with versioned keys
+        predictions_found = 0
+        for i in range(len(df_with_predictions)):
+            if 'onnx_pred' in df_with_predictions.columns:
+                pred = df_with_predictions['onnx_pred'].iloc[i]
+                if pd.notna(pred):
+                    cache_key = self._get_cache_key(i)
+                    self._ml_predictions_cache[cache_key] = float(pred)
+                    self._ml_predictions_cache_size += 1
+                    predictions_found += 1
+                    
+                    # Check if cache is getting full
+                    if self._is_cache_full():
+                        self._cleanup_old_cache_entries()
+                        
+        logger.info(f"Pre-computed ML predictions for {predictions_found} candles out of {len(df_with_predictions)} total")
+
+    def _precompute_ml_predictions_chunked(self, df: pd.DataFrame) -> None:
+        """Pre-compute ML predictions for large datasets using chunked processing."""
+        total_predictions = 0
+        
+        for start_idx in range(0, len(df), CHUNK_SIZE):
+            end_idx = min(start_idx + CHUNK_SIZE, len(df))
+            chunk_df = df.iloc[start_idx:end_idx]
+            
+            logger.debug(f"Processing chunk {start_idx}-{end_idx} ({len(chunk_df)} candles)")
+            
+            try:
+                # Process this chunk
+                chunk_predictions = self._process_ml_chunk(chunk_df, start_idx)
+                total_predictions += chunk_predictions
+                
+                # Check memory usage after each chunk
+                if not self._check_memory_usage():
+                    logger.warning("High memory usage detected during chunked processing. Stopping early.")
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"Failed to process chunk {start_idx}-{end_idx}: {e}")
+                continue
+                
+        logger.info(f"Pre-computed ML predictions for {total_predictions} candles using chunked processing")
+
+    def _process_ml_chunk(self, chunk_df: pd.DataFrame, start_idx: int) -> int:
+        """Process a single chunk of ML predictions."""
+        df_with_predictions = self.strategy.calculate_indicators(chunk_df.copy())
+        
+        predictions_found = 0
+        for i in range(len(df_with_predictions)):
+            if 'onnx_pred' in df_with_predictions.columns:
+                pred = df_with_predictions['onnx_pred'].iloc[i]
+                if pd.notna(pred):
+                    cache_key = self._get_cache_key(start_idx + i)
+                    self._ml_predictions_cache[cache_key] = float(pred)
+                    self._ml_predictions_cache_size += 1
+                    predictions_found += 1
+                    
+                    # Check if cache is getting full
+                    if self._is_cache_full():
+                        self._cleanup_old_cache_entries()
+                        
+        return predictions_found
 
     def _check_exit_conditions_cached(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
         """Optimized exit conditions check using cached data."""
-        # Use cached price data to avoid repeated DataFrame access
-        cached_data = self._strategy_cache[index]
-        current_price = cached_data['current_price']
+        cache_key = self._get_cache_key(index)
+        
+        # Try to use cached data first
+        if cache_key in self._strategy_cache:
+            self._cache_hits += 1
+            cached_data = self._strategy_cache[cache_key]
+            current_price = cached_data['current_price']
+        else:
+            self._cache_misses += 1
+            # Fallback to original method if not cached
+            if hasattr(self.strategy, 'check_exit_conditions'):
+                try:
+                    return self.strategy.check_exit_conditions(df, index, entry_price)
+                except Exception:
+                    return False
+            return False
         
         # For most strategies, we can optimize the exit check
         # by avoiding repeated DataFrame operations
         if hasattr(self.strategy, 'check_exit_conditions'):
             # Try to use cached data if the strategy supports it
             try:
-                # Create a minimal row for the strategy method
-                row = df.iloc[index]
                 return self.strategy.check_exit_conditions(df, index, entry_price)
             except Exception:
                 # Fallback to original method
@@ -1377,6 +1499,14 @@ class Backtester:
 
     def _check_entry_conditions_cached(self, df: pd.DataFrame, index: int) -> bool:
         """Optimized entry conditions check using cached data."""
+        cache_key = self._get_cache_key(index)
+        
+        # Try to use cached data first
+        if cache_key in self._strategy_cache:
+            self._cache_hits += 1
+        else:
+            self._cache_misses += 1
+        
         if hasattr(self.strategy, 'check_entry_conditions'):
             try:
                 return self.strategy.check_entry_conditions(df, index)
@@ -1386,6 +1516,14 @@ class Backtester:
 
     def _check_short_entry_conditions_cached(self, df: pd.DataFrame, index: int) -> bool:
         """Optimized short entry conditions check using cached data."""
+        cache_key = self._get_cache_key(index)
+        
+        # Try to use cached data first
+        if cache_key in self._strategy_cache:
+            self._cache_hits += 1
+        else:
+            self._cache_misses += 1
+        
         if hasattr(self.strategy, 'check_short_entry_conditions'):
             try:
                 return self.strategy.check_short_entry_conditions(df, index)
@@ -1395,6 +1533,14 @@ class Backtester:
 
     def _calculate_position_size_cached(self, df: pd.DataFrame, index: int, balance: float) -> float:
         """Optimized position size calculation using cached data."""
+        cache_key = self._get_cache_key(index)
+        
+        # Try to use cached data first
+        if cache_key in self._strategy_cache:
+            self._cache_hits += 1
+        else:
+            self._cache_misses += 1
+        
         if hasattr(self.strategy, 'calculate_position_size'):
             try:
                 return self.strategy.calculate_position_size(df, index, balance)
@@ -1402,11 +1548,103 @@ class Backtester:
                 return 0.0
         return 0.0
 
+    def _get_model_version(self) -> str:
+        """Get a unique version identifier for the current model."""
+        if self._model_version is not None:
+            return self._model_version
+            
+        # Generate version based on strategy class and parameters
+        strategy_info = f"{self.strategy.__class__.__name__}"
+        
+        # Include model-specific information if available
+        if hasattr(self.strategy, 'model_hash'):
+            strategy_info += f"_{self.strategy.model_hash}"
+        elif hasattr(self.strategy, 'ort_session') and self.strategy.ort_session:
+            # Use ONNX session info for versioning
+            strategy_info += f"_onnx_{hash(str(self.strategy.ort_session.get_modelmeta()))}"
+        elif hasattr(self.strategy, 'prediction_engine'):
+            strategy_info += f"_pred_{hash(str(type(self.strategy.prediction_engine)))}"
+        
+        # Include strategy parameters for versioning
+        if hasattr(self.strategy, 'get_parameters'):
+            try:
+                params = self.strategy.get_parameters()
+                strategy_info += f"_{hash(str(sorted(params.items()) if isinstance(params, dict) else str(params)))}"
+            except Exception:
+                strategy_info += f"_{hash(str(type(self.strategy)))}"
+        
+        self._model_version = hashlib.md5(strategy_info.encode()).hexdigest()[:16]
+        return self._model_version
+
+    def _get_cache_key(self, index: int) -> str:
+        """Generate a cache key that includes model version."""
+        model_version = self._get_model_version()
+        return f"{model_version}_{index}"
+
+    def _check_memory_usage(self) -> bool:
+        """Check if memory usage is within acceptable limits."""
+        try:
+            memory_percent = psutil.virtual_memory().percent
+            if memory_percent > MEMORY_THRESHOLD:
+                logger.warning(f"High memory usage: {memory_percent:.1f}%. Consider reducing cache size.")
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to check memory usage: {e}")
+            return True  # Continue if we can't check memory
+
+    def _is_cache_full(self) -> bool:
+        """Check if any cache has reached its maximum size."""
+        return (self._feature_cache_size >= MAX_CACHE_SIZE or 
+                self._strategy_cache_size >= MAX_CACHE_SIZE or 
+                self._ml_predictions_cache_size >= MAX_CACHE_SIZE)
+
+    def _cleanup_old_cache_entries(self) -> None:
+        """Remove oldest cache entries when cache is full (sliding window approach)."""
+        if not self._is_cache_full():
+            return
+            
+        # Calculate how many entries to remove (keep 80% of max size)
+        target_size = int(MAX_CACHE_SIZE * 0.8)
+        
+        # Clean up feature cache
+        if self._feature_cache_size >= MAX_CACHE_SIZE:
+            entries_to_remove = self._feature_cache_size - target_size
+            keys_to_remove = list(self._feature_cache.keys())[:entries_to_remove]
+            for key in keys_to_remove:
+                del self._feature_cache[key]
+            self._feature_cache_size = len(self._feature_cache)
+            logger.debug(f"Cleaned up {entries_to_remove} feature cache entries")
+        
+        # Clean up strategy cache
+        if self._strategy_cache_size >= MAX_CACHE_SIZE:
+            entries_to_remove = self._strategy_cache_size - target_size
+            keys_to_remove = list(self._strategy_cache.keys())[:entries_to_remove]
+            for key in keys_to_remove:
+                del self._strategy_cache[key]
+            self._strategy_cache_size = len(self._strategy_cache)
+            logger.debug(f"Cleaned up {entries_to_remove} strategy cache entries")
+        
+        # Clean up ML predictions cache
+        if self._ml_predictions_cache_size >= MAX_CACHE_SIZE:
+            entries_to_remove = self._ml_predictions_cache_size - target_size
+            keys_to_remove = list(self._ml_predictions_cache.keys())[:entries_to_remove]
+            for key in keys_to_remove:
+                del self._ml_predictions_cache[key]
+            self._ml_predictions_cache_size = len(self._ml_predictions_cache)
+            logger.debug(f"Cleaned up {entries_to_remove} ML predictions cache entries")
+
     def _clear_feature_cache(self) -> None:
         """Clear the feature cache to free memory."""
         self._feature_cache.clear()
         self._strategy_cache.clear()
         self._ml_predictions_cache.clear()
+        self._feature_cache_size = 0
+        self._strategy_cache_size = 0
+        self._ml_predictions_cache_size = 0
+        self._cache_hits = 0
+        self._cache_misses = 0
+        logger.debug("Cleared all caches and reset counters")
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicators with caching for performance."""

@@ -475,3 +475,313 @@ class TestBacktestingIntegration:
         # Should complete with sentiment integration
         assert isinstance(results, dict)
         assert backtester.sentiment_provider == mock_sentiment_provider
+
+
+class TestCacheMechanism:
+    """Test the new cache mechanism improvements"""
+
+    def test_cache_initialization(self, mock_data_provider):
+        """Test that cache attributes are properly initialized"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Check cache attributes
+        assert hasattr(backtester, '_feature_cache')
+        assert hasattr(backtester, '_strategy_cache')
+        assert hasattr(backtester, '_ml_predictions_cache')
+        assert hasattr(backtester, '_feature_cache_size')
+        assert hasattr(backtester, '_strategy_cache_size')
+        assert hasattr(backtester, '_ml_predictions_cache_size')
+        assert hasattr(backtester, '_model_version')
+        assert hasattr(backtester, '_use_original_method')
+        assert hasattr(backtester, '_cache_hits')
+        assert hasattr(backtester, '_cache_misses')
+
+        # Check initial values
+        assert backtester._feature_cache_size == 0
+        assert backtester._strategy_cache_size == 0
+        assert backtester._ml_predictions_cache_size == 0
+        assert backtester._model_version is None
+        assert backtester._use_original_method is False
+        assert backtester._cache_hits == 0
+        assert backtester._cache_misses == 0
+
+    def test_model_version_generation(self, mock_data_provider):
+        """Test that model version is generated correctly"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # First call should generate version
+        version1 = backtester._get_model_version()
+        assert version1 is not None
+        assert len(version1) == 16  # MD5 hash truncated to 16 chars
+        assert isinstance(version1, str)
+
+        # Second call should return same version
+        version2 = backtester._get_model_version()
+        assert version1 == version2
+
+        # Version should be stored
+        assert backtester._model_version == version1
+
+    def test_cache_key_generation(self, mock_data_provider):
+        """Test that cache keys are generated correctly"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Generate cache keys
+        key1 = backtester._get_cache_key(0)
+        key2 = backtester._get_cache_key(1)
+        key3 = backtester._get_cache_key(0)  # Same index
+
+        # Keys should be different for different indices
+        assert key1 != key2
+        assert key1 == key3  # Same index should produce same key
+
+        # Keys should contain model version
+        model_version = backtester._get_model_version()
+        assert model_version in key1
+        assert model_version in key2
+
+        # Keys should contain index
+        assert "0" in key1
+        assert "1" in key2
+
+    def test_memory_usage_check(self, mock_data_provider):
+        """Test memory usage checking"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Should return boolean
+        memory_ok = backtester._check_memory_usage()
+        assert isinstance(memory_ok, bool)
+
+        # Should not raise exception
+        try:
+            backtester._check_memory_usage()
+        except Exception as e:
+            pytest.fail(f"Memory check should not raise exception: {e}")
+
+    def test_cache_size_limits(self, mock_data_provider):
+        """Test cache size limit checking"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Initially cache should not be full
+        assert not backtester._is_cache_full()
+
+        # Manually set cache sizes to test limits
+        backtester._feature_cache_size = 10000  # At limit
+        assert backtester._is_cache_full()
+
+        backtester._feature_cache_size = 5000
+        backtester._strategy_cache_size = 10000  # At limit
+        assert backtester._is_cache_full()
+
+        backtester._strategy_cache_size = 5000
+        backtester._ml_predictions_cache_size = 10000  # At limit
+        assert backtester._is_cache_full()
+
+    def test_cache_cleanup(self, mock_data_provider):
+        """Test cache cleanup functionality"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Fill caches beyond limit
+        for i in range(12000):  # More than MAX_CACHE_SIZE
+            key = backtester._get_cache_key(i)
+            backtester._feature_cache[key] = {'test': 'data'}
+            backtester._strategy_cache[key] = {'test': 'data'}
+            backtester._ml_predictions_cache[key] = 0.5
+
+        backtester._feature_cache_size = 12000
+        backtester._strategy_cache_size = 12000
+        backtester._ml_predictions_cache_size = 12000
+
+        # Cache should be full
+        assert backtester._is_cache_full()
+
+        # Run cleanup
+        backtester._cleanup_old_cache_entries()
+
+        # Cache should be reduced to 80% of max size
+        target_size = int(10000 * 0.8)  # 8000
+        assert backtester._feature_cache_size <= target_size
+        assert backtester._strategy_cache_size <= target_size
+        assert backtester._ml_predictions_cache_size <= target_size
+
+    def test_cache_clear(self, mock_data_provider):
+        """Test cache clearing functionality"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Add some data to caches
+        key = backtester._get_cache_key(0)
+        backtester._feature_cache[key] = {'test': 'data'}
+        backtester._strategy_cache[key] = {'test': 'data'}
+        backtester._ml_predictions_cache[key] = 0.5
+        backtester._feature_cache_size = 1
+        backtester._strategy_cache_size = 1
+        backtester._ml_predictions_cache_size = 1
+        backtester._cache_hits = 5
+        backtester._cache_misses = 3
+
+        # Caches should have data
+        assert len(backtester._feature_cache) == 1
+        assert len(backtester._strategy_cache) == 1
+        assert len(backtester._ml_predictions_cache) == 1
+        assert backtester._cache_hits == 5
+        assert backtester._cache_misses == 3
+
+        # Clear caches
+        backtester._clear_feature_cache()
+
+        # Caches should be empty
+        assert len(backtester._feature_cache) == 0
+        assert len(backtester._strategy_cache) == 0
+        assert len(backtester._ml_predictions_cache) == 0
+        assert backtester._feature_cache_size == 0
+        assert backtester._strategy_cache_size == 0
+        assert backtester._ml_predictions_cache_size == 0
+        assert backtester._cache_hits == 0
+        assert backtester._cache_misses == 0
+
+    def test_chunked_processing_decision(self, mock_data_provider):
+        """Test that chunked processing is used for large datasets"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Create a large DataFrame (more than MAX_CACHE_SIZE)
+        large_df = pd.DataFrame({
+            'open': np.random.rand(15000),
+            'high': np.random.rand(15000),
+            'low': np.random.rand(15000),
+            'close': np.random.rand(15000),
+            'volume': np.random.rand(15000)
+        })
+
+        # Mock the chunked processing method to verify it's called
+        chunked_called = False
+        original_method = backtester._precompute_ml_predictions_chunked
+
+        def mock_chunked(df):
+            nonlocal chunked_called
+            chunked_called = True
+            return original_method(df)
+
+        backtester._precompute_ml_predictions_chunked = mock_chunked
+
+        # Call pre-computation
+        backtester._precompute_ml_predictions(large_df)
+
+        # Should have called chunked processing
+        assert chunked_called
+
+    def test_fallback_to_original_method(self, mock_data_provider):
+        """Test fallback to original method when pre-computation fails"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Mock strategy to raise exception during calculate_indicators
+        def mock_calculate_indicators(df):
+            raise Exception("Simulated ML prediction failure")
+
+        strategy.calculate_indicators = mock_calculate_indicators
+
+        # Create test DataFrame
+        df = pd.DataFrame({
+            'open': [100, 101, 102],
+            'high': [101, 102, 103],
+            'low': [99, 100, 101],
+            'close': [100.5, 101.5, 102.5],
+            'volume': [1000, 1100, 1200]
+        })
+
+        # Call pre-computation
+        backtester._precompute_ml_predictions(df)
+
+        # Should have fallen back to original method
+        assert backtester._use_original_method is True
+        assert len(backtester._ml_predictions_cache) == 0
+
+    def test_cache_hit_miss_tracking(self, mock_data_provider):
+        """Test that cache hits and misses are properly tracked"""
+        strategy = MlBasic()
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Add some data to strategy cache
+        key = backtester._get_cache_key(0)
+        backtester._strategy_cache[key] = {'current_price': 100.0}
+
+        # Test cached method calls
+        df = pd.DataFrame({'close': [100, 101, 102]})
+        
+        # This should be a cache hit
+        backtester._check_entry_conditions_cached(df, 0)
+        assert backtester._cache_hits == 1
+        assert backtester._cache_misses == 0
+
+        # This should be a cache miss (index 1 not in cache)
+        backtester._check_entry_conditions_cached(df, 1)
+        assert backtester._cache_hits == 1
+        assert backtester._cache_misses == 1
+
+    def test_model_version_consistency(self, mock_data_provider):
+        """Test that model version remains consistent for the same backtester instance"""
+        strategy = MlBasic()
+        
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=mock_data_provider,
+            initial_balance=10000,
+        )
+
+        # Same backtester instance should produce same model version
+        version1 = backtester._get_model_version()
+        version2 = backtester._get_model_version()
+        assert version1 == version2
+
+        # Version should be consistent
+        assert version1 is not None
+        assert version2 is not None
+        assert len(version1) == 16  # MD5 hash truncated to 16 chars
