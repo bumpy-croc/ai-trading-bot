@@ -81,11 +81,6 @@ def parse_args():
         help="Exchange provider to use (default: binance)",
     )
     parser.add_argument(
-        "--enable-short-trading",
-        action="store_true",
-        help="Enable short entries (recommended for bear strategy)",
-    )
-    parser.add_argument(
         "--max-drawdown",
         type=float,
         default=0.5,
@@ -166,7 +161,6 @@ def main() -> int:
             sentiment_provider=sentiment_provider,
             risk_parameters=risk_params,
             initial_balance=args.initial_balance,
-            enable_short_trading=args.enable_short_trading,
             log_to_database=not args.no_db,  # Disable DB logging if --no-db is passed
         )
 

@@ -114,7 +114,6 @@ def _handle(ns: argparse.Namespace) -> int:
             sentiment_provider=sentiment_provider,
             risk_parameters=risk_params,
             initial_balance=ns.initial_balance,
-            enable_short_trading=ns.enable_short_trading,
             log_to_database=enable_db_logging,
         )
 
@@ -254,11 +253,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         choices=["coinbase", "binance"],
         default="binance",
         help="Exchange provider to use - default: binance",
-    )
-    p.add_argument(
-        "--enable-short-trading",
-        action="store_true",
-        help="Enable short entries - recommended for bear strategy",
     )
     p.add_argument(
         "--max-drawdown",

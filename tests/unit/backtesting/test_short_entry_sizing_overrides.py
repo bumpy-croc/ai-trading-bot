@@ -58,7 +58,7 @@ class ShortStrategy(BaseStrategy):
 def test_short_entry_uses_overrides_and_caps_fraction():
     strategy = ShortStrategy()
     provider = MockDataProvider(interval_seconds=60, num_candles=50)
-    bt = Backtester(strategy=strategy, data_provider=provider, enable_short_trading=True)
+    bt = Backtester(strategy=strategy, data_provider=provider)
 
     start = datetime.now() - timedelta(hours=5)
     end = datetime.now()
@@ -102,7 +102,6 @@ def test_short_entry_with_overrides_uses_risk_manager_sizer(mock_data_provider):
         data_provider=mock_data_provider,
         risk_parameters=risk_params,
         initial_balance=10000,
-        enable_short_trading=True,
     )
 
     # Use a spy db to ensure logging happens; not strictly required

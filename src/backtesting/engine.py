@@ -91,7 +91,6 @@ class Backtester:
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[Any] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
-        enable_short_trading: bool = False,
         database_url: Optional[str] = None,
         log_to_database: Optional[bool] = None,
         enable_time_limit_exit: bool = False,
@@ -132,7 +131,6 @@ class Backtester:
             self.dynamic_risk_manager = DynamicRiskManager(final_config, db_manager=None)
 
         # Feature flags for parity tuning
-        self.enable_short_trading = enable_short_trading
         self.enable_time_limit_exit = enable_time_limit_exit
         self.default_take_profit_pct = default_take_profit_pct
         self.legacy_stop_loss_indexing = legacy_stop_loss_indexing
@@ -381,11 +379,7 @@ class Backtester:
 
             logger.info(f"Starting backtest with {len(df)} candles")
 
-            # Preserve legacy behavior: enforce long-only unless explicit flag is set
-            if not self.enable_short_trading:
-                if hasattr(self.strategy, "check_short_entry_conditions"):
-                    # No change to strategy; engine will simply skip short entries via flag
-                    pass
+            # Short trading is always enabled for strategies that define short entry conditions
 
             # -----------------------------
             # Metrics & tracking variables
@@ -923,10 +917,9 @@ class Backtester:
                                 f"Failed to update risk manager for opened long on {symbol}: {e}"
                             )
 
-                # Optional short entry if supported by strategy
+                # Short entry if supported by strategy
                 elif (
-                    self.enable_short_trading
-                    and hasattr(self.strategy, "check_short_entry_conditions")
+                    hasattr(self.strategy, "check_short_entry_conditions")
                     and self.strategy.check_short_entry_conditions(df, i)
                 ):
                     try:
