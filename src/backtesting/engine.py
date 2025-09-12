@@ -1253,6 +1253,22 @@ class Backtester:
         """Clear the feature cache to free memory."""
         self._feature_cache.clear()
 
+    def _cache_feature_data(self, index: int, feature_type: str, data: dict) -> dict:
+        """Helper method to initialize cache and store feature data.
+        
+        Args:
+            index: The candle index
+            feature_type: The type of feature data ('indicators', 'sentiment_data', 'ml_predictions')
+            data: The feature data to cache
+            
+        Returns:
+            The cached feature data
+        """
+        if index not in self._feature_cache:
+            self._feature_cache[index] = {}
+        self._feature_cache[index][feature_type] = data
+        return data
+
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicators with lazy loading and caching for performance."""
         if index in self._feature_cache and 'indicators' in self._feature_cache[index]:
@@ -1260,10 +1276,7 @@ class Backtester:
         
         # Lazy load: compute and cache the indicators
         indicators = util_extract_indicators(df, index)
-        if index not in self._feature_cache:
-            self._feature_cache[index] = {}
-        self._feature_cache[index]['indicators'] = indicators
-        return indicators
+        return self._cache_feature_data(index, 'indicators', indicators)
 
     def _extract_sentiment_data(self, df: pd.DataFrame, index: int) -> dict:
         """Extract sentiment data with lazy loading and caching for performance."""
@@ -1272,10 +1285,7 @@ class Backtester:
         
         # Lazy load: compute and cache the sentiment data
         sentiment_data = util_extract_sentiment(df, index)
-        if index not in self._feature_cache:
-            self._feature_cache[index] = {}
-        self._feature_cache[index]['sentiment_data'] = sentiment_data
-        return sentiment_data
+        return self._cache_feature_data(index, 'sentiment_data', sentiment_data)
 
     def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> dict:
         """Extract ML predictions with lazy loading and caching for performance."""
@@ -1284,7 +1294,4 @@ class Backtester:
         
         # Lazy load: compute and cache the ML predictions
         ml_predictions = util_extract_ml(df, index)
-        if index not in self._feature_cache:
-            self._feature_cache[index] = {}
-        self._feature_cache[index]['ml_predictions'] = ml_predictions
-        return ml_predictions
+        return self._cache_feature_data(index, 'ml_predictions', ml_predictions)
