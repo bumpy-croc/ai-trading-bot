@@ -45,9 +45,9 @@ This project uses centralized, structured logging with optional JSON output for 
 ## Examples
 
 ```python
-from src.utils.logging_config import configure_logging
-from src.utils.logging_context import set_context
-from src.utils.logging_events import log_engine_event
+from utils.logging_config import configure_logging
+from utils.logging_context import set_context
+from utils.logging_events import log_engine_event
 
 configure_logging()
 set_context(component="live_engine", strategy="MlBasic", symbol="BTCUSDT", timeframe="1h")

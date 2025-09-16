@@ -40,7 +40,7 @@ cp .env.example .env
 # DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
 
 # 3. Start PostgreSQL with Docker
-docker-compose up -d postgres
+docker compose up -d postgres
 
 # 4. Verify connection
 python scripts/verify_database_connection.py
@@ -51,31 +51,31 @@ python scripts/verify_database_connection.py
 ### Starting PostgreSQL
 ```bash
 # Start PostgreSQL service
-docker-compose up -d postgres
+docker compose up -d postgres
 
 # Check if PostgreSQL is ready
-docker-compose exec postgres pg_isready -U trading_bot -d ai_trading_bot
+docker compose exec postgres pg_isready -U trading_bot -d ai_trading_bot
 ```
 
 ### Stopping PostgreSQL
 ```bash
 # Stop PostgreSQL service
-docker-compose down
+docker compose down
 
 # Stop and remove volumes (reset database)
-docker-compose down -v
+docker compose down -v
 ```
 
 ### Database Access
 ```bash
 # Connect to PostgreSQL CLI
-docker-compose exec postgres psql -U trading_bot -d ai_trading_bot
+docker compose exec postgres psql -U trading_bot -d ai_trading_bot
 
 # View database logs
-docker-compose logs postgres
+docker compose logs postgres
 
 # Follow logs in real-time
-docker-compose logs -f postgres
+docker compose logs -f postgres
 ```
 
 ### Database Management
@@ -153,7 +153,7 @@ python scripts/railway_database_setup.py --verify
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30
 
 # Check database performance
-docker-compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
+docker compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
 SELECT
     schemaname,
     tablename,
@@ -184,7 +184,7 @@ print(f'Connection Pool: {info[\"connection_pool_size\"]} connections')
 ### Start Development Session
 ```bash
 # 1. Start PostgreSQL
-docker-compose up -d postgres
+docker compose up -d postgres
 
 # 2. Verify connection
 python scripts/verify_database_connection.py
@@ -217,17 +217,17 @@ python scripts/verify_database_connection.py
 lsof -i :5432
 
 # Remove existing containers
-docker-compose down -v
-docker-compose up -d postgres
+docker compose down -v
+docker compose up -d postgres
 ```
 
 #### Connection Refused
 ```bash
 # Check PostgreSQL status
-docker-compose ps
+docker compose ps
 
 # Check PostgreSQL logs
-docker-compose logs postgres
+docker compose logs postgres
 
 # Verify environment configuration
 cat .env | grep DATABASE_URL
@@ -236,15 +236,15 @@ cat .env | grep DATABASE_URL
 #### Permission Issues
 ```bash
 # Reset PostgreSQL data directory
-docker-compose down -v
+docker compose down -v
 docker volume prune
-docker-compose up -d postgres
+docker compose up -d postgres
 ```
 
 #### Database Schema Issues
 ```bash
 # Reset database schema
-docker-compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
+docker compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
 DROP SCHEMA public CASCADE;
 CREATE SCHEMA public;
 GRANT ALL ON SCHEMA public TO trading_bot;
@@ -257,7 +257,7 @@ python scripts/verify_database_connection.py
 ### Performance Issues
 ```bash
 # Monitor PostgreSQL performance
-docker-compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
+docker compose exec postgres psql -U trading_bot -d ai_trading_bot -c "
 SELECT
     query,
     calls,
