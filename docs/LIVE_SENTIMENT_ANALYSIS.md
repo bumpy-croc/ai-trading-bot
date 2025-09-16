@@ -1,5 +1,9 @@
 # 🔴 Live Sentiment Analysis in Real-Time Trading
 
+**⚠️ DEPRECATED: Sentiment analysis providers have been removed from the codebase**
+
+This document is kept for reference but sentiment analysis providers are no longer available.
+
 ## 🎯 **The Challenge You Identified**
 
 You asked an excellent question: **"How does sentiment analysis work when trading live data? It's based on historical values. What happens when decisions are made in real time whether to buy or sell?"**
@@ -30,10 +34,11 @@ live_sentiment = api_call()  # Fresh data from last 15 minutes
 
 ## 🔧 **Technical Implementation**
 
-### **1. Dual-Mode Sentiment Provider**
+### **1. Dual-Mode Sentiment Provider (REMOVED)**
 
 ```python
-class SentiCryptProvider:
+# This class has been removed from the codebase
+class SentimentProvider:
     def __init__(self, live_mode=True, cache_duration_minutes=15):
         self.live_mode = live_mode  # Enable real-time API calls
         self.cache_duration_minutes = cache_duration_minutes
@@ -202,13 +207,13 @@ Fallback: Neutral sentiment values as baseline
 ### **Live Mode Settings**
 ```python
 # Conservative (default)
-SentiCryptProvider(live_mode=True, cache_duration_minutes=15)
+SentimentProvider(live_mode=True, cache_duration_minutes=15)
 
 # Aggressive (high-frequency trading)
-SentiCryptProvider(live_mode=True, cache_duration_minutes=5)
+SentimentProvider(live_mode=True, cache_duration_minutes=5)
 
 # Balanced (cost-conscious)
-SentiCryptProvider(live_mode=True, cache_duration_minutes=30)
+SentimentProvider(live_mode=True, cache_duration_minutes=30)
 ```
 
 ### **Fallback Behavior**
@@ -255,6 +260,6 @@ Hybrid system that automatically switches between historical data (backtesting) 
 2. **Configure for your needs**: Adjust cache duration
 3. **Monitor API usage**: Track costs and performance
 4. **Optimize thresholds**: Fine-tune confidence levels
-5. **Add more providers**: Expand beyond SentiCrypt
+5. **Add more providers**: Expand sentiment data sources
 
 The live sentiment system transforms your trading bot from a **reactive** system using stale data to a **proactive** system using fresh, actionable market intelligence! 🎯

@@ -153,7 +153,7 @@ src/
 
 ## Key components
 
-- Data providers: `data_providers.BinanceProvider`, `CoinbaseProvider`, `SentiCryptProvider`, `CachedDataProvider`
+- Data providers: `data_providers.BinanceProvider`, `CoinbaseProvider`, `CachedDataProvider`
 - ML prediction: `prediction.models.registry.PredictionModelRegistry` (ONNX), caching in `prediction.utils.caching`
 - Strategies: `strategies.ml_basic`
 - Backtesting: `backtesting.engine.Backtester` (CLI: `atb backtest`)
@@ -202,7 +202,7 @@ See `docs/CONFIGURATION_SYSTEM_SUMMARY.md`.
 
 ## Sentiment & models
 
-Sentiment data (SentiCrypt) and ML training are supported. Pretrained models live in `src/ml`. For details and training examples, see:
+Sentiment data and ML training are supported. Pretrained models live in `src/ml`. For details and training examples, see:
 - `docs/LIVE_SENTIMENT_ANALYSIS.md`
 - `docs/MODEL_TRAINING_AND_INTEGRATION_GUIDE.md`
 

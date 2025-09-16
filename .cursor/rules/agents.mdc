@@ -21,7 +21,7 @@ Follow code quality guidelines in `.cursor/rules/code-all`.
 
 ```
 src/
-├── data_providers/    # Market & sentiment data (Binance, SentiCrypt, cached)
+├── data_providers/    # Market & sentiment data (Binance, cached)
 ├── strategies/        # Trading logic (ml_basic, ml_adaptive, ml_with_sentiment)
 ├── risk/              # Position sizing, stop-loss, exposure limits
 ├── live/              # Live trading engine with hot-swapping

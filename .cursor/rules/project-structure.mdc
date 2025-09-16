@@ -16,7 +16,6 @@ src/
 ├── data_providers/          # Market & sentiment data adapters
 │   ├── data_provider.py     # Abstract base class
 │   ├── binance_provider.py    # Live/historical price data
-│   ├── senticrypt_provider.py      # Sentiment data (SentiCrypt API)
 │   ├── cryptocompare_sentiment.py  # Alternative sentiment source
 │   ├── cached_data_provider.py     # API response caching
 │   └── mock_data_provider.py       # Test data provider
@@ -66,7 +65,6 @@ src/
 │
 ├── data/                    # Cached market & sentiment data
 │   ├── BTCUSDT_1d.csv       # Historical price data
-│   └── senticrypt_sentiment_data.csv  # Cached sentiment data
 │
 ├── scripts/                 # CLI utilities & automation
 │   ├── run_backtest.py      # Backtesting runner
@@ -96,7 +94,6 @@ src/
 - **Base Class**: `data_provider.py` - Defines the interface all providers must implement
 - **Implementations**:
   - `binance_provider.py` - Live/historical price data from Binance
-  - `senticrypt_provider.py` - Sentiment data from SentiCrypt API
   - `cryptocompare_sentiment.py` - CryptoCompare sentiment integration
   - `cached_data_provider.py` - Caches API responses to reduce load and costs
 
@@ -195,7 +192,6 @@ class YourStrategy(BaseStrategy):
 
 ### **CSV Files (`data/`)**
 - `BTCUSDT_1d.csv` - Historical daily price data
-- `senticrypt_sentiment_data.csv` - Cached sentiment data
 - Update regularly for accurate backtesting
 
 ### **Caching Strategy**

@@ -36,7 +36,7 @@ Data Providers → Indicators → Strategies → Risk Manager → Execution Laye
 - Real-time data streaming from Binance API
 - Strategy execution with ML model integration
 - Risk management with position sizing & stop-losses
-- Sentiment data integration (SentiCrypt API)
+- Sentiment data integration (removed)
 - Database logging for all trades & positions
 - Hot-swapping strategies without stopping
 
