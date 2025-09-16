@@ -1,0 +1,10 @@
+{
+  "install": "pip install -r requirements.txt && curl -fsSL https://railway.app/install.sh | sh && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo 'deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null && sudo apt update && sudo apt install gh -y",
+  "terminals": [
+    {
+      "name": "Daily Log Analyzer",
+      "command": "python scripts/railway_log_analyzer.py --environment production --hours 24"
+    }
+  ],
+  "description": "Railway Log Analysis Background Agent - Analyzes Railway logs daily to detect and fix errors automatically"
+}
