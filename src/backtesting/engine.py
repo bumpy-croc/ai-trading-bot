@@ -348,6 +348,8 @@ class Backtester:
                     "avg_trade_duration": 0.0,
                     "total_fees": 0.0,
                     "trades": [],
+                    "hold_return": 0.0,
+                    "trading_vs_hold_difference": 0.0,
                 }
 
             # Validate required columns
@@ -364,6 +366,11 @@ class Backtester:
                 except (ValueError, TypeError):
                     # If conversion fails, create a dummy datetime index
                     df.index = pd.date_range(start=start, periods=len(df), freq="h")
+
+            # Calculate hold return (buy and hold strategy)
+            start_price = df["close"].iloc[0]
+            end_price = df["close"].iloc[-1]
+            hold_return = ((end_price / start_price) - 1) * 100
 
             # Fetch/merge sentiment data if provider is available
             if self.sentiment_provider:
@@ -1138,6 +1145,9 @@ class Backtester:
                     session_id=self.trading_session_id, final_balance=self.balance
                 )
 
+            # Calculate trading vs hold difference
+            trading_vs_hold_difference = total_return - hold_return
+
             return {
                 "total_trades": total_trades,
                 "win_rate": win_rate,
@@ -1147,6 +1157,8 @@ class Backtester:
                 "final_balance": self.balance,
                 "annualized_return": annualized_return,
                 "yearly_returns": yearly_returns,
+                "hold_return": hold_return,
+                "trading_vs_hold_difference": trading_vs_hold_difference,
                 "session_id": self.trading_session_id if self.log_to_database else None,
                 "early_stop_reason": self.early_stop_reason,
                 "early_stop_date": self.early_stop_date,

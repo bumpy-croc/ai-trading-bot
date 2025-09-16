@@ -148,6 +148,8 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Max Drawdown: {results['max_drawdown']:.2f}%")
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Balance: ${results['final_balance']:.2f}")
+        print(f"Hold Return: {results['hold_return']:.2f}%")
+        print(f"Trading vs Hold: {results['trading_vs_hold_difference']:+.2f}%")
         print("=" * 50)
 
         if enable_db_logging and results.get("session_id"):
