@@ -35,7 +35,7 @@ Our bot ingests multiple data flavours; combining them tends to outperform any s
    - **Volume-based**: OBV, VWAP – confirm strength.
 
 3. **Sentiment Data** – crowd mood signals.
-   - Source: SentiCrypt API (scores ‑1 → +1 every 2 h).
+   - Source: Removed (sentiment providers have been removed).
    - Derived features: sentiment momentum, volatility, extremes, moving averages.
 
 4. **Machine-Learning Models**

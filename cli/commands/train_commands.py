@@ -27,7 +27,6 @@ from tensorflow.keras.layers import (
 )
 from tensorflow.keras.models import Model
 
-from src.data_providers.senticrypt_provider import SentiCryptProvider
 from src.utils.symbol_factory import SymbolFactory
 
 
@@ -470,35 +469,12 @@ def train_model_main(args):
         sentiment_assessment = None
 
         if not args.force_price_only:
-            print("\n📈 Loading and assessing sentiment data...")
-            sentiment_csv_path = project_root / "data" / "senticrypt_sentiment_data.csv"
-
-            try:
-                sentiment_provider = SentiCryptProvider(csv_path=str(sentiment_csv_path))
-                sentiment_df = sentiment_provider.get_historical_sentiment(
-                    symbol=args.symbol, start=start_date, end=end_date
-                )
-
-                # Assess sentiment data quality
-                sentiment_assessment = assess_sentiment_data_quality(sentiment_df, price_df)
-
-                print("\n🔍 Sentiment Data Assessment:")
-                print(f"  - Coverage ratio: {sentiment_assessment['coverage_ratio']:.2f}")
-                print(f"  - Data freshness: {sentiment_assessment['data_freshness_days']} days old")
-                print(f"  - Quality score: {sentiment_assessment['quality_score']:.2f}")
-                print(f"  - Recommendation: {sentiment_assessment['recommendation']}")
-                print(f"  - Reason: {sentiment_assessment['reason']}")
-
-                if sentiment_assessment["missing_periods"]:
-                    print(f"  - Missing periods: {len(sentiment_assessment['missing_periods'])}")
-
-            except Exception as e:
-                print(f"⚠️ Could not load sentiment data: {e}")
-                sentiment_assessment = {
-                    "recommendation": "price_only",
-                    "quality_score": 0.0,
-                    "reason": f"Sentiment loading failed: {e}",
-                }
+            print("\n📈 Sentiment analysis not available - sentiment providers have been removed")
+            sentiment_assessment = {
+                "recommendation": "price_only",
+                "quality_score": 0.0,
+                "reason": "Sentiment providers have been removed",
+            }
         else:
             sentiment_assessment = {
                 "recommendation": "price_only",

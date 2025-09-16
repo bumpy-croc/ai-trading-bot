@@ -43,7 +43,7 @@ Cryptocurrency trading system with trend-following risk containment. Supports ba
 │  Data Providers  │  Indicators  │  Strategies   │  Risk Mgmt    │
 │  ┌─────────────┐ │ ┌──────────┐ │ ┌──────────┐  │ ┌──────────┐  │
 │  │ Binance     │ │ │ RSI      │ │ │ Adaptive │  │ │ Position │  │
-│  │ SentiCrypt  │ │ │ EMA      │ │ │ Enhanced │  │ │ Sizing   │  │
+│  │ Sentiment  │ │ │ EMA      │ │ │ Enhanced │  │ │ Sizing   │  │
 │  │ CryptoComp  │ │ │ MACD     │ │ │ ML Basic │  │ │ Stop Loss│  │
 │  │ Cached      │ │ │ ATR      │ │ │ ML+Sent  │  │ │ Exposure │  │
 │  └─────────────┘ │ └──────────┘ │ └──────────┘  │ └──────────┘  │
@@ -65,7 +65,7 @@ Cryptocurrency trading system with trend-following risk containment. Supports ba
 - Real-time data streaming from Binance API
 - Strategy execution with ML model integration
 - Risk management with position sizing & stop-losses
-- Sentiment data integration (SentiCrypt API)
+- Sentiment data integration
 - Database logging for all trades & positions
 - Graceful error handling & recovery
 - Hot-swapping strategies without stopping
@@ -143,7 +143,7 @@ All strategies implement:
                                                               │
                                                               ▼
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│ SentiCrypt  │───▶│ Sentiment   │───▶│ Risk Mgmt   │◀───│ Position    │
+│ Sentiment   │───▶│ Sentiment   │───▶│ Risk Mgmt   │◀───│ Position    │
 │ API         │    │ Processing  │    │             │    │ Sizing      │
 │             │    │             │    │ Stop Loss   │    │             │
 │ Sentiment   │    │ Feature Eng │    │ Exposure    │    │ Entry/Exit  │

@@ -11,16 +11,14 @@ IMPORTANT: This is for educational purposes. Always start with paper trading!
 import os
 import sys
 
-# Add src directory to Python path for proper imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Add parent directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_PERFORMANCE_MONITOR_INTERVAL
-from data_providers.binance_provider import BinanceProvider
-from data_providers.senticrypt_provider import SentiCryptProvider
-from live.trading_engine import LiveTradingEngine
-from risk.risk_manager import RiskParameters
-from strategies.ml_basic import MlBasic
-
+from src.config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_PERFORMANCE_MONITOR_INTERVAL
+from src.data_providers.binance_provider import BinanceProvider
+from src.live.trading_engine import LiveTradingEngine
+from src.risk.risk_manager import RiskParameters
+from src.strategies.ml_basic import MlBasic
 
 def setup_paper_trading():
     """Example: Safe paper trading setup"""
@@ -35,14 +33,8 @@ def setup_paper_trading():
     print("Data provider initialized")
 
     # Setup sentiment provider (optional)
-    try:
-        sentiment_provider = SentiCryptProvider(
-            csv_path="data/senticrypt_sentiment_data.csv", live_mode=True, cache_duration_minutes=15
-        )
-        print("Sentiment provider initialized")
-    except Exception as e:
-        print(f"Sentiment provider failed: {e}")
-        sentiment_provider = None
+    print("Sentiment analysis not available - sentiment providers have been removed")
+    sentiment_provider = None
 
     # Risk parameters
     risk_params = RiskParameters(

@@ -31,7 +31,7 @@ This live trading system transforms your backtested strategies into real-time tr
 4. **Risk Management** - Position sizing & stop losses
 5. **Order Management** - Trade execution & tracking
 6. **Monitoring & Alerts** - Performance tracking
-7. **Sentiment Integration** - [Live sentiment data](LIVE_SENTIMENT_ANALYSIS.md) from SentiCrypt API and other providers
+7. **Sentiment Integration** - [Live sentiment data](LIVE_SENTIMENT_ANALYSIS.md) (sentiment providers have been removed)
 
 ### **Data Flow:**
 ```

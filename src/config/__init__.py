@@ -10,7 +10,6 @@ from .paths import (
     get_data_dir,
     get_database_path,
     get_project_root,
-    get_sentiment_data_path,
     resolve_data_path,
 )
 
@@ -21,7 +20,6 @@ __all__ = [
     "get_data_dir",
     "get_cache_dir",
     "get_database_path",
-    "get_sentiment_data_path",
     "resolve_data_path",
     "ensure_dir_exists",
 ]

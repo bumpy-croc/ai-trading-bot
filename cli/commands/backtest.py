@@ -36,8 +36,12 @@ def _load_strategy(strategy_name: str):
             from src.strategies.bull import Bull
 
             return Bull()
+        if strategy_name == "ml_adaptive":
+            from src.strategies.ml_adaptive import MlAdaptive
+
+            return MlAdaptive()
         print(f"Unknown strategy: {strategy_name}")
-        print("Available strategies: ml_basic, bear, bull")
+        print("Available strategies: ml_basic, ml_adaptive, bear, bull")
         raise SystemExit(1)
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")
@@ -144,6 +148,8 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Max Drawdown: {results['max_drawdown']:.2f}%")
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Balance: ${results['final_balance']:.2f}")
+        print(f"Hold Return: {results['hold_return']:.2f}%")
+        print(f"Trading vs Hold: {results['trading_vs_hold_difference']:+.2f}%")
         print("=" * 50)
 
         if enable_db_logging and results.get("session_id"):
