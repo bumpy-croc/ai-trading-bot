@@ -1,39 +1,43 @@
 {
   "symbol": "BTCUSDT",
   "model_type": "price",
-  "training_date": "2025-06-27T20:04:04.219408",
+  "training_date": "2025-09-16T21:55:22.774892",
   "feature_names": [
-    "close",
-    "volume",
-    "high",
-    "low",
-    "open"
+    "open_scaled",
+    "high_scaled",
+    "low_scaled",
+    "close_scaled",
+    "volume_scaled",
+    "sma_7_scaled",
+    "sma_14_scaled",
+    "sma_30_scaled",
+    "rsi_scaled"
   ],
   "sequence_length": 120,
   "has_sentiment": false,
   "sentiment_assessment": {
     "recommendation": "price_only",
     "quality_score": 0.0,
-    "reason": "Price-only mode forced by user"
+    "reason": "Sentiment loading failed: Cannot subtract tz-naive and tz-aware datetime-like objects."
   },
   "robustness_results": {
     "base_performance": {
-      "mse": 0.0031909531153594115,
-      "rmse": 0.05648852197888887
+      "mse": 887940534.8115435,
+      "rmse": 29798.33107426561
     }
   },
   "training_params": {
     "epochs": 300,
     "batch_size": 32,
     "timeframe": "1d",
-    "start_date": "2024-12-01",
-    "end_date": "2025-06-27"
+    "start_date": "2018-02-01",
+    "end_date": "2025-09-16"
   },
   "evaluation_results": {
-    "train_loss": 0.0037686186842620373,
-    "test_loss": 0.0031909532845020294,
-    "train_rmse": 0.061389077454805374,
-    "test_rmse": 0.0564885251224041,
-    "mape": 1.469714610088009
+    "train_loss": 2441135.0,
+    "test_loss": 887940544.0,
+    "train_rmse": 1562.4132080078125,
+    "test_rmse": 29798.33203125,
+    "mape": 23.41809083695207
   }
 }

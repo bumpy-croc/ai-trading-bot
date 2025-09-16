@@ -1,7 +1,7 @@
 {
-  "symbol": "BTCUSDT",
+  "symbol": "ETHUSDT",
   "model_type": "sentiment",
-  "training_date": "2025-09-16T23:05:27.795040",
+  "training_date": "2025-09-16T22:54:32.459385",
   "feature_names": [
     "open_scaled",
     "high_scaled",
@@ -36,13 +36,13 @@
   },
   "robustness_results": {
     "base_performance": {
-      "mse": 820837595.1636403,
-      "rmse": 28650.26343969005
+      "mse": 51337.90813793016,
+      "rmse": 226.57870186301747
     },
     "no_sentiment_performance": {
-      "mse": 821264104.7907982,
-      "rmse": 28657.705853588457,
-      "degradation_pct": 0.05196029393279661
+      "mse": 141838.53564131013,
+      "rmse": 376.614571732574,
+      "degradation_pct": 176.2842133345809
     }
   },
   "training_params": {
@@ -53,10 +53,10 @@
     "end_date": "2025-09-16"
   },
   "evaluation_results": {
-    "train_loss": 2162899.0,
-    "test_loss": 820837504.0,
-    "train_rmse": 1470.6798095703125,
-    "test_rmse": 28650.26171875,
-    "mape": 22.33430221242206
+    "train_loss": 18665.619140625,
+    "test_loss": 51337.91015625,
+    "train_rmse": 136.62217712402344,
+    "test_rmse": 226.57870483398438,
+    "mape": 5.764521816622227
   }
 }
