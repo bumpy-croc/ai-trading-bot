@@ -10,7 +10,7 @@ Note: Path helpers are in `config/paths.py`.
 
 ## Usage
 ```python
-from src.utils.symbol_factory import SymbolFactory
+from utils.symbol_factory import SymbolFactory
 print(SymbolFactory.to_binance("BTC-USD"))  # BTCUSDT
 
 from utils.logging_config import configure_logging

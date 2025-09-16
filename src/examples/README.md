@@ -6,5 +6,10 @@ Minimal runnable examples demonstrating core features.
 
 Run:
 ```bash
-python src/examples/live_trading_example.py
+# From project root
+cd src/examples
+python live_trading_example.py
+
+# Or from project root
+python -m src.examples.live_trading_example
 ```

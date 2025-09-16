@@ -51,8 +51,8 @@ This guide outlines the setup and configuration of a centralized PostgreSQL data
 
 #### Option 1: Docker PostgreSQL (Recommended)
 ```bash
-# Use docker-compose for local PostgreSQL
-docker-compose up -d postgres
+# Use docker compose for local PostgreSQL
+docker compose up -d postgres
 
 # Set environment variable
 export DATABASE_URL=postgresql://trading_user:trading_pass@localhost:5432/trading_db
