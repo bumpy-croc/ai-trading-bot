@@ -22,7 +22,7 @@ The AI Trading Bot system uses a centralized PostgreSQL database on Railway, all
 - **Trading Bot Service**: Connects to shared PostgreSQL database
 - **Dashboard Service**: Connects to shared PostgreSQL database
 - **Data Sharing**: Both services access the same data
-- **Local Development**: Uses PostgreSQL with docker-compose
+- **Local Development**: Uses PostgreSQL with docker compose
 
 ## 🗄️ Database Choice: PostgreSQL vs Redis
 
@@ -79,7 +79,7 @@ The system uses a configuration hierarchy:
 if DATABASE_URL:
     use PostgreSQL with connection pooling (Railway)
 else:
-    use PostgreSQL with docker-compose (Local)
+    use PostgreSQL with docker compose (Local)
 ```
 
 ## 🛠️ Available Tools
@@ -169,7 +169,7 @@ python scripts/railway_database_setup.py --verify
 2. **Check Environment**: Look for `DATABASE_URL`
 3. **Database Connection**:
    - If `DATABASE_URL` exists → PostgreSQL (Railway)
-   - If not → PostgreSQL (Local with docker-compose)
+   - If not → PostgreSQL (Local with docker compose)
 4. **Connection Setup**: Configure appropriate connection pooling
 5. **Schema Creation**: Create tables if they don't exist
 6. **Ready**: Service ready to use database
@@ -211,7 +211,7 @@ python scripts/railway_database_setup.py --verify
 4. Monitor database performance
 
 ### For Database Setup
-1. Setup PostgreSQL using docker-compose
+1. Setup PostgreSQL using docker compose
 2. Verify database connection
 3. Run database verification scripts
 4. Monitor database performance

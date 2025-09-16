@@ -19,9 +19,10 @@ This is a modular cryptocurrency trading bot focused on long-term, risk-balanced
 
 ```bash
 # 1. Bootstrap environment
-make venv                    # Create .venv (required first)
-make install                 # Install CLI (atb) + upgrade pip
-make deps                    # Install dev dependencies (can timeout - see workarounds)
+python -m venv .venv            # Create .venv (or use make dev-setup)
+source .venv/bin/activate       # Activate virtual environment
+make install                    # Install CLI (atb) + upgrade pip
+make deps                       # Install dev dependencies (can timeout - see workarounds)
 
 # 2. Database setup (PostgreSQL required for most functionality)
 docker compose up -d postgres  # Start local PostgreSQL (note: 'docker compose', not 'docker-compose')
@@ -35,7 +36,7 @@ make test                    # Run test suite (requires DB)
 
 ### Build System Details
 
-- **Virtual Environment**: Always use `.venv` via `make venv` first
+- **Virtual Environment**: Always create `.venv` via `python -m venv .venv` first
 - **Editable Install**: CLI installed via `pip install -e .` in Makefile
 - **Dependencies**: Two requirement files:
   - `requirements.txt`: Full dev environment (includes TensorFlow - can timeout)

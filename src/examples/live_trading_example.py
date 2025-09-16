@@ -20,7 +20,6 @@ from src.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
 from src.strategies.ml_basic import MlBasic
 
-
 def setup_paper_trading():
     """Example: Safe paper trading setup"""
     print("🚀 Setting up PAPER TRADING (Safe Mode)")
