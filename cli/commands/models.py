@@ -75,7 +75,7 @@ def _handle_promote(ns: argparse.Namespace) -> int:
             latest.unlink()
         except Exception:
             pass
-    latest.symlink_to(target.resolve())
+    latest.symlink_to(target.name)
     print(f"Promoted {symbol}/{model_type} -> {version}")
     return 0
 
