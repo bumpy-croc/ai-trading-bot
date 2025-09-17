@@ -167,10 +167,10 @@ class MlSentiment(BaseStrategy):
                 # Get prediction using the engine
                 prediction_data = df.iloc[index - self.sequence_length : index]
                 prediction_result = self.prediction_engine.predict(prediction_data)
-                
-                if prediction_result and 'prediction' in prediction_result:
-                    prediction = prediction_result['prediction']
-                    confidence = prediction_result.get('confidence', 0.5)
+
+                if prediction_result and not prediction_result.error:
+                    prediction = getattr(prediction_result, "price", 0.0)
+                    confidence = getattr(prediction_result, "confidence", 0.5)
                     return float(prediction), float(confidence)
             
             # Fallback to direct ONNX inference
