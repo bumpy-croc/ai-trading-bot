@@ -26,7 +26,7 @@ from .exceptions import (
 )
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
-from .models.registry import PredictionModelRegistry
+from .models.registry import PredictionModelRegistry, StrategyModel
 from .utils.caching import PredictionCacheManager
 
 
@@ -145,41 +145,41 @@ class PredictionEngine:
             self._total_feature_extraction_time += feature_time
             self._feature_extraction_count += 1
 
-            # Get model for prediction
-            # Choose model/runner and optionally align features to schema
-            model = self._get_model(model_name)
-            selected_arr = None
-            try:
-                bundle = self.model_registry.get_default_bundle()
-                if bundle.feature_schema and features_df is not None:
-                    selector = FeatureSelector(
-                        bundle.feature_schema,
-                        sequence_length=bundle.feature_schema.get("sequence_length"),
-                    )
-                    selected_arr = selector.select(features_df)
-                    selected_arr = selected_arr.astype(np.float32)[None, :, :]
-            except Exception:
-                selected_arr = None
+            # Resolve bundle for prediction and align features to its schema
+            bundle = self._resolve_bundle(model_name)
+            model = bundle.runner
+            prepared_features = self._prepare_features_for_bundle(
+                bundle, features, features_df
+            )
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
-                prediction = model.predict(selected_arr if selected_arr is not None else features)
+                prediction = model.predict(prepared_features)
                 final_price = prediction.price
                 final_conf = prediction.confidence
                 final_dir = prediction.direction
                 final_model_name = prediction.model_name
                 member_preds = None
+                features_used = self._count_features_used(prepared_features)
             else:
                 # Run all available structured runners for ensemble
                 preds = []
-                for runner in self.model_registry.iter_runners():
-                    preds.append(runner.predict(features))
+                features_used = 0
+                for ensemble_bundle in self.model_registry.list_bundles():
+                    ensemble_features = self._prepare_features_for_bundle(
+                        ensemble_bundle, features, features_df
+                    )
+                    if not features_used:
+                        features_used = self._count_features_used(ensemble_features)
+                    preds.append(ensemble_bundle.runner.predict(ensemble_features))
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence
                 final_dir = ens.direction
                 final_model_name = f"ensemble:{self.config.ensemble_method}"
                 member_preds = ens.member_predictions
+                if not features_used:
+                    features_used = self._count_features_used(features)
 
             # Calculate total inference time
             inference_time = time.time() - start_time
@@ -198,7 +198,7 @@ class PredictionEngine:
                     model_name=final_model_name,
                     timestamp=datetime.now(timezone.utc),
                     inference_time=inference_time,
-                    features_used=features.shape[1] if hasattr(features, "shape") else 0,
+                    features_used=features_used,
                     error=f"Prediction timeout after {inference_time:.3f}s (max: {self.config.max_prediction_latency}s)",
                     metadata={
                         "error_type": "PredictionTimeoutError",
@@ -231,7 +231,7 @@ class PredictionEngine:
                 model_name=final_model_name,
                 timestamp=datetime.now(timezone.utc),
                 inference_time=inference_time,
-                features_used=features.shape[1] if hasattr(features, "shape") else 0,
+                features_used=features_used,
                 cache_hit=cache_hit,
                 metadata={
                     "data_length": len(data),
@@ -375,7 +375,8 @@ class PredictionEngine:
 
         # Get model once for efficiency
         try:
-            model = self._get_model(model_name)
+            bundle = self._resolve_bundle(model_name)
+            model = bundle.runner
         except Exception as e:
             # If model loading fails, return error results for all batches
             # Create individual PredictionResult objects to avoid shared mutable state
@@ -415,7 +416,10 @@ class PredictionEngine:
                 self._feature_extraction_count += 1
 
                 # Make prediction with pre-loaded model
-                prediction = model.predict(features)
+                prepared_features = self._prepare_features_for_bundle(
+                    bundle, features, None
+                )
+                prediction = model.predict(prepared_features)
 
                 # Calculate total inference time
                 inference_time = time.time() - start_time
@@ -428,7 +432,7 @@ class PredictionEngine:
                     model_name=prediction.model_name,
                     timestamp=datetime.now(timezone.utc),
                     inference_time=inference_time,
-                    features_used=features.shape[1] if hasattr(features, "shape") else 0,
+                    features_used=self._count_features_used(prepared_features),
                     cache_hit=self._was_cache_hit(),
                     metadata={
                         "data_length": len(data),
@@ -690,17 +694,58 @@ class PredictionEngine:
         except Exception as e:
             raise FeatureExtractionError(f"Feature extraction failed: {str(e)}") from e
 
-    def _get_model(self, model_name: Optional[str]):
-        """Get model runner for prediction (structured-only)."""
+    def _prepare_features_for_bundle(
+        self,
+        bundle: StrategyModel,
+        raw_features: np.ndarray,
+        features_df: Optional[pd.DataFrame],
+    ) -> np.ndarray:
+        """Align feature matrix to a bundle's schema when available."""
+
+        if bundle.feature_schema and features_df is not None:
+            try:
+                selector = FeatureSelector(
+                    bundle.feature_schema,
+                    sequence_length=bundle.feature_schema.get("sequence_length"),
+                )
+                selected = selector.select(features_df).astype(np.float32, copy=False)
+                if selected.ndim == 2:
+                    return selected[None, :, :]
+                return selected
+            except Exception:
+                # Fall back to raw features if selection fails
+                pass
+
+        if isinstance(raw_features, np.ndarray):
+            return raw_features.astype(np.float32, copy=False)
+
+        return np.asarray(raw_features, dtype=np.float32)
+
+    def _count_features_used(self, features: Any) -> int:
+        """Return the feature dimension from an input array if possible."""
+
+        if isinstance(features, np.ndarray) and features.ndim >= 1:
+            return int(features.shape[-1])
+        return 0
+
+    def _resolve_bundle(self, model_name: Optional[str]) -> StrategyModel:
+        """Resolve the model bundle to use for an inference request."""
+
         if model_name:
-            for b in self.model_registry.list_bundles():
-                if b.key == model_name:
-                    return b.runner
+            for bundle in self.model_registry.list_bundles():
+                if bundle.key == model_name:
+                    return bundle
             raise ModelNotFoundError(f"Model '{model_name}' not found")
+
         try:
-            return self.model_registry.get_default_runner()
+            return self.model_registry.get_default_bundle()
         except Exception as e:
             raise ModelNotFoundError(str(e)) from e
+
+    def _get_model(self, model_name: Optional[str]):
+        """Get model runner for prediction (structured-only)."""
+        bundle = self._resolve_bundle(model_name)
+        return bundle.runner
 
     def _was_cache_hit(self) -> bool:
         """Check if last operation was a cache hit"""

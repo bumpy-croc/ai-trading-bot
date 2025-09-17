@@ -82,7 +82,8 @@ def migrate(timeframe: str, version_id: str | None = None) -> int:
             except Exception:
                 pass
         if not latest.exists():
-            latest.symlink_to(dest_dir.resolve())
+            relative_target = dest_dir.relative_to(dest_dir.parent)
+            latest.symlink_to(relative_target, target_is_directory=True)
 
         moved += 1
 
