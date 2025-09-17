@@ -45,18 +45,25 @@ class MyStrategy(BaseStrategy):
 
 ## Current Strategy Trading Pairs
 
-| Strategy | Default Trading Pair |
-|----------|---------------------|
-| `ml_basic` | ETH-USD |
+| Strategy | Default Trading Pair | Description |
+|----------|---------------------|-------------|
+| `ml_basic` | BTCUSDT | Price-only ML model |
+| `ml_sentiment` | BTCUSDT | Price + sentiment ML model |
+| `ml_adaptive` | BTCUSDT | Adaptive ML with regime detection |
+| `bull` | BTCUSDT | Bull market optimized strategy |
+| `bear` | BTCUSDT | Bear market optimized strategy |
 
 ## Usage Examples
 
 ```bash
-# Uses strategy's default trading pair and CLI
-atb backtest ml_basic --symbol ETHUSD --timeframe 1h --days 100
+# Uses strategy's default trading pair
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 100
 
 # Override with specific symbol
-atb backtest ml_basic --symbol SOLUSD --timeframe 1h --days 100
+atb backtest ml_sentiment --symbol ETHUSDT --timeframe 1h --days 100
+
+# Try different strategies
+atb backtest ml_adaptive --symbol BTCUSDT --timeframe 4h --days 365
 ```
 
 ## Benefits
