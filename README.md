@@ -198,7 +198,7 @@ See `docs/CONFIGURATION_SYSTEM_SUMMARY.md`.
 
 ## Deployment
 
-- Railway: see `docs/RAILWAY_QUICKSTART.md` and `docs/RAILWAY_DEPLOYMENT_GUIDE.md` (includes DB setup and app start commands)
+- Railway: see `docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md` for database setup
 
 ---
 
