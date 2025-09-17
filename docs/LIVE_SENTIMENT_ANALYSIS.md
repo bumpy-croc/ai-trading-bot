@@ -1,8 +1,8 @@
-# 🔴 Live Sentiment Analysis in Real-Time Trading
+# 🟢 Live Sentiment Analysis in Real-Time Trading
 
-**⚠️ DEPRECATED: Sentiment analysis providers have been removed from the codebase**
+**Status: Active** - Sentiment analysis providers and ML models are available in the codebase
 
-This document is kept for reference but sentiment analysis providers are no longer available.
+This guide explains how to use sentiment data in your trading strategies for enhanced market intelligence.
 
 ## 🎯 **The Challenge You Identified**
 
