@@ -3,7 +3,6 @@
 ## Getting Started
 - [Trading Concepts Overview](TRADING_CONCEPTS_OVERVIEW.md) - Core trading concepts and terminology
 - [Paper Trading Quickstart](PAPER_TRADING_QUICKSTART.md) - Fast setup for safe trading
-- [Railway Quickstart](RAILWAY_QUICKSTART.md) - Quick deployment to Railway platform
 - [Local PostgreSQL Setup](LOCAL_POSTGRESQL_SETUP.md) - Database setup for local development
 
 ## Core Functionality
@@ -32,7 +31,6 @@
 - [Persistent Balance Guide](PERSISTENT_BALANCE_GUIDE.md) - Balance state management
 
 ## Deployment & Operations
-- [Railway Deployment Guide](RAILWAY_DEPLOYMENT_GUIDE.md) - Comprehensive Railway deployment
 - [Railway Database Centralization Guide](RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md) - Database setup on Railway
 - [Monitoring Summary](MONITORING_SUMMARY.md) - System monitoring and dashboards
 - [Logging Guide](LOGGING_GUIDE.md) - Application logging configuration

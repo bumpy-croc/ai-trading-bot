@@ -413,7 +413,7 @@ Monitoring:
 **2. Migration failures**
 - Ensure database URL is properly configured
 - Check if tables already exist manually
-- Verify PostgreSQL/SQLite compatibility
+- Verify PostgreSQL database compatibility
 
 **3. Performance degradation**
 - Monitor database query performance on risk_adjustments table
