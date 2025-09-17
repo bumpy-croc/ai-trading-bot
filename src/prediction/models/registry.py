@@ -1,9 +1,4 @@
-"""
-Model registry for managing ML model bundles with metadata and selection.
-
-Supports structured layout under `DEFAULT_MODEL_REGISTRY_PATH` and provides a
-backward-compatible discovery of flat `.onnx` files under legacy `src/ml`.
-"""
+"""Model registry for managing ML model bundles with metadata and selection."""
 
 import logging
 from pathlib import Path
@@ -82,7 +77,7 @@ class PredictionModelRegistry:
         self._load()
 
     def _load(self) -> None:
-        """Load structured bundles and legacy flat models."""
+        """Load structured bundles from the configured registry path."""
         base = Path(self.config.model_registry_path)
         if not base.exists():
             return
@@ -95,23 +90,28 @@ class PredictionModelRegistry:
                 if not mtype_dir.is_dir():
                     continue
                 model_type = mtype_dir.name
-                # Follow latest symlink first if present
+                # Load concrete versions first so the latest symlink assignment wins
                 latest = mtype_dir / "latest"
-                version_dirs = []
-                if latest.exists():
-                    version_dirs.append(latest)
-                # Add all other subdirs as candidates
-                version_dirs.extend([p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"])
+                version_dirs = [
+                    p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"
+                ]
+                # Deterministic order keeps logging/tests stable; latest applied afterwards
+                version_dirs.sort()
                 for vdir in version_dirs:
                     try:
                         bundle = self._load_bundle(symbol, model_type, vdir)
                         key = (bundle.symbol, bundle.timeframe, bundle.model_type)
-                        # Prefer latest symlink as production if pointed
                         self._bundles[key] = bundle
-                        if vdir.name == "latest":
-                            self._production_index[key] = bundle.version_id
                     except Exception as e:  # pragma: no cover - aggregated logging
                         logger.error("Failed to load bundle at %s: %s", vdir, e)
+                if latest.exists():
+                    try:
+                        bundle = self._load_bundle(symbol, model_type, latest)
+                        key = (bundle.symbol, bundle.timeframe, bundle.model_type)
+                        self._bundles[key] = bundle
+                        self._production_index[key] = bundle.version_id
+                    except Exception as e:  # pragma: no cover - aggregated logging
+                        logger.error("Failed to load bundle at %s: %s", latest, e)
 
     def _load_bundle(self, symbol: str, model_type: str, vdir: Path) -> StrategyModel:
         """Load a single bundle directory into a ModelBundle."""

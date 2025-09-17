@@ -126,7 +126,10 @@ class PredictionEngine:
             # Extract features once; if FeatureSelector is used below we will reuse the
             # DataFrame from the pipeline to avoid duplicate work.
             feature_start_time = time.time()
-            features_df_or_arr = self.feature_pipeline.transform(data, use_cache=True)
+            try:
+                features_df_or_arr = self.feature_pipeline.transform(data, use_cache=True)
+            except Exception as exc:
+                raise FeatureExtractionError(f"Feature extraction failed: {exc}") from exc
             if isinstance(features_df_or_arr, np.ndarray):
                 features = features_df_or_arr
                 features_df = None
@@ -471,8 +474,9 @@ class PredictionEngine:
         return results
 
     def get_available_models(self) -> list[str]:
-        """Get list of available models (structured bundle keys)."""
-        return [b.key for b in self.model_registry.list_bundles()]
+        """Get list of available model bundle keys."""
+
+        return [bundle.key for bundle in self.model_registry.list_bundles()]
 
     def get_model_info(self, model_name: str) -> dict[str, Any]:
         """
@@ -484,14 +488,14 @@ class PredictionEngine:
         Returns:
             Dict containing model information
         """
-        for b in self.model_registry.list_bundles():
-            if b.key == model_name:
+        for bundle in self.model_registry.list_bundles():
+            if bundle.key == model_name:
                 return {
-                    "name": b.key,
-                    "path": getattr(b.runner, "model_path", None),
-                    "metadata": b.metadata,
+                    "name": bundle.key,
+                    "path": getattr(bundle.runner, "model_path", None),
+                    "metadata": bundle.metadata,
                     "loaded": True,
-                    "inference_time_avg": self._get_model_avg_inference_time(b.key),
+                    "inference_time_avg": self._get_model_avg_inference_time(bundle.key),
                 }
         return {}
 
@@ -618,12 +622,14 @@ class PredictionEngine:
 
         # Check model registry
         try:
-            bundles = self.model_registry.list_bundles()
-            default_runner = self.model_registry.get_default_runner()
+            bundles = list(self.model_registry.list_bundles())
+            default_bundle = self.model_registry.get_default_bundle() if bundles else None
             health["components"]["model_registry"] = {
                 "status": "healthy",
                 "available_models": len(bundles),
-                "default_model": getattr(default_runner, "model_path", None),
+                "default_model": getattr(default_bundle.runner, "model_path", None)
+                if default_bundle is not None
+                else None,
             }
         except Exception as e:
             health["components"]["model_registry"] = {"status": "error", "error": str(e)}
@@ -731,16 +737,22 @@ class PredictionEngine:
     def _resolve_bundle(self, model_name: Optional[str]) -> StrategyModel:
         """Resolve the model bundle to use for an inference request."""
 
+        bundles = list(self.model_registry.list_bundles())
+
         if model_name:
-            for bundle in self.model_registry.list_bundles():
+            for bundle in bundles:
                 if bundle.key == model_name:
                     return bundle
             raise ModelNotFoundError(f"Model '{model_name}' not found")
 
-        try:
-            return self.model_registry.get_default_bundle()
-        except Exception as e:
-            raise ModelNotFoundError(str(e)) from e
+        if bundles:
+            try:
+                return self.model_registry.get_default_bundle()
+            except Exception:
+                pass
+            return bundles[0]
+
+        raise ModelNotFoundError("No prediction models available")
 
     def _get_model(self, model_name: Optional[str]):
         """Get model runner for prediction (structured-only)."""

@@ -1,9 +1,33 @@
 """Tests covering utility features of PredictionEngine."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 from src.prediction.engine import PredictionEngine, PredictionResult
+from src.prediction.models.registry import StrategyModel
+
+
+def _make_bundle(
+    runner: Mock,
+    *,
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    model_type: str = "basic",
+    version: str = "v1",
+    metadata: dict | None = None,
+) -> StrategyModel:
+    return StrategyModel(
+        symbol=symbol,
+        timeframe=timeframe,
+        model_type=model_type,
+        version_id=version,
+        directory=Path(f"/tmp/{symbol}/{model_type}/{version}"),
+        metadata=metadata or {},
+        feature_schema=None,
+        metrics=None,
+        runner=runner,
+    )
 
 
 class TestPredictionEngineUtilities:
@@ -14,10 +38,17 @@ class TestPredictionEngineUtilities:
     def test_get_available_models(self, mock_pipeline, mock_registry):
         """Test getting available models"""
         engine = PredictionEngine()
-        engine.model_registry.list_models.return_value = ["model1", "model2", "model3"]
+        bundle_one = _make_bundle(Mock(), metadata={"name": "model1"})
+        bundle_two = _make_bundle(Mock(), symbol="ETHUSDT", metadata={"name": "model2"})
+        bundle_three = _make_bundle(Mock(), symbol="LTCUSDT", metadata={"name": "model3"})
+        engine.model_registry.list_bundles.return_value = [
+            bundle_one,
+            bundle_two,
+            bundle_three,
+        ]
 
         models = engine.get_available_models()
-        assert models == ["model1", "model2", "model3"]
+        assert models == [bundle_one.key, bundle_two.key, bundle_three.key]
 
     @patch("src.prediction.engine.PredictionModelRegistry")
     @patch("src.prediction.engine.FeaturePipeline")
@@ -25,14 +56,17 @@ class TestPredictionEngineUtilities:
         """Test getting model information"""
         engine = PredictionEngine()
 
-        mock_model = Mock()
-        mock_model.model_path = "/path/to/model.onnx"
-        mock_model.model_metadata = {"version": "1.0", "type": "price"}
-        engine.model_registry.get_model.return_value = mock_model
+        mock_runner = Mock()
+        mock_runner.model_path = "/path/to/model.onnx"
+        bundle = _make_bundle(
+            mock_runner,
+            metadata={"version": "1.0", "type": "price"},
+        )
+        engine.model_registry.list_bundles.return_value = [bundle]
 
-        info = engine.get_model_info("test_model")
+        info = engine.get_model_info(bundle.key)
 
-        assert info["name"] == "test_model"
+        assert info["name"] == bundle.key
         assert info["path"] == "/path/to/model.onnx"
         assert info["metadata"] == {"version": "1.0", "type": "price"}
         assert info["loaded"] is True
@@ -42,7 +76,7 @@ class TestPredictionEngineUtilities:
     def test_get_model_info_not_found(self, mock_pipeline, mock_registry):
         """Test getting info for non-existent model"""
         engine = PredictionEngine()
-        engine.model_registry.get_model.return_value = None
+        engine.model_registry.list_bundles.return_value = []
 
         info = engine.get_model_info("nonexistent")
         assert info == {}

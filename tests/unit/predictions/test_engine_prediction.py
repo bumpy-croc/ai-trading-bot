@@ -1,5 +1,6 @@
 """Tests covering single prediction flows for PredictionEngine."""
 
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -8,6 +9,29 @@ import pandas as pd
 from src.prediction.config import PredictionConfig
 from src.prediction.engine import PredictionEngine, PredictionResult
 from src.prediction.models.onnx_runner import ModelPrediction
+from src.prediction.models.registry import StrategyModel
+
+
+def _make_bundle(
+    runner: Mock,
+    *,
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    model_type: str = "basic",
+    version: str = "v1",
+    metadata: dict | None = None,
+) -> StrategyModel:
+    return StrategyModel(
+        symbol=symbol,
+        timeframe=timeframe,
+        model_type=model_type,
+        version_id=version,
+        directory=Path(f"/tmp/{symbol}/{model_type}/{version}"),
+        metadata=metadata or {},
+        feature_schema=None,
+        metrics=None,
+        runner=runner,
+    )
 
 
 class TestPredictionEnginePredict:
@@ -44,7 +68,9 @@ class TestPredictionEnginePredict:
             inference_time=0.02,
         )
         mock_model.predict.return_value = mock_prediction
-        engine.model_registry.get_default_model.return_value = mock_model
+        bundle = _make_bundle(mock_model)
+        engine.model_registry.list_bundles.return_value = [bundle]
+        engine.model_registry.get_default_bundle.return_value = bundle
 
         data = self.create_test_data()
         result = engine.predict(data)
@@ -59,7 +85,11 @@ class TestPredictionEnginePredict:
         assert result.inference_time > 0
 
         engine.feature_pipeline.transform.assert_called_once_with(data, use_cache=True)
-        mock_model.predict.assert_called_once_with(mock_features)
+        assert mock_model.predict.call_count == 1
+        np.testing.assert_allclose(
+            mock_model.predict.call_args.args[0],
+            mock_features.astype(np.float32),
+        )
 
     @patch("src.prediction.engine.PredictionModelRegistry")
     @patch("src.prediction.engine.FeaturePipeline")
@@ -77,15 +107,23 @@ class TestPredictionEnginePredict:
             inference_time=0.03,
         )
         mock_model.predict.return_value = mock_prediction
-        engine.model_registry.get_model.return_value = mock_model
+        default_bundle = _make_bundle(Mock(), version="default")
+        specific_bundle = _make_bundle(
+            mock_model,
+            symbol="ETHUSDT",
+            model_type="specific",
+            version="v1",
+        )
+        engine.model_registry.list_bundles.return_value = [default_bundle, specific_bundle]
+        engine.model_registry.get_default_bundle.return_value = default_bundle
 
         mock_features = np.random.random((1, 10))
         engine.feature_pipeline.transform.return_value = mock_features
 
         data = self.create_test_data()
-        result = engine.predict(data, model_name="specific_model")
+        result = engine.predict(data, model_name=specific_bundle.key)
 
-        engine.model_registry.get_model.assert_called_once_with("specific_model")
+        assert mock_model.predict.call_count == 1
         assert result.model_name == "specific_model"
 
     @patch("src.prediction.engine.PredictionModelRegistry")
@@ -125,7 +163,9 @@ class TestPredictionEnginePredict:
     def test_predict_model_not_found(self, mock_pipeline, mock_registry):
         """Test prediction when model is not found"""
         engine = PredictionEngine()
-        engine.model_registry.get_model.return_value = None
+        bundle = _make_bundle(Mock())
+        engine.model_registry.list_bundles.return_value = [bundle]
+        engine.model_registry.get_default_bundle.return_value = bundle
 
         mock_features = np.random.random((1, 10))
         engine.feature_pipeline.transform.return_value = mock_features
@@ -174,7 +214,9 @@ class TestPredictionEnginePredict:
             inference_time=0.01,
         )
         mock_model.predict.return_value = mock_prediction
-        engine.model_registry.get_default_model.return_value = mock_model
+        bundle = _make_bundle(mock_model)
+        engine.model_registry.list_bundles.return_value = [bundle]
+        engine.model_registry.get_default_bundle.return_value = bundle
 
         data = self.create_test_data()
         result = engine.predict(data)

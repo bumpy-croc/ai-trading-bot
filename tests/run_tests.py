@@ -12,12 +12,49 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 # Ensure we can import from the project
 project_root = Path(__file__).parent.parent
 src_path = project_root / "src"
 sys.path.insert(0, str(src_path))
 sys.path.insert(0, str(project_root))
+
+
+def _resolve_python_executable() -> str:
+    """Return the preferred python interpreter for subprocess calls."""
+
+    def _candidate_from(venv_path: Path) -> Optional[Path]:
+        if not venv_path.exists():
+            return None
+        bin_dir = "Scripts" if os.name == "nt" else "bin"
+        candidate = venv_path / bin_dir / ("python.exe" if os.name == "nt" else "python")
+        if candidate.exists():
+            return candidate
+        # Some environments may only have "python3"
+        alt = candidate.with_name("python3" + (".exe" if os.name == "nt" else ""))
+        if alt.exists():
+            return alt
+        return None
+
+    # 1) Respect active virtualenv
+    active_venv = os.environ.get("VIRTUAL_ENV")
+    if active_venv:
+        candidate = _candidate_from(Path(active_venv))
+        if candidate is not None:
+            return str(candidate)
+
+    # 2) Look for project-local .venv
+    project_venv = project_root / ".venv"
+    candidate = _candidate_from(project_venv)
+    if candidate is not None:
+        return str(candidate)
+
+    # 3) Fallback to interpreter running this script
+    return sys.executable
+
+
+PYTHON_EXECUTABLE = _resolve_python_executable()
 
 # Set PYTHONPATH for subprocess calls
 if "PYTHONPATH" in os.environ:
@@ -211,7 +248,7 @@ def run_critical_tests():
     print_header("Running Critical Tests")
 
     cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "-m",
@@ -248,11 +285,11 @@ def run_unit_tests(pytest_args=None):
     print(f"DEBUG: CI environment detected: {is_ci}")
     print(f"DEBUG: Worker count: {get_worker_count()}")
     print(f"DEBUG: Current working directory: {os.getcwd()}")
-    print(f"DEBUG: Python executable: {sys.executable}")
+    print(f"DEBUG: Python executable: {PYTHON_EXECUTABLE}")
     print(f"DEBUG: Python version: {sys.version}")
 
     cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "tests/",
@@ -295,7 +332,7 @@ def run_integration_tests(pytest_args=None):
     os.environ["TEST_TYPE"] = "integration"
 
     cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "-m",
@@ -317,7 +354,7 @@ def run_coverage_analysis():
     print_header("Running Coverage Analysis")
 
     cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "--cov=ai-trading-bot",
@@ -346,7 +383,7 @@ def run_specific_test_file(test_file):
         test_file = f"tests/{test_file}"
 
     cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         test_file,
@@ -411,7 +448,7 @@ def run_database_tests():
     """Run database tests only"""
     print_header("Running Database Tests")
 
-    cmd = [sys.executable, "-m", "pytest", "tests/test_database.py", "-v", "--tb=short"]
+    cmd = [PYTHON_EXECUTABLE, "-m", "pytest", "tests/test_database.py", "-v", "--tb=short"]
 
     return run_command(cmd, "Database Tests")
 
@@ -421,7 +458,7 @@ def run_fast_tests():
     print_header("Running Fast Tests")
 
     cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "-m",
@@ -441,7 +478,7 @@ def run_slow_tests():
     print_header("Running Slow Tests")
 
     cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "-m",
@@ -461,7 +498,7 @@ def run_grouped_tests():
     # Group 1: Fast unit tests (parallel)
     print(f"{Colors.OKBLUE}Group 1: Fast Unit Tests{Colors.ENDC}")
     fast_cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "tests/test_indicators.py",
@@ -481,7 +518,7 @@ def run_grouped_tests():
     # Group 2: Medium unit tests (parallel)
     print(f"{Colors.OKBLUE}Group 2: Medium Unit Tests{Colors.ENDC}")
     medium_cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "tests/test_strategies.py",
@@ -500,7 +537,7 @@ def run_grouped_tests():
     # Group 3: Computation-heavy tests (limited parallelization)
     print(f"{Colors.OKBLUE}Group 3: Computation-Heavy Tests{Colors.ENDC}")
     compute_cmd = [
-        sys.executable,
+        PYTHON_EXECUTABLE,
         "-m",
         "pytest",
         "tests/test_backtesting.py",
@@ -520,7 +557,7 @@ def run_performance_benchmark():
     """Run performance benchmark of test suite"""
     print_header("Running Performance Benchmark")
 
-    cmd = [sys.executable, "tests/performance_benchmark.py"]
+    cmd = [PYTHON_EXECUTABLE, "tests/performance_benchmark.py"]
 
     return run_command(cmd, "Performance Benchmark")
 
@@ -604,7 +641,7 @@ def run_custom_pytest_command(markers=None, coverage=False, verbose=False, quiet
     """Run custom pytest command with specified options"""
     print_header("Running Custom Tests")
 
-    cmd = [sys.executable, "-m", "pytest", "tests/"]
+    cmd = [PYTHON_EXECUTABLE, "-m", "pytest", "tests/"]
 
     # Enable parallel execution with pytest-xdist if available
     # Use loadgroup for better test distribution

@@ -1,5 +1,6 @@
 """Tests covering batch prediction flows for PredictionEngine."""
 
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -7,6 +8,29 @@ import pandas as pd
 
 from src.prediction.engine import PredictionEngine, PredictionResult
 from src.prediction.models.onnx_runner import ModelPrediction
+from src.prediction.models.registry import StrategyModel
+
+
+def _make_bundle(
+    runner: Mock,
+    *,
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    model_type: str = "basic",
+    version: str = "v1",
+    metadata: dict | None = None,
+) -> StrategyModel:
+    return StrategyModel(
+        symbol=symbol,
+        timeframe=timeframe,
+        model_type=model_type,
+        version_id=version,
+        directory=Path(f"/tmp/{symbol}/{model_type}/{version}"),
+        metadata=metadata or {},
+        feature_schema=None,
+        metrics=None,
+        runner=runner,
+    )
 
 
 class TestPredictionEngineBatch:
@@ -42,7 +66,9 @@ class TestPredictionEngineBatch:
             inference_time=0.02,
         )
         mock_model.predict.return_value = mock_prediction
-        engine.model_registry.get_default_model.return_value = mock_model
+        bundle = _make_bundle(mock_model)
+        engine.model_registry.list_bundles.return_value = [bundle]
+        engine.model_registry.get_default_bundle.return_value = bundle
 
         data_batches = [self.create_test_data(), self.create_test_data(), self.create_test_data()]
         results = engine.predict_batch(data_batches)
@@ -61,7 +87,7 @@ class TestPredictionEngineBatch:
     def test_predict_batch_model_error(self, mock_pipeline, mock_registry):
         """Test batch prediction when model loading fails"""
         engine = PredictionEngine()
-        engine.model_registry.get_default_model.side_effect = Exception("Model loading failed")
+        engine.model_registry.list_bundles.return_value = []
 
         data_batches = [self.create_test_data(), self.create_test_data()]
         results = engine.predict_batch(data_batches)
@@ -69,7 +95,7 @@ class TestPredictionEngineBatch:
         assert len(results) == 2
         for result in results:
             assert result.error is not None
-            assert "Model loading failed" in result.error
+            assert "No prediction models available" in result.error
 
     @patch("src.prediction.engine.PredictionModelRegistry")
     @patch("src.prediction.engine.FeaturePipeline")
@@ -96,7 +122,9 @@ class TestPredictionEngineBatch:
             inference_time=0.02,
         )
         mock_model.predict.return_value = mock_prediction
-        engine.model_registry.get_default_model.return_value = mock_model
+        bundle = _make_bundle(mock_model)
+        engine.model_registry.list_bundles.return_value = [bundle]
+        engine.model_registry.get_default_bundle.return_value = bundle
 
         data_batches = [self.create_test_data(), self.create_test_data(), self.create_test_data()]
         results = engine.predict_batch(data_batches)
