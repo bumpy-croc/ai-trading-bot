@@ -31,6 +31,7 @@ from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.prediction.features.technical import TechnicalFeatureExtractor
+from src.prediction.models.registry import PredictionModelRegistry
 from src.strategies.base import BaseStrategy
 
 
@@ -49,16 +50,22 @@ class MlBasic(BaseStrategy):
         sequence_length=120,
         use_prediction_engine: Optional[bool] = None,
         model_name: Optional[str] = None,
+        model_type: Optional[str] = None,
+        timeframe: Optional[str] = None,
     ):
         super().__init__(name)
 
         # Set strategy-specific trading pair - ML model trained on BTC
         self.trading_pair = "BTCUSDT"
+        # Registry model selection preferences
+        self.model_type = model_type or self.model_type or "basic"
+        self.model_timeframe = timeframe or self.model_timeframe or "1h"
 
         self.model_path = model_path
         self.sequence_length = sequence_length
-        self.ort_session = ort.InferenceSession(self.model_path)
-        self.input_name = self.ort_session.get_inputs()[0].name
+        # Defer ONNX session init if prediction engine/registry is used
+        self.ort_session = None
+        self.input_name = None
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
 
@@ -79,6 +86,7 @@ class MlBasic(BaseStrategy):
             except Exception:
                 self.model_name = None
         self.prediction_engine = None
+        self._registry: PredictionModelRegistry | None = None
         self._engine_warning_emitted = False
         # Optional batch inference flag (default off to preserve exact behavior)
         self.use_engine_batch = get_config().get_bool("ENGINE_BATCH_INFERENCE", default=False)
@@ -138,6 +146,11 @@ class MlBasic(BaseStrategy):
                     print(f"[MlBasic] Prediction engine health degraded: {health}")
                     self._engine_warning_emitted = True
                 self.prediction_engine = engine
+                # Initialize registry for structured selection
+                try:
+                    self._registry = engine.model_registry
+                except Exception:
+                    self._registry = None
             except Exception as _e:
                 if not self._engine_warning_emitted:
                     print(
@@ -186,6 +199,21 @@ class MlBasic(BaseStrategy):
             except Exception:
                 self.prediction_engine = None
 
+        # If using prediction engine and structured registry is available, try to bind bundle session
+        if use_prediction_engine and self._registry is not None:
+            try:
+                bundle = self._registry.select_bundle(
+                    symbol=self.trading_pair,
+                    model_type=self.model_type,
+                    timeframe=self.model_timeframe,
+                )
+                if getattr(bundle.runner, "session", None) is not None:
+                    self.ort_session = bundle.runner.session
+                    self.input_name = self.ort_session.get_inputs()[0].name
+            except Exception:
+                # Fallback to legacy ONNX path
+                pass
+
         for i in range(self.sequence_length, len(df)):
             # Prepare input features
             feature_columns = [f"{feature}_normalized" for feature in price_features]
@@ -196,13 +224,33 @@ class MlBasic(BaseStrategy):
             input_data = np.expand_dims(input_data, axis=0)
 
             try:
-                if use_prediction_engine and self.prediction_engine is not None and self.model_name:
+                if use_prediction_engine and self.prediction_engine is not None:
                     window_df = df[["open", "high", "low", "close", "volume"]].iloc[
                         i - self.sequence_length : i
                     ]
-                    result = self.prediction_engine.predict(window_df, model_name=self.model_name)
+                    # Prefer registry selection by symbol/type/timeframe when available
+                    try:
+                        if self._registry is not None:
+                            # Select and enforce existence early (raises on missing)
+                            self._registry.select_bundle(
+                                symbol=self.trading_pair,
+                                model_type=self.model_type or "basic",
+                                timeframe=self.model_timeframe or "1h",
+                            )
+                        result = self.prediction_engine.predict(window_df)
+                    except Exception:
+                        # Fall back to explicit model_name if provided
+                        result = self.prediction_engine.predict(
+                            window_df, model_name=self.model_name
+                        )
                     pred = float(result.price)
                 else:
+                    # Fallback to legacy ONNX session; initialize lazily
+                    if self.ort_session is None:
+                        # If registry exists and model_name corresponds to legacy name, skip
+                        # Otherwise open provided model_path
+                        self.ort_session = ort.InferenceSession(self.model_path)
+                        self.input_name = self.ort_session.get_inputs()[0].name
                     output = self.ort_session.run(None, {self.input_name: input_data})
                     pred = output[0][0][0]
 

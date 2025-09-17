@@ -1,0 +1,11 @@
+{
+  "model_id": "ethusdt_sentiment",
+  "symbol": "ETHUSDT",
+  "timeframe": "1h",
+  "model_type": "sentiment",
+  "version_id": "2025-09-17_1h_v1",
+  "framework": "onnx",
+  "model_file": "model.onnx",
+  "created_at": "2025-09-17T20:07:19",
+  "stage": "candidate"
+}

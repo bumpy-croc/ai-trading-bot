@@ -8,6 +8,8 @@ DEFAULT_INITIAL_BALANCE: float = 1000  # Default starting balance in USD
 DEFAULT_PREDICTION_HORIZONS = [1]  # Single horizon for MVP
 DEFAULT_MIN_CONFIDENCE_THRESHOLD = 0.6
 DEFAULT_MAX_PREDICTION_LATENCY = 0.1  # seconds
+# Default model registry base path (legacy flat layout). The registry also
+# auto-detects a structured subdirectory at base/models when present.
 DEFAULT_MODEL_REGISTRY_PATH = "src/ml"
 DEFAULT_ENABLE_SENTIMENT = False  # Disabled by default
 DEFAULT_ENABLE_MARKET_MICROSTRUCTURE = False  # MVP: disabled

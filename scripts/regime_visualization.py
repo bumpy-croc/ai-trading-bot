@@ -12,20 +12,21 @@ Usage:
 
 import argparse
 import logging
-from datetime import datetime, timedelta
-from pathlib import Path
-
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-import numpy as np
-import pandas as pd
 
 # Add src to path for imports
 import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from regime.detector import RegimeDetector
+
 from data_providers.binance_provider import BinanceProvider
-from regime.detector import RegimeDetector, RegimeConfig, TrendLabel, VolLabel
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

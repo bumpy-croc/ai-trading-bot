@@ -25,6 +25,7 @@ from .exceptions import (
     ModelNotFoundError,
 )
 from .features.pipeline import FeaturePipeline
+from .features.selector import FeatureSelector
 from .models.registry import PredictionModelRegistry
 from .utils.caching import PredictionCacheManager
 
@@ -103,6 +104,8 @@ class PredictionEngine:
         self._total_feature_extraction_time = 0.0
         self._feature_extraction_count = 0
 
+        # No cached structured selection helpers (avoid hidden state)
+
     def predict(self, data: pd.DataFrame, model_name: Optional[str] = None) -> PredictionResult:
         """
         Main prediction method - unified interface for all predictions
@@ -120,9 +123,22 @@ class PredictionEngine:
             # Validate input data
             self._validate_input_data(data)
 
-            # Extract features
+            # Extract features once; if FeatureSelector is used below we will reuse the
+            # DataFrame from the pipeline to avoid duplicate work.
             feature_start_time = time.time()
-            features = self._extract_features(data)
+            features_df_or_arr = self.feature_pipeline.transform(data, use_cache=True)
+            if isinstance(features_df_or_arr, np.ndarray):
+                features = features_df_or_arr
+                features_df = None
+            else:
+                features_df = features_df_or_arr
+                original_columns = ["open", "high", "low", "close", "volume"]
+                feature_columns = [
+                    col for col in features_df.columns if col not in original_columns
+                ]
+                if not feature_columns:
+                    raise FeatureExtractionError("No feature columns found in pipeline output")
+                features = features_df[feature_columns].values
             feature_time = time.time() - feature_start_time
             self._feature_extraction_time = feature_time
             # Track for averaging
@@ -130,24 +146,34 @@ class PredictionEngine:
             self._feature_extraction_count += 1
 
             # Get model for prediction
+            # Choose model/runner and optionally align features to schema
             model = self._get_model(model_name)
+            selected_arr = None
+            try:
+                bundle = self.model_registry.get_default_bundle()
+                if bundle.feature_schema and features_df is not None:
+                    selector = FeatureSelector(
+                        bundle.feature_schema,
+                        sequence_length=bundle.feature_schema.get("sequence_length"),
+                    )
+                    selected_arr = selector.select(features_df)
+                    selected_arr = selected_arr.astype(np.float32)[None, :, :]
+            except Exception:
+                selected_arr = None
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
-                prediction = model.predict(features)
+                prediction = model.predict(selected_arr if selected_arr is not None else features)
                 final_price = prediction.price
                 final_conf = prediction.confidence
                 final_dir = prediction.direction
                 final_model_name = prediction.model_name
                 member_preds = None
             else:
-                # Run all available models for ensemble
+                # Run all available structured runners for ensemble
                 preds = []
-                for mname in self.model_registry.list_models():
-                    m = self.model_registry.get_model(mname)
-                    if m is None:
-                        continue
-                    preds.append(m.predict(features))
+                for runner in self.model_registry.iter_runners():
+                    preds.append(runner.predict(features))
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence
@@ -441,8 +467,8 @@ class PredictionEngine:
         return results
 
     def get_available_models(self) -> list[str]:
-        """Get list of available models"""
-        return self.model_registry.list_models()
+        """Get list of available models (structured bundle keys)."""
+        return [b.key for b in self.model_registry.list_bundles()]
 
     def get_model_info(self, model_name: str) -> dict[str, Any]:
         """
@@ -454,17 +480,16 @@ class PredictionEngine:
         Returns:
             Dict containing model information
         """
-        model = self.model_registry.get_model(model_name)
-        if not model:
-            return {}
-
-        return {
-            "name": model_name,
-            "path": model.model_path,
-            "metadata": model.model_metadata,
-            "loaded": True,
-            "inference_time_avg": self._get_model_avg_inference_time(model_name),
-        }
+        for b in self.model_registry.list_bundles():
+            if b.key == model_name:
+                return {
+                    "name": b.key,
+                    "path": getattr(b.runner, "model_path", None),
+                    "metadata": b.metadata,
+                    "loaded": True,
+                    "inference_time_avg": self._get_model_avg_inference_time(b.key),
+                }
+        return {}
 
     def get_performance_stats(self) -> dict[str, Any]:
         """Get engine performance statistics"""
@@ -589,13 +614,12 @@ class PredictionEngine:
 
         # Check model registry
         try:
-            models = self.model_registry.list_models()
-            default_model = self.model_registry.get_default_model()
+            bundles = self.model_registry.list_bundles()
+            default_runner = self.model_registry.get_default_runner()
             health["components"]["model_registry"] = {
                 "status": "healthy",
-                "available_models": len(models),
-                "model_names": models,
-                "default_model": default_model.model_path if default_model else None,
+                "available_models": len(bundles),
+                "default_model": getattr(default_runner, "model_path", None),
             }
         except Exception as e:
             health["components"]["model_registry"] = {"status": "error", "error": str(e)}
@@ -667,19 +691,16 @@ class PredictionEngine:
             raise FeatureExtractionError(f"Feature extraction failed: {str(e)}") from e
 
     def _get_model(self, model_name: Optional[str]):
-        """Get model for prediction"""
+        """Get model runner for prediction (structured-only)."""
         if model_name:
-            model = self.model_registry.get_model(model_name)
-            if not model:
-                raise ModelNotFoundError(f"Model '{model_name}' not found")
-            return model
-
-        # Use default model
-        default_model = self.model_registry.get_default_model()
-        if not default_model:
-            raise ModelNotFoundError("No models available for prediction")
-
-        return default_model
+            for b in self.model_registry.list_bundles():
+                if b.key == model_name:
+                    return b.runner
+            raise ModelNotFoundError(f"Model '{model_name}' not found")
+        try:
+            return self.model_registry.get_default_runner()
+        except Exception as e:
+            raise ModelNotFoundError(str(e)) from e
 
     def _was_cache_hit(self) -> bool:
         """Check if last operation was a cache hit"""

@@ -312,161 +312,40 @@ class TestOnnxRunner:
 
 
 class TestPredictionModelRegistry:
-    """Test PredictionModelRegistry class"""
+    """Structured-only PredictionModelRegistry tests"""
 
-    def setup_method(self):
-        """Set up test configuration"""
-        self.config = PredictionConfig(model_registry_path="test_models")
+    def _write_bundle(self, root, symbol: str, model_type: str, version: str, timeframe: str = "1h"):
+        import json
+        base = root / symbol / model_type / version
+        base.mkdir(parents=True, exist_ok=True)
+        # empty onnx file (stub runner will handle failures)
+        (base / "model.onnx").write_bytes(b"")
+        (base / "metadata.json").write_text(json.dumps({"symbol": symbol, "model_type": model_type, "timeframe": timeframe, "version_id": version}))
+        return base
 
-    @patch("pathlib.Path.glob")
-    @patch("src.prediction.models.registry.OnnxRunner")
-    def test_model_loading(self, mock_onnx_runner, mock_glob):
-        """Test model registry loading"""
-        # Mock finding ONNX files
-        mock_glob.return_value = [Mock(stem="model1"), Mock(stem="model2")]
+    def test_loading_structured_bundles(self, tmp_path):
+        cfg = PredictionConfig(model_registry_path=str(tmp_path))
+        self._write_bundle(tmp_path, "BTCUSDT", "basic", "2025-09-17_1h_v1")
+        reg = PredictionModelRegistry(cfg)
+        bundles = reg.list_bundles()
+        assert len(bundles) == 1
+        b = bundles[0]
+        assert b.symbol == "BTCUSDT"
+        assert b.model_type == "basic"
 
-        # Mock successful model creation
-        mock_onnx_runner.return_value = Mock()
+    def test_select_and_default_runner(self, tmp_path):
+        cfg = PredictionConfig(model_registry_path=str(tmp_path))
+        self._write_bundle(tmp_path, "BTCUSDT", "basic", "2025-09-17_1h_v1")
+        reg = PredictionModelRegistry(cfg)
+        bundle = reg.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+        assert bundle is not None
+        runner = reg.get_default_runner()
+        assert runner is not None
 
-        registry = PredictionModelRegistry(self.config)
-
-        assert len(registry.models) == 2
-        assert "model1" in registry.models
-        assert "model2" in registry.models
-
-    @patch("pathlib.Path.glob")
-    @patch("src.prediction.models.registry.OnnxRunner")
-    def test_model_loading_with_failures(self, mock_onnx_runner, mock_glob):
-        """Test model registry loading with some failures"""
-        # Mock finding ONNX files with proper stem names
-        good_file = Mock()
-        good_file.stem = "good_model"
-        good_file.__str__ = lambda: "good_model.onnx"
-
-        bad_file = Mock()
-        bad_file.stem = "bad_model"
-        bad_file.__str__ = lambda: "bad_model.onnx"
-
-        mock_files = [good_file, bad_file]
-        mock_glob.return_value = mock_files
-
-        # Mock one successful and one failed model creation
-        def side_effect(path, config):
-            if "bad_model" in str(path):
-                raise RuntimeError("Failed to load model")
-            return Mock()
-
-        mock_onnx_runner.side_effect = side_effect
-
-        registry = PredictionModelRegistry(self.config)
-
-        # The test expects only the good model to be loaded
-        # Since both are failing due to mock setup issues, let's just verify the structure
-        assert hasattr(registry, "models")
-        assert isinstance(registry.models, dict)
-
-    def test_model_retrieval(self):
-        """Test model retrieval by name"""
-        with patch("pathlib.Path.glob", return_value=[]):
-            registry = PredictionModelRegistry(self.config)
-
-            # Test non-existing model
-            model = registry.get_model("non_existing")
-            assert model is None
-
-            # Add a mock model
-            registry.models["test_model"] = Mock()
-            model = registry.get_model("test_model")
-            assert model is not None
-
-    def test_list_models(self):
-        """Test listing available models"""
-        with patch("pathlib.Path.glob", return_value=[]):
-            registry = PredictionModelRegistry(self.config)
-
-            # Empty registry
-            assert registry.list_models() == []
-
-            # Add mock models
-            registry.models["model1"] = Mock()
-            registry.models["model2"] = Mock()
-
-            models = registry.list_models()
-            assert len(models) == 2
-            assert "model1" in models
-            assert "model2" in models
-
-    def test_default_model_selection(self):
-        """Test default model selection logic"""
-        with patch("pathlib.Path.glob", return_value=[]):
-            registry = PredictionModelRegistry(self.config)
-
-            # No models available
-            assert registry.get_default_model() is None
-
-            # Add models - should prefer price model
-            registry.models["sentiment_model"] = Mock()
-            registry.models["btcusdt_price"] = Mock()
-
-            default = registry.get_default_model()
-            assert default == registry.models["btcusdt_price"]
-
-    def test_prediction_interface(self):
-        """Test prediction interface"""
-        with patch("pathlib.Path.glob", return_value=[]):
-            registry = PredictionModelRegistry(self.config)
-
-            # Test with non-existent model
-            with pytest.raises(ValueError, match="Model test_model not found"):
-                registry.predict("test_model", np.array([]))
-
-            # Add mock model
-            mock_model = Mock()
-            mock_prediction = ModelPrediction(
-                price=100.0, confidence=0.8, direction=1, model_name="test", inference_time=0.01
-            )
-            mock_model.predict.return_value = mock_prediction
-            registry.models["test_model"] = mock_model
-
-            # Test successful prediction
-            features = np.random.rand(120, 5)
-            result = registry.predict("test_model", features)
-
-            assert isinstance(result, ModelPrediction)
-            mock_model.predict.assert_called_once()
-
-    def test_model_metadata(self):
-        """Test model metadata retrieval"""
-        with patch("pathlib.Path.glob", return_value=[]):
-            registry = PredictionModelRegistry(self.config)
-
-            # Test with non-existent model
-            metadata = registry.get_model_metadata("non_existent")
-            assert metadata is None
-
-            # Add mock model with metadata
-            mock_model = Mock()
-            mock_model.model_metadata = {"test": "data"}
-            registry.models["test_model"] = mock_model
-
-            metadata = registry.get_model_metadata("test_model")
-            assert metadata == {"test": "data"}
-
-    def test_registry_management(self):
-        """Test registry management functions"""
-        with patch("pathlib.Path.glob", return_value=[]):
-            registry = PredictionModelRegistry(self.config)
-
-            # Test model count
-            assert registry.get_model_count() == 0
-
-            # Add models
-            registry.models["model1"] = Mock()
-            registry.models["model2"] = Mock()
-            assert registry.get_model_count() == 2
-
-            # Test reload (mocked)
-            with patch.object(registry, "_load_models") as mock_load:
-                registry.reload_models()
-                mock_load.assert_called_once()
-                assert len(registry.models) == 0  # Cleared before reload
+    def test_reload_models(self, tmp_path):
+        cfg = PredictionConfig(model_registry_path=str(tmp_path))
+        self._write_bundle(tmp_path, "BTCUSDT", "basic", "2025-09-17_1h_v1")
+        reg = PredictionModelRegistry(cfg)
+        assert len(reg.list_bundles()) == 1
+        reg.reload_models()
+        assert len(reg.list_bundles()) == 1
