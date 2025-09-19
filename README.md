@@ -131,9 +131,11 @@ src/
   backtesting/       # Vectorised simulation engine
   config/            # Typed configuration loader + constants + feature flags  
   dashboards/        # Web-based monitoring and analysis dashboards
+  data/              # Data management and caching utilities
   data_providers/    # Market & sentiment providers (+ caching wrapper)
   database/          # SQLAlchemy models + DatabaseManager (PostgreSQL-only)
   database_manager/  # Flask-Admin UI for DB inspection
+  examples/          # Minimal runnable examples demonstrating core features
   indicators/        # Technical indicators (pure functions)
   live/              # Live trading engine
   ml/                # Trained models (.onnx/.keras) + metadata
@@ -144,7 +146,7 @@ src/
   prediction/        # Centralized model registry, ONNX runtime, caching
   regime/            # Market regime detection and analysis
   risk/              # Risk parameters and position sizing utilities
-  strategies/        # Built-in strategies (ML basic only)
+  strategies/        # Built-in strategies (ML basic, sentiment, adaptive, bull/bear)
   trading/           # Core trading interfaces and shared functionality
   utils/             # Shared utilities (paths, symbols, etc.)
 ```
@@ -196,7 +198,7 @@ See `docs/CONFIGURATION_SYSTEM_SUMMARY.md`.
 
 ## Deployment
 
-- Railway: see `docs/RAILWAY_QUICKSTART.md` and `docs/RAILWAY_DEPLOYMENT_GUIDE.md` (includes DB setup and app start commands)
+- Railway: see `docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md` for database setup
 
 ---
 

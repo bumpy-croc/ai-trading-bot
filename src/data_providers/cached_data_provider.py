@@ -173,7 +173,7 @@ class CachedDataProvider(DataProvider):
         ranges = []
         current = start
 
-        while current < end:
+        while current <= end:
             year = current.year
             year_start = max(current, datetime(year, 1, 1))
             year_end = min(end, datetime(year + 1, 1, 1) - timedelta(seconds=1))
