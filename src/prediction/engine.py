@@ -297,18 +297,61 @@ class PredictionEngine:
         If return_denormalized is True, applies rolling-window denormalization of close based on previous window.
         """
         self._validate_input_data(data)
-        # Extract features once
-        features_df = self.feature_pipeline.transform(data, use_cache=True)
-        original_columns = ["open", "high", "low", "close", "volume"]
-        feature_columns = [c for c in features_df.columns if c not in original_columns]
-        if not feature_columns:
-            raise FeatureExtractionError("No feature columns found for series prediction")
-        feat = features_df[feature_columns].values.astype(np.float32)
-        total = len(features_df)
+        # Extract features once and align to the target bundle's schema when available
+        try:
+            features_df_or_arr = self.feature_pipeline.transform(data, use_cache=True)
+        except Exception as exc:
+            raise FeatureExtractionError(f"Feature extraction failed: {exc}") from exc
+
+        bundle = self._resolve_bundle(model_name)
+        model = bundle.runner
+
+        features_df: Optional[pd.DataFrame]
+        if isinstance(features_df_or_arr, pd.DataFrame):
+            features_df = features_df_or_arr
+        else:
+            features_df = None
+
+        base_features: np.ndarray
+        if features_df is not None:
+            original_columns = ["open", "high", "low", "close", "volume"]
+            feature_columns = [
+                c for c in features_df.columns if c not in original_columns
+            ]
+            if not feature_columns and not bundle.feature_schema:
+                raise FeatureExtractionError(
+                    "No feature columns found for series prediction"
+                )
+            base_features = (
+                features_df[feature_columns].to_numpy(dtype=np.float32)
+                if feature_columns
+                else features_df.to_numpy(dtype=np.float32)
+            )
+        else:
+            base_features = np.asarray(features_df_or_arr, dtype=np.float32)
+
+        feat = base_features
+        schema_sequence_length: Optional[int] = None
+        if features_df is not None and bundle.feature_schema:
+            try:
+                aligned_matrix, schema_sequence_length = self._select_schema_features(
+                    bundle, features_df
+                )
+                feat = aligned_matrix.astype(np.float32, copy=False)
+            except Exception:
+                feat = base_features.astype(np.float32, copy=False)
+        else:
+            feat = base_features.astype(np.float32, copy=False)
+
+        total = int(feat.shape[0])
         seq = (
-            sequence_length_override or self.config.prediction_horizons[0]
-            if hasattr(self.config, "prediction_horizons")
-            else 120
+            sequence_length_override
+            or schema_sequence_length
+            or (
+                self.config.prediction_horizons[0]
+                if hasattr(self.config, "prediction_horizons")
+                else 120
+            )
         )
         # Fallback to 120 if missing
         if not isinstance(seq, int) or seq <= 0:
@@ -320,7 +363,6 @@ class PredictionEngine:
                 "normalized": not return_denormalized,
             }
 
-        model = self._get_model(model_name)
         session = model.session
         input_name = session.get_inputs()[0].name
 
@@ -350,6 +392,10 @@ class PredictionEngine:
             return {"indices": indices, "preds": preds_norm, "normalized": True}
 
         # Denormalize using rolling window on close based on previous seq bars
+        if features_df is None:
+            raise FeatureExtractionError(
+                "Denormalization requires feature pipeline to return a DataFrame"
+            )
         close = features_df["close"]
         min_prev = close.shift(1).rolling(window=seq).min().values
         max_prev = close.shift(1).rolling(window=seq).max().values
@@ -412,16 +458,43 @@ class PredictionEngine:
 
                 # Extract features
                 feature_start_time = time.time()
-                features = self._extract_features(data)
+                try:
+                    features_df_or_arr = self.feature_pipeline.transform(
+                        data, use_cache=True
+                    )
+                except Exception as exc:
+                    raise FeatureExtractionError(
+                        f"Feature extraction failed: {exc}"
+                    ) from exc
+
+                if isinstance(features_df_or_arr, pd.DataFrame):
+                    features_df = features_df_or_arr
+                    original_columns = ["open", "high", "low", "close", "volume"]
+                    feature_columns = [
+                        col for col in features_df.columns if col not in original_columns
+                    ]
+                    if not feature_columns and not bundle.feature_schema:
+                        raise FeatureExtractionError(
+                            "No feature columns found in pipeline output"
+                        )
+                    base_features = (
+                        features_df[feature_columns].to_numpy(dtype=np.float32)
+                        if feature_columns
+                        else features_df.to_numpy(dtype=np.float32)
+                    )
+                else:
+                    features_df = None
+                    base_features = np.asarray(features_df_or_arr, dtype=np.float32)
+
+                prepared_features = self._prepare_features_for_bundle(
+                    bundle, base_features, features_df
+                )
                 feature_time = time.time() - feature_start_time
                 # Track for averaging
                 self._total_feature_extraction_time += feature_time
                 self._feature_extraction_count += 1
 
                 # Make prediction with pre-loaded model
-                prepared_features = self._prepare_features_for_bundle(
-                    bundle, features, None
-                )
                 prediction = model.predict(prepared_features)
 
                 # Calculate total inference time
@@ -700,6 +773,43 @@ class PredictionEngine:
         except Exception as e:
             raise FeatureExtractionError(f"Feature extraction failed: {str(e)}") from e
 
+    def _select_schema_features(
+        self, bundle: StrategyModel, features_df: pd.DataFrame
+    ) -> tuple[np.ndarray, int]:
+        """Return all rows aligned to a bundle's schema with normalization applied."""
+
+        selector = FeatureSelector(
+            bundle.feature_schema,
+            sequence_length=bundle.feature_schema.get("sequence_length"),
+        )
+        columns: list[str] = []
+        normalizers: list[dict[str, float] | None] = []
+        for feature_cfg in selector.ordered_features:
+            name = feature_cfg.get("name")
+            if not name:
+                raise ValueError("Feature schema entry missing 'name'")
+            required = bool(feature_cfg.get("required", True))
+            if required and name not in features_df.columns:
+                raise ValueError(f"Required feature '{name}' missing in pipeline output")
+            if name in features_df.columns:
+                columns.append(name)
+                normalizers.append(feature_cfg.get("normalization"))
+
+        if not columns:
+            raise ValueError("No matching features found for selection")
+
+        matrix = features_df[columns].to_numpy(dtype=np.float32, copy=True)
+        for idx, norm in enumerate(normalizers):
+            if not norm:
+                continue
+            mean = float(norm.get("mean", 0.0))
+            std = float(norm.get("std", 1.0))
+            if std == 0.0:
+                std = 1e-8
+            matrix[:, idx] = (matrix[:, idx] - mean) / std
+
+        return matrix, selector.sequence_length
+
     def _prepare_features_for_bundle(
         self,
         bundle: StrategyModel,
@@ -710,14 +820,13 @@ class PredictionEngine:
 
         if bundle.feature_schema and features_df is not None:
             try:
-                selector = FeatureSelector(
-                    bundle.feature_schema,
-                    sequence_length=bundle.feature_schema.get("sequence_length"),
+                selected, sequence_length = self._select_schema_features(
+                    bundle, features_df
                 )
-                selected = selector.select(features_df).astype(np.float32, copy=False)
-                if selected.ndim == 2:
-                    return selected[None, :, :]
-                return selected
+                window = selected[-sequence_length:, :]
+                if window.ndim == 2:
+                    return window[None, :, :]
+                return window
             except Exception:
                 # Fall back to raw features if selection fails
                 pass
