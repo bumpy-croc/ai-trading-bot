@@ -1593,10 +1593,10 @@ class LiveTradingEngine:
             else:
                 pnl_pct = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
 
-            # Update balance using cash PnL
-            balance_before_close = self.current_balance
-            realized_pnl = cash_pnl(pnl_pct, balance_before_close)
-            self.current_balance += realized_pnl
+            # Update balance using sized percentage P&L (parity with backtester)
+            balance_before = self.current_balance
+            realized_pnl = cash_pnl(pnl_pct, balance_before)
+            self.current_balance = balance_before + realized_pnl
             self.total_pnl += realized_pnl
 
             # Update peak balance for drawdown tracking
@@ -1757,9 +1757,10 @@ class LiveTradingEngine:
             pnl_frac = pnl_percent(position.entry_price, price, Side.LONG, delta_fraction)
         else:
             pnl_frac = pnl_percent(position.entry_price, price, Side.SHORT, delta_fraction)
-        cash_pnl = pnl_frac * self.current_balance
-        self.current_balance += cash_pnl
-        self.total_pnl += cash_pnl
+        balance_before = self.current_balance
+        realized_cash = cash_pnl(pnl_frac, balance_before)
+        self.current_balance = balance_before + realized_cash
+        self.total_pnl += realized_cash
 
         # Risk manager: reduce exposure and daily risk
         if self.risk_manager:
