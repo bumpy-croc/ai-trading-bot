@@ -166,7 +166,26 @@ class MlSentiment(BaseStrategy):
             if self.use_prediction_engine and self.prediction_engine:
                 # Get prediction using the engine
                 prediction_data = df.iloc[index - self.sequence_length : index]
-                prediction_result = self.prediction_engine.predict(prediction_data)
+                engine_model_name: Optional[str] = None
+                if self._registry is not None:
+                    try:
+                        bundle = self._registry.select_bundle(
+                            symbol=self.trading_pair,
+                            model_type=self.model_type,
+                            timeframe=self.model_timeframe,
+                        )
+                        engine_model_name = bundle.key
+                    except Exception:
+                        engine_model_name = None
+                if engine_model_name is None:
+                    engine_model_name = self.model_name
+
+                if engine_model_name:
+                    prediction_result = self.prediction_engine.predict(
+                        prediction_data, model_name=engine_model_name
+                    )
+                else:
+                    prediction_result = self.prediction_engine.predict(prediction_data)
 
                 if prediction_result and not prediction_result.error:
                     prediction = getattr(prediction_result, "price", 0.0)

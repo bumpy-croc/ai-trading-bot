@@ -200,6 +200,7 @@ class MlBasic(BaseStrategy):
                 self.prediction_engine = None
 
         # If using prediction engine and structured registry is available, try to bind bundle session
+        selected_bundle_key: Optional[str] = None
         if use_prediction_engine and self._registry is not None:
             try:
                 bundle = self._registry.select_bundle(
@@ -207,12 +208,13 @@ class MlBasic(BaseStrategy):
                     model_type=self.model_type,
                     timeframe=self.model_timeframe,
                 )
+                selected_bundle_key = bundle.key
                 if getattr(bundle.runner, "session", None) is not None:
                     self.ort_session = bundle.runner.session
                     self.input_name = self.ort_session.get_inputs()[0].name
             except Exception:
-                # Fallback to legacy ONNX path
-                pass
+                # Fallback to legacy ONNX path while still attempting best-effort engine usage
+                selected_bundle_key = None
 
         for i in range(self.sequence_length, len(df)):
             # Prepare input features
@@ -229,20 +231,17 @@ class MlBasic(BaseStrategy):
                         i - self.sequence_length : i
                     ]
                     # Prefer registry selection by symbol/type/timeframe when available
+                    engine_model_name = selected_bundle_key or self.model_name
                     try:
-                        if self._registry is not None:
-                            # Select and enforce existence early (raises on missing)
-                            self._registry.select_bundle(
-                                symbol=self.trading_pair,
-                                model_type=self.model_type or "basic",
-                                timeframe=self.model_timeframe or "1h",
+                        if engine_model_name:
+                            result = self.prediction_engine.predict(
+                                window_df, model_name=engine_model_name
                             )
-                        result = self.prediction_engine.predict(window_df)
+                        else:
+                            result = self.prediction_engine.predict(window_df)
                     except Exception:
-                        # Fall back to explicit model_name if provided
-                        result = self.prediction_engine.predict(
-                            window_df, model_name=self.model_name
-                        )
+                        # Fall back to default registry resolution if explicit lookup fails
+                        result = self.prediction_engine.predict(window_df)
                     pred = float(result.price)
                 else:
                     # Fallback to legacy ONNX session; initialize lazily
