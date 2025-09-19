@@ -34,8 +34,13 @@ def setup_paper_trading():
     print("Data provider initialized")
 
     # Setup sentiment provider (optional)
-    print("Sentiment analysis not available - sentiment providers have been removed")
-    sentiment_provider = None
+    try:
+        from src.data_providers.sentiment_provider import SentimentProvider
+        sentiment_provider = SentimentProvider()
+        print("Sentiment provider initialized")
+    except ImportError:
+        print("Sentiment provider not available - continuing without sentiment analysis")
+        sentiment_provider = None
 
     # Risk parameters
     risk_params = RiskParameters(

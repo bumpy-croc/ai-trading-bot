@@ -34,10 +34,10 @@ live_sentiment = api_call()  # Fresh data from last 15 minutes
 
 ## 🔧 **Technical Implementation**
 
-### **1. Dual-Mode Sentiment Provider (REMOVED)**
+### **1. Dual-Mode Sentiment Provider**
 
 ```python
-# This class has been removed from the codebase
+# Available in src/data_providers/sentiment_provider.py
 class SentimentProvider:
     def __init__(self, live_mode=True, cache_duration_minutes=15):
         self.live_mode = live_mode  # Enable real-time API calls
