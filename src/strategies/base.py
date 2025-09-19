@@ -22,6 +22,10 @@ class BaseStrategy(ABC):
         # Default trading pair - strategies can override this
         self.trading_pair = "BTCUSDT"
 
+        # Optional model selection preferences for registry-based strategies
+        self.model_type: str | None = None
+        self.model_timeframe: str | None = None
+
         # Strategy execution logging
         self.db_manager = None
         self.session_id = None

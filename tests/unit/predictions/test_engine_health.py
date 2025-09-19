@@ -1,6 +1,7 @@
 """Tests covering health checks and validation in PredictionEngine."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -10,6 +11,29 @@ import pytest
 from src.prediction.config import PredictionConfig
 from src.prediction.engine import PredictionEngine
 from src.prediction.exceptions import InvalidInputError
+from src.prediction.models.registry import StrategyModel
+
+
+def _make_bundle(
+    runner: Mock,
+    *,
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1h",
+    model_type: str = "basic",
+    version: str = "v1",
+    metadata: dict | None = None,
+) -> StrategyModel:
+    return StrategyModel(
+        symbol=symbol,
+        timeframe=timeframe,
+        model_type=model_type,
+        version_id=version,
+        directory=Path(f"/tmp/{symbol}/{model_type}/{version}"),
+        metadata=metadata or {},
+        feature_schema=None,
+        metrics=None,
+        runner=runner,
+    )
 
 
 class TestPredictionEngineHealthCheck:
@@ -24,10 +48,12 @@ class TestPredictionEngineHealthCheck:
         mock_features = np.random.random((120, 10))
         engine.feature_pipeline.transform.return_value = mock_features
 
-        engine.model_registry.list_models.return_value = ["model1", "model2"]
-        mock_model = Mock()
-        mock_model.model_path = "/path/to/model.onnx"
-        engine.model_registry.get_default_model.return_value = mock_model
+        mock_runner = Mock()
+        mock_runner.model_path = "/path/to/model.onnx"
+        bundle_one = _make_bundle(mock_runner, metadata={"name": "model1"})
+        bundle_two = _make_bundle(Mock(), symbol="ETHUSDT", metadata={"name": "model2"})
+        engine.model_registry.list_bundles.return_value = [bundle_one, bundle_two]
+        engine.model_registry.get_default_bundle.return_value = bundle_one
 
         health = engine.health_check()
 
@@ -46,10 +72,11 @@ class TestPredictionEngineHealthCheck:
 
         engine.feature_pipeline.transform.side_effect = Exception("Feature pipeline error")
 
-        engine.model_registry.list_models.return_value = ["model1"]
-        mock_model = Mock()
-        mock_model.model_path = "/path/to/model.onnx"
-        engine.model_registry.get_default_model.return_value = mock_model
+        mock_runner = Mock()
+        mock_runner.model_path = "/path/to/model.onnx"
+        bundle = _make_bundle(mock_runner, metadata={"name": "model1"})
+        engine.model_registry.list_bundles.return_value = [bundle]
+        engine.model_registry.get_default_bundle.return_value = bundle
 
         health = engine.health_check()
 

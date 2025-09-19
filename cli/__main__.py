@@ -78,12 +78,16 @@ def build_parser() -> argparse.ArgumentParser:
         tests,
         train,
     )
+    from cli.commands import (
+        models as models_cmd,
+    )
     from cli.commands import scripts as scripts_cmd
 
     dashboards.register(subparsers)
     live.register(subparsers)
     backtest.register(subparsers)
     optimizer.register(subparsers)
+    models_cmd.register(subparsers)
     scripts_cmd.register(subparsers)
     live_health.register(subparsers)
     data.register(subparsers)

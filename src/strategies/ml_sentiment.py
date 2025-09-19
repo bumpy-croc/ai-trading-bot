@@ -32,6 +32,7 @@ from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.sentiment import SentimentFeatureExtractor
 from src.prediction.features.technical import TechnicalFeatureExtractor
+from src.prediction.models.registry import PredictionModelRegistry
 from src.strategies.base import BaseStrategy
 
 
@@ -55,16 +56,22 @@ class MlSentiment(BaseStrategy):
         sequence_length=120,
         use_prediction_engine: Optional[bool] = None,
         model_name: Optional[str] = None,
+        model_type: Optional[str] = None,
+        timeframe: Optional[str] = None,
     ):
         super().__init__(name)
 
         # Set strategy-specific trading pair - default to BTC, can be overridden
         self.trading_pair = "BTCUSDT"
+        # Registry model selection preferences
+        self.model_type = model_type or self.model_type or "sentiment"
+        self.model_timeframe = timeframe or self.model_timeframe or "1h"
 
         self.model_path = model_path
         self.sequence_length = sequence_length
-        self.ort_session = ort.InferenceSession(self.model_path)
-        self.input_name = self.ort_session.get_inputs()[0].name
+        # Lazy init ONNX session if not using engine/registry
+        self.ort_session = None
+        self.input_name = None
         self.stop_loss_pct = 0.02  # 2% stop loss
         self.take_profit_pct = 0.04  # 4% take profit
 
@@ -87,6 +94,7 @@ class MlSentiment(BaseStrategy):
                 self.model_name = None
         
         self.prediction_engine = None
+        self._registry: PredictionModelRegistry | None = None
         self._engine_warning_emitted = False
         self.use_engine_batch = get_config().get_bool("ENGINE_BATCH_INFERENCE", default=False)
 
@@ -114,13 +122,15 @@ class MlSentiment(BaseStrategy):
         # Initialize prediction engine if enabled
         if self.use_prediction_engine:
             try:
-                prediction_config = PredictionConfig(
-                    model_name=self.model_name,
-                    sequence_length=self.sequence_length,
-                    feature_pipeline=self.feature_pipeline,
-                )
+                prediction_config = PredictionConfig.from_config_manager()
                 self.prediction_engine = PredictionEngine(prediction_config)
-                self.logger.info(f"Initialized prediction engine with model: {self.model_name}")
+                # Use same pipeline
+                self.prediction_engine.feature_pipeline = self.feature_pipeline
+                try:
+                    self._registry = self.prediction_engine.model_registry
+                except Exception:
+                    self._registry = None
+                self.logger.info("Initialized prediction engine")
             except Exception as e:
                 if not self._engine_warning_emitted:
                     self.logger.warning(f"Failed to initialize prediction engine: {e}")
@@ -156,11 +166,30 @@ class MlSentiment(BaseStrategy):
             if self.use_prediction_engine and self.prediction_engine:
                 # Get prediction using the engine
                 prediction_data = df.iloc[index - self.sequence_length : index]
-                prediction_result = self.prediction_engine.predict(prediction_data)
-                
-                if prediction_result and 'prediction' in prediction_result:
-                    prediction = prediction_result['prediction']
-                    confidence = prediction_result.get('confidence', 0.5)
+                engine_model_name: Optional[str] = None
+                if self._registry is not None:
+                    try:
+                        bundle = self._registry.select_bundle(
+                            symbol=self.trading_pair,
+                            model_type=self.model_type,
+                            timeframe=self.model_timeframe,
+                        )
+                        engine_model_name = bundle.key
+                    except Exception:
+                        engine_model_name = None
+                if engine_model_name is None:
+                    engine_model_name = self.model_name
+
+                if engine_model_name:
+                    prediction_result = self.prediction_engine.predict(
+                        prediction_data, model_name=engine_model_name
+                    )
+                else:
+                    prediction_result = self.prediction_engine.predict(prediction_data)
+
+                if prediction_result and not prediction_result.error:
+                    prediction = getattr(prediction_result, "price", 0.0)
+                    confidence = getattr(prediction_result, "confidence", 0.5)
                     return float(prediction), float(confidence)
             
             # Fallback to direct ONNX inference
@@ -194,7 +223,10 @@ class MlSentiment(BaseStrategy):
             # Reshape for LSTM input (samples, timesteps, features)
             features_reshaped = features_normalized.reshape(1, self.sequence_length, -1)
             
-            # Get prediction
+            # Lazy init session
+            if self.ort_session is None:
+                self.ort_session = ort.InferenceSession(self.model_path)
+                self.input_name = self.ort_session.get_inputs()[0].name
             prediction = self.ort_session.run(None, {self.input_name: features_reshaped.astype(np.float32)})
             prediction_value = float(prediction[0][0][0])
             
