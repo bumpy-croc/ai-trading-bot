@@ -41,7 +41,7 @@ from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
 from src.live.strategy_manager import StrategyManager
-from src.performance.metrics import Side, pnl_percent
+from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
@@ -1588,14 +1588,14 @@ class LiveTradingEngine:
             # Calculate P&L based on CURRENT remaining size
             fraction = float(position.current_size if position.current_size is not None else position.size)
             if position.side == PositionSide.LONG:
-                pnl = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
             else:
-                pnl = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
 
-            # Update balance
-            position_value = fraction * self.current_balance
-            realized_pnl = position_value * pnl
-            self.current_balance += realized_pnl
+            # Update balance using sized percentage P&L (parity with backtester)
+            balance_before = self.current_balance
+            realized_pnl = cash_pnl(pnl_pct, balance_before)
+            self.current_balance = balance_before + realized_pnl
             self.total_pnl += realized_pnl
 
             # Update peak balance for drawdown tracking
@@ -1614,13 +1614,13 @@ class LiveTradingEngine:
                 exit_price=current_price,
                 entry_time=position.entry_time,
                 exit_time=datetime.now(),
-                pnl=pnl,
+                pnl=pnl_pct,
                 exit_reason=reason,
             )
 
             # Update statistics
             self.total_trades += 1
-            if pnl > 0:
+            if pnl_pct > 0:
                 self.winning_trades += 1
 
             # Log trade
@@ -1636,7 +1636,7 @@ class LiveTradingEngine:
                     entry_price=position.entry_price,
                     exit_price=current_price,
                     size=fraction,
-                    pnl=pnl,
+                    pnl=pnl_pct,
                     strategy_name=self.strategy.__class__.__name__,
                     exit_reason=reason,
                     entry_time=position.entry_time,
@@ -1667,7 +1667,7 @@ class LiveTradingEngine:
 
             logger.info(
                 f"📈 Closed {position.side.value} position for {position.symbol}: "
-                f"P&L={pnl:.2%}, Reason={reason}, "
+                f"P&L={pnl_pct:.2%}, Reason={reason}, "
                 f"Balance=${self.current_balance:,.2f}"
             )
             log_order_event(
@@ -1676,7 +1676,7 @@ class LiveTradingEngine:
                 symbol=position.symbol,
                 side=position.side.value,
                 exit_price=current_price,
-                pnl=pnl,
+                pnl=pnl_pct,
                 reason=reason,
             )
 
@@ -1754,9 +1754,10 @@ class LiveTradingEngine:
             pnl_frac = pnl_percent(position.entry_price, price, Side.LONG, delta_fraction)
         else:
             pnl_frac = pnl_percent(position.entry_price, price, Side.SHORT, delta_fraction)
-        cash_pnl = pnl_frac * self.current_balance
-        self.current_balance += cash_pnl
-        self.total_pnl += cash_pnl
+        balance_before = self.current_balance
+        realized_cash = cash_pnl(pnl_frac, balance_before)
+        self.current_balance = balance_before + realized_cash
+        self.total_pnl += realized_cash
 
         # Risk manager: reduce exposure and daily risk
         if self.risk_manager:
