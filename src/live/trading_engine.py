@@ -41,7 +41,7 @@ from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
 from src.live.strategy_manager import StrategyManager
-from src.performance.metrics import Side, pnl_percent
+from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
@@ -112,7 +112,8 @@ class Trade:
     entry_time: datetime
     exit_price: float | None = None
     exit_time: datetime | None = None
-    pnl: float | None = None
+    pnl: float | None = None  # Realized PnL in account currency
+    pnl_percent: float | None = None  # Sized percentage return (decimal, e.g. 0.02 = +2%)
     exit_reason: str | None = None
 
 
@@ -1588,13 +1589,13 @@ class LiveTradingEngine:
             # Calculate P&L based on CURRENT remaining size
             fraction = float(position.current_size if position.current_size is not None else position.size)
             if position.side == PositionSide.LONG:
-                pnl = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
             else:
-                pnl = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
 
-            # Update balance
-            position_value = fraction * self.current_balance
-            realized_pnl = position_value * pnl
+            # Update balance using cash PnL
+            balance_before_close = self.current_balance
+            realized_pnl = cash_pnl(pnl_pct, balance_before_close)
             self.current_balance += realized_pnl
             self.total_pnl += realized_pnl
 
@@ -1614,13 +1615,14 @@ class LiveTradingEngine:
                 exit_price=current_price,
                 entry_time=position.entry_time,
                 exit_time=datetime.now(),
-                pnl=pnl,
+                pnl=realized_pnl,
+                pnl_percent=pnl_pct,
                 exit_reason=reason,
             )
 
             # Update statistics
             self.total_trades += 1
-            if pnl > 0:
+            if realized_pnl > 0:
                 self.winning_trades += 1
 
             # Log trade
@@ -1636,7 +1638,7 @@ class LiveTradingEngine:
                     entry_price=position.entry_price,
                     exit_price=current_price,
                     size=fraction,
-                    pnl=pnl,
+                    pnl=realized_pnl,
                     strategy_name=self.strategy.__class__.__name__,
                     exit_reason=reason,
                     entry_time=position.entry_time,
@@ -1667,7 +1669,7 @@ class LiveTradingEngine:
 
             logger.info(
                 f"📈 Closed {position.side.value} position for {position.symbol}: "
-                f"P&L={pnl:.2%}, Reason={reason}, "
+                f"PnL=${realized_pnl:,.2f} ({pnl_pct:+.2%}), Reason={reason}, "
                 f"Balance=${self.current_balance:,.2f}"
             )
             log_order_event(
@@ -1676,7 +1678,8 @@ class LiveTradingEngine:
                 symbol=position.symbol,
                 side=position.side.value,
                 exit_price=current_price,
-                pnl=pnl,
+                pnl=realized_pnl,
+                pnl_percent=pnl_pct,
                 reason=reason,
             )
 
@@ -1994,6 +1997,7 @@ class LiveTradingEngine:
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
                 "pnl": trade.pnl,
+                "pnl_percent": trade.pnl_percent,
                 "exit_reason": trade.exit_reason,
                 "duration_minutes": (trade.exit_time - trade.entry_time).total_seconds() / 60,
             }

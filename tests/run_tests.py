@@ -378,6 +378,50 @@ def run_quick_smoke_test():
         RiskManager()
         print_success("Core objects can be instantiated")
 
+        # Validate live/backtest trade export units align (cash PnL)
+        from datetime import datetime, timedelta
+
+        from src.backtesting.models import Trade as BacktestTrade
+        from src.live.trading_engine import PositionSide, Trade as LiveTrade
+        from src.performance.metrics import Side, cash_pnl, pnl_percent
+
+        entry_price = 100.0
+        exit_price = 105.0
+        fraction = 0.2
+        account_balance = 10_000.0
+        pnl_pct = pnl_percent(entry_price, exit_price, Side.LONG, fraction)
+        expected_cash = cash_pnl(pnl_pct, account_balance)
+        now = datetime.utcnow()
+        live_trade = LiveTrade(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=fraction,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            entry_time=now - timedelta(hours=1),
+            exit_time=now,
+            pnl=expected_cash,
+            pnl_percent=pnl_pct,
+            exit_reason="smoke_validation",
+        )
+        backtest_trade = BacktestTrade(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=entry_price,
+            exit_price=exit_price,
+            entry_time=now - timedelta(hours=1),
+            exit_time=now,
+            size=fraction,
+            pnl=expected_cash,
+            exit_reason="smoke_validation",
+        )
+
+        if abs(live_trade.pnl - backtest_trade.pnl) > 1e-6:
+            print_error("PnL units mismatch between live and backtest trade exports")
+            return False
+
+        print_success("Live/backtest trade exports report PnL in matching cash units")
+
         return True
     except Exception as e:
         print_error(f"Smoke test failed: {e}")
