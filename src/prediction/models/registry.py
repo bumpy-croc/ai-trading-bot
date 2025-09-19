@@ -258,15 +258,19 @@ class PredictionModelRegistry:
 
     def invalidate_cache(self, model_name: Optional[str] = None) -> int:
         """
-        Invalidate cache entries for models.
-        
-        Args:
-            model_name: Specific model name to invalidate, or None for all models
-            
-        Returns:
-            Number of cache entries invalidated
+        Invalidate cache entries for the provided model or all models.
+
+        If a model name is supplied, only the matching entries are removed using
+        PredictionCacheManager.invalidate_model(). When *model_name* is None,
+        the entire cache is cleared. The underlying cache manager returns the
+        number of entries it removed, which we propagate back to callers so
+        they can act on the actual number of invalidations performed.
         """
+
         if not self.cache_manager:
             return 0
-        # Without legacy names, invalidate all predictions
-        return self.cache_manager.clear() or 0
+
+        if model_name:
+            return self.cache_manager.invalidate_model(model_name)
+
+        return self.cache_manager.clear()
