@@ -168,7 +168,23 @@ class PredictionEngine:
                 # Run all available structured runners for ensemble
                 preds = []
                 features_used = 0
-                for ensemble_bundle in self.model_registry.list_bundles():
+
+                target_symbol = bundle.symbol
+                target_timeframe = bundle.timeframe
+                target_model_type = bundle.model_type
+
+                ensemble_bundles = [
+                    b
+                    for b in self.model_registry.list_bundles()
+                    if b.symbol == target_symbol
+                    and b.timeframe == target_timeframe
+                    and b.model_type == target_model_type
+                ]
+
+                if not ensemble_bundles:
+                    ensemble_bundles = [bundle]
+
+                for ensemble_bundle in ensemble_bundles:
                     ensemble_features = self._prepare_features_for_bundle(
                         ensemble_bundle, features, features_df
                     )
