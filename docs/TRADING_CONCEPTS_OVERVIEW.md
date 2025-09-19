@@ -35,7 +35,8 @@ Our bot ingests multiple data flavours; combining them tends to outperform any s
    - **Volume-based**: OBV, VWAP – confirm strength.
 
 3. **Sentiment Data** – crowd mood signals.
-   - Source: Removed (sentiment providers have been removed).
+   - Source: Fear & Greed Index, news sentiment analysis
+   - Provider: `data_providers.sentiment_provider.SentimentProvider`
    - Derived features: sentiment momentum, volatility, extremes, moving averages.
 
 4. **Machine-Learning Models**
