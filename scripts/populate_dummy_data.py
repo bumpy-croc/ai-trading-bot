@@ -8,6 +8,7 @@ import logging
 import random
 import sys
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 # Add src to path for imports
 sys.path.insert(0, "src")
@@ -15,6 +16,7 @@ sys.path.insert(0, "src")
 from src.database.manager import DatabaseManager
 from src.database.models import (
     EventType,
+    PositionSide,
     PredictionPerformance,
     Trade,
     TradeSource,
@@ -170,6 +172,52 @@ class DummyDataPopulator:
                 logger.info(f"Created {i + 1} trades")
 
         logger.info(f"Successfully created {num_trades} trades")
+
+    def validate_trade_exports(self, session_ids: list[int]):
+        """Ensure live/backtest trade exports report cash PnL."""
+
+        logger.info("Validating trade export PnL units across live/backtest sessions...")
+        tolerance = Decimal("0.01")
+
+        with self.db_manager.get_session() as session:
+            for session_id in session_ids:
+                trades = (
+                    session.query(Trade)
+                    .filter(Trade.session_id == session_id)
+                    .all()
+                )
+
+                for trade in trades:
+                    if trade.source not in {TradeSource.LIVE, TradeSource.BACKTEST}:
+                        continue
+
+                    quantity = Decimal(trade.quantity or 0)
+                    if quantity == 0:
+                        continue
+
+                    entry_price = Decimal(trade.entry_price)
+                    exit_price = Decimal(trade.exit_price)
+                    commission = Decimal(trade.commission or 0)
+                    side = (
+                        trade.side.value
+                        if isinstance(trade.side, PositionSide)
+                        else str(trade.side)
+                    ).lower()
+
+                    if side == "long":
+                        expected_cash = (exit_price - entry_price) * quantity - commission
+                    else:
+                        expected_cash = (entry_price - exit_price) * quantity - commission
+
+                    actual_cash = Decimal(trade.pnl)
+
+                    if (expected_cash - actual_cash).copy_abs() > tolerance:
+                        raise ValueError(
+                            "PnL unit mismatch detected: expected cash value "
+                            f"{expected_cash} but saw {actual_cash} for session {session_id}"
+                        )
+
+        logger.info("Trade export validation passed: cash PnL stored for live/backtest trades")
 
     def populate_positions(self, session_ids: list, num_positions: int = 15):
         """Populate positions table with dummy data."""
@@ -543,6 +591,7 @@ class DummyDataPopulator:
 
             # Populate all tables
             self.populate_trades(session_ids, num_trades)
+            self.validate_trade_exports(session_ids)
             self.populate_positions(session_ids, 15)
             self.populate_account_history(session_ids, 50)
             self.populate_system_events(session_ids, 30)
