@@ -270,7 +270,45 @@ class PredictionModelRegistry:
         if not self.cache_manager:
             return 0
 
-        if model_name:
-            return self.cache_manager.invalidate_model(model_name)
+        # Invalidate entire cache when no specific model is provided
+        if model_name is None:
+            cleared = self.cache_manager.clear()
+            return cleared or 0
 
-        return self.cache_manager.clear()
+        # Attempt direct invalidation first (flat cache keys)
+        invalidated = self.cache_manager.invalidate_model(model_name) or 0
+        if invalidated:
+            return invalidated
+
+        # Map structured identifiers or aliases to underlying runner filenames
+        target_runner_names: set[str] = set()
+
+        for bundle in self.list_bundles():
+            candidate_names: set[str] = {
+                bundle.key,
+                f"{bundle.symbol}:{bundle.timeframe}:{bundle.model_type}",
+                bundle.version_id,
+            }
+
+            # Metadata may expose an explicit model_name
+            metadata_name = bundle.metadata.get("model_name")
+            if isinstance(metadata_name, str):
+                candidate_names.add(metadata_name)
+
+            # Runner path / filename also acts as an alias
+            runner_path = getattr(bundle.runner, "model_path", None)
+            runner_name: Optional[str] = None
+            if runner_path:
+                runner_path_str = str(runner_path)
+                candidate_names.add(runner_path_str)
+                runner_name = Path(runner_path_str).name
+                candidate_names.add(runner_name)
+
+            if model_name in candidate_names and runner_name:
+                target_runner_names.add(runner_name)
+
+        total_invalidated = 0
+        for runner_name in target_runner_names:
+            total_invalidated += self.cache_manager.invalidate_model(runner_name) or 0
+
+        return total_invalidated

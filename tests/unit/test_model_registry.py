@@ -60,3 +60,48 @@ def test_select_many_fail_fast(tmp_path: Path, monkeypatch):
         ])
 
 
+# ---- Cache invalidation tests ----
+
+
+from unittest.mock import MagicMock, call  # noqa: E402, isort:skip
+
+
+def test_invalidate_cache_maps_structured_name_to_runner(tmp_path: Path, monkeypatch):
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+
+    mock_cache_manager = MagicMock()
+    reg = PredictionModelRegistry(cfg, mock_cache_manager)
+
+    # First attempt returns 0 (not found), second returns 2 for runner name
+    mock_cache_manager.invalidate_model.side_effect = [0, 2]
+
+    invalidated = reg.invalidate_cache("BTCUSDT:1h:basic")
+
+    assert invalidated == 2
+    assert mock_cache_manager.invalidate_model.call_args_list == [
+        call("BTCUSDT:1h:basic"),
+        call("model.onnx"),
+    ]
+
+
+def test_invalidate_cache_clear_all(tmp_path: Path, monkeypatch):
+    reg_root = tmp_path / "models"
+    _make_bundle(reg_root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
+
+    cfg = PredictionConfig.from_config_manager()
+    monkeypatch.setattr(cfg, "model_registry_path", str(reg_root))
+
+    mock_cache_manager = MagicMock()
+    mock_cache_manager.clear.return_value = 5
+    reg = PredictionModelRegistry(cfg, mock_cache_manager)
+
+    invalidated = reg.invalidate_cache()
+
+    assert invalidated == 5
+    mock_cache_manager.clear.assert_called_once_with()
+
+
