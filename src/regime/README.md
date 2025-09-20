@@ -16,7 +16,7 @@ This module provides market regime detection capabilities to help strategies ada
 ## Usage
 
 ```python
-from regime import RegimeDetector
+from src.regime import RegimeDetector
 
 detector = RegimeDetector()
 regime = detector.detect_current_regime(price_data)

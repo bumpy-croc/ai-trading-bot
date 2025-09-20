@@ -12,8 +12,8 @@ Note: `sitecustomize.py` adds both project root and `src/` to `sys.path`, so imp
 
 ## Usage
 ```python
-from prediction.config import PredictionConfig
-from prediction.models.registry import PredictionModelRegistry
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
 import numpy as np
 
 config = PredictionConfig()
