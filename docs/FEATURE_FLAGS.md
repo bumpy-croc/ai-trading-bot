@@ -16,7 +16,10 @@ Flags can be boolean or string (for limited multi-choice scenarios). Constants r
 
 ```json
 {
-  "use_prediction_engine": false
+  "use_prediction_engine": true,
+  "enable_regime_detection": false,
+  "optimizer_canary_fraction": "0.1",
+  "optimizer_auto_apply": false
 }
 ```
 
