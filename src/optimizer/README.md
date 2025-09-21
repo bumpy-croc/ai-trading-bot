@@ -26,7 +26,7 @@ atb optimizer --strategy ml_basic --param-file custom_ranges.json
 ## Programmatic Usage
 
 ```python
-from optimizer import ParameterOptimizer
+from src.optimizer import ParameterOptimizer
 
 optimizer = ParameterOptimizer()
 best_params = optimizer.optimize_strategy("ml_basic", symbol="BTCUSDT")

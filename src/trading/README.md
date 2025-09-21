@@ -11,5 +11,5 @@ Core trading functionality and shared interfaces.
 This module provides the foundational trading abstractions used throughout the system.
 
 ```python
-from trading.shared import TradingInterface
+from src.trading.shared import TradingInterface
 ```

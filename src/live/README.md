@@ -16,9 +16,9 @@ atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading
 
 ## Programmatic
 ```python
-from live.trading_engine import LiveTradingEngine
-from strategies.ml_basic import MlBasic
-from data_providers.binance_provider import BinanceProvider
+from src.live.trading_engine import LiveTradingEngine
+from src.strategies.ml_basic import MlBasic
+from src.data_providers.binance_provider import BinanceProvider
 
 engine = LiveTradingEngine(strategy=MlBasic(), data_provider=BinanceProvider(), initial_balance=10000)
 engine.start("BTCUSDT", "1h")

@@ -47,7 +47,7 @@ EOF
 ```bash
 # Test that Binance connection works
 python -c "
-from data_providers.binance_provider import BinanceProvider
+from src.data_providers.binance_provider import BinanceProvider
 provider = BinanceProvider()
 price = provider.get_current_price('BTCUSDT')
 print(f'✅ Connection successful! BTC Price: ${price:,.2f}')
