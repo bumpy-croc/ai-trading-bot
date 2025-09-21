@@ -39,27 +39,38 @@ class MockDataProvider:
 
 class TestBacktestingDynamicRiskIntegration:
     """Integration tests for dynamic risk management in backtesting"""
-    
-    def test_backtester_with_dynamic_risk_disabled(self):
-        """Test backtester creation with dynamic risk disabled"""
+
+    def test_backtester_dynamic_risk_enabled_by_default(self):
+        """Dynamic risk should follow the live engine defaults."""
+        backtester = Backtester(
+            strategy=MockStrategy(),
+            data_provider=MockDataProvider(),
+            log_to_database=False
+        )
+
+        assert backtester.enable_dynamic_risk is True
+        assert backtester.dynamic_risk_manager is not None
+
+    def test_backtester_can_disable_dynamic_risk(self):
+        """Strategies can still opt out of dynamic risk sizing."""
         backtester = Backtester(
             strategy=MockStrategy(),
             data_provider=MockDataProvider(),
             enable_dynamic_risk=False,
             log_to_database=False
         )
-        
+
         assert backtester.enable_dynamic_risk is False
         assert backtester.dynamic_risk_manager is None
-    
+
     def test_backtester_with_dynamic_risk_enabled(self):
-        """Test backtester creation with dynamic risk enabled"""
+        """Test backtester creation with explicit dynamic risk configuration"""
         config = DynamicRiskConfig(
             enabled=True,
             drawdown_thresholds=[0.05, 0.10, 0.15],
             risk_reduction_factors=[0.8, 0.6, 0.4]
         )
-        
+
         backtester = Backtester(
             strategy=MockStrategy(),
             data_provider=MockDataProvider(),
@@ -67,7 +78,7 @@ class TestBacktestingDynamicRiskIntegration:
             dynamic_risk_config=config,
             log_to_database=False
         )
-        
+
         assert backtester.enable_dynamic_risk is True
         assert backtester.dynamic_risk_manager is not None
         assert backtester.dynamic_risk_manager.config.enabled is True
