@@ -32,7 +32,7 @@ api_key = os.getenv('BINANCE_API_KEY')
 
 **New way:**
 ```python
-from core.config import get_config
+from src.config import get_config
 
 config = get_config()
 api_key = config.get('BINANCE_API_KEY')
@@ -136,7 +136,7 @@ python your_script.py
 
 ## Need Help?
 
-- Run `python scripts/test_config_system.py` to debug
+- Use `pytest tests/unit/config/test_config_system.py -v` to test config functionality
 - Check logs for which configuration source is being used
 - Ensure your Railway project has correct environment variables for deployment
 

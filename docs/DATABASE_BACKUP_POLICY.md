@@ -67,7 +67,7 @@ BACKUP_RETENTION_DAYS  # Optional, default 7
 
 ## 3  Monitoring & Heartbeats
 
-• The script `scripts/heartbeat_job.py` is run every 5 minutes by the
+• The heartbeat functionality is available via `atb tests heartbeat` and is run every 5 minutes by the
   scheduler. It inserts a `SystemEvent` row of type `TEST` with the
   message "Heartbeat".
 

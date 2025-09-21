@@ -44,7 +44,7 @@ Emergency per-flag override:
 Use from `src/config/feature_flags.py`:
 
 ```python
-from config.feature_flags import is_enabled, get_flag
+from src.config.feature_flags import is_enabled, get_flag
 
 if is_enabled("use_prediction_engine", default=False):
     ...

@@ -329,7 +329,7 @@ Time-based exits provide guardrails to control holding time, overnight/weekend e
 
 ```python
 from datetime import time
-from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
+from src.position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
 
 us_equities = MarketSessionDef(
     name='US_EQUITIES',
