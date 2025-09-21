@@ -528,7 +528,7 @@ RiskManager updates exposure via:
 ### Example Usage
 
 ```python
-from position_management.partial_manager import PartialExitPolicy
+from src.position_management.partial_manager import PartialExitPolicy
 
 engine = LiveTradingEngine(
     strategy=strategy,
