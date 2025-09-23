@@ -6,12 +6,13 @@ A modular cryptocurrency trading system focused on long-term, risk-balanced tren
 
 ---
 
-## What’s inside
+## What's inside
 
 - Pluggable components: data providers, indicators, strategies, ML prediction engine, risk, backtesting, live engine, monitoring
 - PostgreSQL-only database with connection pooling and Alembic migrations
 - ONNX-based ML models with a central prediction engine
 - Real-time monitoring dashboard and an admin UI for database inspection
+- **Offline backtesting support** with pre-loaded cache for air-gapped environments
 
 ---
 
@@ -54,6 +55,9 @@ alembic upgrade head
 
 ```bash
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90
+
+# For offline/air-gapped environments, pre-load cache with historical data
+atb data preload-offline --years-back 10                        # Pre-load 10 years of data
 ```
 
 4) Monitoring dashboard
@@ -170,6 +174,11 @@ src/
 ## Documentation
 
 See `docs/README.md` for the full documentation index.
+
+**Key Guides:**
+- [Offline Cache Pre-loading](docs/OFFLINE_CACHE_PRELOADING.md) - Pre-load data for air-gapped environments
+- [Backtest Guide](docs/BACKTEST_GUIDE.md) - Comprehensive backtesting documentation
+- [Live Trading Guide](docs/LIVE_TRADING_GUIDE.md) - Live trading setup and configuration
 
 ---
 
