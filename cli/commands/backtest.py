@@ -95,8 +95,12 @@ def _handle(ns: argparse.Namespace) -> int:
         else:
             from src.data_providers.cached_data_provider import CachedDataProvider
 
-            data_provider = CachedDataProvider(provider, cache_ttl_hours=ns.cache_ttl)
-            logger.info(f"Using cached data provider (TTL: {ns.cache_ttl} hours)")
+            # Determine appropriate cache TTL based on provider state
+            from src.utils.cache_utils import get_cache_ttl_for_provider
+            
+            cache_ttl = get_cache_ttl_for_provider(provider, ns.cache_ttl)
+            data_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)
+            logger.info(f"Using cached data provider (TTL: {cache_ttl} hours)")
             cache_info = data_provider.get_cache_info()
             logger.info(
                 f"Cache info: {cache_info['total_files']} files, {cache_info['total_size_mb']} MB"

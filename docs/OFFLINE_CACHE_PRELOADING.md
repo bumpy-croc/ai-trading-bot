@@ -202,7 +202,7 @@ If backtests still fail with cache misses:
    atb data preload-offline --test-offline
    ```
 
-4. **Cache TTL issues**: The `preload-offline` command uses a 10-year TTL to treat cached data as permanently valid, avoiding expiration issues in offline environments.
+4. **Cache TTL issues**: The system automatically detects offline environments and uses a 10-year TTL, ensuring preloaded cached data remains valid. This happens automatically in backtests when Binance API is unavailable.
 
 ### Network Issues During Pre-loading
 
@@ -256,12 +256,17 @@ request_str = f"{symbol}_{timeframe}_{year}"
 cache_key = hashlib.sha256(request_str.encode()).hexdigest()
 ```
 
-### Offline Detection
+### Offline Detection and Automatic TTL Adjustment
 
 The system automatically detects offline mode when:
 - Binance API connection fails
-- Network proxy errors occur
+- Network proxy errors occur  
 - SSL/TLS handshake failures happen
+
+When offline mode is detected, commands automatically use an extended 10-year cache TTL instead of the default 24 hours. This ensures that:
+- Preloaded cache data remains valid indefinitely
+- Backtests work seamlessly without manual TTL configuration
+- No additional command-line flags are needed for offline operation
 
 ### Cache Validation
 
@@ -269,7 +274,7 @@ Cache files are considered valid if:
 - File exists and is readable
 - For historical years (< current year): Always valid
 - For current year: Valid if within TTL
-- **For offline preloading**: Uses extended TTL (10 years) to treat all cached data as permanently valid
+- **For offline environments**: Automatically uses extended TTL (10 years) when Binance API is unavailable, ensuring preloaded data remains accessible
 
 ### Data Format
 
