@@ -139,10 +139,10 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     import logging
     from datetime import datetime, timedelta
     from pathlib import Path
-    
+
     from tqdm import tqdm
-    
-    from src.config.paths import get_cache_dir, ensure_dir_exists
+
+    from src.config.paths import ensure_dir_exists, get_cache_dir
     from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
     from src.utils.logging_config import configure_logging
@@ -174,10 +174,15 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     symbols = _normalize_symbols(ns.symbols)
     timeframes = [tf.strip() for tf in ns.timeframes]
     
-    # Create providers
+    # Create providers with extended TTL for offline preloading
+    # Use very long TTL (10 years) to treat preloaded data as permanently valid
     try:
         binance_provider = BinanceProvider()
-        cached_provider = CachedDataProvider(binance_provider, cache_dir=cache_dir)
+        cached_provider = CachedDataProvider(
+            binance_provider, 
+            cache_dir=cache_dir,
+            cache_ttl_hours=87600  # 10 years = 10 * 365 * 24 hours
+        )
     except Exception as e:
         logger.error(f"Failed to initialize providers: {e}")
         return 1
@@ -272,8 +277,12 @@ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str
         offline_provider = BinanceProvider()
         offline_provider._client = offline_provider._create_offline_client()
         
-        # Wrap with cached provider
-        cached_provider = CachedDataProvider(offline_provider, cache_dir=cache_dir)
+        # Wrap with cached provider using extended TTL for offline testing
+        cached_provider = CachedDataProvider(
+            offline_provider, 
+            cache_dir=cache_dir,
+            cache_ttl_hours=87600  # 10 years = 10 * 365 * 24 hours
+        )
         
         # Try to fetch recent data (should come from cache)
         end_date = datetime.now()

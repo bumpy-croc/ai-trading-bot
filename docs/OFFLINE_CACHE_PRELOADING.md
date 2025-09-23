@@ -202,6 +202,8 @@ If backtests still fail with cache misses:
    atb data preload-offline --test-offline
    ```
 
+4. **Cache TTL issues**: The `preload-offline` command uses a 10-year TTL to treat cached data as permanently valid, avoiding expiration issues in offline environments.
+
 ### Network Issues During Pre-loading
 
 If pre-loading fails due to network issues:
@@ -266,7 +268,8 @@ The system automatically detects offline mode when:
 Cache files are considered valid if:
 - File exists and is readable
 - For historical years (< current year): Always valid
-- For current year: Valid if within TTL (default: 24 hours)
+- For current year: Valid if within TTL
+- **For offline preloading**: Uses extended TTL (10 years) to treat all cached data as permanently valid
 
 ### Data Format
 
