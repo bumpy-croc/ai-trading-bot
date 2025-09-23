@@ -253,12 +253,13 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     except Exception as e:
         logger.warning(f"Could not calculate cache size: {e}")
     
+    # Return appropriate exit code based on success/failure
     if successful_combinations == total_combinations:
         logger.info("✓ All data successfully pre-loaded!")
         return 0
     else:
         logger.warning(f"⚠ Some data failed to pre-load ({successful_combinations}/{total_combinations})")
-        return 1
+        return 1  # Return non-zero exit code to indicate partial failure
 
 
 def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str = "1h") -> bool:
