@@ -28,7 +28,7 @@ def test_backtester_time_exit_max_holding(mock_data_provider):
 
     # Exit after 1 hour
     policy = TimeExitPolicy(max_holding_hours=1)
-    bt = Backtester(strategy=strategy, data_provider=mock_data_provider, time_exit_policy=policy, enable_time_limit_exit=True)
+    bt = Backtester(strategy=strategy, data_provider=mock_data_provider, time_exit_policy=policy)
 
     results = bt.run("BTCUSDT", "1h", start=idx[0].to_pydatetime(), end=idx[-1].to_pydatetime())
 
@@ -66,7 +66,7 @@ def test_backtester_time_exit_end_of_day(mock_data_provider):
     mock_data_provider.get_historical_data.return_value = df
 
     strategy = MlBasic()
-    bt = Backtester(strategy=strategy, data_provider=mock_data_provider, time_exit_policy=policy, enable_time_limit_exit=True)
+    bt = Backtester(strategy=strategy, data_provider=mock_data_provider, time_exit_policy=policy)
 
     results = bt.run("BTCUSDT", "1h", start=idx[0].to_pydatetime(), end=idx[-1].to_pydatetime())
     assert isinstance(results, dict)

@@ -102,7 +102,6 @@ class Backtester:
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
         database_url: Optional[str] = None,
         log_to_database: Optional[bool] = None,
-        enable_time_limit_exit: bool = True,
         default_take_profit_pct: Optional[float] = None,
         legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
         enable_engine_risk_exits: bool = True,  # Mirror live engine protective exits
@@ -143,7 +142,6 @@ class Backtester:
             self.dynamic_risk_manager = DynamicRiskManager(final_config, db_manager=None)
 
         # Feature flags for parity tuning
-        self.enable_time_limit_exit = enable_time_limit_exit
         self.default_take_profit_pct = default_take_profit_pct
         self.legacy_stop_loss_indexing = legacy_stop_loss_indexing
         self.enable_engine_risk_exits = enable_engine_risk_exits
@@ -689,7 +687,7 @@ class Backtester:
                         else:
                             hit_take_profit = current_price <= float(self.current_trade.take_profit)
                     hit_time_limit = False
-                    if self.enable_time_limit_exit and self.time_exit_policy is not None:
+                    if self.time_exit_policy is not None:
                         try:
                             should_exit, _ = self.time_exit_policy.check_time_exit_conditions(
                                 self.current_trade.entry_time, current_time
