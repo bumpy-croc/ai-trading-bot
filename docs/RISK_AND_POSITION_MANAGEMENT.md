@@ -329,7 +329,7 @@ Time-based exits provide guardrails to control holding time, overnight/weekend e
 
 ```python
 from datetime import time
-from position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
+from src.position_management.time_exits import TimeExitPolicy, MarketSessionDef, TimeRestrictions
 
 us_equities = MarketSessionDef(
     name='US_EQUITIES',
@@ -528,7 +528,7 @@ RiskManager updates exposure via:
 ### Example Usage
 
 ```python
-from position_management.partial_manager import PartialExitPolicy
+from src.position_management.partial_manager import PartialExitPolicy
 
 engine = LiveTradingEngine(
     strategy=strategy,

@@ -171,7 +171,7 @@ python3 -c "
 import sys
 import os
 sys.path.insert(0, 'src')
-from database.manager import DatabaseManager
+from src.database.manager import DatabaseManager
 db = DatabaseManager()
 info = db.get_database_info()
 print(f'Database Type: PostgreSQL')

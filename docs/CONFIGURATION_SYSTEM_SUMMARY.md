@@ -59,7 +59,7 @@ The AI Trading Bot now features a secure, flexible configuration system that eli
 
 3. **Usage Pattern**
    ```python
-from config import get_config
+from src.config import get_config
 
 config = get_config()
 api_key = config.get_required('BINANCE_API_KEY')

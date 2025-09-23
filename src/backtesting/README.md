@@ -14,7 +14,7 @@ atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90
 
 ## Programmatic
 ```python
-from backtesting.engine import Backtester
+from src.backtesting.engine import Backtester
 
 results = Backtester(...).run(symbol="BTCUSDT", timeframe="1h", start=..., end=...)
 print(results["session_id"])  # if logging enabled

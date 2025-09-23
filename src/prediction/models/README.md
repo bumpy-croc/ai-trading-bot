@@ -10,8 +10,8 @@ Core prediction model components for ONNX runtime and model registry.
 ## Usage
 
 ```python
-from prediction.models.registry import PredictionModelRegistry
-from prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
+from src.prediction.config import PredictionConfig
 
 config = PredictionConfig()
 registry = PredictionModelRegistry(config)

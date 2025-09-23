@@ -7,7 +7,7 @@ Utilities for computing common performance metrics used across backtesting, live
 
 ## Usage
 ```python
-from performance.metrics import perf_sharpe, perf_max_drawdown
+from src.performance.metrics import perf_sharpe, perf_max_drawdown
 
 ratio = perf_sharpe(daily_balance_series)
 dd = perf_max_drawdown(daily_balance_series)

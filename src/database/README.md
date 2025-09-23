@@ -8,7 +8,7 @@ SQLAlchemy models and the PostgreSQL-only `DatabaseManager` used by backtesting,
 
 ## Usage
 ```python
-from database.manager import DatabaseManager
+from src.database.manager import DatabaseManager
 
 db = DatabaseManager()  # uses DATABASE_URL
 print(db.get_database_info())

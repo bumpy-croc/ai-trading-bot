@@ -15,7 +15,7 @@ This module handles position sizing, portfolio allocation, and position tracking
 ## Usage
 
 ```python
-from position_management import PositionManager
+from src.position_management import PositionManager
 
 pm = PositionManager()
 position_size = pm.calculate_position_size(balance, risk_level, price, atr)

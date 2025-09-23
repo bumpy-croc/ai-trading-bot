@@ -133,7 +133,7 @@ python scripts/verify_database_connection.py
 python3 -c "
 import sys, os
 sys.path.insert(0, 'src')
-from config.config_manager import get_config
+from src.config import get_config
 config = get_config()
 print(f'Database URL: {config.get(\"DATABASE_URL\") or \"PostgreSQL (local)\"}')
 "

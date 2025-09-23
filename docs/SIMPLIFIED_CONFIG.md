@@ -2,31 +2,42 @@
 
 ## Overview
 
-The configuration system has been streamlined to follow a simple approach:
-- **API keys only** in `.env` file
+The configuration system uses a multi-provider approach with priority-based fallback:
+- **Railway environment variables** (production deployment)
+- **Environment variables** (Docker/CI/local)
+- **`.env` file** (local development)
 - **Strategy parameters** defined directly in each strategy class
 - **Strategy-specific trading pairs** set in each strategy constructor
 
 ## Configuration Structure
 
-### 1. API Keys (`.env` file)
-Only API credentials are stored in environment variables:
+### 1. Configuration Providers (Priority Order)
+The system uses multiple configuration providers handled by `ConfigManager`:
+
+```python
+from src.config import get_config
+
+config = get_config()
+api_key = config.get_required('BINANCE_API_KEY')
+balance = config.get_int('INITIAL_BALANCE', 1000)
+```
+
+Available providers:
+1. **Railway Provider**: For Railway deployments 
+2. **Environment Variables**: For Docker/CI environments
+3. **DotEnv Provider**: For local development (`.env` file)
+
+### 2. Environment Variables
+Configuration can be set via environment variables or `.env` file:
 ```bash
 BINANCE_API_KEY=your_binance_api_key
 BINANCE_API_SECRET=your_binance_api_secret
-CRYPTO_COMPARE_API_KEY=your_crypto_compare_api_key
+DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
+TRADING_MODE=paper
+INITIAL_BALANCE=1000
 ```
 
-Components that need API keys load them directly:
-```python
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-api_key = os.getenv('BINANCE_API_KEY')
-```
-
-### 2. Strategy Parameters (In Strategy Classes)
+### 3. Strategy Parameters (In Strategy Classes)
 Each strategy defines its own parameters and trading pair:
 
 ```python
@@ -68,18 +79,20 @@ atb backtest ml_adaptive --symbol BTCUSDT --timeframe 4h --days 365
 
 ## Benefits
 
-1. **Simplicity**: No complex configuration management
-2. **Clarity**: Parameters are clearly defined in each strategy
-3. **Flexibility**: Easy to modify strategy parameters during development
-4. **Security**: Only sensitive API keys are in environment variables
-5. **Strategy-Specific Trading Pairs**: Different strategies can focus on different assets
+1. **Provider Flexibility**: Multiple configuration sources with automatic fallback
+2. **Security**: Environment variable priority for production secrets
+3. **Local Development**: Easy `.env` file support for development
+4. **Type Safety**: Built-in type conversion and validation in ConfigManager
+5. **Railway Integration**: Seamless deployment with Railway environment variables
+6. **Strategy-Specific Trading Pairs**: Different strategies can focus on different assets
 
 ## Files Modified
 
+- **ADDED**: `src/config/config_manager.py` - Centralized configuration management
+- **ADDED**: `src/config/providers/` - Modular configuration providers
 - **UPDATED**: All strategy files - Added trading pair definitions
 - **UPDATED**: CLI tool `atb` - Uses strategy-specific trading pairs
-- **UPDATED**: Data providers - Load API keys directly from environment
-- **REMOVED**: Old `config.py` and `config/settings.py` files - No longer needed
+- **UPDATED**: Data providers - Use ConfigManager for API keys
 
 ## Adding New Strategies
 

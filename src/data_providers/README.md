@@ -10,8 +10,8 @@ Abstractions and implementations for market and sentiment data.
 
 ## Usage
 ```python
-from data_providers.binance_provider import BinanceProvider
-from data_providers.cached_data_provider import CachedDataProvider
+from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.cached_data_provider import CachedDataProvider
 
 provider = CachedDataProvider(BinanceProvider(), cache_ttl_hours=24)
 df = provider.get_historical_data(symbol="BTCUSDT", timeframe="1h", start=..., end=...)

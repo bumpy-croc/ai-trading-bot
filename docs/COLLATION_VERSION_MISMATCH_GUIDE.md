@@ -144,12 +144,15 @@ Create a `railway.json` file to specify PostgreSQL version:
 ```json
 {
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "dockerfile"
   },
   "deploy": {
-    "startCommand": "python -m ai_trading_bot",
+    "preDeployCommand": "atb db verify --apply-migrations",
+    "startCommand": "atb live-health ml_basic",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 10,
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
+    "restartPolicyMaxRetries": 3
   },
   "databases": [
     {

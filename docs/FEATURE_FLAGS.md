@@ -16,7 +16,10 @@ Flags can be boolean or string (for limited multi-choice scenarios). Constants r
 
 ```json
 {
-  "use_prediction_engine": false
+  "use_prediction_engine": true,
+  "enable_regime_detection": false,
+  "optimizer_canary_fraction": "0.1",
+  "optimizer_auto_apply": false
 }
 ```
 
@@ -41,7 +44,7 @@ Emergency per-flag override:
 Use from `src/config/feature_flags.py`:
 
 ```python
-from config.feature_flags import is_enabled, get_flag
+from src.config.feature_flags import is_enabled, get_flag
 
 if is_enabled("use_prediction_engine", default=False):
     ...

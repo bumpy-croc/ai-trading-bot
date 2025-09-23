@@ -210,8 +210,8 @@ For account synchronization, your Binance API key needs:
 ### **Manual Synchronization**
 
 ```python
-from data_providers.binance_provider import BinanceProvider
-from database.manager import DatabaseManager
+from src.data_providers.binance_provider import BinanceProvider
+from src.database.manager import DatabaseManager
 from src.live.account_sync import AccountSynchronizer
 
 # Initialize components

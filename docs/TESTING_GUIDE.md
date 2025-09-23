@@ -31,13 +31,33 @@ Our testing strategy prioritizes components based on risk to capital and system 
 tests/
 ├── __init__.py                 # Test package
 ├── conftest.py                 # Shared fixtures and configuration
-├── test_live_trading.py        # Live trading engine tests (CRITICAL)
-├── test_risk_management.py     # Risk management tests (CRITICAL)
-├── test_strategies.py          # Strategy testing
-├── test_data_providers.py      # Data provider tests
-├── test_strategy_manager.py    # Hot-swapping tests
-├── test_account_sync.py        # Account synchronization tests
-└── test_integration.py         # End-to-end tests
+├── README.md                   # Testing documentation
+├── run_tests.py                # Test runner script
+├── performance_benchmark.py    # Performance testing
+├── data/                       # Test data files
+├── mocks/                      # Mock implementations
+├── unit/                       # Unit tests organized by module
+│   ├── backtesting/           # Backtesting unit tests
+│   ├── config/                # Configuration unit tests
+│   ├── data_providers/        # Data provider unit tests
+│   ├── database/              # Database unit tests
+│   ├── indicators/            # Indicator unit tests
+│   ├── live/                  # Live trading unit tests
+│   ├── optimizer/             # Optimizer unit tests
+│   ├── performance/           # Performance unit tests
+│   ├── position_management/   # Position management unit tests
+│   ├── predictions/           # ML prediction unit tests
+│   ├── regime/                # Regime detection unit tests
+│   ├── risk/                  # Risk management unit tests (CRITICAL)
+│   ├── strategies/            # Strategy unit tests
+│   └── trading/               # Trading core unit tests
+└── integration/               # Integration tests
+    ├── backtesting/           # Backtesting integration tests
+    ├── contracts/             # Contract testing
+    ├── live/                  # Live trading integration tests
+    ├── live_trading/          # Live trading engine tests (CRITICAL)
+    ├── monitoring/            # Monitoring dashboard tests
+    └── predictions/           # ML prediction integration tests
 ```
 
 ### Test Infrastructure Best Practices
@@ -86,26 +106,32 @@ pip install -r requirements.txt  # or requirements-server.txt for CI
 pytest
 
 # Run with coverage
-pytest --cov=ai-trading-bot --cov-report=html
+pytest --cov=src --cov-report=html
 
 # Run specific test categories
 pytest -m live_trading          # Live trading tests only
 pytest -m risk_management       # Risk management tests only
+pytest -m integration           # Integration tests only
 pytest -m "not integration"     # Skip slower integration tests
+pytest -m unit                  # Unit tests only
 
-# Run specific test files
-pytest tests/test_live_trading.py
-pytest tests/test_risk_management.py
-pytest tests/test_account_sync.py
+# Run specific test directories
+pytest tests/unit/live/          # Live trading unit tests
+pytest tests/unit/risk/          # Risk management unit tests
+pytest tests/integration/live_trading/  # Live trading integration tests
 
-# Run account sync tests with coverage
-pytest tests/test_account_sync.py --cov=src.live.account_sync --cov-report=term
+# Run with coverage for specific modules
+pytest tests/unit/live/ --cov=src.live --cov-report=term
+pytest tests/unit/risk/ --cov=src.risk --cov-report=term
 
 # Run with verbose output
 pytest -v
 
 # Run with detailed output for failures
 pytest -vvv --tb=short
+
+# Quick test run (fast tests only)
+pytest -q
 ```
 
 ### Development Testing
