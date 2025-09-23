@@ -26,7 +26,16 @@ from src.backtesting.utils import (
     extract_sentiment_data as util_extract_sentiment,
 )
 from src.config.config_manager import get_config
-from src.config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_MFE_MAE_PRECISION_DECIMALS
+from src.config.constants import (
+    DEFAULT_DYNAMIC_RISK_ENABLED,
+    DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_INITIAL_BALANCE,
+    DEFAULT_MARKET_TIMEZONE,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
+)
 from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
@@ -36,7 +45,7 @@ from src.position_management.correlation_engine import CorrelationConfig, Correl
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
 from src.position_management.partial_manager import PositionState
-from src.position_management.time_exits import TimeExitPolicy
+from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager
@@ -93,13 +102,12 @@ class Backtester:
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
         database_url: Optional[str] = None,
         log_to_database: Optional[bool] = None,
-        enable_time_limit_exit: bool = False,
         default_take_profit_pct: Optional[float] = None,
         legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
-        enable_engine_risk_exits: bool = False,  # Enforce engine-level SL/TP exits (off to preserve baseline)
+        enable_engine_risk_exits: bool = True,  # Mirror live engine protective exits
         time_exit_policy: TimeExitPolicy | None = None,
         # Dynamic risk management
-        enable_dynamic_risk: bool = False,  # Disabled by default for backtesting to preserve historical results
+        enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
         dynamic_risk_config: Optional[DynamicRiskConfig] = None,
         # Trailing stops
         trailing_stop_policy: Optional[TrailingStopPolicy] = None,
@@ -116,8 +124,11 @@ class Backtester:
         self.trades: list[dict] = []
         self.current_trade: Optional[ActiveTrade] = None
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
+        self._custom_trailing_stop_policy = trailing_stop_policy is not None
         self.trailing_stop_policy = trailing_stop_policy
         self.partial_manager = partial_manager
+        self.time_exit_policy: TimeExitPolicy | None = time_exit_policy
+        self._custom_time_exit_policy = time_exit_policy is not None
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -131,7 +142,6 @@ class Backtester:
             self.dynamic_risk_manager = DynamicRiskManager(final_config, db_manager=None)
 
         # Feature flags for parity tuning
-        self.enable_time_limit_exit = enable_time_limit_exit
         self.default_take_profit_pct = default_take_profit_pct
         self.legacy_stop_loss_indexing = legacy_stop_loss_indexing
         self.enable_engine_risk_exits = enable_engine_risk_exits
@@ -141,6 +151,10 @@ class Backtester:
 
         # Risk manager (parity with live engine)
         self.risk_manager = RiskManager(risk_parameters)
+        if not self._custom_trailing_stop_policy:
+            self.trailing_stop_policy = self._build_trailing_policy()
+        if not self._custom_time_exit_policy:
+            self.time_exit_policy = self._build_time_exit_policy()
         # Correlation engine (for correlation-aware backtests)
         try:
             corr_cfg = CorrelationConfig(
@@ -244,6 +258,100 @@ class Backtester:
         except Exception as e:
             print(f"Failed to merge strategy dynamic risk overrides: {e}")
             return base_config
+
+    def _build_trailing_policy(self) -> TrailingStopPolicy | None:
+        """Construct trailing stop policy to align with live engine defaults."""
+        try:
+            overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, "get_risk_overrides") else None
+        except Exception:
+            overrides = None
+
+        cfg = None
+        if overrides and isinstance(overrides, dict):
+            cfg = overrides.get("trailing_stop")
+
+        params = getattr(self.risk_manager, "params", None)
+        if cfg or params:
+            activation = (cfg.get("activation_threshold") if cfg else None) or (
+                params.trailing_activation_threshold if params else None
+            )
+            dist_pct = cfg.get("trailing_distance_pct") if cfg else None
+            atr_mult = cfg.get("trailing_distance_atr_mult") if cfg else None
+            if atr_mult is None and params is not None:
+                atr_mult = params.trailing_atr_multiplier
+            breakeven_threshold = (cfg.get("breakeven_threshold") if cfg else None) or (
+                params.breakeven_threshold if params else None
+            )
+            breakeven_buffer = (cfg.get("breakeven_buffer") if cfg else None) or (
+                params.breakeven_buffer if params else None
+            )
+
+            params_has_distance = bool(
+                params
+                and (
+                    params.trailing_distance_pct is not None
+                    or params.trailing_atr_multiplier is not None
+                )
+            )
+
+            if activation and (dist_pct is not None or atr_mult is not None or params_has_distance):
+                return TrailingStopPolicy(
+                    activation_threshold=float(activation),
+                    trailing_distance_pct=float(dist_pct)
+                    if dist_pct is not None
+                    else (
+                        float(params.trailing_distance_pct)
+                        if params and params.trailing_distance_pct is not None
+                        else None
+                    ),
+                    atr_multiplier=float(atr_mult) if atr_mult is not None else None,
+                    breakeven_threshold=float(breakeven_threshold)
+                    if breakeven_threshold is not None
+                    else 0.02,
+                    breakeven_buffer=float(breakeven_buffer)
+                    if breakeven_buffer is not None
+                    else 0.001,
+                )
+
+        return None
+
+    def _build_time_exit_policy(self) -> TimeExitPolicy | None:
+        """Construct time exit policy from overrides or risk parameters."""
+        try:
+            overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, "get_risk_overrides") else None
+        except Exception:
+            overrides = None
+
+        time_cfg = None
+        if overrides and isinstance(overrides, dict):
+            time_cfg = overrides.get("time_exits")
+
+        if not time_cfg and self.risk_manager and getattr(self.risk_manager, "params", None):
+            time_cfg = getattr(self.risk_manager.params, "time_exits", None)
+
+        if not time_cfg:
+            return None
+
+        try:
+            restrictions_cfg = time_cfg.get("time_restrictions") if isinstance(time_cfg, dict) else None
+            if restrictions_cfg is None:
+                restrictions_cfg = DEFAULT_TIME_RESTRICTIONS
+
+            restrictions = TimeRestrictions(
+                no_overnight=bool(restrictions_cfg.get("no_overnight", False)),
+                no_weekend=bool(restrictions_cfg.get("no_weekend", False)),
+                trading_hours_only=bool(restrictions_cfg.get("trading_hours_only", False)),
+            )
+
+            return TimeExitPolicy(
+                max_holding_hours=time_cfg.get("max_holding_hours", DEFAULT_MAX_HOLDING_HOURS),
+                end_of_day_flat=time_cfg.get("end_of_day_flat", DEFAULT_END_OF_DAY_FLAT),
+                weekend_flat=time_cfg.get("weekend_flat", DEFAULT_WEEKEND_FLAT),
+                market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
+                time_restrictions=restrictions,
+            )
+        except Exception:
+            return None
 
     def _get_dynamic_risk_adjusted_size(self, original_size: float, current_time: datetime) -> float:
         """Apply dynamic risk adjustments to position size in backtesting"""
@@ -579,19 +687,14 @@ class Backtester:
                         else:
                             hit_take_profit = current_price <= float(self.current_trade.take_profit)
                     hit_time_limit = False
-                    if self.enable_time_limit_exit:
-                        if self.time_exit_policy is not None:
-                            try:
-                                should_exit, _ = self.time_exit_policy.check_time_exit_conditions(
-                                    self.current_trade.entry_time, current_time
-                                )
-                                hit_time_limit = should_exit
-                            except Exception:
-                                hit_time_limit = False
-                        else:
-                            hit_time_limit = (
-                                (current_time - self.current_trade.entry_time).total_seconds() > 86400
+                    if self.time_exit_policy is not None:
+                        try:
+                            should_exit, _ = self.time_exit_policy.check_time_exit_conditions(
+                                self.current_trade.entry_time, current_time
                             )
+                            hit_time_limit = should_exit
+                        except Exception:
+                            hit_time_limit = False
 
                     should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_limit
                     exit_reason = (
