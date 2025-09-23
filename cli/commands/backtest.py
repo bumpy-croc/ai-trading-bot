@@ -44,8 +44,16 @@ def _load_strategy(strategy_name: str):
             from src.strategies.ml_adaptive import MlAdaptive
 
             return MlAdaptive()
+        if strategy_name == "ensemble_weighted":
+            from src.strategies.ensemble_weighted import EnsembleWeighted
+
+            return EnsembleWeighted()
+        if strategy_name == "ensemble_adaptive":
+            from src.strategies.ensemble_adaptive import EnsembleAdaptive
+
+            return EnsembleAdaptive()
         print(f"Unknown strategy: {strategy_name}")
-        print("Available strategies: ml_basic, ml_sentiment, ml_adaptive, bear, bull")
+        print("Available strategies: ml_basic, ml_sentiment, ml_adaptive, bear, bull, ensemble_weighted, ensemble_adaptive")
         raise SystemExit(1)
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")
