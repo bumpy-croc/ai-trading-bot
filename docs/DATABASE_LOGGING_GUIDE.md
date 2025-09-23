@@ -60,7 +60,7 @@ export DATABASE_URL="postgresql://username:password@localhost:5432/ai-trading-bo
 Or pass it directly when initializing:
 
 ```python
-from database.manager import DatabaseManager
+from src.database.manager import DatabaseManager
 
 db_manager = DatabaseManager("postgresql://username:password@localhost:5432/ai-trading-bot")
 ```
@@ -70,9 +70,9 @@ db_manager = DatabaseManager("postgresql://username:password@localhost:5432/ai-t
 ### Live Trading with Database Logging
 
 ```python
-from live.trading_engine import LiveTradingEngine
-from strategies.ml_basic import MlBasic
-from core.data_providers.binance_provider import BinanceProvider
+from src.live.trading_engine import LiveTradingEngine
+from src.strategies.ml_basic import MlBasic
+from src.data_providers.binance_provider import BinanceProvider
 
 # Strategy and data provider setup
 strategy = MlBasic()
@@ -94,7 +94,7 @@ engine.start("BTCUSDT", "1h")
 ### Backtesting with Database Logging
 
 ```python
-from backtesting.engine import Backtester
+from src.backtesting.engine import Backtester
 from datetime import datetime, timedelta
 
 # Create backtester with database logging
@@ -119,7 +119,7 @@ print(f"Session ID: {results['session_id']}")
 ### Querying Performance Data
 
 ```python
-from database.manager import DatabaseManager
+from src.database.manager import DatabaseManager
 
 db_manager = DatabaseManager()
 
