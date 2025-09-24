@@ -26,5 +26,7 @@ mcp.json
 # Distribution / packaging
 *.egg-info/
 
-# Cache directory (market data cache files)
-cache/
+# Cache directory - only allow market_data subdirectory
+cache/*
+!cache/market_data/
+!cache/market_data/*.pkl
