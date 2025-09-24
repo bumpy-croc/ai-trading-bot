@@ -111,7 +111,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             )
 
     def _initialize_client(self):
-        """Initialize Binance client with error handling"""
+        """Initialize Binance client with geo-aware API selection and error handling"""
         logger.debug(f"_initialize_client called - BINANCE_AVAILABLE: {BINANCE_AVAILABLE}")
         
         if not BINANCE_AVAILABLE:
@@ -119,19 +119,35 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self._client = self._create_offline_client()
             return
 
+        # Determine which Binance API to use based on location
+        api_endpoint = get_binance_api_endpoint()
+        is_us = is_us_location()
+        
+        logger.info(f"Geo-detection result: {'US location' if is_us else 'Non-US location'} - using {api_endpoint} API")
+
         try:
-            logger.debug(f"Attempting to create Binance client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}")
+            logger.debug(f"Attempting to create {api_endpoint} client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}")
             
-            # Direct client creation (works well with gevent, standard environments)
+            # Create client with appropriate API endpoint
             if self.api_key and self.api_secret:
-                logger.debug("Creating authenticated Binance client...")
-                self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
+                logger.debug(f"Creating authenticated {api_endpoint} client...")
+                if api_endpoint == "binanceus":
+                    # For Binance US, use tld='us' parameter
+                    self._client = Client(self.api_key, self.api_secret, testnet=self.testnet, tld='us')
+                else:
+                    # For global Binance
+                    self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
             else:
-                logger.debug("Creating public Binance client...")
-                self._client = Client()
+                logger.debug(f"Creating public {api_endpoint} client...")
+                if api_endpoint == "binanceus":
+                    # For Binance US public client
+                    self._client = Client(tld='us')
+                else:
+                    # For global Binance public client
+                    self._client = Client()
             
             logger.info(
-                f"Binance client initialized successfully "
+                f"{api_endpoint.title()} client initialized successfully "
                 f"({'with credentials' if self.api_key and self.api_secret else 'public mode'}, "
                 f"testnet: {self.testnet})"
             )
@@ -147,7 +163,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             # Log detailed error information (never log credentials)
             logger.error(
-                f"Binance Client initialization failed with {error_type}: {error_msg}. "
+                f"{api_endpoint.title()} Client initialization failed with {error_type}: {error_msg}. "
                 f"Credentials available: {bool(self.api_key and self.api_secret)}, "
                 f"Testnet mode: {self.testnet}. "
                 f"Falling back to offline stub."
