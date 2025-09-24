@@ -507,13 +507,15 @@ class TestDynamicRiskManagerExtendedEdgeCases:
         # Mock database to return None
         self.db_manager.get_dynamic_risk_performance_metrics.return_value = None
         
+        # The implementation has exception handling that catches TypeError
+        # and continues with empty metrics, so it should handle None gracefully
         adjustments = self.manager.calculate_dynamic_risk_adjustments(
             current_balance=10000,
             peak_balance=10000,
             session_id=1
         )
         
-        # Should handle None gracefully
+        # Should handle None gracefully due to exception handling
         assert isinstance(adjustments, RiskAdjustments)
 
     def test_database_connection_error(self):
@@ -562,6 +564,13 @@ class TestDynamicRiskManagerExtendedEdgeCases:
 
     def test_invalid_session_id_type(self):
         """Test with invalid session ID type."""
+        # Mock database to return valid metrics dict to avoid TypeError
+        self.db_manager.get_dynamic_risk_performance_metrics.return_value = {
+            "total_trades": 20,
+            "win_rate": 0.5,
+            "profit_factor": 1.0
+        }
+        
         adjustments = self.manager.calculate_dynamic_risk_adjustments(
             current_balance=10000,
             peak_balance=10000,
@@ -738,6 +747,13 @@ class TestDynamicRiskManagerExtendedEdgeCases:
         """Test behavior under simulated concurrent access."""
         # This is a basic test since we can't easily simulate true concurrency
         # but we can test that the manager handles rapid successive calls
+        
+        # Mock database to return valid metrics dict to avoid TypeError
+        self.db_manager.get_dynamic_risk_performance_metrics.return_value = {
+            "total_trades": 20,
+            "win_rate": 0.5,
+            "profit_factor": 1.0
+        }
         
         results = []
         for i in range(100):
