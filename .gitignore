@@ -27,4 +27,3 @@ mcp.json
 *.egg-info/
 
 # Cache directory (market data cache files)
-cache/
