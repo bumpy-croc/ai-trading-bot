@@ -48,6 +48,9 @@ except ImportError:
     SIDE_SELL = "SELL"
     BINANCE_AVAILABLE = False
 
+# Import geo-detection utilities
+from src.utils.geo_detection import get_binance_api_endpoint, is_us_location
+
 
 class BinanceProvider(DataProvider, ExchangeInterface):
     """
