@@ -5,7 +5,6 @@ from .ml_adaptive import MlAdaptive
 from .ml_basic import MlBasic
 from .ml_sentiment import MlSentiment
 from .test_high_frequency import TestHighFrequencyStrategy
-from .ensemble_adaptive import EnsembleAdaptive
 from .ensemble_weighted import EnsembleWeighted
 
 __all__ = [
@@ -16,6 +15,5 @@ __all__ = [
     "TestHighFrequencyStrategy",
     "BearStrategy",
     "Bull",
-    "EnsembleAdaptive",
     "EnsembleWeighted",
 ]
