@@ -48,8 +48,12 @@ def _load_strategy(strategy_name: str):
             from src.strategies.ensemble_weighted import EnsembleWeighted
 
             return EnsembleWeighted()
+        if strategy_name == "momentum_leverage":
+            from src.strategies.momentum_leverage import MomentumLeverage
+
+            return MomentumLeverage()
         print(f"Unknown strategy: {strategy_name}")
-        print("Available strategies: ml_basic, ml_sentiment, ml_adaptive, bear, bull, ensemble_weighted")
+        print("Available strategies: ml_basic, ml_sentiment, ml_adaptive, bear, bull, ensemble_weighted, momentum_leverage")
         raise SystemExit(1)
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")

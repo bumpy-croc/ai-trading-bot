@@ -39,19 +39,25 @@ class EnsembleWeighted(BaseStrategy):
     Weighted Ensemble Strategy using performance-based weighting and majority voting
     """
     
-    # Configuration - Optimized for higher returns with 20-30% acceptable drawdown
-    MIN_STRATEGIES_FOR_SIGNAL = 2  # Minimum strategies that must agree
-    PERFORMANCE_WINDOW = 50  # Number of recent decisions to track
-    WEIGHT_UPDATE_FREQUENCY = 20  # Update weights every N decisions
+    # Configuration - Cycle 2: Volatility-Based Pseudo-Leverage
+    MIN_STRATEGIES_FOR_SIGNAL = 1  # More aggressive: single strategy can trigger
+    PERFORMANCE_WINDOW = 30  # Faster adaptation
+    WEIGHT_UPDATE_FREQUENCY = 10  # Very frequent updates
     
-    # Position sizing - More aggressive for higher returns
-    BASE_POSITION_SIZE = 0.30  # 30% base allocation (increased from 18%)
-    MIN_POSITION_SIZE_RATIO = 0.10  # 10% minimum (increased from 6%)
-    MAX_POSITION_SIZE_RATIO = 0.45  # 45% maximum (increased from 25%)
+    # Position sizing - Aggressive pseudo-leverage (key to beating buy-and-hold)
+    BASE_POSITION_SIZE = 0.50  # 50% base allocation 
+    MIN_POSITION_SIZE_RATIO = 0.20  # 20% minimum (always significant)
+    MAX_POSITION_SIZE_RATIO = 0.80  # 80% maximum (pseudo 2x leverage)
     
-    # Risk management - Wider stops for higher returns
-    STOP_LOSS_PCT = 0.035  # 3.5% (increased from 2%)
-    TAKE_PROFIT_PCT = 0.08  # 8% (increased from 4.5%)
+    # Risk management - Optimized for capturing large moves
+    STOP_LOSS_PCT = 0.06  # 6% (wide enough to avoid noise)
+    TAKE_PROFIT_PCT = 0.20  # 20% (capture major moves)
+    
+    # Volatility-based thresholds
+    LOW_VOLATILITY_THRESHOLD = 0.01  # 1% daily volatility
+    HIGH_VOLATILITY_THRESHOLD = 0.05  # 5% daily volatility
+    MOMENTUM_THRESHOLD = 0.02  # 2% momentum threshold
+    TREND_STRENGTH_THRESHOLD = 0.015  # 1.5% trend strength
     
     def __init__(
         self,
@@ -203,30 +209,70 @@ class EnsembleWeighted(BaseStrategy):
         return df
     
     def _calculate_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate momentum and trend indicators to help beat buy-and-hold"""
+        """Calculate advanced momentum and trend indicators for cycle 1 optimization"""
         
-        # Price momentum
-        df["price_momentum_5"] = df["close"].pct_change(5)  # 5-period momentum
-        df["price_momentum_20"] = df["close"].pct_change(20)  # 20-period momentum
+        # Multi-timeframe momentum (key to beating buy-and-hold)
+        df["momentum_fast"] = df["close"].pct_change(3)   # 3-period for quick signals
+        df["momentum_medium"] = df["close"].pct_change(10) # 10-period for trend
+        df["momentum_slow"] = df["close"].pct_change(30)   # 30-period for regime
         
-        # Trend strength
-        df["sma_20"] = df["close"].rolling(20).mean()
-        df["sma_50"] = df["close"].rolling(50).mean()
-        df["trend_strength"] = (df["sma_20"] - df["sma_50"]) / df["sma_50"]
+        # Exponential moving averages (more responsive than SMA)
+        df["ema_12"] = df["close"].ewm(span=12).mean()
+        df["ema_26"] = df["close"].ewm(span=26).mean()
+        df["ema_50"] = df["close"].ewm(span=50).mean()
         
-        # Volatility for position sizing
-        df["volatility"] = df["close"].pct_change().rolling(20).std()
-        df["volatility_rank"] = df["volatility"].rolling(100).rank(pct=True)
+        # MACD for momentum confirmation
+        df["macd"] = df["ema_12"] - df["ema_26"]
+        df["macd_signal"] = df["macd"].ewm(span=9).mean()
+        df["macd_histogram"] = df["macd"] - df["macd_signal"]
         
-        # Breakout detection
-        df["high_20"] = df["high"].rolling(20).max()
-        df["low_20"] = df["low"].rolling(20).min()
-        df["breakout_up"] = (df["close"] > df["high_20"].shift(1)) & (df["trend_strength"] > 0.02)
-        df["breakout_down"] = (df["close"] < df["low_20"].shift(1)) & (df["trend_strength"] < -0.02)
+        # Advanced trend strength (multi-timeframe)
+        df["trend_strength_fast"] = (df["ema_12"] - df["ema_26"]) / df["ema_26"]
+        df["trend_strength_slow"] = (df["ema_26"] - df["ema_50"]) / df["ema_50"]
+        df["trend_alignment"] = (df["trend_strength_fast"] > 0) & (df["trend_strength_slow"] > 0)
         
-        # Market regime detection (simple)
-        df["bull_market"] = (df["sma_20"] > df["sma_50"]) & (df["trend_strength"] > 0.01)
-        df["bear_market"] = (df["sma_20"] < df["sma_50"]) & (df["trend_strength"] < -0.01)
+        # Volatility indicators for position sizing
+        df["atr"] = df[["high", "low", "close"]].apply(lambda x: 
+            max(x["high"] - x["low"], 
+                abs(x["high"] - x["close"]), 
+                abs(x["low"] - x["close"])), axis=1).rolling(14).mean()
+        df["volatility_fast"] = df["close"].pct_change().rolling(10).std()
+        df["volatility_slow"] = df["close"].pct_change().rolling(30).std()
+        df["volatility_ratio"] = df["volatility_fast"] / df["volatility_slow"]
+        
+        # Advanced breakout detection (faster response)
+        lookback = 15  # Use direct value instead of self.BREAKOUT_LOOKBACK
+        df[f"high_{lookback}"] = df["high"].rolling(lookback).max()
+        df[f"low_{lookback}"] = df["low"].rolling(lookback).min()
+        df["breakout_strength_up"] = (df["close"] - df[f"high_{lookback}"].shift(1)) / df[f"high_{lookback}"].shift(1)
+        df["breakout_strength_down"] = (df[f"low_{lookback}"].shift(1) - df["close"]) / df[f"low_{lookback}"].shift(1)
+        
+        # Strong breakout signals (higher threshold for quality)
+        df["strong_breakout_up"] = (df["breakout_strength_up"] > 0.01) & (df["trend_strength_fast"] > 0.005)
+        df["strong_breakout_down"] = (df["breakout_strength_down"] > 0.01) & (df["trend_strength_fast"] < -0.005)
+        
+        # Market regime classification (enhanced)
+        confirmation = 10  # Use direct value instead of self.TREND_CONFIRMATION_PERIODS
+        df["strong_bull"] = (
+            (df["ema_12"] > df["ema_26"]) & 
+            (df["ema_26"] > df["ema_50"]) & 
+            (df["momentum_medium"] > 0.02) &
+            (df["macd_histogram"] > 0)
+        ).rolling(confirmation).sum() >= confirmation * 0.7
+        
+        df["strong_bear"] = (
+            (df["ema_12"] < df["ema_26"]) & 
+            (df["ema_26"] < df["ema_50"]) & 
+            (df["momentum_medium"] < -0.02) &
+            (df["macd_histogram"] < 0)
+        ).rolling(confirmation).sum() >= confirmation * 0.7
+        
+        # Momentum score (composite indicator)
+        df["momentum_score"] = (
+            np.sign(df["momentum_fast"]) * 0.3 +
+            np.sign(df["momentum_medium"]) * 0.4 +
+            np.sign(df["momentum_slow"]) * 0.3
+        )
         
         return df
     
@@ -241,20 +287,23 @@ class EnsembleWeighted(BaseStrategy):
         confidence = df["ensemble_confidence"].iloc[index]
         active_strategies = df["active_strategies"].iloc[index]
         
-        # Entry criteria - More aggressive for higher returns
-        score_threshold = 0.4  # Weighted score must be > 0.4 (lowered from 0.5)
-        min_agreement = 0.5    # At least 50% of strategies must agree (lowered from 60%)
-        min_confidence = 0.3   # Minimum confidence level (lowered from 0.4)
+        # Entry criteria - Cycle 2: Very aggressive for maximum capture
+        score_threshold = 0.3  # Weighted score must be > 0.3 (very low threshold)
+        min_agreement = 0.4    # At least 40% of strategies must agree 
+        min_confidence = 0.25  # Minimum confidence level (very low)
         min_active = self.MIN_STRATEGIES_FOR_SIGNAL
         
-        # Momentum filters to beat buy-and-hold
-        momentum_5 = df.get("price_momentum_5", pd.Series([0.0])).iloc[index]
-        momentum_20 = df.get("price_momentum_20", pd.Series([0.0])).iloc[index]
-        trend_strength = df.get("trend_strength", pd.Series([0.0])).iloc[index]
-        breakout_up = df.get("breakout_up", pd.Series([False])).iloc[index]
-        bull_market = df.get("bull_market", pd.Series([False])).iloc[index]
+        # Advanced momentum filters (Cycle 1 optimization)
+        momentum_fast = df.get("momentum_fast", pd.Series([0.0])).iloc[index]
+        momentum_medium = df.get("momentum_medium", pd.Series([0.0])).iloc[index]
+        momentum_score = df.get("momentum_score", pd.Series([0.0])).iloc[index]
+        trend_strength_fast = df.get("trend_strength_fast", pd.Series([0.0])).iloc[index]
+        strong_breakout_up = df.get("strong_breakout_up", pd.Series([False])).iloc[index]
+        strong_bull = df.get("strong_bull", pd.Series([False])).iloc[index]
+        macd_histogram = df.get("macd_histogram", pd.Series([0.0])).iloc[index]
+        trend_alignment = df.get("trend_alignment", pd.Series([False])).iloc[index]
         
-        # Enhanced entry conditions with momentum
+        # Enhanced entry conditions with advanced momentum
         basic_entry = (
             entry_score > score_threshold and
             agreement >= min_agreement and
@@ -262,16 +311,57 @@ class EnsembleWeighted(BaseStrategy):
             active_strategies >= min_active
         )
         
-        # Momentum boost conditions
-        strong_momentum = momentum_5 > 0.01 or momentum_20 > 0.03  # Strong recent momentum
-        trending_up = trend_strength > 0.005  # Positive trend
-        breakout_signal = breakout_up  # Price breakout
-        favorable_regime = bull_market  # Bull market regime
+        # Advanced momentum conditions for pseudo-leverage entry
+        explosive_momentum = (
+            momentum_fast > 0.03 and  # Use direct value instead of self.STRONG_MOMENTUM_THRESHOLD
+            momentum_medium > 0.015 and
+            momentum_score > 0.5
+        )
         
-        # Combined entry decision (basic OR momentum-boosted)
-        momentum_entry = strong_momentum and (trending_up or breakout_signal or favorable_regime)
+        confirmed_trend = (
+            trend_alignment and 
+            abs(trend_strength_fast) > 0.01 and
+            macd_histogram > 0
+        )
         
-        entry_decision = basic_entry or (entry_score > 0.3 and momentum_entry)
+        quality_breakout = strong_breakout_up and confirmed_trend
+        regime_favorable = strong_bull or (trend_alignment and momentum_score > 0.3)
+        
+        # Cycle 2: Simplified but aggressive entry logic
+        # Focus on capturing ALL profitable opportunities
+        
+        # Basic entry (lowered thresholds)
+        basic_entry_decision = (
+            entry_score > score_threshold and
+            agreement >= min_agreement and
+            confidence >= min_confidence and
+            active_strategies >= min_active
+        )
+        
+        # Momentum-based entry (very aggressive)
+        momentum_entry_decision = (
+            entry_score > 0.2 and  # Very low threshold
+            active_strategies >= 1 and  # Any single strategy
+            (momentum_fast > 0.005 or momentum_medium > 0.01 or explosive_momentum)
+        )
+        
+        # Breakout-based entry (catch all breakouts)
+        breakout_entry_decision = (
+            entry_score > 0.15 and  # Extremely low threshold
+            (strong_breakout_up or quality_breakout) and
+            momentum_fast > 0.002  # Minimal momentum requirement
+        )
+        
+        # Trend-following entry (capture trends early)
+        trend_entry_decision = (
+            entry_score > 0.2 and
+            confirmed_trend and
+            (trend_alignment or regime_favorable)
+        )
+        
+        # Combined decision: Enter on ANY favorable condition
+        entry_decision = (basic_entry_decision or momentum_entry_decision or 
+                         breakout_entry_decision or trend_entry_decision)
         
         # Log decision
         self.log_execution(
@@ -339,11 +429,11 @@ class EnsembleWeighted(BaseStrategy):
                 self.logger.debug(f"Error checking exit for {name}: {e}")
                 continue
         
-        # Ensemble exit decision - More aggressive (hold longer for higher returns)
+        # Cycle 2: Hold much longer for bigger moves
         ensemble_exit = False
         if len(exit_signals) >= 2:  # Need at least 2 strategies
             exit_agreement = sum(exit_signals) / len(exit_signals)
-            ensemble_exit = exit_agreement >= 0.7  # 70% must agree to exit (increased from 60%)
+            ensemble_exit = exit_agreement >= 0.8  # 80% must agree to exit (very high threshold)
         
         exit_decision = hit_stop_loss or hit_take_profit or ensemble_exit
         
@@ -380,43 +470,73 @@ class EnsembleWeighted(BaseStrategy):
         score_factor = max(0.9, min(1.8, entry_score * 1.4))      # Higher score impact
         agreement_factor = max(0.9, min(1.5, agreement * 1.2))    # Reward strong agreement
         
-        # Momentum and volatility adjustments to beat buy-and-hold
-        momentum_5 = df.get("price_momentum_5", pd.Series([0.0])).iloc[index]
-        trend_strength = df.get("trend_strength", pd.Series([0.0])).iloc[index]
-        volatility_rank = df.get("volatility_rank", pd.Series([0.5])).iloc[index]
-        bull_market = df.get("bull_market", pd.Series([False])).iloc[index]
+        # Advanced momentum and volatility adjustments (Cycle 1)
+        momentum_fast = df.get("momentum_fast", pd.Series([0.0])).iloc[index]
+        momentum_medium = df.get("momentum_medium", pd.Series([0.0])).iloc[index]
+        momentum_score = df.get("momentum_score", pd.Series([0.0])).iloc[index]
+        trend_strength_fast = df.get("trend_strength_fast", pd.Series([0.0])).iloc[index]
+        volatility_ratio = df.get("volatility_ratio", pd.Series([1.0])).iloc[index]
+        strong_bull = df.get("strong_bull", pd.Series([False])).iloc[index]
+        strong_breakout_up = df.get("strong_breakout_up", pd.Series([False])).iloc[index]
+        trend_alignment = df.get("trend_alignment", pd.Series([False])).iloc[index]
         
-        # Momentum factor: boost size in strong trends
-        momentum_factor = 1.0
-        if momentum_5 > 0.02:  # Strong 5-period momentum
-            momentum_factor = 1.3
-        elif momentum_5 > 0.01:  # Moderate momentum
-            momentum_factor = 1.15
-        elif momentum_5 < -0.01:  # Negative momentum
-            momentum_factor = 0.8
+        # Cycle 2: Aggressive volatility-based pseudo-leverage
+        # Key insight: Use volatility to determine leverage amount
         
-        # Trend factor: boost size in strong trends
-        trend_factor = 1.0
-        if abs(trend_strength) > 0.03:  # Strong trend
-            trend_factor = 1.4
-        elif abs(trend_strength) > 0.01:  # Moderate trend
-            trend_factor = 1.2
+        # Base volatility calculation for leverage decisions
+        volatility_fast = df.get("volatility_fast", pd.Series([0.02])).iloc[index]
         
-        # Volatility factor: reduce size in high volatility
-        vol_factor = 1.0
-        if volatility_rank > 0.8:  # High volatility
-            vol_factor = 0.7
-        elif volatility_rank > 0.6:  # Moderate volatility
-            vol_factor = 0.85
-        elif volatility_rank < 0.3:  # Low volatility
-            vol_factor = 1.2
+        # Volatility-based leverage factor (core innovation)
+        if volatility_fast < 0.01:  # Low vol = higher leverage
+            volatility_leverage = 2.5  # Aggressive in calm markets
+        elif volatility_fast < 0.02:  # Moderate volatility
+            volatility_leverage = 2.0
+        elif volatility_fast < 0.05:  # Normal volatility
+            volatility_leverage = 1.5
+        else:  # High volatility
+            volatility_leverage = 1.0  # Conservative in volatile markets
         
-        # Bull market boost
-        regime_factor = 1.3 if bull_market else 1.0
+        # Momentum amplification (stronger effect)
+        momentum_amplifier = 1.0
+        if momentum_fast > 0.02:  # Strong momentum
+            momentum_amplifier = 1.8
+        elif momentum_fast > 0.01:  # Good momentum
+            momentum_amplifier = 1.4
+        elif momentum_fast > 0.005:  # Weak momentum
+            momentum_amplifier = 1.2
+        elif momentum_fast < -0.005:  # Negative momentum
+            momentum_amplifier = 0.7
         
-        # Combine all factors
-        dynamic_size = (base_size * confidence_factor * score_factor * agreement_factor * 
-                       momentum_factor * trend_factor * vol_factor * regime_factor)
+        # Trend strength amplification
+        trend_amplifier = 1.0
+        if strong_bull and trend_alignment:  # Perfect bull setup
+            trend_amplifier = 2.0  # Double down in perfect conditions
+        elif trend_alignment:  # Good trend alignment
+            trend_amplifier = 1.6
+        elif abs(trend_strength_fast) > 0.015:
+            trend_amplifier = 1.4
+        
+        # Breakout amplification
+        breakout_amplifier = 1.0
+        if strong_breakout_up and confirmed_trend:  # Quality breakout
+            breakout_amplifier = 1.7
+        elif strong_breakout_up:  # Simple breakout
+            breakout_amplifier = 1.3
+        
+        # Composite momentum boost
+        composite_boost = 1.0
+        if momentum_score > 0.7:  # Very strong composite
+            composite_boost = 1.5
+        elif momentum_score > 0.4:  # Good composite
+            composite_boost = 1.2
+        
+        # Ultimate leverage calculation (can reach 80% in perfect conditions)
+        leverage_multiplier = (volatility_leverage * momentum_amplifier * trend_amplifier * 
+                              breakout_amplifier * composite_boost)
+        
+        # Apply to base size with all factors
+        dynamic_size = (base_size * confidence_factor * score_factor * 
+                       min(3.0, leverage_multiplier))  # Cap at 3x base
         
         # Apply limits
         position_ratio = max(
@@ -456,22 +576,22 @@ class EnsembleWeighted(BaseStrategy):
             "take_profit_pct": self.TAKE_PROFIT_PCT,
             "dynamic_risk": {
                 "enabled": True,
-                "drawdown_thresholds": [0.10, 0.20, 0.30],  # Accept higher drawdowns
-                "risk_reduction_factors": [0.9, 0.7, 0.5],   # Less aggressive reduction
-                "recovery_thresholds": [0.05, 0.10],         # Higher recovery thresholds
+                "drawdown_thresholds": [0.15, 0.25, 0.35],  # Higher drawdown tolerance
+                "risk_reduction_factors": [0.95, 0.8, 0.6],  # Less aggressive reduction
+                "recovery_thresholds": [0.08, 0.15],         # Higher recovery thresholds
             },
             "partial_operations": {
-                "exit_targets": [0.04, 0.06, 0.10],  # 4%, 6%, 10% (higher targets)
-                "exit_sizes": [0.20, 0.30, 0.50],     # 20%, 30%, 50% (hold more)
-                "scale_in_thresholds": [0.02, 0.04], # 2%, 4% (more aggressive scale-in)
-                "scale_in_sizes": [0.4, 0.3],         # 40%, 30% (larger scale-ins)
-                "max_scale_ins": 3,                   # Allow more scale-ins
+                "exit_targets": [0.06, 0.10, 0.15],  # 6%, 10%, 15% (even higher targets)
+                "exit_sizes": [0.15, 0.25, 0.60],     # 15%, 25%, 60% (hold most for big moves)
+                "scale_in_thresholds": [0.015, 0.03, 0.05], # 1.5%, 3%, 5% (more scale-ins)
+                "scale_in_sizes": [0.3, 0.25, 0.2],   # 30%, 25%, 20% (larger scale-ins)
+                "max_scale_ins": 4,                   # More aggressive scale-ins
             },
             "trailing_stop": {
-                "activation_threshold": 0.03,   # 3% before trailing starts
-                "trailing_distance_pct": 0.015, # 1.5% trailing distance
-                "breakeven_threshold": 0.04,    # 4% before breakeven
-                "breakeven_buffer": 0.005,      # 0.5% buffer
+                "activation_threshold": 0.04,   # 4% before trailing starts
+                "trailing_distance_pct": 0.02,  # 2% trailing distance
+                "breakeven_threshold": 0.06,    # 6% before breakeven
+                "breakeven_buffer": 0.01,       # 1% buffer
             },
         }
     
