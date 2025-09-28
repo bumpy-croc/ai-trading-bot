@@ -108,7 +108,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             )
 
     def _initialize_client(self):
-        """Initialize Binance client with error handling"""
+        """Initialize Binance client with error handling and US region detection"""
         logger.debug(f"_initialize_client called - BINANCE_AVAILABLE: {BINANCE_AVAILABLE}")
         
         if not BINANCE_AVAILABLE:
@@ -117,20 +117,23 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return
 
         try:
-            logger.debug(f"Attempting to create Binance client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}")
+            # Detect if we should use Binance.US
+            tld = self._detect_binance_region()
             
-            # Direct client creation (works well with gevent, standard environments)
+            logger.debug(f"Attempting to create Binance client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}, tld: {tld}")
+            
+            # Direct client creation with region-specific TLD
             if self.api_key and self.api_secret:
-                logger.debug("Creating authenticated Binance client...")
-                self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
+                logger.debug(f"Creating authenticated Binance client (tld={tld})...")
+                self._client = Client(self.api_key, self.api_secret, testnet=self.testnet, tld=tld)
             else:
-                logger.debug("Creating public Binance client...")
-                self._client = Client()
+                logger.debug(f"Creating public Binance client (tld={tld})...")
+                self._client = Client(tld=tld)
             
             logger.info(
                 f"Binance client initialized successfully "
                 f"({'with credentials' if self.api_key and self.api_secret else 'public mode'}, "
-                f"testnet: {self.testnet})"
+                f"testnet: {self.testnet}, region: {tld})"
             )
                 
             # Test the client with a simple operation
@@ -206,6 +209,67 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 return {"symbols": []}
 
         return _OfflineClient()
+
+    def _detect_binance_region(self):
+        """Detect appropriate Binance region/TLD based on location"""
+        import os
+        
+        # Method 1: Environment variable override (highest priority)
+        env_region = os.environ.get('BINANCE_REGION', '').upper()
+        if env_region == 'US':
+            logger.info("Using Binance.US (BINANCE_REGION=US environment variable)")
+            return 'us'
+        elif env_region == 'COM' or env_region == 'INTERNATIONAL':
+            logger.info("Using international Binance (BINANCE_REGION environment variable)")
+            return 'com'
+        
+        # Method 2: Auto-detect based on IP geolocation
+        try:
+            import requests
+            
+            # Try multiple geolocation services (in case one is down)
+            services = [
+                'https://api.country.is/',
+                'https://ipapi.co/json/',
+                'https://ipinfo.io/json'
+            ]
+            
+            for service in services:
+                try:
+                    logger.debug(f"Trying geolocation service: {service}")
+                    response = requests.get(service, timeout=3)
+                    
+                    if 'country.is' in service:
+                        data = response.json()
+                        country = data.get('country', '')
+                    elif 'ipapi.co' in service:
+                        data = response.json()
+                        country = data.get('country_code', '')
+                    elif 'ipinfo.io' in service:
+                        data = response.json()
+                        country = data.get('country', '')
+                    else:
+                        continue
+                    
+                    if country == 'US':
+                        logger.info(f"Detected US location via {service} - using Binance.US")
+                        return 'us'
+                    elif country:
+                        logger.info(f"Detected {country} location via {service} - using international Binance")
+                        return 'com'
+                        
+                except Exception as e:
+                    logger.debug(f"Geolocation service {service} failed: {e}")
+                    continue
+                    
+        except ImportError:
+            logger.debug("Requests library not available for region detection")
+        except Exception as e:
+            logger.debug(f"Region detection failed: {e}")
+        
+        # Method 3: Default fallback (international Binance)
+        logger.info("Could not detect region - defaulting to international Binance")
+        return 'com'
 
     # ========================================
     # DataProvider Interface Implementation
