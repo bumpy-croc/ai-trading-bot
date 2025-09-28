@@ -8,12 +8,18 @@ Built-in strategies using indicators and/or ML predictions.
 - `ml_adaptive.py`: Adaptive ML strategy with regime detection
 - `bull.py`: Bull market optimized strategy  
 - `bear.py`: Bear market optimized strategy
+- `ensemble_weighted.py`: Weighted ensemble strategy combining multiple strategies
+- `momentum_leverage.py`: Aggressive momentum-based strategy with pseudo-leverage
+- `regime_adaptive.py`: Meta-strategy that switches between strategies based on market regimes
 
 ## Usage (with backtester)
 ```bash
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90
 atb backtest ml_sentiment --symbol BTCUSDT --timeframe 1h --days 90
 atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 90
+atb backtest ensemble_weighted --symbol BTCUSDT --timeframe 1h --days 90
+atb backtest momentum_leverage --symbol BTCUSDT --timeframe 1h --days 90
+atb backtest regime_adaptive --symbol BTCUSDT --timeframe 1h --days 90
 ```
 
 ## Strategy Details
@@ -24,6 +30,27 @@ atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 90
 - Enhanced prediction accuracy during volatile market conditions
 - Robust fallback when sentiment data is unavailable
 - Supports both BTC and ETH models with sentiment integration
+
+### Ensemble Weighted Strategy
+- Combines multiple strategies (ML Basic, ML Adaptive, Bull, Bear) using weighted voting
+- Performance-based dynamic weighting that adapts over time
+- Aggressive position sizing (up to 80% allocation) with pseudo-leverage
+- Advanced momentum and trend indicators for enhanced entry timing
+- Wide stop losses (6%) and high profit targets (20%) to capture major moves
+
+### Momentum Leverage Strategy
+- Pure momentum-based approach with pseudo-leverage for beating buy-and-hold
+- Ultra-aggressive position sizing (40-95% allocation) based on momentum strength
+- Multi-timeframe momentum analysis (3, 7, 20 periods)
+- Trend confirmation using exponential moving averages
+- Volatility-based position scaling for optimal risk management
+
+### Regime Adaptive Strategy
+- Meta-strategy that automatically switches between optimal strategies based on market regimes
+- Uses enhanced regime detection (trend direction + volatility level)
+- Strategy mapping: Bull+Low Vol → Momentum Leverage, Bull+High Vol → Ensemble Weighted
+- Risk-adjusted position sizing based on regime confidence and stability
+- Intelligent switching with cooldown periods to avoid excessive trading
 
 ## Create your own
 - Subclass `strategies.base.BaseStrategy`
