@@ -8,12 +8,12 @@ and timeframes for better accuracy and faster response times.
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-from src.regime.detector import RegimeDetector, RegimeConfig, TrendLabel, VolLabel
+from src.regime.detector import RegimeConfig, RegimeDetector
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class EnhancedRegimeConfig:
     rsi_window: int = 14
     rsi_overbought: float = 70
     rsi_oversold: float = 30
-    momentum_windows: List[int] = None  # [5, 10, 20]
+    momentum_windows: list[int] = None  # [5, 10, 20]
     
     # Volume analysis
     volume_sma_window: int = 20
@@ -235,25 +235,30 @@ class EnhancedRegimeDetector:
         return df
     
     def _calculate_garch_volatility(self, returns: pd.Series) -> pd.Series:
-        """Calculate GARCH-like volatility estimate"""
+        """Calculate GARCH-like volatility estimate using vectorized operations"""
         
         # Simple GARCH(1,1) approximation
         alpha = 0.1
         beta = 0.85
         
-        volatility = returns.copy()
-        volatility.iloc[0] = returns.std()
+        returns_array = returns.to_numpy()
+        n = len(returns_array)
+        volatility = np.full(n, np.nan, dtype=np.float64)
         
-        for i in range(1, len(returns)):
-            if pd.notna(returns.iloc[i]) and pd.notna(volatility.iloc[i-1]):
-                volatility.iloc[i] = np.sqrt(
-                    alpha * returns.iloc[i]**2 + 
-                    beta * volatility.iloc[i-1]**2
+        # Use the std of returns (ignoring NaNs) for initial volatility
+        initial_vol = np.nanstd(returns_array)
+        volatility[0] = initial_vol
+        
+        for i in range(1, n):
+            if not np.isnan(returns_array[i]) and not np.isnan(volatility[i-1]):
+                volatility[i] = np.sqrt(
+                    alpha * returns_array[i]**2 +
+                    beta * volatility[i-1]**2
                 )
             else:
-                volatility.iloc[i] = volatility.iloc[i-1] if i > 0 else returns.std()
+                volatility[i] = volatility[i-1] if i > 0 else initial_vol
         
-        return volatility
+        return pd.Series(volatility, index=returns.index)
     
     def detect_regime(self, df: pd.DataFrame) -> pd.DataFrame:
         """Main regime detection using enhanced indicators"""
@@ -390,7 +395,7 @@ class EnhancedRegimeDetector:
         """Calculate volatility component score"""
         
         vol_regime = row.get('vol_regime', 1)
-        atr_pct = row.get('atr_pct', 0.02)
+        row.get('atr_pct', 0.02)
         
         # High volatility reduces confidence in trend signals
         if vol_regime > self.config.volatility_regime_threshold:
@@ -460,7 +465,7 @@ class EnhancedRegimeDetector:
         
         return np.clip(confidence, 0, 1)
     
-    def _apply_hysteresis(self, regimes: List[str]) -> List[str]:
+    def _apply_hysteresis(self, regimes: list[str]) -> list[str]:
         """Apply hysteresis to prevent regime flip-flopping"""
         
         result = []
@@ -498,7 +503,7 @@ class EnhancedRegimeDetector:
         
         return result
     
-    def get_current_regime(self, df: pd.DataFrame) -> Tuple[str, float]:
+    def get_current_regime(self, df: pd.DataFrame) -> tuple[str, float]:
         """Get current market regime and confidence"""
         
         if df.empty or 'final_regime' not in df.columns:
@@ -509,7 +514,7 @@ class EnhancedRegimeDetector:
         
         return current_regime, current_confidence
     
-    def get_regime_summary(self, df: pd.DataFrame, lookback: int = 100) -> Dict[str, any]:
+    def get_regime_summary(self, df: pd.DataFrame, lookback: int = 100) -> dict[str, any]:
         """Get summary of recent regime behavior"""
         
         if df.empty or len(df) < lookback:
