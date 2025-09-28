@@ -19,14 +19,14 @@ Research-backed approach:
 Key insight: Beat buy-and-hold by being MORE aggressive, not more conservative.
 """
 
-import logging
-from typing import Any, Dict, Optional
+from typing import Any, Optional
+
 import numpy as np
 import pandas as pd
 
 from src.strategies.base import BaseStrategy
-from src.strategies.ml_basic import MlBasic
 from src.strategies.bull import Bull
+from src.strategies.ml_basic import MlBasic
 
 
 class MomentumLeverage(BaseStrategy):
@@ -282,7 +282,7 @@ class MomentumLeverage(BaseStrategy):
         else:
             return price * (1 + self.STOP_LOSS_PCT)
     
-    def get_risk_overrides(self) -> Optional[Dict[str, Any]]:
+    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
         """Aggressive risk management for beating buy-and-hold"""
         return {
             "position_sizer": "confidence_weighted",

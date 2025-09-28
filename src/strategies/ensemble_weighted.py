@@ -127,19 +127,29 @@ class EnsembleWeighted(BaseStrategy):
         
         # Calculate indicators for each strategy
         strategy_dfs = {}
+        # Collect strategy-specific columns with prefixes
+        strategy_columns = []
         for name, strategy in self.strategies.items():
             try:
                 strategy_df = strategy.calculate_indicators(df.copy())
                 strategy_dfs[name] = strategy_df
                 
-                # Add strategy-specific columns with prefixes
+                # Collect strategy-specific columns with prefixes
+                strategy_cols = {}
                 for col in strategy_df.columns:
                     if col not in ["open", "high", "low", "close", "volume"]:
-                        df[f"{name}_{col}"] = strategy_df[col]
+                        strategy_cols[f"{name}_{col}"] = strategy_df[col]
+                
+                if strategy_cols:
+                    strategy_columns.append(pd.DataFrame(strategy_cols, index=df.index))
                         
             except Exception as e:
                 self.logger.warning(f"Failed to calculate indicators for {name}: {e}")
                 continue
+        
+        # Concatenate all strategy columns at once to avoid fragmentation
+        if strategy_columns:
+            df = pd.concat([df] + strategy_columns, axis=1)
         
         # Calculate ensemble-specific indicators
         df = self._calculate_ensemble_signals(df, strategy_dfs)
@@ -152,11 +162,14 @@ class EnsembleWeighted(BaseStrategy):
     def _calculate_ensemble_signals(self, df: pd.DataFrame, strategy_dfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
         """Calculate ensemble signals and confidence metrics"""
         
-        # Initialize ensemble columns
-        df["ensemble_entry_score"] = 0.0
-        df["ensemble_confidence"] = 0.0
-        df["strategy_agreement"] = 0.0
-        df["active_strategies"] = 0
+        # Initialize ensemble columns using concat to avoid fragmentation
+        ensemble_cols = pd.DataFrame({
+            "ensemble_entry_score": 0.0,
+            "ensemble_confidence": 0.0,
+            "strategy_agreement": 0.0,
+            "active_strategies": 0
+        }, index=df.index)
+        df = pd.concat([df, ensemble_cols], axis=1)
         
         # Calculate for each row
         for i in range(len(df)):
@@ -220,68 +233,75 @@ class EnsembleWeighted(BaseStrategy):
     def _calculate_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate advanced momentum and trend indicators for cycle 1 optimization"""
         
+        # Calculate all indicators and collect them in a dictionary to avoid fragmentation
+        momentum_indicators = {}
+        
         # Multi-timeframe momentum (key to beating buy-and-hold)
-        df["momentum_fast"] = df["close"].pct_change(3)   # 3-period for quick signals
-        df["momentum_medium"] = df["close"].pct_change(10) # 10-period for trend
-        df["momentum_slow"] = df["close"].pct_change(30)   # 30-period for regime
+        momentum_indicators["momentum_fast"] = df["close"].pct_change(3)   # 3-period for quick signals
+        momentum_indicators["momentum_medium"] = df["close"].pct_change(10) # 10-period for trend
+        momentum_indicators["momentum_slow"] = df["close"].pct_change(30)   # 30-period for regime
         
         # Exponential moving averages (more responsive than SMA)
-        df["ema_12"] = df["close"].ewm(span=12).mean()
-        df["ema_26"] = df["close"].ewm(span=26).mean()
-        df["ema_50"] = df["close"].ewm(span=50).mean()
+        momentum_indicators["ema_12"] = df["close"].ewm(span=12).mean()
+        momentum_indicators["ema_26"] = df["close"].ewm(span=26).mean()
+        momentum_indicators["ema_50"] = df["close"].ewm(span=50).mean()
         
         # MACD for momentum confirmation
-        df["macd"] = df["ema_12"] - df["ema_26"]
-        df["macd_signal"] = df["macd"].ewm(span=9).mean()
-        df["macd_histogram"] = df["macd"] - df["macd_signal"]
+        momentum_indicators["macd"] = momentum_indicators["ema_12"] - momentum_indicators["ema_26"]
+        momentum_indicators["macd_signal"] = momentum_indicators["macd"].ewm(span=9).mean()
+        momentum_indicators["macd_histogram"] = momentum_indicators["macd"] - momentum_indicators["macd_signal"]
         
         # Advanced trend strength (multi-timeframe)
-        df["trend_strength_fast"] = (df["ema_12"] - df["ema_26"]) / df["ema_26"]
-        df["trend_strength_slow"] = (df["ema_26"] - df["ema_50"]) / df["ema_50"]
-        df["trend_alignment"] = (df["trend_strength_fast"] > 0) & (df["trend_strength_slow"] > 0)
+        momentum_indicators["trend_strength_fast"] = (momentum_indicators["ema_12"] - momentum_indicators["ema_26"]) / momentum_indicators["ema_26"]
+        momentum_indicators["trend_strength_slow"] = (momentum_indicators["ema_26"] - momentum_indicators["ema_50"]) / momentum_indicators["ema_50"]
+        momentum_indicators["trend_alignment"] = (momentum_indicators["trend_strength_fast"] > 0) & (momentum_indicators["trend_strength_slow"] > 0)
         
         # Volatility indicators for position sizing
-        df["atr"] = df[["high", "low", "close"]].apply(lambda x: 
+        momentum_indicators["atr"] = df[["high", "low", "close"]].apply(lambda x: 
             max(x["high"] - x["low"], 
                 abs(x["high"] - x["close"]), 
                 abs(x["low"] - x["close"])), axis=1).rolling(14).mean()
-        df["volatility_fast"] = df["close"].pct_change().rolling(10).std()
-        df["volatility_slow"] = df["close"].pct_change().rolling(30).std()
-        df["volatility_ratio"] = df["volatility_fast"] / df["volatility_slow"]
+        momentum_indicators["volatility_fast"] = df["close"].pct_change().rolling(10).std()
+        momentum_indicators["volatility_slow"] = df["close"].pct_change().rolling(30).std()
+        momentum_indicators["volatility_ratio"] = momentum_indicators["volatility_fast"] / momentum_indicators["volatility_slow"]
         
         # Advanced breakout detection (faster response)
         lookback = self.BREAKOUT_LOOKBACK
-        df[f"high_{lookback}"] = df["high"].rolling(lookback).max()
-        df[f"low_{lookback}"] = df["low"].rolling(lookback).min()
-        df["breakout_strength_up"] = (df["close"] - df[f"high_{lookback}"].shift(1)) / df[f"high_{lookback}"].shift(1)
-        df["breakout_strength_down"] = (df[f"low_{lookback}"].shift(1) - df["close"]) / df[f"low_{lookback}"].shift(1)
+        momentum_indicators[f"high_{lookback}"] = df["high"].rolling(lookback).max()
+        momentum_indicators[f"low_{lookback}"] = df["low"].rolling(lookback).min()
+        momentum_indicators["breakout_strength_up"] = (df["close"] - momentum_indicators[f"high_{lookback}"].shift(1)) / momentum_indicators[f"high_{lookback}"].shift(1)
+        momentum_indicators["breakout_strength_down"] = (momentum_indicators[f"low_{lookback}"].shift(1) - df["close"]) / momentum_indicators[f"low_{lookback}"].shift(1)
         
         # Strong breakout signals (higher threshold for quality)
-        df["strong_breakout_up"] = (df["breakout_strength_up"] > 0.01) & (df["trend_strength_fast"] > 0.005)
-        df["strong_breakout_down"] = (df["breakout_strength_down"] > 0.01) & (df["trend_strength_fast"] < -0.005)
+        momentum_indicators["strong_breakout_up"] = (momentum_indicators["breakout_strength_up"] > 0.01) & (momentum_indicators["trend_strength_fast"] > 0.005)
+        momentum_indicators["strong_breakout_down"] = (momentum_indicators["breakout_strength_down"] > 0.01) & (momentum_indicators["trend_strength_fast"] < -0.005)
         
         # Market regime classification (enhanced)
         confirmation = self.TREND_CONFIRMATION_PERIODS
-        df["strong_bull"] = (
-            (df["ema_12"] > df["ema_26"]) & 
-            (df["ema_26"] > df["ema_50"]) & 
-            (df["momentum_medium"] > self.MOMENTUM_BULL_THRESHOLD) &
-            (df["macd_histogram"] > 0)
+        momentum_indicators["strong_bull"] = (
+            (momentum_indicators["ema_12"] > momentum_indicators["ema_26"]) & 
+            (momentum_indicators["ema_26"] > momentum_indicators["ema_50"]) & 
+            (momentum_indicators["momentum_medium"] > self.MOMENTUM_BULL_THRESHOLD) &
+            (momentum_indicators["macd_histogram"] > 0)
         ).rolling(confirmation).sum() >= confirmation * self.TREND_AGREEMENT_RATIO
         
-        df["strong_bear"] = (
-            (df["ema_12"] < df["ema_26"]) & 
-            (df["ema_26"] < df["ema_50"]) & 
-            (df["momentum_medium"] < self.MOMENTUM_BEAR_THRESHOLD) &
-            (df["macd_histogram"] < 0)
+        momentum_indicators["strong_bear"] = (
+            (momentum_indicators["ema_12"] < momentum_indicators["ema_26"]) & 
+            (momentum_indicators["ema_26"] < momentum_indicators["ema_50"]) & 
+            (momentum_indicators["momentum_medium"] < self.MOMENTUM_BEAR_THRESHOLD) &
+            (momentum_indicators["macd_histogram"] < 0)
         ).rolling(confirmation).sum() >= confirmation * self.TREND_AGREEMENT_RATIO
         
         # Momentum score (composite indicator)
-        df["momentum_score"] = (
-            np.sign(df["momentum_fast"]) * 0.3 +
-            np.sign(df["momentum_medium"]) * 0.4 +
-            np.sign(df["momentum_slow"]) * 0.3
+        momentum_indicators["momentum_score"] = (
+            np.sign(momentum_indicators["momentum_fast"]) * 0.3 +
+            np.sign(momentum_indicators["momentum_medium"]) * 0.4 +
+            np.sign(momentum_indicators["momentum_slow"]) * 0.3
         )
+        
+        # Create DataFrame from all indicators and concatenate with original to avoid fragmentation
+        momentum_df = pd.DataFrame(momentum_indicators, index=df.index)
+        df = pd.concat([df, momentum_df], axis=1)
         
         return df
     

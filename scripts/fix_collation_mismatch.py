@@ -180,7 +180,7 @@ def fix_collation_mismatch(env=None):
                     print(f"   📝 Found {len(text_columns)} text columns")
 
                     # Alter each text column to use explicit collation
-                    for col_name, data_type, nullable, default in text_columns:
+                    for col_name, data_type, _nullable, _default in text_columns:
                         if data_type == 'text':
                             alter_sql = f'ALTER TABLE {table_name} ALTER COLUMN "{col_name}" TYPE TEXT COLLATE "en_US.UTF-8"'
                         else:

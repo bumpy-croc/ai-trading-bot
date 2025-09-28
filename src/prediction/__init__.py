@@ -55,7 +55,7 @@ def __getattr__(name: str) -> Any:
 
 def create_engine(
     enable_sentiment: bool = False, enable_market_microstructure: bool = False
-) -> "PredictionEngine":
+) -> PredictionEngine:
     """Create a lazily imported prediction engine with common configuration."""
 
     from .engine import PredictionEngine
@@ -66,7 +66,7 @@ def create_engine(
     return PredictionEngine(config)
 
 
-def create_minimal_engine() -> "PredictionEngine":
+def create_minimal_engine() -> PredictionEngine:
     """Create a minimal prediction engine with basic configuration."""
 
     return create_engine(
@@ -74,7 +74,7 @@ def create_minimal_engine() -> "PredictionEngine":
     )
 
 
-def predict(data, model_name=None) -> "PredictionResult":
+def predict(data, model_name=None) -> PredictionResult:
     """Quick prediction helper using the minimal engine configuration."""
 
     engine = create_minimal_engine()

@@ -13,6 +13,8 @@ pytestmark = pytest.mark.integration
 
 class MockStrategy:
     """Mock strategy for testing"""
+    name = "MockStrategy"  # Add required name attribute
+    
     def check_entry_conditions(self, df, index):
         return False
     
