@@ -479,6 +479,14 @@ class EnsembleWeighted(BaseStrategy):
         strong_bull = df.get("strong_bull", pd.Series([False])).iloc[index]
         strong_breakout_up = df.get("strong_breakout_up", pd.Series([False])).iloc[index]
         trend_alignment = df.get("trend_alignment", pd.Series([False])).iloc[index]
+        macd_histogram = df.get("macd_histogram", pd.Series([0.0])).iloc[index]
+        
+        # Calculate confirmed_trend for position sizing (same logic as entry conditions)
+        confirmed_trend = (
+            trend_alignment and 
+            abs(trend_strength_fast) > 0.01 and
+            macd_histogram > 0
+        )
         
         # Cycle 2: Aggressive volatility-based pseudo-leverage
         # Key insight: Use volatility to determine leverage amount

@@ -143,9 +143,9 @@ class TestEnsembleOptimized:
         strategy = EnsembleWeighted()
         
         # Check increased position size limits
-        assert strategy.BASE_POSITION_SIZE == 0.30  # 30%
-        assert strategy.MAX_POSITION_SIZE_RATIO == 0.45  # 45%
-        assert strategy.MIN_POSITION_SIZE_RATIO == 0.10  # 10%
+        assert strategy.BASE_POSITION_SIZE == 0.50  # 50%
+        assert strategy.MAX_POSITION_SIZE_RATIO == 0.80  # 80%
+        assert strategy.MIN_POSITION_SIZE_RATIO == 0.20  # 20%
         
         df_with_indicators = strategy.calculate_indicators(sample_data)
         balance = 10000.0
@@ -153,22 +153,22 @@ class TestEnsembleOptimized:
         position_size = strategy.calculate_position_size(df_with_indicators, 130, balance)
         
         # Should allow larger positions
-        assert position_size >= balance * 0.10  # At least 10%
-        assert position_size <= balance * 0.45  # At most 45%
+        assert position_size >= balance * 0.20  # At least 20%
+        assert position_size <= balance * 0.80  # At most 80%
     
     def test_optimized_risk_parameters(self):
         """Test that risk parameters are optimized for higher returns"""
         strategy = EnsembleWeighted()
         
         # Check wider stops and targets
-        assert strategy.STOP_LOSS_PCT == 0.035  # 3.5%
-        assert strategy.TAKE_PROFIT_PCT == 0.08  # 8%
+        assert strategy.STOP_LOSS_PCT == 0.06  # 6%
+        assert strategy.TAKE_PROFIT_PCT == 0.20  # 20%
         
         risk_overrides = strategy.get_risk_overrides()
         
         # Check trailing stops are included
         assert "trailing_stop" in risk_overrides
-        assert risk_overrides["trailing_stop"]["activation_threshold"] == 0.03
+        assert risk_overrides["trailing_stop"]["activation_threshold"] == 0.04
     
     def test_momentum_indicators(self, sample_data):
         """Test that momentum indicators are calculated"""
@@ -178,9 +178,10 @@ class TestEnsembleOptimized:
         
         # Check momentum indicators exist
         momentum_cols = [
-            "price_momentum_5", "price_momentum_20", "trend_strength",
-            "volatility", "volatility_rank", "breakout_up", "breakout_down",
-            "bull_market", "bear_market"
+            "momentum_fast", "momentum_medium", "momentum_slow", "momentum_score",
+            "volatility_fast", "volatility_slow", "volatility_ratio",
+            "trend_strength_fast", "trend_strength_slow", "trend_alignment",
+            "strong_breakout_up", "strong_breakout_down", "strong_bull", "strong_bear"
         ]
         
         for col in momentum_cols:

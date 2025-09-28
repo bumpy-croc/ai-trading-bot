@@ -215,6 +215,7 @@ class MomentumLeverage(BaseStrategy):
         # Get momentum and volatility
         momentum_3 = df.get("momentum_3", pd.Series([0.0])).iloc[index]
         momentum_7 = df.get("momentum_7", pd.Series([0.0])).iloc[index]
+        trend_strength = df.get("trend_strength", pd.Series([0.0])).iloc[index]
         volatility = df.get("volatility", pd.Series([0.02])).iloc[index]
         bull_confirmed = df.get("bull_confirmed", pd.Series([False])).iloc[index]
         strong_momentum = df.get("strong_momentum", pd.Series([False])).iloc[index]
