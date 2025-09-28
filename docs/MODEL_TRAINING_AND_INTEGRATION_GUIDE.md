@@ -84,7 +84,7 @@ This guide explains how to train or retrain models and integrate them with the p
 ### Quick start: plugging in a new price-only model
 1. Export ONNX and metadata to `src/ml` (use `sequence_length=120`, `feature_count=5`).
 2. Enable engine: `USE_PREDICTION_ENGINE=1`.
-3. Run smoke test: `pytest -q tests/test_smoke.py::test_ml_basic_backtest_jan_2024_fast -n 4`.
+3. Run parity test: `pytest -q tests/test_smoke.py::test_ml_basic_engine_parity_short_slice -n 4`.
 4. If returns drop or dimension errors appear:
    - Verify metadata and feature order.
    - Ensure extractor matches training features.
@@ -98,10 +98,10 @@ This guide explains how to train or retrain models and integrate them with the p
 - No model found: ensure files are in `src/ml` and naming matches expectations; set `PREDICTION_ENGINE_MODEL_NAME` if needed.
 
 ### Testing commands
-- Engine OFF (baseline):
-  - `pytest -q tests/test_smoke.py::test_ml_basic_backtest_jan_2024_fast -n 4`
-- Engine ON:
-  - `USE_PREDICTION_ENGINE=1 pytest -q tests/test_smoke.py::test_ml_basic_backtest_jan_2024_fast -n 4`
+- Engine parity test:
+  - `pytest -q tests/test_smoke.py::test_ml_basic_engine_parity_short_slice -n 4`
+- Unit tests:
+  - `pytest -q tests/unit/strategies/test_ml_basic_unit.py -n 4`
 
 ### CI considerations
 - Keep engine disabled by default; enable in dedicated jobs to validate new models.
