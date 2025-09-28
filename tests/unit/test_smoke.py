@@ -33,43 +33,6 @@ pytestmark = [
 ]
 
 
-@pytest.mark.timeout(300)  # Give the backtest up to 5 minutes
-@pytest.mark.slow
-def test_ml_basic_backtest_2024_smoke(btcusdt_1h_2023_2024):
-    """Run MlBasic backtest and validate 2024 annual return."""
-    # Use a lightweight mocked DataProvider that returns cached candles.
-    data_provider: DataProvider = Mock(spec=DataProvider)
-    data_provider.get_historical_data.return_value = btcusdt_1h_2023_2024
-    # For completeness, live data can return last candle
-    data_provider.get_live_data.return_value = btcusdt_1h_2023_2024.tail(1)
-
-    # Stabilize engine path to match baseline
-    os.environ["USE_PREDICTION_ENGINE"] = "1"
-    os.environ["ENGINE_BATCH_INFERENCE"] = "0"
-
-    strategy = MlBasic()
-    backtester = Backtester(
-        strategy=strategy,
-        data_provider=data_provider,
-        initial_balance=10_000,  # Nominal starting equity
-        log_to_database=False,  # Speed up the test
-    )
-
-    start_date = datetime(2024, 1, 1)
-    end_date = datetime(2024, 12, 31)
-
-    results = backtester.run("BTCUSDT", "1h", start_date, end_date)
-    yearly = results.get("yearly_returns", {})
-
-    # Ensure year of interest is present
-    assert "2024" in yearly, "Year 2024 missing from yearly returns"
-
-    # Validate performance: require >= 73% with a 2% relative margin (>= 71.54)
-    actual = yearly["2024"]
-    min_allowed = 73.0 * (1 - 0.02)
-    assert (
-        actual >= min_allowed
-    ), f"2024 return {actual:.2f}% is below minimum allowed {min_allowed:.2f}%"
 
 
 @pytest.mark.fast

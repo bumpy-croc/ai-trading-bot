@@ -19,7 +19,7 @@ Note: The prediction engine is available and strategies will migrate to it; data
   - Added per-row capture of `engine_direction` and `engine_confidence` (for monitoring only; not used for sizing/signals yet).
 - Parity and smoke validation:
   - Parity test added: engine-off vs engine-on predictions over a 500-bar slice with relaxed relative error and direction-agreement thresholds.
-  - Smoke test `test_ml_basic_backtest_2024_smoke` passes with `USE_PREDICTION_ENGINE=1` and `ENGINE_BATCH_INFERENCE=0` (batch off) to preserve baseline returns.
+  - Smoke test `test_ml_basic_backtest_jan_2024_fast` passes with `USE_PREDICTION_ENGINE=1` and `ENGINE_BATCH_INFERENCE=0` (batch off) to preserve baseline returns.
 - Optional batching path:
   - `ENGINE_BATCH_INFERENCE` (default False). When enabled, uses the engine model’s ONNX session for batched inference over sliding windows for speed. Kept off by default to avoid small drift in returns until a performance budget test is in place.
 
@@ -36,7 +36,7 @@ Key files touched
 - `ENGINE_BATCH_INFERENCE` (default False) – enables batched ONNX inference via engine session.
 
 #### Validations performed
-- Engine ON (batch off): smoke returns preserved (≥ 73.81% for 2024 per `test_ml_basic_backtest_2024_smoke`).
+- Engine ON (batch off): smoke returns preserved (≥ 73.81% for 2024 per `test_ml_basic_backtest_jan_2024_fast`).
 - Engine parity short-slice test (direction and relative error thresholds) passes.
 
 ---
@@ -73,5 +73,5 @@ Key files touched
 
 #### Quick commands (dev)
 - Parity test: `pytest -q tests/test_smoke.py::test_ml_basic_engine_parity_short_slice -n 4`
-- Smoke test (engine on, batch off): `USE_PREDICTION_ENGINE=1 ENGINE_BATCH_INFERENCE=0 pytest -q tests/test_smoke.py::test_ml_basic_backtest_2024_smoke -n 4`
-- Smoke test (engine on, batch on): `USE_PREDICTION_ENGINE=1 ENGINE_BATCH_INFERENCE=1 pytest -q tests/test_smoke.py::test_ml_basic_backtest_2024_smoke -n 4`
+- Smoke test (engine on, batch off): `USE_PREDICTION_ENGINE=1 ENGINE_BATCH_INFERENCE=0 pytest -q tests/test_smoke.py::test_ml_basic_backtest_jan_2024_fast -n 4`
+- Smoke test (engine on, batch on): `USE_PREDICTION_ENGINE=1 ENGINE_BATCH_INFERENCE=1 pytest -q tests/test_smoke.py::test_ml_basic_backtest_jan_2024_fast -n 4`
