@@ -6,16 +6,14 @@ based on detected market regimes for optimal performance.
 """
 
 import logging
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Any, Callable
+from typing import Any, Callable, Optional
 
 import pandas as pd
 
 from src.live.strategy_manager import StrategyManager
-from src.regime.detector import RegimeDetector, RegimeConfig, TrendLabel, VolLabel
-from src.strategies.base import BaseStrategy
+from src.regime.detector import RegimeConfig, RegimeDetector, TrendLabel, VolLabel
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +96,7 @@ class RegimeStrategySwitcher:
         self.regime_duration: int = 0
         
         # Multi-timeframe regime detectors
-        self.timeframe_detectors: Dict[str, RegimeDetector] = {}
+        self.timeframe_detectors: dict[str, RegimeDetector] = {}
         if self.switching_config.enable_multi_timeframe:
             for tf in self.switching_config.timeframes:
                 # Adjust parameters based on timeframe
@@ -106,7 +104,7 @@ class RegimeStrategySwitcher:
                 self.timeframe_detectors[tf] = RegimeDetector(config)
         
         # Performance tracking
-        self.strategy_performance: Dict[str, Dict[str, float]] = {}
+        self.strategy_performance: dict[str, dict[str, float]] = {}
         self.regime_history: list = []
         
         # Callbacks
@@ -145,7 +143,7 @@ class RegimeStrategySwitcher:
         else:
             return base_config
     
-    def analyze_market_regime(self, price_data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+    def analyze_market_regime(self, price_data: dict[str, pd.DataFrame]) -> dict[str, Any]:
         """
         Analyze market regime across multiple timeframes
         
@@ -192,7 +190,7 @@ class RegimeStrategySwitcher:
             'analysis_timestamp': datetime.now()
         }
     
-    def _determine_consensus_regime(self, regime_results: Dict[str, Dict]) -> Dict[str, Any]:
+    def _determine_consensus_regime(self, regime_results: dict[str, dict]) -> dict[str, Any]:
         """Determine consensus regime across timeframes"""
         
         if not regime_results:
@@ -250,7 +248,7 @@ class RegimeStrategySwitcher:
             'regime_votes': regime_votes
         }
     
-    def should_switch_strategy(self, regime_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    def should_switch_strategy(self, regime_analysis: dict[str, Any]) -> dict[str, Any]:
         """Determine if strategy should be switched based on regime analysis"""
         
         consensus = regime_analysis['consensus_regime']
@@ -309,7 +307,7 @@ class RegimeStrategySwitcher:
         
         # All checks passed - recommend switch
         decision['should_switch'] = True
-        decision['reason'] = f"Regime stable, high confidence, different optimal strategy"
+        decision['reason'] = "Regime stable, high confidence, different optimal strategy"
         
         return decision
     
@@ -363,7 +361,7 @@ class RegimeStrategySwitcher:
             else:
                 return self.strategy_mapping.range_high_vol_multiplier
     
-    def execute_strategy_switch(self, switch_decision: Dict[str, Any]) -> bool:
+    def execute_strategy_switch(self, switch_decision: dict[str, Any]) -> bool:
         """Execute the strategy switch"""
         
         if not switch_decision['should_switch']:
@@ -415,7 +413,7 @@ class RegimeStrategySwitcher:
             logger.error(f"❌ Strategy switch execution failed: {e}")
             return False
     
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get current status of regime-based switching"""
         
         return {

@@ -20,18 +20,18 @@ Risk Management:
 - Dynamic position sizing based on confidence
 """
 
-import logging
-from typing import Any, Dict, List, Optional, Tuple
+from collections import defaultdict
+from typing import Any, Optional
+
 import numpy as np
 import pandas as pd
-from collections import defaultdict
 
 from src.strategies.base import BaseStrategy
-from src.strategies.ml_basic import MlBasic
-from src.strategies.ml_adaptive import MlAdaptive
-from src.strategies.ml_sentiment import MlSentiment
-from src.strategies.bull import Bull
 from src.strategies.bear import BearStrategy
+from src.strategies.bull import Bull
+from src.strategies.ml_adaptive import MlAdaptive
+from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_sentiment import MlSentiment
 
 
 class EnsembleWeighted(BaseStrategy):
@@ -81,9 +81,9 @@ class EnsembleWeighted(BaseStrategy):
         self.trading_pair = "BTCUSDT"
         
         # Initialize component strategies with optimized weights for higher returns
-        self.strategies: Dict[str, BaseStrategy] = {}
-        self.strategy_weights: Dict[str, float] = {}
-        self.strategy_performance: Dict[str, List[float]] = defaultdict(list)
+        self.strategies: dict[str, BaseStrategy] = {}
+        self.strategy_weights: dict[str, float] = {}
+        self.strategy_performance: dict[str, list[float]] = defaultdict(list)
         self.decision_count = 0
         
         if use_ml_basic:
@@ -149,7 +149,7 @@ class EnsembleWeighted(BaseStrategy):
         
         return df
     
-    def _calculate_ensemble_signals(self, df: pd.DataFrame, strategy_dfs: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    def _calculate_ensemble_signals(self, df: pd.DataFrame, strategy_dfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
         """Calculate ensemble signals and confidence metrics"""
         
         # Initialize ensemble columns
@@ -313,12 +313,6 @@ class EnsembleWeighted(BaseStrategy):
         trend_alignment = df.get("trend_alignment", pd.Series([False])).iloc[index]
         
         # Enhanced entry conditions with advanced momentum
-        basic_entry = (
-            entry_score > score_threshold and
-            agreement >= min_agreement and
-            confidence >= min_confidence and
-            active_strategies >= min_active
-        )
         
         # Advanced momentum conditions for pseudo-leverage entry
         explosive_momentum = (
@@ -477,14 +471,14 @@ class EnsembleWeighted(BaseStrategy):
         # Adjust for ensemble metrics - More aggressive multipliers
         confidence_factor = max(0.8, min(2.0, confidence * 1.5))  # Increased multipliers
         score_factor = max(0.9, min(1.8, entry_score * 1.4))      # Higher score impact
-        agreement_factor = max(0.9, min(1.5, agreement * 1.2))    # Reward strong agreement
+        max(0.9, min(1.5, agreement * 1.2))    # Reward strong agreement
         
         # Advanced momentum and volatility adjustments (Cycle 1)
         momentum_fast = df.get("momentum_fast", pd.Series([0.0])).iloc[index]
-        momentum_medium = df.get("momentum_medium", pd.Series([0.0])).iloc[index]
+        df.get("momentum_medium", pd.Series([0.0])).iloc[index]
         momentum_score = df.get("momentum_score", pd.Series([0.0])).iloc[index]
         trend_strength_fast = df.get("trend_strength_fast", pd.Series([0.0])).iloc[index]
-        volatility_ratio = df.get("volatility_ratio", pd.Series([1.0])).iloc[index]
+        df.get("volatility_ratio", pd.Series([1.0])).iloc[index]
         strong_bull = df.get("strong_bull", pd.Series([False])).iloc[index]
         strong_breakout_up = df.get("strong_breakout_up", pd.Series([False])).iloc[index]
         trend_alignment = df.get("trend_alignment", pd.Series([False])).iloc[index]
@@ -582,7 +576,7 @@ class EnsembleWeighted(BaseStrategy):
         # For now, keep weights stable
         pass
     
-    def get_risk_overrides(self) -> Optional[Dict[str, Any]]:
+    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
         """Risk management overrides for ensemble strategy - Optimized for higher returns"""
         return {
             "position_sizer": "confidence_weighted",
@@ -627,7 +621,7 @@ class EnsembleWeighted(BaseStrategy):
             "decision_count": self.decision_count,
         }
     
-    def get_ensemble_status(self) -> Dict[str, Any]:
+    def get_ensemble_status(self) -> dict[str, Any]:
         """Get current ensemble status and health"""
         return {
             "ensemble_name": self.name,

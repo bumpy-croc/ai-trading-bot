@@ -8,12 +8,12 @@ and timeframes for better accuracy and faster response times.
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-from src.regime.detector import RegimeDetector, RegimeConfig, TrendLabel, VolLabel
+from src.regime.detector import RegimeConfig, RegimeDetector
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class EnhancedRegimeConfig:
     rsi_window: int = 14
     rsi_overbought: float = 70
     rsi_oversold: float = 30
-    momentum_windows: List[int] = None  # [5, 10, 20]
+    momentum_windows: list[int] = None  # [5, 10, 20]
     
     # Volume analysis
     volume_sma_window: int = 20
@@ -395,7 +395,7 @@ class EnhancedRegimeDetector:
         """Calculate volatility component score"""
         
         vol_regime = row.get('vol_regime', 1)
-        atr_pct = row.get('atr_pct', 0.02)
+        row.get('atr_pct', 0.02)
         
         # High volatility reduces confidence in trend signals
         if vol_regime > self.config.volatility_regime_threshold:
@@ -465,7 +465,7 @@ class EnhancedRegimeDetector:
         
         return np.clip(confidence, 0, 1)
     
-    def _apply_hysteresis(self, regimes: List[str]) -> List[str]:
+    def _apply_hysteresis(self, regimes: list[str]) -> list[str]:
         """Apply hysteresis to prevent regime flip-flopping"""
         
         result = []
@@ -503,7 +503,7 @@ class EnhancedRegimeDetector:
         
         return result
     
-    def get_current_regime(self, df: pd.DataFrame) -> Tuple[str, float]:
+    def get_current_regime(self, df: pd.DataFrame) -> tuple[str, float]:
         """Get current market regime and confidence"""
         
         if df.empty or 'final_regime' not in df.columns:
@@ -514,7 +514,7 @@ class EnhancedRegimeDetector:
         
         return current_regime, current_confidence
     
-    def get_regime_summary(self, df: pd.DataFrame, lookback: int = 100) -> Dict[str, any]:
+    def get_regime_summary(self, df: pd.DataFrame, lookback: int = 100) -> dict[str, any]:
         """Get summary of recent regime behavior"""
         
         if df.empty or len(df) < lookback:
