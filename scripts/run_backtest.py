@@ -22,20 +22,28 @@ def load_strategy(strategy_name: str):
     try:
         # Import strategies
         if strategy_name == "ml_basic":
-            from strategies.ml_basic import MlBasic
+            from src.strategies.ml_basic import MlBasic
 
             strategy = MlBasic()
+        elif strategy_name == "ml_adaptive":
+            from src.strategies.ml_adaptive import MlAdaptive
+
+            strategy = MlAdaptive()
+        elif strategy_name == "ml_sentiment":
+            from src.strategies.ml_sentiment import MlSentiment
+
+            strategy = MlSentiment()
         elif strategy_name == "bear":
-            from strategies.bear import BearStrategy
+            from src.strategies.bear import BearStrategy
 
             strategy = BearStrategy()
         elif strategy_name == "bull":
-            from strategies.bull import Bull
+            from src.strategies.bull import Bull
 
             strategy = Bull()
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ["ml_basic", "bear", "bull"]
+            available_strategies = ["ml_basic", "ml_adaptive", "ml_sentiment", "bear", "bull"]
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
 
@@ -119,18 +127,18 @@ def main() -> int:
 
         # Initialize data provider with caching
         if args.provider == "coinbase":
-            from data_providers.coinbase_provider import CoinbaseProvider
+            from src.data_providers.coinbase_provider import CoinbaseProvider
 
             provider = CoinbaseProvider()
         else:
-            from data_providers.binance_provider import BinanceProvider
+            from src.data_providers.binance_provider import BinanceProvider
 
             provider = BinanceProvider()
         if args.no_cache:
             data_provider = provider
             logger.info("Data caching disabled")
         else:
-            from data_providers.cached_data_provider import CachedDataProvider
+            from src.data_providers.cached_data_provider import CachedDataProvider
 
             data_provider = CachedDataProvider(provider, cache_ttl_hours=args.cache_ttl)
             logger.info(f"Using cached data provider (TTL: {args.cache_ttl} hours)")
