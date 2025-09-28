@@ -372,11 +372,10 @@ class RegimeStrategySwitcher:
         try:
             new_strategy = switch_decision['optimal_strategy']
             
-            # Add regime-specific configuration
+            # For now, just pass the name parameter to avoid constructor issues
+            # The regime-specific configuration can be added later when strategies support it
             regime_config = {
-                'regime_aware': True,
-                'regime_label': switch_decision['new_regime'],
-                'position_multiplier': self.get_position_size_multiplier(switch_decision['new_regime'])
+                'name': f"{new_strategy}_RegimeAdaptive"
             }
             
             # Execute hot swap

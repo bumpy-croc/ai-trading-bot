@@ -52,12 +52,8 @@ def _load_strategy(strategy_name: str):
             from src.strategies.momentum_leverage import MomentumLeverage
 
             return MomentumLeverage()
-        if strategy_name == "regime_adaptive":
-            from src.strategies.regime_adaptive import RegimeAdaptive
-
-            return RegimeAdaptive()
         print(f"Unknown strategy: {strategy_name}")
-        print("Available strategies: ml_basic, ml_sentiment, ml_adaptive, bear, bull, ensemble_weighted, momentum_leverage, regime_adaptive")
+        print("Available strategies: ml_basic, ml_sentiment, ml_adaptive, bear, bull, ensemble_weighted, momentum_leverage")
         raise SystemExit(1)
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")
@@ -89,6 +85,11 @@ def _handle(ns: argparse.Namespace) -> int:
         configure_logging()
 
         start_date, end_date = _get_date_range(ns)
+        
+        # Check if regime-aware backtesting is requested
+        if hasattr(ns, 'regime_aware') and ns.regime_aware:
+            return _handle_regime_aware_backtest(ns, start_date, end_date)
+        
         strategy = _load_strategy(ns.strategy)
         logger.info(f"Loaded strategy: {strategy.name}")
 
@@ -251,6 +252,118 @@ def _handle(ns: argparse.Namespace) -> int:
         return 1
 
 
+def _handle_regime_aware_backtest(ns: argparse.Namespace, start_date: datetime, end_date: datetime) -> int:
+    """Handle regime-aware backtesting with strategy switching"""
+    try:
+        from src.backtesting.regime_backtester import RegimeAwareBacktester
+        from src.data_providers.feargreed_provider import FearGreedProvider
+        from src.risk.risk_manager import RiskParameters
+        from src.live.regime_strategy_switcher import RegimeStrategyMapping, SwitchingConfig
+        from src.regime.detector import RegimeConfig
+
+        # Load initial strategy
+        initial_strategy = _load_strategy(ns.strategy)
+        logger.info(f"Loaded initial strategy for regime-aware backtest: {initial_strategy.name}")
+
+        # Provider setup (same as regular backtest)
+        if ns.provider == "coinbase":
+            from src.data_providers.coinbase_provider import CoinbaseProvider
+            provider = CoinbaseProvider()
+        else:
+            from src.data_providers.binance_provider import BinanceProvider
+            provider = BinanceProvider()
+            
+        if ns.no_cache:
+            data_provider = provider
+            logger.info("Data caching disabled")
+        else:
+            from src.data_providers.cached_data_provider import CachedDataProvider
+            from src.utils.cache_utils import get_cache_ttl_for_provider
+            
+            cache_ttl = get_cache_ttl_for_provider(provider, ns.cache_ttl)
+            data_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)
+            logger.info(f"Using cached data provider (TTL: {cache_ttl} hours)")
+
+        sentiment_provider = None
+        if ns.use_sentiment:
+            sentiment_provider = FearGreedProvider()
+            logger.info("Using sentiment analysis in regime-aware backtest")
+
+        risk_params = RiskParameters(
+            base_risk_per_trade=ns.risk_per_trade,
+            max_risk_per_trade=ns.max_risk_per_trade,
+            max_drawdown=ns.max_drawdown,
+        )
+
+        # Configure regime detection and strategy switching
+        regime_config = RegimeConfig()
+        strategy_mapping = RegimeStrategyMapping()
+        switching_config = SwitchingConfig()
+
+        # Create regime-aware backtester
+        backtester = RegimeAwareBacktester(
+            initial_strategy=initial_strategy,
+            data_provider=data_provider,
+            sentiment_provider=sentiment_provider,
+            risk_parameters=risk_params,
+            initial_balance=ns.initial_balance,
+            regime_config=regime_config,
+            strategy_mapping=strategy_mapping,
+            switching_config=switching_config,
+            enable_regime_switching=True,
+            log_to_database=ns.log_to_db
+        )
+
+        trading_symbol = (
+            SymbolFactory.to_exchange_symbol(ns.symbol, ns.provider)
+            if ns.symbol != "BTC-USD"
+            else initial_strategy.get_trading_pair()
+        )
+
+        results = backtester.run(
+            symbol=trading_symbol, 
+            timeframe=ns.timeframe, 
+            start=start_date, 
+            end=end_date
+        )
+
+        # Print results
+        print("\nRegime-Aware Backtest Results:")
+        print("=" * 60)
+        print(f"Initial Strategy: {initial_strategy.name}")
+        print(f"Final Strategy: {results.get('final_strategy', 'N/A')}")
+        print(f"Total Strategy Switches: {results.get('total_strategy_switches', 0)}")
+        print(f"Symbol: {trading_symbol}")
+        print(f"Period: {start_date.date()} to {end_date.date()}")
+        print(f"Timeframe: {ns.timeframe}")
+        print("-" * 60)
+        print(f"Total Trades: {results['total_trades']}")
+        print(f"Win Rate: {results['win_rate']:.2f}%")
+        print(f"Total Return: {results['total_return']:.2f}%")
+        print(f"Annualized Return: {results['annualized_return']:.2f}%")
+        print(f"Max Drawdown: {results['max_drawdown']:.2f}%")
+        print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
+        print(f"Final Balance: ${results['final_balance']:.2f}")
+        print(f"Hold Return: {results['hold_return']:.2f}%")
+        print(f"Trading vs Hold: {results['trading_vs_hold_difference']:+.2f}%")
+        print("=" * 60)
+
+        # Print strategy switches if any
+        if results.get('strategy_switches'):
+            print("\nStrategy Switches:")
+            print("-" * 60)
+            for switch in results['strategy_switches']:
+                print(f"{switch['timestamp']}: {switch['old_strategy']} -> {switch['new_strategy']} "
+                      f"(regime: {switch['regime']}, confidence: {switch['confidence']:.2f})")
+            print("=" * 60)
+
+        return 0
+
+    except Exception as exc:
+        logger.error(f"Error running regime-aware backtest: {exc}")
+        return 1
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("backtest", help="Run strategy backtest")
     p.add_argument("strategy", help="Strategy name - e.g., ml_basic")
@@ -285,5 +398,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=0.5,
         help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
+    )
+    p.add_argument(
+        "--regime-aware",
+        action="store_true",
+        help="Enable regime-aware backtesting with automatic strategy switching",
     )
     p.set_defaults(func=_handle)

@@ -73,6 +73,31 @@ class StrategyManager:
             self.strategy_registry["bear"] = BearStrategy
         except Exception as e:
             logger.debug(f"Bear strategy not available: {e}")
+            
+        # Register new ensemble strategies
+        try:
+            from src.strategies.ml_adaptive import MlAdaptive
+            self.strategy_registry["ml_adaptive"] = MlAdaptive
+        except Exception as e:
+            logger.debug(f"ML Adaptive strategy not available: {e}")
+            
+        try:
+            from src.strategies.ensemble_weighted import EnsembleWeighted
+            self.strategy_registry["ensemble_weighted"] = EnsembleWeighted
+        except Exception as e:
+            logger.debug(f"Ensemble Weighted strategy not available: {e}")
+            
+        try:
+            from src.strategies.momentum_leverage import MomentumLeverage
+            self.strategy_registry["momentum_leverage"] = MomentumLeverage
+        except Exception as e:
+            logger.debug(f"Momentum Leverage strategy not available: {e}")
+            
+        try:
+            from src.strategies.ml_sentiment import MlSentiment
+            self.strategy_registry["ml_sentiment"] = MlSentiment
+        except Exception as e:
+            logger.debug(f"ML Sentiment strategy not available: {e}")
 
         # Version history
         self.version_history: dict[str, StrategyVersion] = {}

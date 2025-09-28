@@ -59,6 +59,15 @@ class EnsembleWeighted(BaseStrategy):
     MOMENTUM_THRESHOLD = 0.02  # 2% momentum threshold
     TREND_STRENGTH_THRESHOLD = 0.015  # 1.5% trend strength
     
+    # Breakout detection constants
+    BREAKOUT_LOOKBACK = 15  # Lookback period for breakout detection
+    
+    # Trend confirmation constants
+    TREND_CONFIRMATION_PERIODS = 10  # Periods for trend confirmation
+    MOMENTUM_BULL_THRESHOLD = 0.02  # Momentum threshold for bull regime
+    MOMENTUM_BEAR_THRESHOLD = -0.02  # Momentum threshold for bear regime
+    TREND_AGREEMENT_RATIO = 0.7  # Required agreement ratio for regime confirmation
+    
     def __init__(
         self,
         name: str = "EnsembleWeighted",
@@ -241,7 +250,7 @@ class EnsembleWeighted(BaseStrategy):
         df["volatility_ratio"] = df["volatility_fast"] / df["volatility_slow"]
         
         # Advanced breakout detection (faster response)
-        lookback = 15  # Use direct value instead of self.BREAKOUT_LOOKBACK
+        lookback = self.BREAKOUT_LOOKBACK
         df[f"high_{lookback}"] = df["high"].rolling(lookback).max()
         df[f"low_{lookback}"] = df["low"].rolling(lookback).min()
         df["breakout_strength_up"] = (df["close"] - df[f"high_{lookback}"].shift(1)) / df[f"high_{lookback}"].shift(1)
@@ -252,20 +261,20 @@ class EnsembleWeighted(BaseStrategy):
         df["strong_breakout_down"] = (df["breakout_strength_down"] > 0.01) & (df["trend_strength_fast"] < -0.005)
         
         # Market regime classification (enhanced)
-        confirmation = 10  # Use direct value instead of self.TREND_CONFIRMATION_PERIODS
+        confirmation = self.TREND_CONFIRMATION_PERIODS
         df["strong_bull"] = (
             (df["ema_12"] > df["ema_26"]) & 
             (df["ema_26"] > df["ema_50"]) & 
-            (df["momentum_medium"] > 0.02) &
+            (df["momentum_medium"] > self.MOMENTUM_BULL_THRESHOLD) &
             (df["macd_histogram"] > 0)
-        ).rolling(confirmation).sum() >= confirmation * 0.7
+        ).rolling(confirmation).sum() >= confirmation * self.TREND_AGREEMENT_RATIO
         
         df["strong_bear"] = (
             (df["ema_12"] < df["ema_26"]) & 
             (df["ema_26"] < df["ema_50"]) & 
-            (df["momentum_medium"] < -0.02) &
+            (df["momentum_medium"] < self.MOMENTUM_BEAR_THRESHOLD) &
             (df["macd_histogram"] < 0)
-        ).rolling(confirmation).sum() >= confirmation * 0.7
+        ).rolling(confirmation).sum() >= confirmation * self.TREND_AGREEMENT_RATIO
         
         # Momentum score (composite indicator)
         df["momentum_score"] = (

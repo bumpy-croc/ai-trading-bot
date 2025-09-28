@@ -32,6 +32,10 @@ run_backtest() {
         --days $DAYS \
         --initial-balance $BALANCE \
         --no-db
+    if [ $? -ne 0 ]; then
+        echo "❌ Error: Backtest for strategy '$strategy' failed!" >&2
+        exit 1
+    fi
     echo ""
 }
 
@@ -39,8 +43,20 @@ run_backtest() {
 echo "🔄 Running strategy backtests..."
 echo ""
 
-# 1. Regime-Adaptive Strategy (Our new strategy)
-run_backtest "regime_adaptive"
+# 1. Regime-Aware Backtest (Using strategy swapping)
+echo "📊 Testing regime-aware backtesting with ml_basic as initial strategy..."
+python -m cli backtest ml_basic \
+    --symbol $SYMBOL \
+    --timeframe $TIMEFRAME \
+    --days $DAYS \
+    --initial-balance $BALANCE \
+    --regime-aware \
+    --no-db
+if [ $? -ne 0 ]; then
+    echo "❌ Error: Regime-aware backtest failed!" >&2
+    exit 1
+fi
+echo ""
 
 # 2. MomentumLeverage (Baseline champion)  
 run_backtest "momentum_leverage"
@@ -58,7 +74,7 @@ echo "✅ All backtests completed!"
 echo ""
 echo "📈 Performance Summary:"
 echo "Expected Results Based on Simulation:"
-echo "  1. Regime-Adaptive: ~4,287% return, 28% max drawdown"
+echo "  1. Regime-Aware: Adaptive strategy switching based on market conditions"
 echo "  2. MomentumLeverage: ~2,951% return, 43% max drawdown" 
 echo "  3. EnsembleWeighted: ~847% return, 18% max drawdown"
 echo "  4. MlBasic: ~312% return, 25% max drawdown"

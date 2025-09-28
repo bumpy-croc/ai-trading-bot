@@ -7,7 +7,6 @@ from .ml_sentiment import MlSentiment
 from .test_high_frequency import TestHighFrequencyStrategy
 from .ensemble_weighted import EnsembleWeighted
 from .momentum_leverage import MomentumLeverage
-from .regime_adaptive import RegimeAdaptive
 
 __all__ = [
     "BaseStrategy",
@@ -19,5 +18,4 @@ __all__ = [
     "Bull",
     "EnsembleWeighted",
     "MomentumLeverage",
-    "RegimeAdaptive",
 ]
