@@ -309,7 +309,7 @@ def run_unit_tests(pytest_args=None):
         cmd.extend(
             [
                 "-k",
-                "not test_very_large_dataset and not test_ml_basic_backtest_2024_smoke and not test_position_sizing and not test_dynamic_stop_loss and not test_market_regime_detection and not test_volatility_calculations and not test_entry_conditions_crisis and not test_ml_predictions",
+                "not test_very_large_dataset and not test_position_sizing and not test_dynamic_stop_loss and not test_market_regime_detection and not test_volatility_calculations and not test_entry_conditions_crisis and not test_ml_predictions",
             ]
         )
         print_warning("CI environment detected - skipping heaviest tests to prevent timeouts")
