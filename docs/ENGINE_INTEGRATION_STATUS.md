@@ -19,7 +19,7 @@ Note: The prediction engine is available and strategies will migrate to it; data
   - Added per-row capture of `engine_direction` and `engine_confidence` (for monitoring only; not used for sizing/signals yet).
 - Parity and smoke validation:
   - Parity test added: engine-off vs engine-on predictions over a 500-bar slice with relaxed relative error and direction-agreement thresholds.
-  - Smoke test `test_ml_basic_backtest_2024_smoke` passes with `USE_PREDICTION_ENGINE=1` and `ENGINE_BATCH_INFERENCE=0` (batch off) to preserve baseline returns.
+  - Unit tests validate MlBasic strategy core functionality and logging behavior.
 - Optional batching path:
   - `ENGINE_BATCH_INFERENCE` (default False). When enabled, uses the engine model’s ONNX session for batched inference over sliding windows for speed. Kept off by default to avoid small drift in returns until a performance budget test is in place.
 
@@ -27,7 +27,7 @@ Key files touched
 - `strategies/ml_basic.py`: engine integration, health checks, fallback, logging.
 - `prediction/features/price_only.py`: 5-feature price-only extractor.
 - `prediction/engine.py`: added `predict_series(...)` batching API.
-- `tests/test_smoke.py`: engine parity test.
+- `tests/unit/strategies/`: MlBasic unit and logging tests.
 - `docs/MODEL_TRAINING_AND_INTEGRATION_GUIDE.md`: training/integration guidance and checklist.
 
 #### Current flags and defaults
@@ -36,8 +36,8 @@ Key files touched
 - `ENGINE_BATCH_INFERENCE` (default False) – enables batched ONNX inference via engine session.
 
 #### Validations performed
-- Engine ON (batch off): smoke returns preserved (≥ 73.81% for 2024 per `test_ml_basic_backtest_2024_smoke`).
-- Engine parity short-slice test (direction and relative error thresholds) passes.
+- Unit tests: validate MlBasic strategy core functionality and logging behavior.
+- MlBasic unit tests validate core strategy functionality.
 
 ---
 
@@ -55,7 +55,7 @@ Key files touched
   - Add a unit test to validate extractor feature count and order against model metadata (`feature_count`). Fail fast on mismatch.
   - Add configuration profiles for extractors per strategy (price-only vs technical) and bind models via config.
 - CI and safeguards
-  - Add parity test to CI and keep smoke thresholds unchanged.
+  - Add unit tests to CI and keep test coverage unchanged.
   - Add a performance test (max wall-time for the smoke run), with `ENGINE_BATCH_INFERENCE=1` to ensure speed-ups do not change returns.
   - Auto-disable engine on repeated health check failures (cooldown), with a single run-level warning.
 - Model lifecycle
@@ -69,9 +69,8 @@ Key files touched
 2) Enable `ENGINE_BATCH_INFERENCE=1` in tests guarded by a performance budget; tweak chunk size if needed.
 3) Add extractor↔model shape validation test and fail fast on mismatch.
 4) Add a feature flag to use engine confidence/direction for sizing/signals; run A/B with the smoke test to compare returns.
-5) Expand CI: run parity test, smoke test, and performance budget test with engine on (batch on) and ensure thresholds are met.
+5) Expand CI: run unit tests and performance budget test with engine on (batch on) and ensure thresholds are met.
 
 #### Quick commands (dev)
-- Parity test: `pytest -q tests/test_smoke.py::test_ml_basic_engine_parity_short_slice -n 4`
-- Smoke test (engine on, batch off): `USE_PREDICTION_ENGINE=1 ENGINE_BATCH_INFERENCE=0 pytest -q tests/test_smoke.py::test_ml_basic_backtest_2024_smoke -n 4`
-- Smoke test (engine on, batch on): `USE_PREDICTION_ENGINE=1 ENGINE_BATCH_INFERENCE=1 pytest -q tests/test_smoke.py::test_ml_basic_backtest_2024_smoke -n 4`
+- MlBasic unit tests: `pytest -q tests/unit/strategies/test_ml_basic_unit.py -n 4`
+- MlBasic logging tests: `pytest -q tests/unit/strategies/test_ml_basic_logging_unit.py -n 4`

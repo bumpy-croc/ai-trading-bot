@@ -84,7 +84,7 @@ This guide explains how to train or retrain models and integrate them with the p
 ### Quick start: plugging in a new price-only model
 1. Export ONNX and metadata to `src/ml` (use `sequence_length=120`, `feature_count=5`).
 2. Enable engine: `USE_PREDICTION_ENGINE=1`.
-3. Run smoke test: `pytest -q tests/test_smoke.py::test_ml_basic_backtest_2024_smoke -n 4`.
+3. Run unit tests: `pytest -q tests/unit/strategies/test_ml_basic_unit.py -n 4`.
 4. If returns drop or dimension errors appear:
    - Verify metadata and feature order.
    - Ensure extractor matches training features.
@@ -98,15 +98,15 @@ This guide explains how to train or retrain models and integrate them with the p
 - No model found: ensure files are in `src/ml` and naming matches expectations; set `PREDICTION_ENGINE_MODEL_NAME` if needed.
 
 ### Testing commands
-- Engine OFF (baseline):
-  - `pytest -q tests/test_smoke.py::test_ml_basic_backtest_2024_smoke -n 4`
-- Engine ON:
-  - `USE_PREDICTION_ENGINE=1 pytest -q tests/test_smoke.py::test_ml_basic_backtest_2024_smoke -n 4`
+- MlBasic unit tests:
+  - `pytest -q tests/unit/strategies/test_ml_basic_unit.py -n 4`
+- MlBasic logging tests:
+  - `pytest -q tests/unit/strategies/test_ml_basic_logging_unit.py -n 4`
 
 ### CI considerations
 - Keep engine disabled by default; enable in dedicated jobs to validate new models.
 - Enforce a minimum return threshold vs. baseline to avoid regressions.
-- Add a parity test comparing engine-off vs engine-on predictions within a tight tolerance over a short slice.
+- Add unit tests to validate strategy core functionality and logging behavior.
 - Keep smoke test threshold unchanged; add a performance budget test once batching is implemented.
 
 ### Roadmap for fuller integration
@@ -118,6 +118,6 @@ This guide explains how to train or retrain models and integrate them with the p
 - [ ] Enable via `USE_PREDICTION_ENGINE=1` and select model (`PREDICTION_ENGINE_MODEL_NAME` or filename stem)
 - [ ] Ensure extractor matches model features (count, order); for MlBasic use `PriceOnlyFeatureExtractor`
 - [ ] Confirm metadata (`sequence_length`, `feature_count`) present
-- [ ] Run parity test (engine-off vs engine-on predictions within tight tolerance)
+- [ ] Run unit tests to validate strategy functionality
 - [ ] Run smoke test (returns ≥ baseline)
 - [ ] Add performance budget test if needed (batching on)
