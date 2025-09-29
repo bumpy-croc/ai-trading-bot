@@ -583,7 +583,9 @@ class Backtester:
                     try:
                         # Prepare data slice for regime analysis
                         analysis_df = df.iloc[:i+1].copy()
-                        price_data = {timeframe: analysis_df}
+                        # Use the timeframe parameter passed to run method
+                        current_timeframe = timeframe
+                        price_data = {current_timeframe: analysis_df}
                         
                         # Analyze current market regime
                         regime_analysis = self.regime_switcher.analyze_market_regime(price_data)
