@@ -188,7 +188,11 @@ class PredictionEngine:
                         and prev_index[1:].equals(new_index[:-1])
                     ):
                         use_incremental = True
-                if use_incremental:
+                min_warmup = max(
+                    self._regime_detector.config.atr_percentile_lookback,
+                    self._regime_detector.config.slope_window,
+                )
+                if use_incremental and len(data) >= min_warmup:
                     annotated = self._regime_detector.annotate_incremental(data)
                 else:
                     annotated = self._regime_detector.annotate(data)
