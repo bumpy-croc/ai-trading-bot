@@ -639,17 +639,16 @@ class Backtester:
                                     # Recalculate indicators for new strategy
                                     # This ensures the new strategy has all required indicators
                                     try:
-                                        # Get data up to current point for recalculation
-                                        temp_df = df.iloc[:i+1].copy()
-                                        
-                                        # Recalculate indicators with new strategy
+                                        # Recalculate indicators for the entire remaining dataset
+                                        # This prevents future candles from having missing data
+                                        temp_df = df.copy()
                                         temp_df = new_strategy.calculate_indicators(temp_df)
                                         
                                         # Update the main dataframe with new indicators
                                         # Only update columns that don't exist yet or are strategy-specific
                                         for col in temp_df.columns:
                                             if col not in df.columns or col.startswith(('ml_', 'ensemble_', 'momentum_', 'regime_')):
-                                                df[col] = temp_df[col].reindex(df.index, fill_value=None)
+                                                df[col] = temp_df[col]
                                         
                                         logger.debug(f"Recalculated indicators for strategy {new_strategy_name}")
                                     except Exception as indicator_error:
