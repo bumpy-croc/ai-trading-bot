@@ -598,7 +598,7 @@ class Backtester:
                         })
                         
                         # Check if strategy should be switched
-                        switch_decision = self.regime_switcher.should_switch_strategy(regime_analysis)
+                        switch_decision = self.regime_switcher.should_switch_strategy(regime_analysis, current_candle_index=i)
                         
                         if switch_decision['should_switch']:
                             new_strategy_name = switch_decision['optimal_strategy']

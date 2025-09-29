@@ -92,6 +92,7 @@ class RegimeStrategySwitcher:
         self.current_regime: Optional[str] = None
         self.regime_confidence: float = 0.0
         self.regime_start_time: Optional[datetime] = None
+        self.regime_start_candle_index: Optional[int] = None
         self.last_switch_time: Optional[datetime] = None
         self.regime_duration: int = 0
         
@@ -248,8 +249,13 @@ class RegimeStrategySwitcher:
             'regime_votes': regime_votes
         }
     
-    def should_switch_strategy(self, regime_analysis: dict[str, Any]) -> dict[str, Any]:
-        """Determine if strategy should be switched based on regime analysis"""
+    def should_switch_strategy(self, regime_analysis: dict[str, Any], current_candle_index: Optional[int] = None) -> dict[str, Any]:
+        """Determine if strategy should be switched based on regime analysis
+        
+        Args:
+            regime_analysis: Results from analyze_market_regime
+            current_candle_index: Current candle index for accurate duration tracking
+        """
         
         consensus = regime_analysis['consensus_regime']
         new_regime = consensus['regime_label']
@@ -290,11 +296,18 @@ class RegimeStrategySwitcher:
         
         # Check if regime has been stable long enough
         if self.current_regime == new_regime:
-            self.regime_duration += 1
+            # Calculate duration based on actual candle count if index is provided
+            if current_candle_index is not None and self.regime_start_candle_index is not None:
+                self.regime_duration = current_candle_index - self.regime_start_candle_index + 1
+            else:
+                # Fallback to old method if candle index not available
+                self.regime_duration += 1
         else:
             self.regime_duration = 1
             self.current_regime = new_regime
             self.regime_start_time = datetime.now()
+            if current_candle_index is not None:
+                self.regime_start_candle_index = current_candle_index
         
         if self.regime_duration < self.switching_config.min_regime_duration:
             decision['reason'] = f"Regime not stable: {self.regime_duration} < {self.switching_config.min_regime_duration}"
