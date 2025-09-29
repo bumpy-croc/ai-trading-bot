@@ -188,7 +188,7 @@ class MomentumLeverage(BaseStrategy):
         trend_strength = df["trend_strength"].iloc[index]
         
         # More aggressive holding - only exit on very strong negative signals
-        momentum_exit = (momentum_3 < -0.03 and trend_strength < -0.015 and returns < 0.05)
+        momentum_exit = (momentum_3 < -self.STRONG_MOMENTUM_THRESHOLD and trend_strength < -0.015 and returns < 0.05)
         
         exit_decision = hit_stop_loss or hit_take_profit or momentum_exit
         
