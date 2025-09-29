@@ -45,6 +45,51 @@ class RegimeDetector:
         self._last_label: Optional[str] = None
         self._consecutive: int = 0
         self._dwell: int = 0
+        # Cached rolling metrics for incremental updates
+        self._cache_index: Optional[pd.Index] = None
+        self._cache_len: int = 0
+        self._cache_slope: Optional[pd.Series] = None
+        self._cache_r2: Optional[pd.Series] = None
+        self._cache_atr: Optional[pd.Series] = None
+        self._cache_atr_pct: Optional[pd.Series] = None
+        self._cache_trend_score: Optional[pd.Series] = None
+        self._cache_regime_conf: Optional[pd.Series] = None
+        self._cache_vol_label_values: Optional[pd.Series] = None
+        self._cache_result: Optional[pd.DataFrame] = None
+        self._last_processed_index: Optional[pd.Timestamp] = None
+
+    def _reset_cache(self) -> None:
+        self._cache_index = None
+        self._cache_len = 0
+        self._cache_slope = None
+        self._cache_r2 = None
+        self._cache_atr = None
+        self._cache_atr_pct = None
+        self._cache_trend_score = None
+        self._cache_regime_conf = None
+        self._cache_vol_label_values = None
+        self._cache_result = None
+        self._last_processed_index = None
+
+    @staticmethod
+    def _ols_slope_and_r2_block(window: pd.Series) -> tuple[float, float]:
+        if len(window) == 0:
+            return np.nan, np.nan
+        y = np.log(window.astype(float).clip(lower=1e-8))
+        t = np.arange(len(y), dtype=float)
+        t_mean = t.mean()
+        y_mean = y.mean()
+        tt = t - t_mean
+        yy = y - y_mean
+        denom = (tt**2).sum()
+        if denom == 0:
+            return np.nan, np.nan
+        slope = float((tt * yy).sum() / denom)
+        y_hat = y_mean + slope * tt
+        ss_tot = float((yy**2).sum())
+        ss_res = float(((y - y_hat) ** 2).sum())
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
+        return slope, r2
 
     @staticmethod
     def _rolling_ols_slope_and_r2(x: pd.Series, window: int) -> tuple[pd.Series, pd.Series]:
@@ -139,6 +184,9 @@ class RegimeDetector:
                 VolLabel.HIGH if (not pd.isna(p) and p >= cfg.atr_high_percentile) else VolLabel.LOW
             )
         )
+        vol_label_values = vol_label.apply(
+            lambda v: v.value if isinstance(v, VolLabel) else str(v)
+        )
         # Hysteresis on combined trend label only (vol used as overlay)
         labels = []
         dwell = self._dwell
@@ -174,7 +222,7 @@ class RegimeDetector:
         self._dwell = dwell
         out["trend_label"] = labels
         out["vol_label"] = vol_label.astype(str)
-        out["regime_label"] = out["trend_label"].astype(str) + ":" + out["vol_label"].astype(str)
+        out["regime_label"] = out["trend_label"].astype(str) + ":" + vol_label_values.astype(str)
         # Confidence from normalized |trend_score|
         ts = trend_score.copy()
         ts_mean = ts.rolling(252, min_periods=cfg.slope_window).mean()
@@ -182,6 +230,183 @@ class RegimeDetector:
         z = (ts - ts_mean) / ts_std.replace(0, np.nan)
         conf = z.abs().clip(0, 3) / 3.0
         out["regime_confidence"] = conf
+        # Update cache for incremental path
+        self._cache_index = out.index
+        self._cache_len = len(out)
+        self._cache_slope = slope.copy()
+        self._cache_r2 = r2.copy()
+        self._cache_atr = atr.copy()
+        self._cache_atr_pct = atr_pct.copy()
+        self._cache_trend_score = trend_score.copy()
+        self._cache_regime_conf = conf.copy()
+        self._cache_vol_label_values = vol_label_values.copy()
+        self._cache_result = out.copy()
+        self._last_processed_index = out.index[-1] if len(out) else None
+        return out
+
+    def _can_use_incremental(self, df: pd.DataFrame) -> bool:
+        if self._cache_result is None or self._cache_index is None:
+            return False
+        if df.empty or self._cache_len == 0:
+            return False
+        if len(df) != self._cache_len:
+            return False
+        prev_index = self._cache_index
+        new_index = df.index
+        if len(prev_index) < 2:
+            return False
+        if not prev_index[1:].equals(new_index[:-1]):
+            return False
+        return True
+
+    def annotate_incremental(self, df: pd.DataFrame) -> pd.DataFrame:
+        if not self._can_use_incremental(df):
+            return self.annotate(df)
+
+        cfg = self.config
+        out = df.copy()
+        prev_out = self._cache_result
+        assert prev_out is not None
+
+        closes = out["close"].astype(float)
+        slope_series = self._cache_slope.iloc[1:].copy() if self._cache_slope is not None else pd.Series([], dtype=float)
+        r2_series = self._cache_r2.iloc[1:].copy() if self._cache_r2 is not None else pd.Series([], dtype=float)
+        atr_series = self._cache_atr.iloc[1:].copy() if self._cache_atr is not None else pd.Series([], dtype=float)
+        atr_pct_series = (
+            self._cache_atr_pct.iloc[1:].copy() if self._cache_atr_pct is not None else pd.Series([], dtype=float)
+        )
+        trend_score_series = (
+            self._cache_trend_score.iloc[1:].copy()
+            if self._cache_trend_score is not None
+            else pd.Series([], dtype=float)
+        )
+        prev_vol_value_series = (
+            self._cache_vol_label_values.iloc[1:].copy()
+            if self._cache_vol_label_values is not None
+            else pd.Series([], dtype=object)
+        )
+
+        last_index = out.index[-1]
+
+        # Compute new slope/r2 for final bar
+        if len(closes) >= cfg.slope_window:
+            window = closes.iloc[-cfg.slope_window :]
+            new_slope, new_r2 = self._ols_slope_and_r2_block(window)
+        else:
+            new_slope, new_r2 = np.nan, np.nan
+
+        slope_series = pd.concat([slope_series, pd.Series([new_slope], index=[last_index])])
+        r2_series = pd.concat([r2_series, pd.Series([new_r2], index=[last_index])])
+
+        invalid_span = max(cfg.slope_window - 1, 0)
+        if invalid_span > 0:
+            slope_series.iloc[:invalid_span] = np.nan
+            r2_series.iloc[:invalid_span] = np.nan
+
+        trend_score_series = slope_series * r2_series
+        trend_score_series[r2_series < cfg.r2_min] = 0.0
+
+        # ATR computation
+        atr_window_data = out.iloc[-(cfg.atr_window + 1) :]
+        atr_tail = self._atr(atr_window_data, cfg.atr_window)
+        new_atr = float(atr_tail.iloc[-1]) if len(atr_tail) and not pd.isna(atr_tail.iloc[-1]) else np.nan
+        atr_series = pd.concat([atr_series, pd.Series([new_atr], index=[last_index])])
+        atr_invalid = max(cfg.atr_window - 1, 0)
+        if atr_invalid > 0:
+            atr_series.iloc[:atr_invalid] = np.nan
+
+        # ATR percentile
+        if len(atr_series.dropna()) >= cfg.atr_percentile_lookback:
+            atr_window = atr_series.iloc[-cfg.atr_percentile_lookback :]
+            if atr_window.isna().any():
+                new_pct = np.nan
+            else:
+                last_val = atr_window.iloc[-1]
+                new_pct = float((atr_window <= last_val).mean())
+        else:
+            new_pct = np.nan
+        atr_pct_series = pd.concat([atr_pct_series, pd.Series([new_pct], index=[last_index])])
+        pct_invalid_base = max(cfg.atr_percentile_lookback - 1, 0)
+        pct_invalid_total = pct_invalid_base + atr_invalid
+        if pct_invalid_total > 0:
+            atr_pct_series.iloc[:pct_invalid_total] = np.nan
+
+        # Trend labels
+        prev_trend_labels = prev_out["trend_label"].iloc[1:].astype(str).tolist()
+        proposed_label = str(self._label_trend(trend_score_series.iloc[-1]).value)
+        last = self._last_label
+        cons = self._consecutive
+        dwell = self._dwell
+        if last is None:
+            last = proposed_label
+            cons = 1
+            dwell = 1
+        elif proposed_label == last:
+            cons += 1
+            dwell += 1
+        else:
+            cons += 1
+            if dwell >= cfg.min_dwell and cons >= cfg.hysteresis_k:
+                last = proposed_label
+                dwell = 1
+                cons = 1
+        trend_labels = prev_trend_labels + [last]
+        if invalid_span > 0:
+            limit = min(invalid_span, len(trend_labels))
+            for i in range(limit):
+                trend_labels[i] = TrendLabel.RANGE.value
+        self._last_label = last
+        self._consecutive = cons
+        self._dwell = dwell
+
+        # Vol labels
+        prev_vol_labels = prev_out["vol_label"].iloc[1:].astype(str).tolist()
+        prev_vol_value_labels = (
+            prev_vol_value_series.astype(str).tolist()
+            if not prev_vol_value_series.empty
+            else [VolLabel.LOW.value] * len(prev_vol_labels)
+        )
+        vol_label_last = (
+            VolLabel.HIGH if (not pd.isna(new_pct) and new_pct >= cfg.atr_high_percentile) else VolLabel.LOW
+        )
+        vol_labels = prev_vol_labels + [str(vol_label_last)]
+        vol_value_labels = prev_vol_value_labels + [vol_label_last.value]
+        if pct_invalid_total > 0:
+            limit = min(pct_invalid_total, len(vol_labels))
+            for i in range(limit):
+                vol_labels[i] = str(VolLabel.LOW)
+                vol_value_labels[i] = VolLabel.LOW.value
+
+        regime_labels = [f"{t}:{v}" for t, v in zip(trend_labels, vol_value_labels)]
+
+        # Regime confidence recomputed from updated trend scores
+        ts = trend_score_series.copy()
+        ts_mean = ts.rolling(252, min_periods=cfg.slope_window).mean()
+        ts_std = ts.rolling(252, min_periods=cfg.slope_window).std(ddof=0)
+        z = (ts - ts_mean) / ts_std.replace(0, np.nan)
+        regime_conf_series = z.abs().clip(0, 3) / 3.0
+
+        out["trend_score"] = trend_score_series
+        out["trend_label"] = trend_labels
+        out["atr"] = atr_series
+        out["atr_percentile"] = atr_pct_series
+        out["vol_label"] = vol_labels
+        out["regime_label"] = regime_labels
+        out["regime_confidence"] = regime_conf_series
+
+        # Update caches
+        self._cache_index = out.index
+        self._cache_len = len(out)
+        self._cache_slope = slope_series.copy()
+        self._cache_r2 = r2_series.copy()
+        self._cache_atr = atr_series.copy()
+        self._cache_atr_pct = atr_pct_series.copy()
+        self._cache_trend_score = trend_score_series.copy()
+        self._cache_regime_conf = regime_conf_series.copy()
+        self._cache_vol_label_values = pd.Series(vol_value_labels, index=out.index, dtype=object)
+        self._cache_result = out.copy()
+        self._last_processed_index = last_index
+
         return out
 
     def current_labels(self, df: pd.DataFrame) -> tuple[str, str, float]:

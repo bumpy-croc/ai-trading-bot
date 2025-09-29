@@ -78,6 +78,7 @@ class PredictionEngine:
         self._regime_detector = None
         if getattr(self.config, "enable_regime_aware_confidence", False):
             self._regime_detector = RegimeDetector(RegimeConfig())
+        self._last_regime_window: Optional[pd.DataFrame] = None
 
         # Performance tracking
         self._prediction_count = 0
@@ -177,7 +178,21 @@ class PredictionEngine:
             # Optional regime-aware confidence adjustment
             adjusted_conf = final_conf
             if self._regime_detector is not None:
-                annotated = self._regime_detector.annotate(data)
+                use_incremental = False
+                if self._last_regime_window is not None:
+                    prev_index = self._last_regime_window.index
+                    new_index = data.index
+                    if (
+                        len(prev_index) == len(new_index)
+                        and len(new_index) > 1
+                        and prev_index[1:].equals(new_index[:-1])
+                    ):
+                        use_incremental = True
+                if use_incremental:
+                    annotated = self._regime_detector.annotate_incremental(data)
+                else:
+                    annotated = self._regime_detector.annotate(data)
+                self._last_regime_window = data.copy()
                 _, vol_label, regime_conf = self._regime_detector.current_labels(annotated)
                 if vol_label == "high_vol":
                     adjusted_conf *= 0.85

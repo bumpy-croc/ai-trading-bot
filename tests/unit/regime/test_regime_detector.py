@@ -86,3 +86,48 @@ def test_confidence_in_0_1_range():
     out = rd.annotate(df)
     conf = out["regime_confidence"].dropna()
     assert (conf >= 0).all() and (conf <= 1).all()
+
+
+def test_incremental_matches_full_recompute():
+    cfg = RegimeConfig(
+        slope_window=30,
+        atr_window=14,
+        atr_percentile_lookback=80,
+        hysteresis_k=3,
+        min_dwell=10,
+    )
+    base = make_trend_series(n=320, slope=0.0008, noise=0.0005)
+    detector_full = RegimeDetector(cfg)
+    detector_incremental = RegimeDetector(cfg)
+
+    warm = detector_incremental.annotate(base)
+    assert not warm.empty
+
+    new_row = base.iloc[-1:].copy()
+    new_row.index = [base.index[-1] + timedelta(hours=1)]
+    new_row["open"] = base["close"].iloc[-1]
+    new_row["close"] = base["close"].iloc[-1] * 1.0015
+    new_row["high"] = new_row["close"] * 1.001
+    new_row["low"] = new_row["close"] * 0.999
+    new_row["volume"] = base["volume"].iloc[-1]
+
+    next_window = pd.concat([base.iloc[1:], new_row])
+
+    incremental = detector_incremental.annotate_incremental(next_window)
+    recomputed = detector_full.annotate(next_window)
+
+    for column in [
+        "trend_score",
+        "trend_label",
+        "vol_label",
+        "regime_label",
+        "regime_confidence",
+        "atr",
+        "atr_percentile",
+    ]:
+        inc_vals = incremental[column]
+        rec_vals = recomputed[column]
+        if np.issubdtype(inc_vals.dtype, np.floating):
+            pd.testing.assert_series_equal(inc_vals, rec_vals, check_names=False, check_dtype=False)
+        else:
+            assert list(map(str, inc_vals.tolist())) == list(map(str, rec_vals.tolist()))
