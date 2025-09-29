@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import pandas.testing as pdt
 
 from src.regime import RegimeConfig, RegimeDetector
 
@@ -86,3 +87,98 @@ def test_confidence_in_0_1_range():
     out = rd.annotate(df)
     conf = out["regime_confidence"].dropna()
     assert (conf >= 0).all() and (conf <= 1).all()
+
+
+def _naive_rolling_ols(close: pd.Series, window: int) -> tuple[pd.Series, pd.Series]:
+    y = np.log(close.clip(lower=1e-8))
+    idx = np.arange(len(y))
+    df = pd.DataFrame({"y": y.values, "t": idx}, index=y.index)
+
+    slopes: list[float] = []
+    r2s: list[float] = []
+    for i in range(len(df)):
+        if i + 1 < window:
+            slopes.append(np.nan)
+            r2s.append(np.nan)
+            continue
+        block = df.iloc[i + 1 - window : i + 1]
+        t_block = block["t"].astype(float).to_numpy()
+        y_block = block["y"].astype(float).to_numpy()
+        t_mean = t_block.mean()
+        y_mean = y_block.mean()
+        tt = t_block - t_mean
+        yy = y_block - y_mean
+        denom = (tt**2).sum()
+        if denom == 0:
+            slopes.append(np.nan)
+            r2s.append(np.nan)
+            continue
+        slope = (tt * yy).sum() / denom
+        y_hat = y_mean + slope * tt
+        ss_tot = (yy**2).sum()
+        ss_res = ((y_block - y_hat) ** 2).sum()
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
+        slopes.append(slope)
+        r2s.append(r2)
+    return pd.Series(slopes, index=close.index), pd.Series(r2s, index=close.index)
+
+
+def _naive_percentile_rank(series: pd.Series, lookback: int) -> pd.Series:
+    def rank_last(window: pd.Series) -> float:
+        if window.isna().any():
+            return np.nan
+        last = window.iloc[-1]
+        return (window <= last).mean()
+
+    return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False)
+
+
+def test_vectorized_components_match_naive():
+    df = make_trend_series(n=160, slope=0.0015, noise=0.0005)
+    window = 40
+    slope_vec, r2_vec = RegimeDetector._rolling_ols_slope_and_r2(df["close"], window)
+    slope_naive, r2_naive = _naive_rolling_ols(df["close"], window)
+
+    np.testing.assert_allclose(
+        slope_vec.to_numpy(), slope_naive.to_numpy(), rtol=1e-9, atol=1e-9, equal_nan=True
+    )
+    np.testing.assert_allclose(
+        r2_vec.to_numpy(), r2_naive.to_numpy(), rtol=1e-9, atol=1e-9, equal_nan=True
+    )
+
+    atr_series = RegimeDetector._atr(df, window).copy()
+    atr_series.iloc[window] = np.nan
+    lookback = 80
+    rank_vec = RegimeDetector._percentile_rank(atr_series, lookback)
+    rank_naive = _naive_percentile_rank(atr_series, lookback)
+    pdt.assert_series_equal(rank_vec, rank_naive)
+
+
+def test_annotate_inplace_controls_mutation():
+    df = make_trend_series(n=120, slope=0.001, noise=0.0002)
+    rd = RegimeDetector(RegimeConfig(slope_window=20, atr_window=10, atr_percentile_lookback=30))
+
+    df_copy = df.copy()
+    out = rd.annotate(df_copy)
+    assert out is not df_copy
+    for col in [
+        "trend_score",
+        "trend_label",
+        "vol_label",
+        "regime_label",
+        "regime_confidence",
+    ]:
+        assert col in out.columns
+        assert col not in df_copy.columns
+
+    df_inplace = df.copy()
+    out_inplace = rd.annotate(df_inplace, inplace=True)
+    assert out_inplace is df_inplace
+    for col in [
+        "trend_score",
+        "trend_label",
+        "vol_label",
+        "regime_label",
+        "regime_confidence",
+    ]:
+        assert col in df_inplace.columns
