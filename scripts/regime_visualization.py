@@ -95,7 +95,7 @@ def create_visualization(df: pd.DataFrame, symbol: str, timeframe: str, days: in
     current_regime = None
     regime_start = None
     
-    for i, (timestamp, row) in enumerate(df.iterrows()):
+    for _i, (timestamp, row) in enumerate(df.iterrows()):
         regime = row['regime_label']
         
         if regime != current_regime:

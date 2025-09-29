@@ -113,8 +113,14 @@ class Backtester:
         trailing_stop_policy: Optional[TrailingStopPolicy] = None,
         # Partial operations
         partial_manager: Optional[Any] = None,
+        # Regime-aware strategy switching
+        enable_regime_switching: bool = False,
+        regime_config: Optional[Any] = None,
+        strategy_mapping: Optional[Any] = None,
+        switching_config: Optional[Any] = None,
     ):
         self.strategy = strategy
+        self.initial_strategy_name = strategy.name  # Store original strategy name
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
         self.risk_parameters = risk_parameters
@@ -129,6 +135,43 @@ class Backtester:
         self.partial_manager = partial_manager
         self.time_exit_policy: TimeExitPolicy | None = time_exit_policy
         self._custom_time_exit_policy = time_exit_policy is not None
+
+        # Regime-aware strategy switching
+        self.enable_regime_switching = enable_regime_switching
+        self.strategy_manager = None
+        self.regime_switcher = None
+        self.strategy_switches: list[dict] = []
+        self.regime_history: list[dict] = []
+        
+        if enable_regime_switching:
+            try:
+                from src.live.regime_strategy_switcher import RegimeStrategySwitcher
+                from src.live.strategy_manager import StrategyManager
+                
+                # Initialize strategy manager
+                self.strategy_manager = StrategyManager()
+                # Convert strategy name to registry format
+                strategy_key = strategy.name.lower().replace(" ", "_").replace("strategy", "")
+                if strategy_key == "mlbasic":
+                    strategy_key = "ml_basic"
+                elif strategy_key == "ensembleweighted":
+                    strategy_key = "ensemble_weighted"
+                elif strategy_key == "momentumleverage":
+                    strategy_key = "momentum_leverage"
+                self.strategy_manager.load_strategy(strategy_key)
+                
+                # Initialize regime switcher
+                self.regime_switcher = RegimeStrategySwitcher(
+                    strategy_manager=self.strategy_manager,
+                    regime_config=regime_config,
+                    strategy_mapping=strategy_mapping,
+                    switching_config=switching_config
+                )
+                
+                logger.info("Regime-aware strategy switching enabled for backtesting")
+            except Exception as e:
+                logger.warning(f"Failed to initialize regime switching: {e}. Continuing without regime switching.")
+                self.enable_regime_switching = False
 
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -534,6 +577,89 @@ class Backtester:
                     else 0.0
                 )
                 max_drawdown_running = max(max_drawdown_running, current_drawdown)
+
+                # Regime-aware strategy switching (check every 50 candles)
+                if self.enable_regime_switching and self.regime_switcher and i % 50 == 0 and i > 60:
+                    try:
+                        # Prepare data slice for regime analysis
+                        analysis_df = df.iloc[:i+1].copy()
+                        price_data = {timeframe: analysis_df}
+                        
+                        # Analyze current market regime
+                        regime_analysis = self.regime_switcher.analyze_market_regime(price_data)
+                        
+                        # Record regime for history
+                        self.regime_history.append({
+                            'timestamp': current_time,
+                            'candle_index': i,
+                            'regime': regime_analysis['consensus_regime']['regime_label'],
+                            'confidence': regime_analysis['consensus_regime']['confidence'],
+                            'agreement': regime_analysis['consensus_regime']['agreement_score']
+                        })
+                        
+                        # Check if strategy should be switched
+                        switch_decision = self.regime_switcher.should_switch_strategy(regime_analysis, current_candle_index=i)
+                        
+                        if switch_decision['should_switch']:
+                            new_strategy_name = switch_decision['optimal_strategy']
+                            old_strategy_name = self.strategy.name
+                            
+                            # Record the switch
+                            switch_info = {
+                                'timestamp': current_time,
+                                'candle_index': i,
+                                'old_strategy': old_strategy_name,
+                                'new_strategy': new_strategy_name,
+                                'regime': switch_decision['new_regime'],
+                                'confidence': switch_decision['confidence'],
+                                'reason': switch_decision['reason'],
+                                'balance_at_switch': self.balance
+                            }
+                            self.strategy_switches.append(switch_info)
+                            
+                            # Load and switch to new strategy
+                            try:
+                                new_strategy = self._load_strategy_by_name(new_strategy_name)
+                                if new_strategy:
+                                    logger.info(f"Strategy switch at {current_time} (candle {i}): {old_strategy_name} -> {new_strategy_name} (regime: {switch_decision['new_regime']})")
+                                    self.strategy = new_strategy
+                                    
+                                    # Update regime switcher state properly
+                                    try:
+                                        self.regime_switcher.execute_strategy_switch(switch_decision)
+                                    except Exception as switcher_error:
+                                        # Fallback to manual state update if execute_strategy_switch fails
+                                        logger.debug(f"Using fallback state update: {switcher_error}")
+                                        self.regime_switcher.last_switch_time = datetime.now()
+                                        
+                                        # Update strategy manager's current strategy if available
+                                        if hasattr(self.regime_switcher, 'strategy_manager') and self.regime_switcher.strategy_manager:
+                                            self.regime_switcher.strategy_manager.current_strategy = new_strategy
+                                    
+                                    # Recalculate indicators for new strategy
+                                    # This ensures the new strategy has all required indicators
+                                    try:
+                                        # Recalculate indicators for the entire remaining dataset
+                                        # This prevents future candles from having missing data
+                                        temp_df = df.copy()
+                                        temp_df = new_strategy.calculate_indicators(temp_df)
+                                        
+                                        # Update the main dataframe with new indicators
+                                        # Only update columns that don't exist yet or are strategy-specific
+                                        for col in temp_df.columns:
+                                            if col not in df.columns or col.startswith(('ml_', 'ensemble_', 'momentum_', 'regime_')):
+                                                df[col] = temp_df[col]
+                                        
+                                        logger.debug(f"Recalculated indicators for strategy {new_strategy_name}")
+                                    except Exception as indicator_error:
+                                        logger.warning(f"Failed to recalculate indicators for {new_strategy_name}: {indicator_error}")
+                                        # Continue with existing indicators if recalculation fails
+                                    
+                            except Exception as switch_error:
+                                logger.warning(f"Failed to switch to strategy {new_strategy_name}: {switch_error}")
+                                
+                    except Exception as regime_error:
+                        logger.debug(f"Regime analysis error at candle {i}: {regime_error}")
 
                 # Check for exit if in position
                 if self.current_trade is not None:
@@ -1251,7 +1377,7 @@ class Backtester:
             # Calculate trading vs hold difference
             trading_vs_hold_difference = total_return - hold_return
 
-            return {
+            results = {
                 "total_trades": total_trades,
                 "win_rate": win_rate,
                 "total_return": total_return,
@@ -1275,6 +1401,26 @@ class Backtester:
                 "dynamic_risk_adjustments": self.dynamic_risk_adjustments if self.enable_dynamic_risk else [],
                 "dynamic_risk_summary": self._summarize_dynamic_risk_adjustments() if self.enable_dynamic_risk else None,
             }
+            
+            # Add regime switching results if enabled
+            if self.enable_regime_switching:
+                results.update({
+                    "regime_switching_enabled": True,
+                    "strategy_switches": self.strategy_switches,
+                    "regime_history": self.regime_history,
+                    "final_strategy": self.strategy.name,
+                    "initial_strategy": self.initial_strategy_name,  # Original strategy name
+                    "total_strategy_switches": len(self.strategy_switches)
+                })
+            else:
+                results.update({
+                    "regime_switching_enabled": False,
+                    "strategy_switches": [],
+                    "regime_history": [],
+                    "total_strategy_switches": 0
+                })
+            
+            return results
 
         except Exception as e:
             logger.error(f"Error running backtest: {str(e)}")
@@ -1324,6 +1470,33 @@ class Backtester:
     # --------------------
     # Modularized helpers
     # --------------------
+    def _load_strategy_by_name(self, strategy_name: str) -> Optional[BaseStrategy]:
+        """Load strategy by name for regime switching"""
+        try:
+            strategy_classes = {
+                'ml_basic': ('src.strategies.ml_basic', 'MlBasic'),
+                'ml_adaptive': ('src.strategies.ml_adaptive', 'MlAdaptive'),
+                'ml_sentiment': ('src.strategies.ml_sentiment', 'MlSentiment'),
+                'bear': ('src.strategies.bear', 'BearStrategy'),
+                'bull': ('src.strategies.bull', 'Bull'),
+                'ensemble_weighted': ('src.strategies.ensemble_weighted', 'EnsembleWeighted'),
+                'momentum_leverage': ('src.strategies.momentum_leverage', 'MomentumLeverage')
+            }
+            
+            if strategy_name not in strategy_classes:
+                logger.warning(f"Unknown strategy for switching: {strategy_name}")
+                return None
+            
+            module_path, class_name = strategy_classes[strategy_name]
+            module = __import__(module_path, fromlist=[class_name])
+            strategy_class = getattr(module, class_name)
+            
+            return strategy_class()
+            
+        except Exception as e:
+            logger.error(f"Failed to load strategy {strategy_name}: {e}")
+            return None
+
     def _merge_sentiment_data(
         self,
         df: pd.DataFrame,

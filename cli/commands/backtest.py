@@ -23,29 +23,26 @@ logger = logging.getLogger("atb.backtest")
 
 
 def _load_strategy(strategy_name: str):
+    # Define available strategies with their import paths and classes
+    available_strategies = {
+        "ml_basic": ("src.strategies.ml_basic", "MlBasic"),
+        "ml_sentiment": ("src.strategies.ml_sentiment", "MlSentiment"),
+        "bear": ("src.strategies.bear", "BearStrategy"),
+        "bull": ("src.strategies.bull", "Bull"),
+        "ml_adaptive": ("src.strategies.ml_adaptive", "MlAdaptive"),
+        "ensemble_weighted": ("src.strategies.ensemble_weighted", "EnsembleWeighted"),
+        "momentum_leverage": ("src.strategies.momentum_leverage", "MomentumLeverage"),
+    }
+    
     try:
-        if strategy_name == "ml_basic":
-            from src.strategies.ml_basic import MlBasic
-
-            return MlBasic()
-        if strategy_name == "ml_sentiment":
-            from src.strategies.ml_sentiment import MlSentiment
-
-            return MlSentiment()
-        if strategy_name == "bear":
-            from src.strategies.bear import BearStrategy
-
-            return BearStrategy()
-        if strategy_name == "bull":
-            from src.strategies.bull import Bull
-
-            return Bull()
-        if strategy_name == "ml_adaptive":
-            from src.strategies.ml_adaptive import MlAdaptive
-
-            return MlAdaptive()
+        if strategy_name in available_strategies:
+            module_path, class_name = available_strategies[strategy_name]
+            module = __import__(module_path, fromlist=[class_name])
+            strategy_class = getattr(module, class_name)
+            return strategy_class()
+        
         print(f"Unknown strategy: {strategy_name}")
-        print("Available strategies: ml_basic, ml_sentiment, ml_adaptive, bear, bull")
+        print(f"Available strategies: {', '.join(available_strategies.keys())}")
         raise SystemExit(1)
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")
@@ -77,6 +74,10 @@ def _handle(ns: argparse.Namespace) -> int:
         configure_logging()
 
         start_date, end_date = _get_date_range(ns)
+        
+        # Check if regime-aware backtesting is requested
+        enable_regime_switching = hasattr(ns, 'regime_aware') and ns.regime_aware
+        
         strategy = _load_strategy(ns.strategy)
         logger.info(f"Loaded strategy: {strategy.name}")
 
@@ -120,6 +121,20 @@ def _handle(ns: argparse.Namespace) -> int:
         # Default to no database logging for performance, unless explicitly enabled
         enable_db_logging = ns.log_to_db
         
+        # Setup regime switching parameters if enabled
+        regime_config = None
+        strategy_mapping = None
+        switching_config = None
+        
+        if enable_regime_switching:
+            from src.live.regime_strategy_switcher import RegimeStrategyMapping, SwitchingConfig
+            from src.regime.detector import RegimeConfig
+            
+            regime_config = RegimeConfig()
+            strategy_mapping = RegimeStrategyMapping()
+            switching_config = SwitchingConfig()
+            logger.info("Regime-aware backtesting enabled")
+        
         backtester = Backtester(
             strategy=strategy,
             data_provider=data_provider,
@@ -127,6 +142,10 @@ def _handle(ns: argparse.Namespace) -> int:
             risk_parameters=risk_params,
             initial_balance=ns.initial_balance,
             log_to_database=enable_db_logging,
+            enable_regime_switching=enable_regime_switching,
+            regime_config=regime_config,
+            strategy_mapping=strategy_mapping,
+            switching_config=switching_config,
         )
 
         trading_symbol = (
@@ -139,16 +158,26 @@ def _handle(ns: argparse.Namespace) -> int:
             symbol=trading_symbol, timeframe=ns.timeframe, start=start_date, end=end_date
         )
 
-        print("\nBacktest Results:")
-        print("=" * 50)
-        print(f"Strategy: {strategy.name}")
+        # Display results based on whether regime switching was enabled
+        if enable_regime_switching:
+            print("\nRegime-Aware Backtest Results:")
+            print("=" * 60)
+            print(f"Initial Strategy: {strategy.name}")
+            print(f"Final Strategy: {results.get('final_strategy', 'N/A')}")
+            print(f"Total Strategy Switches: {results.get('total_strategy_switches', 0)}")
+        else:
+            print("\nBacktest Results:")
+            print("=" * 50)
+            print(f"Strategy: {strategy.name}")
+            
         print(f"Symbol: {trading_symbol}")
         print(f"Period: {start_date.date()} to {end_date.date()}")
         print(f"Timeframe: {ns.timeframe}")
         print(f"Using Sentiment: {ns.use_sentiment}")
         print(f"Using Cache: {not ns.no_cache}")
         print(f"Database Logging: {enable_db_logging}")
-        print("-" * 50)
+        print(f"Regime Switching: {enable_regime_switching}")
+        print("-" * (60 if enable_regime_switching else 50))
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
         print(f"Total Return: {results['total_return']:.2f}%")
@@ -158,7 +187,16 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print(f"Hold Return: {results['hold_return']:.2f}%")
         print(f"Trading vs Hold: {results['trading_vs_hold_difference']:+.2f}%")
-        print("=" * 50)
+        print("=" * (60 if enable_regime_switching else 50))
+
+        # Show strategy switches if any occurred
+        if enable_regime_switching and results.get('strategy_switches'):
+            print("\nStrategy Switches:")
+            print("-" * 60)
+            for switch in results['strategy_switches']:
+                print(f"{switch['timestamp']}: {switch['old_strategy']} -> {switch['new_strategy']} "
+                      f"(regime: {switch['regime']}, confidence: {switch['confidence']:.2f})")
+            print("=" * 60)
 
         if enable_db_logging and results.get("session_id"):
             print(f"Database Session ID: {results['session_id']}")
@@ -239,6 +277,8 @@ def _handle(ns: argparse.Namespace) -> int:
         return 1
 
 
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("backtest", help="Run strategy backtest")
     p.add_argument("strategy", help="Strategy name - e.g., ml_basic")
@@ -273,5 +313,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=0.5,
         help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
+    )
+    p.add_argument(
+        "--regime-aware",
+        action="store_true",
+        help="Enable regime-aware backtesting with automatic strategy switching",
     )
     p.set_defaults(func=_handle)

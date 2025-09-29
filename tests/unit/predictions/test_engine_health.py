@@ -1,6 +1,5 @@
 """Tests covering health checks and validation in PredictionEngine."""
 
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 

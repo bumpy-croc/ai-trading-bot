@@ -419,7 +419,8 @@ def run_quick_smoke_test():
         from datetime import datetime, timedelta
 
         from src.backtesting.models import Trade as BacktestTrade
-        from src.live.trading_engine import PositionSide, Trade as LiveTrade
+        from src.live.trading_engine import PositionSide
+        from src.live.trading_engine import Trade as LiveTrade
         from src.performance.metrics import Side, cash_pnl, pnl_percent
 
         entry_price = 100.0
