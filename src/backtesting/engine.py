@@ -624,6 +624,13 @@ class Backtester:
                                     logger.info(f"Strategy switch at {current_time} (candle {i}): {old_strategy_name} -> {new_strategy_name} (regime: {switch_decision['new_regime']})")
                                     self.strategy = new_strategy
                                     
+                                    # Update regime switcher state to prevent repeated switches
+                                    self.regime_switcher.last_switch_time = datetime.now()
+                                    
+                                    # Update strategy manager's current strategy if available
+                                    if hasattr(self.regime_switcher, 'strategy_manager') and self.regime_switcher.strategy_manager:
+                                        self.regime_switcher.strategy_manager.current_strategy = new_strategy
+                                    
                                     # Recalculate indicators for new strategy if needed
                                     # For performance, we'll continue with existing indicators
                                     # A more sophisticated implementation could recalculate

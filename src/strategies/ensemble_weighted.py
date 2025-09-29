@@ -491,14 +491,14 @@ class EnsembleWeighted(BaseStrategy):
         # Adjust for ensemble metrics - More aggressive multipliers
         confidence_factor = max(0.8, min(2.0, confidence * 1.5))  # Increased multipliers
         score_factor = max(0.9, min(1.8, entry_score * 1.4))      # Higher score impact
-        max(0.9, min(1.5, agreement * 1.2))    # Reward strong agreement
+        agreement_factor = max(0.9, min(1.5, agreement * 1.2))    # Reward strong agreement
         
         # Advanced momentum and volatility adjustments (Cycle 1)
         momentum_fast = df.get("momentum_fast", pd.Series([0.0])).iloc[index]
-        df.get("momentum_medium", pd.Series([0.0])).iloc[index]
+        momentum_medium = df.get("momentum_medium", pd.Series([0.0])).iloc[index]
         momentum_score = df.get("momentum_score", pd.Series([0.0])).iloc[index]
         trend_strength_fast = df.get("trend_strength_fast", pd.Series([0.0])).iloc[index]
-        df.get("volatility_ratio", pd.Series([1.0])).iloc[index]
+        volatility_ratio = df.get("volatility_ratio", pd.Series([1.0])).iloc[index]
         strong_bull = df.get("strong_bull", pd.Series([False])).iloc[index]
         strong_breakout_up = df.get("strong_breakout_up", pd.Series([False])).iloc[index]
         trend_alignment = df.get("trend_alignment", pd.Series([False])).iloc[index]
@@ -518,24 +518,28 @@ class EnsembleWeighted(BaseStrategy):
         volatility_fast = df.get("volatility_fast", pd.Series([0.02])).iloc[index]
         
         # Volatility-based leverage factor (core innovation)
-        if volatility_fast < 0.01:  # Low vol = higher leverage
+        # Adjust volatility based on ratio of fast to slow volatility
+        adjusted_volatility = volatility_fast * max(0.5, min(1.5, volatility_ratio))
+        
+        if adjusted_volatility < 0.01:  # Low vol = higher leverage
             volatility_leverage = 2.5  # Aggressive in calm markets
-        elif volatility_fast < 0.02:  # Moderate volatility
+        elif adjusted_volatility < 0.02:  # Moderate volatility
             volatility_leverage = 2.0
-        elif volatility_fast < 0.05:  # Normal volatility
+        elif adjusted_volatility < 0.05:  # Normal volatility
             volatility_leverage = 1.5
         else:  # High volatility
             volatility_leverage = 1.0  # Conservative in volatile markets
         
-        # Momentum amplification (stronger effect)
+        # Momentum amplification (stronger effect using both fast and medium momentum)
         momentum_amplifier = 1.0
-        if momentum_fast > 0.02:  # Strong momentum
+        combined_momentum = (momentum_fast * 0.6 + momentum_medium * 0.4)  # Weighted combination
+        if combined_momentum > 0.02:  # Strong momentum
             momentum_amplifier = 1.8
-        elif momentum_fast > 0.01:  # Good momentum
+        elif combined_momentum > 0.01:  # Good momentum
             momentum_amplifier = 1.4
-        elif momentum_fast > 0.005:  # Weak momentum
+        elif combined_momentum > 0.005:  # Weak momentum
             momentum_amplifier = 1.2
-        elif momentum_fast < -0.005:  # Negative momentum
+        elif combined_momentum < -0.005:  # Negative momentum
             momentum_amplifier = 0.7
         
         # Trend strength amplification
@@ -566,7 +570,7 @@ class EnsembleWeighted(BaseStrategy):
                               breakout_amplifier * composite_boost)
         
         # Apply to base size with all factors
-        dynamic_size = (base_size * confidence_factor * score_factor * 
+        dynamic_size = (base_size * confidence_factor * score_factor * agreement_factor * 
                        min(3.0, leverage_multiplier))  # Cap at 3x base
         
         # Apply limits

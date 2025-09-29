@@ -395,12 +395,13 @@ class EnhancedRegimeDetector:
         """Calculate volatility component score"""
         
         vol_regime = row.get('vol_regime', 1)
-        row.get('atr_pct', 0.02)
+        atr_pct = row.get('atr_pct', 0.02)
         
         # High volatility reduces confidence in trend signals
-        if vol_regime > self.config.volatility_regime_threshold:
+        # Combine vol_regime and atr_pct for more comprehensive volatility assessment
+        if vol_regime > self.config.volatility_regime_threshold or atr_pct > 0.04:
             volatility_penalty = -0.5
-        elif vol_regime < 0.5:
+        elif vol_regime < 0.5 and atr_pct < 0.02:
             volatility_penalty = 0.3  # Low volatility is good for trends
         else:
             volatility_penalty = 0.0

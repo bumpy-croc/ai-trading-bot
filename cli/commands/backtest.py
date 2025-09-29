@@ -23,37 +23,26 @@ logger = logging.getLogger("atb.backtest")
 
 
 def _load_strategy(strategy_name: str):
+    # Define available strategies with their import paths and classes
+    available_strategies = {
+        "ml_basic": ("src.strategies.ml_basic", "MlBasic"),
+        "ml_sentiment": ("src.strategies.ml_sentiment", "MlSentiment"),
+        "bear": ("src.strategies.bear", "BearStrategy"),
+        "bull": ("src.strategies.bull", "Bull"),
+        "ml_adaptive": ("src.strategies.ml_adaptive", "MlAdaptive"),
+        "ensemble_weighted": ("src.strategies.ensemble_weighted", "EnsembleWeighted"),
+        "momentum_leverage": ("src.strategies.momentum_leverage", "MomentumLeverage"),
+    }
+    
     try:
-        if strategy_name == "ml_basic":
-            from src.strategies.ml_basic import MlBasic
-
-            return MlBasic()
-        if strategy_name == "ml_sentiment":
-            from src.strategies.ml_sentiment import MlSentiment
-
-            return MlSentiment()
-        if strategy_name == "bear":
-            from src.strategies.bear import BearStrategy
-
-            return BearStrategy()
-        if strategy_name == "bull":
-            from src.strategies.bull import Bull
-
-            return Bull()
-        if strategy_name == "ml_adaptive":
-            from src.strategies.ml_adaptive import MlAdaptive
-
-            return MlAdaptive()
-        if strategy_name == "ensemble_weighted":
-            from src.strategies.ensemble_weighted import EnsembleWeighted
-
-            return EnsembleWeighted()
-        if strategy_name == "momentum_leverage":
-            from src.strategies.momentum_leverage import MomentumLeverage
-
-            return MomentumLeverage()
+        if strategy_name in available_strategies:
+            module_path, class_name = available_strategies[strategy_name]
+            module = __import__(module_path, fromlist=[class_name])
+            strategy_class = getattr(module, class_name)
+            return strategy_class()
+        
         print(f"Unknown strategy: {strategy_name}")
-        print("Available strategies: ml_basic, ml_sentiment, ml_adaptive, bear, bull, ensemble_weighted, momentum_leverage")
+        print(f"Available strategies: {', '.join(available_strategies.keys())}")
         raise SystemExit(1)
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")
