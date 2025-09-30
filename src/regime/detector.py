@@ -77,6 +77,10 @@ class RegimeDetector:
         csum_yy = _nancumsum_with_zero(y_vals * y_vals)
         csum_ty = _nancumsum_with_zero(t * y_vals)
 
+        # Track which windows contain NaN values to invalidate them
+        nan_mask = np.isnan(y_vals)
+        csum_nan_count = _nancumsum_with_zero(nan_mask.astype(float))
+        
         # Rolling window sums (length n - window + 1)
         window_slice = slice(window, None)
         sum_t = csum_t[window_slice] - csum_t[:-window]
@@ -84,16 +88,22 @@ class RegimeDetector:
         sum_tt = csum_tt[window_slice] - csum_tt[:-window]
         sum_yy = csum_yy[window_slice] - csum_yy[:-window]
         sum_ty = csum_ty[window_slice] - csum_ty[:-window]
+        
+        # Count of NaN values in each rolling window
+        nan_count_in_window = csum_nan_count[window_slice] - csum_nan_count[:-window]
+        windows_with_nan = nan_count_in_window > 0
 
         window_float = float(window)
         cov_ty = window_float * sum_ty - sum_t * sum_y
         var_t = window_float * sum_tt - sum_t * sum_t
         var_y = window_float * sum_yy - sum_y * sum_y
 
-        valid_slope = var_t > 0
+        # Valid slope calculation requires non-zero variance and no NaN in window
+        valid_slope = (var_t > 0) & (~windows_with_nan)
         slope_vals = np.full_like(sum_ty, np.nan, dtype=float)
         slope_vals[valid_slope] = cov_ty[valid_slope] / var_t[valid_slope]
 
+        # Valid R² calculation requires valid slope and non-zero y variance
         valid_r2 = valid_slope & (var_y > 0)
         r2_vals = np.full_like(sum_ty, np.nan, dtype=float)
         r2_vals[valid_r2] = (cov_ty[valid_r2] ** 2) / (var_t[valid_r2] * var_y[valid_r2])
