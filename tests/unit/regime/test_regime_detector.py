@@ -593,3 +593,87 @@ def test_rolling_ols_handles_nan_values_correctly():
         valid_post_nan = slopes.iloc[post_nan_start:].dropna()
         if not valid_post_nan.empty:
             np.testing.assert_allclose(valid_post_nan.values, 0.01, atol=1e-10, rtol=1e-8)
+
+
+def test_rolling_ols_numerical_stability_large_windows():
+    """Test that large rolling windows don't suffer from catastrophic cancellation."""
+    # Create a long series with small but consistent trend
+    n_points = 5000
+    t = np.arange(n_points, dtype=float)
+    # Use a very small slope to test numerical stability
+    small_slope = 1e-6
+    prices = np.exp(small_slope * t + 10.0)  # Start at high price level
+
+    # Add tiny amount of noise to make variance non-zero but very small
+    np.random.seed(42)  # For reproducibility
+    noise = np.random.normal(0, 1e-8, n_points)
+    prices = prices * (1 + noise)
+
+    close = pd.Series(prices, index=pd.date_range("2024-01-01", periods=n_points, freq="h"))
+
+    # Test with large window that would cause cancellation issues
+    large_window = 2000
+    slopes, r2 = RegimeDetector._rolling_ols_slope_and_r2(close, large_window)
+
+    # Check that we don't get excessive NaN values due to cancellation
+    valid_slopes = slopes.dropna()
+    valid_r2 = r2.dropna()
+
+    # We should have a reasonable number of valid results
+    expected_valid_count = n_points - large_window + 1
+    assert (
+        len(valid_slopes) >= expected_valid_count * 0.8
+    ), f"Too many NaN slopes: got {len(valid_slopes)} valid out of {expected_valid_count} expected"
+    assert (
+        len(valid_r2) >= expected_valid_count * 0.8
+    ), f"Too many NaN R² values: got {len(valid_r2)} valid out of {expected_valid_count} expected"
+
+    # The slopes should be close to the true slope (allowing for noise)
+    if len(valid_slopes) > 0:
+        mean_slope = valid_slopes.mean()
+        assert (
+            abs(mean_slope - small_slope) < 1e-5
+        ), f"Mean slope {mean_slope} too far from expected {small_slope}"
+
+    # R² values should be finite and in valid range
+    if len(valid_r2) > 0:
+        assert np.all(valid_r2 >= 0), "R² values should be non-negative"
+        assert np.all(valid_r2 <= 1), "R² values should not exceed 1"
+        assert np.all(np.isfinite(valid_r2)), "R² values should be finite"
+
+
+def test_rolling_ols_cancellation_detection():
+    """Test that the cancellation detection works correctly."""
+    # Create a series where variance calculation would suffer from cancellation
+    n_points = 1000
+    base_value = 1e6  # Large base value to amplify cancellation effects
+
+    # Create nearly constant series (very small variance)
+    t = np.arange(n_points, dtype=float)
+    prices = np.full(n_points, base_value)
+    # Add tiny variations that would cause cancellation in naive calculation
+    tiny_variations = np.sin(t * 0.01) * 1e-10
+    prices = prices + tiny_variations
+
+    close = pd.Series(prices, index=pd.date_range("2024-01-01", periods=n_points, freq="h"))
+
+    window = 500
+    slopes, r2 = RegimeDetector._rolling_ols_slope_and_r2(close, window)
+
+    # With cancellation protection, we should get valid results (likely R² ≈ 0)
+    valid_r2 = r2.dropna()
+
+    # Should have most windows valid (not NaN due to cancellation)
+    expected_valid_count = n_points - window + 1
+    assert (
+        len(valid_r2) >= expected_valid_count * 0.9
+    ), f"Cancellation protection failed: got {len(valid_r2)} valid out of {expected_valid_count} expected"
+
+    # R² should be close to 0 for nearly constant series
+    if len(valid_r2) > 0:
+        assert np.all(valid_r2 >= 0), "R² values should be non-negative"
+        assert np.all(valid_r2 <= 1), "R² values should not exceed 1"
+        # Most R² values should be very small for nearly constant data
+        assert (
+            np.mean(valid_r2) < 0.1
+        ), f"Expected low R² for constant data, got mean {np.mean(valid_r2)}"

@@ -96,7 +96,17 @@ class RegimeDetector:
         window_float = float(window)
         cov_ty = window_float * sum_ty - sum_t * sum_y
         var_t = window_float * sum_tt - sum_t * sum_t
-        var_y = window_float * sum_yy - sum_y * sum_y
+        var_y_raw = window_float * sum_yy - sum_y * sum_y
+
+        # Guard against catastrophic cancellation in variance calculation
+        # For large windows, the subtraction can produce small negative numbers
+        # due to floating-point precision issues, even when variance should be positive
+        var_y = np.maximum(var_y_raw, 0.0)
+
+        # Detect cases where cancellation likely occurred (small negative values)
+        # These should be treated as effectively zero variance
+        cancellation_threshold = 1e-12 * window_float * np.maximum(np.abs(sum_yy), 1.0)
+        likely_cancellation = (var_y_raw < 0) & (np.abs(var_y_raw) <= cancellation_threshold)
 
         # Valid slope calculation requires non-zero variance and no NaN in window
         valid_slope = (var_t > 0) & (~windows_with_nan)
@@ -106,11 +116,9 @@ class RegimeDetector:
         # Valid R² calculation requires valid slope and non-zero y variance
         # For backward compatibility, when var_y is very small (effectively zero),
         # we set R² to 0 instead of NaN to match the naive implementation behavior
-        var_y_threshold = (
-            1e-9  # Threshold for numerical precision (larger to handle floating point errors)
-        )
-        valid_r2 = valid_slope & (var_y > var_y_threshold)
-        near_zero_var_y = valid_slope & (np.abs(var_y) <= var_y_threshold)
+        var_y_threshold = 1e-9  # Threshold for numerical precision
+        valid_r2 = valid_slope & (var_y > var_y_threshold) & (~likely_cancellation)
+        near_zero_var_y = valid_slope & ((var_y <= var_y_threshold) | likely_cancellation)
 
         r2_vals = np.full_like(sum_ty, np.nan, dtype=float)
         r2_vals[valid_r2] = (cov_ty[valid_r2] ** 2) / (var_t[valid_r2] * var_y[valid_r2])
