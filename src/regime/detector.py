@@ -48,42 +48,78 @@ class RegimeDetector:
 
     @staticmethod
     def _rolling_ols_slope_and_r2(x: pd.Series, window: int) -> tuple[pd.Series, pd.Series]:
-        # Compute rolling OLS slope and R^2 for y = log(price) vs time index
-        y = np.log(x.clip(lower=1e-8))
-        idx = np.arange(len(y))
-        df = pd.DataFrame({"y": y.values, "t": idx}, index=y.index)
+        """Vectorised rolling OLS slope and R^2 for log-price vs time index."""
 
-        # Rolling OLS helper
-        def _ols(block: pd.DataFrame):
-            t = block["t"].values.astype(float)
-            yb = block["y"].values.astype(float)
-            t_mean = t.mean()
-            y_mean = yb.mean()
-            tt = t - t_mean
-            yy = yb - y_mean
-            denom = (tt**2).sum()
-            if denom == 0:
-                return pd.Series([np.nan, np.nan])
-            slope = (tt * yy).sum() / denom
-            y_hat = y_mean + slope * tt
-            ss_tot = (yy**2).sum()
-            ss_res = ((yb - y_hat) ** 2).sum()
-            r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
-            return pd.Series([slope, r2])
+        if window <= 0:
+            raise ValueError("window must be positive")
 
-        # Compute using a simple sliding window to avoid DataFrame.rolling apply quirks
-        slopes = []
-        r2s = []
-        for i in range(len(df)):
-            if i + 1 < window:
-                slopes.append(np.nan)
-                r2s.append(np.nan)
-                continue
-            block = df.iloc[i + 1 - window : i + 1]
-            vals = _ols(block)
-            slopes.append(vals.iloc[0])
-            r2s.append(vals.iloc[1])
-        return pd.Series(slopes, index=y.index), pd.Series(r2s, index=y.index)
+        y = np.log(x.clip(lower=1e-8)).astype(float)
+        n = len(y)
+        index = x.index
+
+        slopes = np.full(n, np.nan, dtype=float)
+        r2s = np.full(n, np.nan, dtype=float)
+
+        if n < window:
+            return pd.Series(slopes, index=index), pd.Series(r2s, index=index)
+
+        t = np.arange(n, dtype=float)
+
+        y_valid = ~np.isnan(y)
+        counts = np.cumsum(y_valid.astype(int))
+        counts = counts[window - 1 :] - np.concatenate(([0], counts[:-window]))
+        valid_mask = counts == window
+
+        y_filled = np.where(y_valid, y, 0.0)
+
+        def _rolling_sum(arr: np.ndarray) -> np.ndarray:
+            csum = np.cumsum(arr, dtype=float)
+            return csum[window - 1 :] - np.concatenate(([0.0], csum[:-window]))
+
+        sum_y = _rolling_sum(y_filled)
+        sum_t = _rolling_sum(t)
+        sum_ty = _rolling_sum(t * y_filled)
+        sum_t2 = _rolling_sum(t * t)
+        sum_y2 = _rolling_sum(y_filled * y_filled)
+
+        w = float(window)
+        denom = w * sum_t2 - sum_t**2
+        denom_zero = denom == 0
+
+        slope = np.full_like(sum_y, np.nan)
+        valid_denom = ~denom_zero
+        slope[valid_denom] = (w * sum_ty - sum_t * sum_y)[valid_denom] / denom[valid_denom]
+
+        mean_t = sum_t / w
+        mean_y = sum_y / w
+        intercept = mean_y - slope * mean_t
+
+        ss_tot = sum_y2 - (sum_y**2) / w
+        ss_res = (
+            sum_y2
+            - 2 * slope * sum_ty
+            - 2 * intercept * sum_y
+            + (slope**2) * sum_t2
+            + 2 * slope * intercept * sum_t
+            + w * (intercept**2)
+        )
+        ss_res = np.maximum(ss_res, 0.0)
+
+        positive_ss_tot = ss_tot > 0
+        r2 = np.full_like(sum_y, np.nan)
+        r2[positive_ss_tot] = 1 - ss_res[positive_ss_tot] / ss_tot[positive_ss_tot]
+
+        valid_slope = valid_mask & valid_denom
+        valid_r2 = valid_slope & positive_ss_tot
+
+        slopes_out = slopes.copy()
+        r2_out = r2s.copy()
+        slope_idx = np.nonzero(valid_slope)[0] + (window - 1)
+        r2_idx = np.nonzero(valid_r2)[0] + (window - 1)
+        slopes_out[slope_idx] = slope[valid_slope]
+        r2_out[r2_idx] = r2[valid_r2]
+
+        return pd.Series(slopes_out, index=index), pd.Series(r2_out, index=index)
 
     @staticmethod
     def _atr(df: pd.DataFrame, window: int) -> pd.Series:
@@ -112,17 +148,26 @@ class RegimeDetector:
 
     @staticmethod
     def _percentile_rank(series: pd.Series, lookback: int) -> pd.Series:
-        def rank_last(window: pd.Series) -> float:
-            if window.isna().any():
-                return np.nan
-            last = window.iloc[-1]
-            return (window <= last).mean()
+        if lookback <= 0:
+            raise ValueError("lookback must be positive")
 
-        return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False)
+        values = series.to_numpy(dtype=float, copy=False)
+        n = len(values)
+        result = np.full(n, np.nan, dtype=float)
+        if n < lookback:
+            return pd.Series(result, index=series.index)
 
-    def annotate(self, df: pd.DataFrame) -> pd.DataFrame:
+        windows = np.lib.stride_tricks.sliding_window_view(values, lookback)
+        invalid = np.isnan(windows).any(axis=1)
+        last = windows[:, -1]
+        pct = (windows <= last[:, None]).mean(axis=1)
+        pct[invalid] = np.nan
+        result[lookback - 1 :] = pct
+        return pd.Series(result, index=series.index)
+
+    def annotate(self, df: pd.DataFrame, *, inplace: bool = False) -> pd.DataFrame:
         cfg = self.config
-        out = df.copy()
+        out = df if inplace else df.copy(deep=False)
         # Trend
         slope, r2 = self._rolling_ols_slope_and_r2(out["close"], cfg.slope_window)
         trend_score = slope * r2
