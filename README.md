@@ -207,7 +207,9 @@ See `docs/CONFIGURATION_SYSTEM_SUMMARY.md`.
 
 ## Deployment
 
-- Railway: see `docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md` for database setup
+- Railway: 
+  - Quick start: see [Railway Quickstart](docs/RAILWAY_QUICKSTART.md)
+  - Database setup: see [Railway Database Centralization Guide](docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md)
 
 ---
 

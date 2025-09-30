@@ -31,6 +31,7 @@
 - [Persistent Balance Guide](PERSISTENT_BALANCE_GUIDE.md) - Balance state management
 
 ## Deployment & Operations
+- [Railway Quickstart](RAILWAY_QUICKSTART.md) - Quick Railway deployment guide
 - [Railway Database Centralization Guide](RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md) - Database setup on Railway
 - [Monitoring Summary](MONITORING_SUMMARY.md) - System monitoring and dashboards
 - [Logging Guide](LOGGING_GUIDE.md) - Application logging configuration
