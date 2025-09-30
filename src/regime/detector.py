@@ -64,17 +64,18 @@ class RegimeDetector:
         y_vals = y.to_numpy(dtype=float)
 
         # Prefix cumulative sums to efficiently compute rolling window sums
-        def _cumsum_with_zero(arr: np.ndarray) -> np.ndarray:
+        # Use nancumsum to avoid NaN propagation - windows without NaN will still be valid
+        def _nancumsum_with_zero(arr: np.ndarray) -> np.ndarray:
             out = np.empty(arr.size + 1, dtype=float)
             out[0] = 0.0
-            np.cumsum(arr, out=out[1:])
+            np.nancumsum(arr, out=out[1:])
             return out
 
-        csum_t = _cumsum_with_zero(t)
-        csum_y = _cumsum_with_zero(y_vals)
-        csum_tt = _cumsum_with_zero(t * t)
-        csum_yy = _cumsum_with_zero(y_vals * y_vals)
-        csum_ty = _cumsum_with_zero(t * y_vals)
+        csum_t = _nancumsum_with_zero(t)
+        csum_y = _nancumsum_with_zero(y_vals)
+        csum_tt = _nancumsum_with_zero(t * t)
+        csum_yy = _nancumsum_with_zero(y_vals * y_vals)
+        csum_ty = _nancumsum_with_zero(t * y_vals)
 
         # Rolling window sums (length n - window + 1)
         window_slice = slice(window, None)
