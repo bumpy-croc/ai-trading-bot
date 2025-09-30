@@ -56,6 +56,39 @@ from src.utils.logging_events import log_engine_event
 logger = logging.getLogger(__name__)
 
 
+REGIME_LOOKBACK_BUFFER = 5
+
+
+def _compute_regime_lookback(regime_switcher: Any) -> int:
+    """Determine how many candles are needed for regime analysis."""
+
+    if not regime_switcher:
+        return 0
+
+    configs: list[Any] = []
+
+    detector = getattr(regime_switcher, "regime_detector", None)
+    if detector is not None:
+        cfg = getattr(detector, "config", None)
+        if cfg is not None:
+            configs.append(cfg)
+
+    timeframe_detectors = getattr(regime_switcher, "timeframe_detectors", {}) or {}
+    for detector in timeframe_detectors.values():
+        cfg = getattr(detector, "config", None)
+        if cfg is not None:
+            configs.append(cfg)
+
+    if not configs:
+        return 0
+
+    slope_window = max((getattr(cfg, "slope_window", 0) or 0) for cfg in configs)
+    atr_lookback = max((getattr(cfg, "atr_percentile_lookback", 0) or 0) for cfg in configs)
+
+    base_lookback = max(slope_window, atr_lookback)
+    return int(base_lookback + REGIME_LOOKBACK_BUFFER)
+
+
 class ActiveTrade:
     """Represents an active trade during backtest iteration"""
 
@@ -582,9 +615,21 @@ class Backtester:
                 if self.enable_regime_switching and self.regime_switcher and i % 50 == 0 and i > 60:
                     try:
                         # Prepare data slice for regime analysis
-                        analysis_df = df.iloc[:i+1].copy()
-                        price_data = {timeframe: analysis_df}
-                        
+                        regime_lookback = _compute_regime_lookback(self.regime_switcher)
+                        start_idx = max(0, (i + 1) - max(regime_lookback, 0))
+                        analysis_df = df.iloc[start_idx : i + 1]
+
+                        price_data: dict[str, pd.DataFrame] = {}
+                        switching_config = getattr(self.regime_switcher, "switching_config", None)
+                        if switching_config is not None:
+                            timeframes = getattr(switching_config, "timeframes", None) or []
+                            multi_tf = getattr(switching_config, "enable_multi_timeframe", False)
+                            if multi_tf and timeframes:
+                                for tf in timeframes:
+                                    price_data[tf] = analysis_df
+                        if not price_data:
+                            price_data[timeframe] = analysis_df
+
                         # Analyze current market regime
                         regime_analysis = self.regime_switcher.analyze_market_regime(price_data)
                         
