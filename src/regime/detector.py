@@ -80,7 +80,7 @@ class RegimeDetector:
         # Track which windows contain NaN values to invalidate them
         nan_mask = np.isnan(y_vals)
         csum_nan_count = _nancumsum_with_zero(nan_mask.astype(float))
-        
+
         # Rolling window sums (length n - window + 1)
         window_slice = slice(window, None)
         sum_t = csum_t[window_slice] - csum_t[:-window]
@@ -88,7 +88,7 @@ class RegimeDetector:
         sum_tt = csum_tt[window_slice] - csum_tt[:-window]
         sum_yy = csum_yy[window_slice] - csum_yy[:-window]
         sum_ty = csum_ty[window_slice] - csum_ty[:-window]
-        
+
         # Count of NaN values in each rolling window
         nan_count_in_window = csum_nan_count[window_slice] - csum_nan_count[:-window]
         windows_with_nan = nan_count_in_window > 0
@@ -104,10 +104,20 @@ class RegimeDetector:
         slope_vals[valid_slope] = cov_ty[valid_slope] / var_t[valid_slope]
 
         # Valid R² calculation requires valid slope and non-zero y variance
-        valid_r2 = valid_slope & (var_y > 0)
+        # For backward compatibility, when var_y is very small (effectively zero),
+        # we set R² to 0 instead of NaN to match the naive implementation behavior
+        var_y_threshold = (
+            1e-9  # Threshold for numerical precision (larger to handle floating point errors)
+        )
+        valid_r2 = valid_slope & (var_y > var_y_threshold)
+        near_zero_var_y = valid_slope & (np.abs(var_y) <= var_y_threshold)
+
         r2_vals = np.full_like(sum_ty, np.nan, dtype=float)
         r2_vals[valid_r2] = (cov_ty[valid_r2] ** 2) / (var_t[valid_r2] * var_y[valid_r2])
         r2_vals[valid_r2] = np.clip(r2_vals[valid_r2], 0.0, 1.0)
+
+        # Set R² to 0 for cases where var_y is effectively zero (constant y values)
+        r2_vals[near_zero_var_y] = 0.0
 
         start_idx = window - 1
         slopes[start_idx:] = slope_vals

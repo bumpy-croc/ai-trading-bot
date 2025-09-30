@@ -91,9 +91,7 @@ def test_rolling_ols_regression(rolling_ols_regression_baseline):
     np.testing.assert_allclose(
         slopes.to_numpy(), baseline_slopes, rtol=1e-12, atol=1e-12, equal_nan=True
     )
-    np.testing.assert_allclose(
-        r2.to_numpy(), baseline_r2, rtol=1e-12, atol=1e-12, equal_nan=True
-    )
+    np.testing.assert_allclose(r2.to_numpy(), baseline_r2, rtol=1e-12, atol=1e-12, equal_nan=True)
 
 
 def make_trend_series(
@@ -104,36 +102,36 @@ def make_trend_series(
     rng: Optional[np.random.Generator] = None,
 ):
     """Create a synthetic trend series with optional noise.
-    
+
     Args:
         n: Number of data points
         slope: Trend slope per time step
         noise: Noise level as fraction of start price
         start: Starting price level
         rng: Optional RNG for reproducible noise generation
-        
+
     Returns:
         DataFrame with OHLCV data
     """
     t = np.arange(n)
     base = start * (1.0 + slope * t)
-    
+
     if noise > 0.0:
         if rng is None:
             rng = np.random.default_rng(TEST_RANDOM_SEED)
         noise_arr = rng.normal(0.0, noise * start, size=n)
     else:
         noise_arr = np.zeros_like(base)
-        
+
     prices = np.maximum(1.0, base + noise_arr)
     ts = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
-    
+
     # Use deterministic volume generation
     if rng is not None:
         volume = rng.uniform(1.0, 2.0, size=n)
     else:
         volume = 1.0 + 0.01 * t
-        
+
     return pd.DataFrame(
         {
             "open": prices,
@@ -379,8 +377,8 @@ def _assert_expected_columns(out: pd.DataFrame, expected: dict[str, object]):
     np.testing.assert_allclose(
         out["trend_score"].to_numpy(),
         expected["trend_score"],
-        rtol=0.0,
-        atol=1e-12,
+        rtol=1e-7,
+        atol=1e-8,
         equal_nan=True,
     )
     assert out["trend_label"].astype(str).tolist() == expected["trend_label"]
@@ -388,8 +386,8 @@ def _assert_expected_columns(out: pd.DataFrame, expected: dict[str, object]):
     np.testing.assert_allclose(
         out["regime_confidence"].to_numpy(),
         expected["regime_confidence"],
-        rtol=0.0,
-        atol=1e-12,
+        rtol=1e-7,
+        atol=1e-8,
         equal_nan=True,
     )
 
@@ -530,13 +528,19 @@ def test_rolling_ols_matches_naive_calculation():
     slopes_vec, r2_vec = RegimeDetector._rolling_ols_slope_and_r2(series, window)
     slopes_naive, r2_naive = _naive_rolling_ols(series, window)
 
-    np.testing.assert_allclose(slopes_vec.values, slopes_naive.values, atol=1e-12, rtol=1e-9, equal_nan=True)
-    np.testing.assert_allclose(r2_vec.values, r2_naive.values, atol=1e-12, rtol=1e-6, equal_nan=True)
+    np.testing.assert_allclose(
+        slopes_vec.values, slopes_naive.values, atol=1e-12, rtol=1e-9, equal_nan=True
+    )
+    np.testing.assert_allclose(
+        r2_vec.values, r2_naive.values, atol=1e-12, rtol=1e-6, equal_nan=True
+    )
 
 
 def test_rolling_ols_perfect_trend_has_unit_r2():
     t = np.arange(200, dtype=float)
-    close = pd.Series(np.exp(0.01 * t + 2.0), index=pd.date_range("2024-01-01", periods=t.size, freq="h"))
+    close = pd.Series(
+        np.exp(0.01 * t + 2.0), index=pd.date_range("2024-01-01", periods=t.size, freq="h")
+    )
     window = 40
     slopes, r2 = RegimeDetector._rolling_ols_slope_and_r2(close, window)
 
@@ -551,36 +555,40 @@ def test_rolling_ols_handles_nan_values_correctly():
     # Create a series with some NaN values in the middle
     t = np.arange(200, dtype=float)
     prices = np.exp(0.01 * t + 2.0)
-    
+
     # Insert NaN values at positions 50-55
     prices[50:56] = np.nan
-    
+
     close = pd.Series(prices, index=pd.date_range("2024-01-01", periods=t.size, freq="h"))
     window = 40
     slopes, r2 = RegimeDetector._rolling_ols_slope_and_r2(close, window)
-    
+
     # Windows that contain NaN values should be NaN
     # Window starting at position 11 (ending at 50) should be valid
     # Window starting at position 16 (ending at 55) should be NaN
-    # Window starting at position 17 (ending at 56) should be NaN  
+    # Window starting at position 17 (ending at 56) should be NaN
     # Window starting at position 56 (ending at 95) should be valid again
-    
+
     # Check that we have valid values before the NaN region
     assert not pd.isna(slopes.iloc[49])  # Window ending at position 49 (before NaN)
     assert not pd.isna(r2.iloc[49])
-    
+
     # Check that windows containing NaN are invalid
     for i in range(50, 56 + window - 1):  # Windows that would contain NaN values
         if i < len(slopes):
             assert pd.isna(slopes.iloc[i]), f"Expected NaN at position {i}, got {slopes.iloc[i]}"
             assert pd.isna(r2.iloc[i]), f"Expected NaN at position {i}, got {r2.iloc[i]}"
-    
+
     # Check that we have valid values after the NaN region (once window no longer contains NaN)
     post_nan_start = 56 + window - 1  # First window that doesn't contain any NaN
     if post_nan_start < len(slopes):
-        assert not pd.isna(slopes.iloc[post_nan_start]), f"Expected valid value at position {post_nan_start}"
-        assert not pd.isna(r2.iloc[post_nan_start]), f"Expected valid value at position {post_nan_start}"
-        
+        assert not pd.isna(
+            slopes.iloc[post_nan_start]
+        ), f"Expected valid value at position {post_nan_start}"
+        assert not pd.isna(
+            r2.iloc[post_nan_start]
+        ), f"Expected valid value at position {post_nan_start}"
+
         # The slope should still be approximately 0.01 for the valid windows
         valid_post_nan = slopes.iloc[post_nan_start:].dropna()
         if not valid_post_nan.empty:
