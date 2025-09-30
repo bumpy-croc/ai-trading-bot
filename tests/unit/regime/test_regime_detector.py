@@ -86,3 +86,56 @@ def test_confidence_in_0_1_range():
     out = rd.annotate(df)
     conf = out["regime_confidence"].dropna()
     assert (conf >= 0).all() and (conf <= 1).all()
+
+
+def _naive_rolling_ols(series: pd.Series, window: int) -> tuple[pd.Series, pd.Series]:
+    y = np.log(series.clip(lower=1e-8).astype(float))
+    t = np.arange(len(y), dtype=float)
+    slopes = np.full(len(y), np.nan, dtype=float)
+    r2s = np.full(len(y), np.nan, dtype=float)
+    if window <= 0:
+        return pd.Series(slopes, index=series.index), pd.Series(r2s, index=series.index)
+    for end in range(window - 1, len(y)):
+        idx_slice = slice(end + 1 - window, end + 1)
+        t_window = t[idx_slice]
+        y_window = y.iloc[idx_slice]
+        t_mean = t_window.mean()
+        y_mean = y_window.mean()
+        tt = t_window - t_mean
+        yy = y_window - y_mean
+        denom = (tt**2).sum()
+        if denom == 0:
+            continue
+        slope = (tt * yy).sum() / denom
+        y_hat = y_mean + slope * tt
+        ss_tot = (yy**2).sum()
+        ss_res = ((y_window - y_hat) ** 2).sum()
+        slopes[end] = slope
+        r2s[end] = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
+    return pd.Series(slopes, index=series.index), pd.Series(r2s, index=series.index)
+
+
+def test_rolling_ols_matches_naive_calculation():
+    rng = np.random.default_rng(42)
+    prices = np.exp(rng.normal(0.0, 0.01, size=500).cumsum() + 10.0)
+    index = pd.date_range("2024-01-01", periods=prices.size, freq="h")
+    series = pd.Series(prices, index=index)
+    window = 50
+
+    slopes_vec, r2_vec = RegimeDetector._rolling_ols_slope_and_r2(series, window)
+    slopes_naive, r2_naive = _naive_rolling_ols(series, window)
+
+    np.testing.assert_allclose(slopes_vec.values, slopes_naive.values, atol=1e-12, rtol=1e-9, equal_nan=True)
+    np.testing.assert_allclose(r2_vec.values, r2_naive.values, atol=1e-12, rtol=1e-6, equal_nan=True)
+
+
+def test_rolling_ols_perfect_trend_has_unit_r2():
+    t = np.arange(200, dtype=float)
+    close = pd.Series(np.exp(0.01 * t + 2.0), index=pd.date_range("2024-01-01", periods=t.size, freq="h"))
+    window = 40
+    slopes, r2 = RegimeDetector._rolling_ols_slope_and_r2(close, window)
+
+    valid = r2.dropna()
+    assert not valid.empty
+    np.testing.assert_allclose(slopes[valid.index].values, 0.01, atol=1e-12, rtol=1e-9)
+    np.testing.assert_allclose(valid.values, 1.0, atol=1e-12, rtol=1e-9)

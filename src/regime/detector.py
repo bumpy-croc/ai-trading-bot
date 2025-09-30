@@ -48,41 +48,60 @@ class RegimeDetector:
 
     @staticmethod
     def _rolling_ols_slope_and_r2(x: pd.Series, window: int) -> tuple[pd.Series, pd.Series]:
-        # Compute rolling OLS slope and R^2 for y = log(price) vs time index
-        y = np.log(x.clip(lower=1e-8))
-        idx = np.arange(len(y))
-        df = pd.DataFrame({"y": y.values, "t": idx}, index=y.index)
+        """Compute rolling OLS slope and R^2 for log-price vs time using vectorized sums."""
 
-        # Rolling OLS helper
-        def _ols(block: pd.DataFrame):
-            t = block["t"].values.astype(float)
-            yb = block["y"].values.astype(float)
-            t_mean = t.mean()
-            y_mean = yb.mean()
-            tt = t - t_mean
-            yy = yb - y_mean
-            denom = (tt**2).sum()
-            if denom == 0:
-                return pd.Series([np.nan, np.nan])
-            slope = (tt * yy).sum() / denom
-            y_hat = y_mean + slope * tt
-            ss_tot = (yy**2).sum()
-            ss_res = ((yb - y_hat) ** 2).sum()
-            r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
-            return pd.Series([slope, r2])
+        y = np.log(x.clip(lower=1e-8).astype(float))
+        n = len(y)
+        slopes = np.full(n, np.nan, dtype=float)
+        r2s = np.full(n, np.nan, dtype=float)
+        if window <= 0 or n == 0:
+            return pd.Series(slopes, index=x.index), pd.Series(r2s, index=x.index)
 
-        # Compute using a simple sliding window to avoid DataFrame.rolling apply quirks
-        slopes = []
-        r2s = []
-        for i in range(len(df)):
-            if i + 1 < window:
-                slopes.append(np.nan)
-                r2s.append(np.nan)
-                continue
-            block = df.iloc[i + 1 - window : i + 1]
-            vals = _ols(block)
-            slopes.append(vals.iloc[0])
-            r2s.append(vals.iloc[1])
+        if window > n:
+            return pd.Series(slopes, index=y.index), pd.Series(r2s, index=y.index)
+
+        t = np.arange(n, dtype=float)
+        y_vals = y.to_numpy(dtype=float)
+
+        # Prefix cumulative sums to efficiently compute rolling window sums
+        def _cumsum_with_zero(arr: np.ndarray) -> np.ndarray:
+            out = np.empty(arr.size + 1, dtype=float)
+            out[0] = 0.0
+            np.cumsum(arr, out=out[1:])
+            return out
+
+        csum_t = _cumsum_with_zero(t)
+        csum_y = _cumsum_with_zero(y_vals)
+        csum_tt = _cumsum_with_zero(t * t)
+        csum_yy = _cumsum_with_zero(y_vals * y_vals)
+        csum_ty = _cumsum_with_zero(t * y_vals)
+
+        # Rolling window sums (length n - window + 1)
+        window_slice = slice(window, None)
+        sum_t = csum_t[window_slice] - csum_t[:-window]
+        sum_y = csum_y[window_slice] - csum_y[:-window]
+        sum_tt = csum_tt[window_slice] - csum_tt[:-window]
+        sum_yy = csum_yy[window_slice] - csum_yy[:-window]
+        sum_ty = csum_ty[window_slice] - csum_ty[:-window]
+
+        window_float = float(window)
+        cov_ty = window_float * sum_ty - sum_t * sum_y
+        var_t = window_float * sum_tt - sum_t * sum_t
+        var_y = window_float * sum_yy - sum_y * sum_y
+
+        valid_slope = var_t > 0
+        slope_vals = np.full_like(sum_ty, np.nan, dtype=float)
+        slope_vals[valid_slope] = cov_ty[valid_slope] / var_t[valid_slope]
+
+        valid_r2 = valid_slope & (var_y > 0)
+        r2_vals = np.full_like(sum_ty, np.nan, dtype=float)
+        r2_vals[valid_r2] = (cov_ty[valid_r2] ** 2) / (var_t[valid_r2] * var_y[valid_r2])
+        r2_vals[valid_r2] = np.clip(r2_vals[valid_r2], 0.0, 1.0)
+
+        start_idx = window - 1
+        slopes[start_idx:] = slope_vals
+        r2s[start_idx:] = r2_vals
+
         return pd.Series(slopes, index=y.index), pd.Series(r2s, index=y.index)
 
     @staticmethod
