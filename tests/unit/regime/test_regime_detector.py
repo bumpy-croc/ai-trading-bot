@@ -16,70 +16,71 @@ def seeded_rng() -> np.random.Generator:
     return np.random.default_rng(TEST_RANDOM_SEED)
 
 
+def _compute_reference_rolling_ols(series: pd.Series, window: int) -> tuple[np.ndarray, np.ndarray]:
+    """Reference implementation of the rolling OLS slope and R² calculation.
+
+    To keep the regression test independent from the vectorised production
+    implementation we deliberately rely on an explicit least-squares solve via
+    :func:`numpy.linalg.lstsq` for each window.  Computing the baseline
+    dynamically still avoids hard-coding floating point literals that can drift
+    slightly between Python/NumPy builds – the root cause of the original
+    regression – while ensuring the expectation comes from a numerically
+    distinct algorithm.
+    """
+
+    y = np.log(series.clip(lower=1e-8).astype(float))
+    t = np.arange(len(y), dtype=float)
+    slopes = np.full(len(series), np.nan, dtype=float)
+    r2s = np.full(len(series), np.nan, dtype=float)
+
+    if window <= 0:
+        return slopes, r2s
+
+    for end in range(window - 1, len(series)):
+        idx = slice(end + 1 - window, end + 1)
+        y_window = y.iloc[idx]
+
+        if y_window.isna().any():
+            continue
+
+        t_window = t[idx]
+        X = np.column_stack((np.ones(window, dtype=float), t_window))
+        y_vals = y_window.to_numpy(dtype=float)
+
+        coeffs, *_ = np.linalg.lstsq(X, y_vals, rcond=None)
+        slope = coeffs[1]
+        y_hat = X @ coeffs
+
+        y_mean = y_vals.mean()
+        ss_tot = np.sum((y_vals - y_mean) ** 2)
+        if ss_tot <= 0:
+            slopes[end] = slope
+            r2s[end] = np.nan
+            continue
+
+        ss_res = np.sum((y_vals - y_hat) ** 2)
+
+        slopes[end] = slope
+        r2 = 1.0 - (ss_res / ss_tot)
+        r2s[end] = np.clip(r2, 0.0, 1.0)
+
+    return slopes, r2s
+
+
 @pytest.fixture(scope="module")
 def rolling_ols_regression_baseline():
-    """Deterministic baseline for the rolling OLS regression helper."""
+    """Deterministic baseline for the rolling OLS regression helper.
+
+    The fixture intentionally computes the expected slopes and R² values on the
+    fly using the naïve reference algorithm above.  This keeps the regression
+    test stable across different BLAS/NumPy builds where hard-coded floating
+    point literals can differ by >1e-12 and break the strict comparison in
+    :func:`test_rolling_ols_regression`.
+    """
 
     prices = pd.Series(np.linspace(100.0, 200.0, 25), name="close")
     window = 10
-    baseline_slopes = np.array(
-        [
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            3.5301395907215532e-02,
-            3.4090813820782596e-02,
-            3.2960937086141493e-02,
-            3.1903916497827214e-02,
-            3.0912893331543825e-02,
-            2.9981847233983377e-02,
-            2.9105471417943810e-02,
-            2.8279069589811904e-02,
-            2.7498470303878066e-02,
-            2.6759955389056985e-02,
-            2.6060199813985914e-02,
-            2.5396220906882251e-02,
-            2.4765335270506460e-02,
-            2.4165122061650814e-02,
-            2.3593391561837376e-02,
-            2.3048158168403280e-02,
-        ]
-    )
-    baseline_r2 = np.array(
-        [
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            np.nan,
-            9.9800119874779356e-01,
-            9.9813624573380360e-01,
-            9.9825800003010322e-01,
-            9.9836815710894969e-01,
-            9.9846814955810634e-01,
-            9.9855919467675505e-01,
-            9.9864233228278224e-01,
-            9.9871845497277623e-01,
-            9.9878833251332530e-01,
-            9.9885263163254431e-01,
-            9.9891193217951106e-01,
-            9.9896674039563061e-01,
-            9.9901749987441204e-01,
-            9.9906460065957061e-01,
-            9.9910838683500984e-01,
-            9.9914916288631137e-01,
-        ]
-    )
+    baseline_slopes, baseline_r2 = _compute_reference_rolling_ols(prices, window)
     return prices, window, baseline_slopes, baseline_r2
 
 
