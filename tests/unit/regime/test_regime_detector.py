@@ -90,7 +90,11 @@ def test_rolling_ols_regression(rolling_ols_regression_baseline):
 def make_trend_series(n=200, slope=0.001, noise=0.0, start=30000.0):
     t = np.arange(n)
     base = start * (1.0 + slope * t)
-    noise_arr = np.random.normal(0.0, noise * start, size=n)
+    if noise:
+        rng = np.random.default_rng(1234)
+        noise_arr = rng.normal(0.0, noise * start, size=n)
+    else:
+        noise_arr = np.zeros_like(base)
     prices = np.maximum(1.0, base + noise_arr)
     ts = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
     return pd.DataFrame(
@@ -99,10 +103,285 @@ def make_trend_series(n=200, slope=0.001, noise=0.0, start=30000.0):
             "high": prices * 1.001,
             "low": prices * 0.999,
             "close": prices,
-            "volume": np.random.uniform(1.0, 2.0, size=n),
+            "volume": 1.0 + 0.01 * t,
         },
         index=pd.to_datetime(ts),
     )
+
+
+UP_TREND_SCORE_SUFFIX = [
+    0.0009857359308331664,
+    0.0009847651841847058,
+    0.0009837963476811648,
+    0.0009828294156900058,
+    0.0009818643826008276,
+    0.0009809012428252514,
+    0.0009799399907967877,
+    0.0009789806209707526,
+    0.0009780231278241458,
+    0.0009770675058555886,
+    0.0009761137495851572,
+    0.0009751618535543032,
+    0.0009742118123257661,
+    0.0009732636204834472,
+    0.0009723172726323222,
+    0.0009713727633983214,
+    0.0009704300874282372,
+    0.0009694892393896393,
+    0.0009685502139707481,
+    0.0009676130058803523,
+    0.0009666776098476782,
+    0.0009657440206223513,
+    0.0009648122329742311,
+    0.0009638822416933512,
+    0.0009629540415898299,
+    0.0009620276274937498,
+    0.000961102994255076,
+    0.0009601801367435604,
+    0.0009592590498486059,
+    0.0009583397284792484,
+    0.0009574221675640183,
+    0.0009565063620508366,
+    0.0009555923069069388,
+    0.0009546799971187777,
+    0.0009537694276919637,
+    0.0009528605936511062,
+    0.000951953490039802,
+    0.0009510481119204667,
+    0.0009501444543742932,
+    0.000949242512501183,
+    0.0009483422814195986,
+    0.0009474437562665065,
+    0.0009465469321972893,
+    0.0009456518043856601,
+    0.0009447583680235692,
+    0.0009438666183211392,
+    0.000942976550506536,
+    0.0009420881598259189,
+    0.0009412014415433413,
+    0.0009403163909406932,
+    0.0009394330033175751,
+]
+
+UP_REGIME_CONFIDENCE_SUFFIX = [
+    0.5533738618049914,
+    0.5537931092478762,
+    0.5541755329467465,
+    0.5545244551213705,
+    0.5548428122923142,
+    0.5551332096775271,
+    0.5553979666365391,
+    0.5556391548285513,
+    0.5558586304205887,
+    0.5560580613930836,
+    0.5562389507962305,
+    0.5564026566422721,
+    0.5565504089838389,
+    0.5566833246350696,
+    0.556802419905841,
+    0.5569086216554048,
+    0.5570027769176922,
+    0.5570856613114183,
+    0.5571579864068462,
+    0.5572204062002379,
+    0.5572735228174331,
+    0.557317891554058,
+]
+
+DOWN_TREND_SCORE_SUFFIX = [
+    -0.0010147446371265925,
+    -0.001015775421610121,
+    -0.0010168083024437297,
+    -0.0010178432860292732,
+    -0.0010188803787946974,
+    -0.0010199195871941984,
+    -0.001020960917708328,
+    -0.0010220043768441132,
+    -0.0010230499711352352,
+    -0.0010240977071421316,
+    -0.001025147591452159,
+    -0.0010261996306796884,
+    -0.0010272538314662853,
+    -0.0010283102004808489,
+    -0.001029368744419752,
+    -0.0010304294700069253,
+    -0.0010314923839940921,
+    -0.0010325574931608352,
+    -0.0010336248043147861,
+    -0.0010346943242917548,
+    -0.0010357660599558784,
+    -0.0010368400181997516,
+    -0.0010379162059445924,
+    -0.0010389946301404133,
+    -0.001040075297766108,
+    -0.0010411582158296457,
+    -0.0010422433913682392,
+    -0.0010433308314484468,
+    -0.001044420543166374,
+    -0.0010455125336477987,
+    -0.001046606810048327,
+    -0.0010477033795535636,
+    -0.0010488022493792637,
+    -0.0010499034267714734,
+    -0.0010510069190067118,
+    -0.001052112733392154,
+    -0.001053220877265735,
+    -0.0010543313579963389,
+    -0.0010554441829839804,
+    -0.0010565593596599365,
+    -0.0010576768954869465,
+    -0.0010587967979593244,
+    -0.001059919074603205,
+    -0.0010610437329766408,
+    -0.0010621707806698273,
+    -0.0010633002253052195,
+    -0.0010644320745377277,
+    -0.0010655663360549178,
+    -0.001066703017577167,
+    -0.0010678421268577952,
+    -0.0010689836716833167,
+]
+
+DOWN_REGIME_CONFIDENCE_SUFFIX = [
+    0.5638112221973819,
+    0.5646154441238309,
+    0.5653829567528408,
+    0.5661170781686916,
+    0.5668207413888227,
+    0.5674965486733882,
+    0.5681468168934748,
+    0.5687736156277385,
+    0.5693787993161513,
+    0.5699640345230579,
+    0.5705308231549893,
+    0.5710805223195293,
+    0.5716143613752903,
+    0.5721334566308943,
+    0.5726388240565261,
+    0.573131390320587,
+    0.5736120023985242,
+    0.5740814359685754,
+    0.57454040276804,
+    0.5749895570561978,
+    0.5754295013083064,
+    0.575860791248112,
+]
+
+EXPECTED_UP_TREND_SCORE = np.array([np.nan] * 29 + UP_TREND_SCORE_SUFFIX, dtype=float)
+EXPECTED_UP_TREND_LABEL = ["range"] * 29 + ["trend_up"] * 51
+EXPECTED_UP_REGIME_LABEL = (
+    ["range:low_vol"] * 29 + ["trend_up:low_vol"] * 19 + ["trend_up:high_vol"] * 32
+)
+EXPECTED_UP_REGIME_CONFIDENCE = np.array(
+    [np.nan] * 58 + UP_REGIME_CONFIDENCE_SUFFIX,
+    dtype=float,
+)
+
+EXPECTED_DOWN_TREND_SCORE = np.array([np.nan] * 29 + DOWN_TREND_SCORE_SUFFIX, dtype=float)
+EXPECTED_DOWN_TREND_LABEL = ["range"] * 29 + ["trend_down"] * 51
+EXPECTED_DOWN_REGIME_LABEL = ["range:low_vol"] * 29 + ["trend_down:low_vol"] * 51
+EXPECTED_DOWN_REGIME_CONFIDENCE = np.array(
+    [np.nan] * 58 + DOWN_REGIME_CONFIDENCE_SUFFIX,
+    dtype=float,
+)
+
+EXPECTED_RANGE_TREND_SCORE = np.array([np.nan] * 29 + [0.0] * 51, dtype=float)
+EXPECTED_RANGE_TREND_LABEL = ["range"] * 80
+EXPECTED_RANGE_REGIME_LABEL = ["range:low_vol"] * 48 + ["range:high_vol"] * 32
+EXPECTED_RANGE_REGIME_CONFIDENCE = np.full(80, np.nan, dtype=float)
+
+
+@pytest.fixture(scope="module")
+def deterministic_regime_config() -> RegimeConfig:
+    return RegimeConfig(
+        slope_window=30,
+        atr_window=10,
+        atr_percentile_lookback=40,
+        hysteresis_k=2,
+        min_dwell=5,
+    )
+
+
+@pytest.fixture(scope="module")
+def upward_regime_expectations():
+    df = make_trend_series(n=80, slope=0.001, noise=0.0)
+    expected = {
+        "trend_score": EXPECTED_UP_TREND_SCORE,
+        "trend_label": EXPECTED_UP_TREND_LABEL,
+        "regime_label": EXPECTED_UP_REGIME_LABEL,
+        "regime_confidence": EXPECTED_UP_REGIME_CONFIDENCE,
+    }
+    return df, expected
+
+
+@pytest.fixture(scope="module")
+def downward_regime_expectations():
+    df = make_trend_series(n=80, slope=-0.001, noise=0.0)
+    expected = {
+        "trend_score": EXPECTED_DOWN_TREND_SCORE,
+        "trend_label": EXPECTED_DOWN_TREND_LABEL,
+        "regime_label": EXPECTED_DOWN_REGIME_LABEL,
+        "regime_confidence": EXPECTED_DOWN_REGIME_CONFIDENCE,
+    }
+    return df, expected
+
+
+@pytest.fixture(scope="module")
+def range_regime_expectations():
+    df = make_trend_series(n=80, slope=0.0, noise=0.0)
+    expected = {
+        "trend_score": EXPECTED_RANGE_TREND_SCORE,
+        "trend_label": EXPECTED_RANGE_TREND_LABEL,
+        "regime_label": EXPECTED_RANGE_REGIME_LABEL,
+        "regime_confidence": EXPECTED_RANGE_REGIME_CONFIDENCE,
+    }
+    return df, expected
+
+
+def _assert_expected_columns(out: pd.DataFrame, expected: dict[str, object]):
+    np.testing.assert_allclose(
+        out["trend_score"].to_numpy(),
+        expected["trend_score"],
+        rtol=0.0,
+        atol=1e-12,
+        equal_nan=True,
+    )
+    assert out["trend_label"].astype(str).tolist() == expected["trend_label"]
+    assert out["regime_label"].astype(str).tolist() == expected["regime_label"]
+    np.testing.assert_allclose(
+        out["regime_confidence"].to_numpy(),
+        expected["regime_confidence"],
+        rtol=0.0,
+        atol=1e-12,
+        equal_nan=True,
+    )
+
+
+def test_regime_detector_trend_up_vectors(
+    deterministic_regime_config: RegimeConfig, upward_regime_expectations
+):
+    df, expected = upward_regime_expectations
+    rd = RegimeDetector(deterministic_regime_config)
+    out = rd.annotate(df)
+    _assert_expected_columns(out, expected)
+
+
+def test_regime_detector_trend_down_vectors(
+    deterministic_regime_config: RegimeConfig, downward_regime_expectations
+):
+    df, expected = downward_regime_expectations
+    rd = RegimeDetector(deterministic_regime_config)
+    out = rd.annotate(df)
+    _assert_expected_columns(out, expected)
+
+
+def test_regime_detector_range_vectors(
+    deterministic_regime_config: RegimeConfig, range_regime_expectations
+):
+    df, expected = range_regime_expectations
+    rd = RegimeDetector(deterministic_regime_config)
+    out = rd.annotate(df)
+    _assert_expected_columns(out, expected)
 
 
 def test_regime_detector_trend_up_basic():
