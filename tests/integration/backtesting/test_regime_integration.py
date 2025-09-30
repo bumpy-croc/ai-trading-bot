@@ -47,7 +47,49 @@ def test_backtester_regime_annotation(monkeypatch):
         initial_balance=1000,
         log_to_database=False,
     )
+    # Inject a deterministic regime switcher so we can assert on regime metrics
+    class StubRegimeSwitcher:
+        def __init__(self):
+            self._call_count = 0
+
+        def analyze_market_regime(self, price_data):
+            self._call_count += 1
+            if self._call_count <= 4:
+                regime_label = "bull:low_vol"
+            else:
+                regime_label = "bear:high_vol"
+            return {
+                "consensus_regime": {
+                    "regime_label": regime_label,
+                    "confidence": 0.75,
+                    "agreement_score": 0.6,
+                },
+                "analysis_timestamp": datetime.now(),
+            }
+
+        def should_switch_strategy(self, regime_analysis, current_candle_index):
+            return {
+                "should_switch": False,
+                "optimal_strategy": "dummy",
+                "new_regime": regime_analysis["consensus_regime"]["regime_label"],
+                "confidence": regime_analysis["consensus_regime"]["confidence"],
+                "reason": "stubbed-no-switch",
+            }
+
+    backtester.enable_regime_switching = True
+    backtester.regime_switcher = StubRegimeSwitcher()
     result = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)
     # Detector should be initialized and run without error
     assert backtester.regime_detector is not None
     assert "total_trades" in result
+
+    # Regime metadata should be populated when the feature flag is enabled
+    assert result["regime_switching_enabled"] is True
+    assert result["total_strategy_switches"] == 0
+    assert len(result["regime_history"]) == 7
+    assert result["regime_history"] == backtester.regime_history
+    regime_indices = [entry["candle_index"] for entry in result["regime_history"]]
+    assert regime_indices == [100, 150, 200, 250, 300, 350, 400]
+    last_regime = result["regime_history"][-1]
+    assert last_regime["regime"] == "bear:high_vol"
+    assert last_regime["confidence"] == 0.75
