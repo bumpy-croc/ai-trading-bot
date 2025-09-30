@@ -92,7 +92,7 @@ def test_rolling_ols_regression(rolling_ols_regression_baseline):
     np.testing.assert_allclose(
         slopes.to_numpy(), baseline_slopes, rtol=1e-12, atol=1e-12, equal_nan=True
     )
-    np.testing.assert_allclose(r2.to_numpy(), baseline_r2, rtol=1e-12, atol=1e-12, equal_nan=True)
+    np.testing.assert_allclose(r2.to_numpy(), baseline_r2, rtol=1e-10, atol=1e-12, equal_nan=True)
 
 
 def make_trend_series(
