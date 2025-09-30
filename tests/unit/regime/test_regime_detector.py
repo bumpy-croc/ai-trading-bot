@@ -544,3 +544,44 @@ def test_rolling_ols_perfect_trend_has_unit_r2():
     assert not valid.empty
     np.testing.assert_allclose(slopes[valid.index].values, 0.01, atol=1e-12, rtol=1e-9)
     np.testing.assert_allclose(valid.values, 1.0, atol=1e-12, rtol=1e-9)
+
+
+def test_rolling_ols_handles_nan_values_correctly():
+    """Test that NaN values don't propagate to windows that don't contain them."""
+    # Create a series with some NaN values in the middle
+    t = np.arange(200, dtype=float)
+    prices = np.exp(0.01 * t + 2.0)
+    
+    # Insert NaN values at positions 50-55
+    prices[50:56] = np.nan
+    
+    close = pd.Series(prices, index=pd.date_range("2024-01-01", periods=t.size, freq="h"))
+    window = 40
+    slopes, r2 = RegimeDetector._rolling_ols_slope_and_r2(close, window)
+    
+    # Windows that contain NaN values should be NaN
+    # Window starting at position 11 (ending at 50) should be valid
+    # Window starting at position 16 (ending at 55) should be NaN
+    # Window starting at position 17 (ending at 56) should be NaN  
+    # Window starting at position 56 (ending at 95) should be valid again
+    
+    # Check that we have valid values before the NaN region
+    assert not pd.isna(slopes.iloc[49])  # Window ending at position 49 (before NaN)
+    assert not pd.isna(r2.iloc[49])
+    
+    # Check that windows containing NaN are invalid
+    for i in range(50, 56 + window - 1):  # Windows that would contain NaN values
+        if i < len(slopes):
+            assert pd.isna(slopes.iloc[i]), f"Expected NaN at position {i}, got {slopes.iloc[i]}"
+            assert pd.isna(r2.iloc[i]), f"Expected NaN at position {i}, got {r2.iloc[i]}"
+    
+    # Check that we have valid values after the NaN region (once window no longer contains NaN)
+    post_nan_start = 56 + window - 1  # First window that doesn't contain any NaN
+    if post_nan_start < len(slopes):
+        assert not pd.isna(slopes.iloc[post_nan_start]), f"Expected valid value at position {post_nan_start}"
+        assert not pd.isna(r2.iloc[post_nan_start]), f"Expected valid value at position {post_nan_start}"
+        
+        # The slope should still be approximately 0.01 for the valid windows
+        valid_post_nan = slopes.iloc[post_nan_start:].dropna()
+        if not valid_post_nan.empty:
+            np.testing.assert_allclose(valid_post_nan.values, 0.01, atol=1e-10, rtol=1e-8)
