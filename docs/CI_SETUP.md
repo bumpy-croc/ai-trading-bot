@@ -29,7 +29,7 @@ Base.metadata.create_all(db.engine)
 ### Common Issues
 - **"Database setup/reset failed before tests"**: PostgreSQL service not running
 - **"relation does not exist"**: Database schema not properly created
-- **SQLite fallback in CI**: DATABASE_URL not set or PostgreSQL not available
+- **"Only PostgreSQL databases are supported"**: DATABASE_URL not set or pointing to non-PostgreSQL database
 
 ### Verification
 Run integration tests locally to verify setup:
