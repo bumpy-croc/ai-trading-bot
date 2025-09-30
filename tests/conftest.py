@@ -6,6 +6,7 @@ especially for setting up mock data, test environments, and common objects.
 """
 
 import os
+import random
 import tempfile
 import time
 from datetime import datetime, timedelta
@@ -20,6 +21,24 @@ import pytest
 from src.data_providers.data_provider import DataProvider
 from src.risk.risk_manager import RiskParameters
 from src.strategies.base import BaseStrategy
+
+REGIME_TEST_SEED = 1337
+
+
+def _is_regime_test(item: pytest.Item) -> bool:
+    try:
+        path = Path(str(item.fspath))
+    except Exception:
+        return False
+    return "tests/unit/regime" in str(path)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Ensure deterministic randomness for regime detector tests."""
+
+    if _is_regime_test(item):
+        random.seed(REGIME_TEST_SEED)
+        np.random.seed(REGIME_TEST_SEED)
 
 # Import account sync dependencies
 try:
