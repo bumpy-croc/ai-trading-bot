@@ -1,0 +1,41 @@
+{
+  "total_trades": 7,
+  "win_rate": 71.42857142857143,
+  "total_return": 0.45305411393752326,
+  "strategy_switches": [
+    {
+      "timestamp": "2022-01-07T06:00:00",
+      "candle_index": 150,
+      "old_strategy": "MlBasicStrategy",
+      "new_strategy": "alternate",
+      "regime": "trend_down:high_vol",
+      "confidence": 0.85,
+      "reason": "deterministic-switch",
+      "balance_at_switch": 10037.6341068058,
+      "agreement": 0.85
+    }
+  ],
+  "regime_history": [
+    {
+      "timestamp": "2022-01-05T04:00:00",
+      "candle_index": 100,
+      "regime": "trend_up:low_vol",
+      "confidence": 0.9,
+      "agreement": 0.9
+    },
+    {
+      "timestamp": "2022-01-07T06:00:00",
+      "candle_index": 150,
+      "regime": "trend_down:high_vol",
+      "confidence": 0.85,
+      "agreement": 0.85
+    },
+    {
+      "timestamp": "2022-01-09T08:00:00",
+      "candle_index": 200,
+      "regime": "range:low_vol",
+      "confidence": 0.8,
+      "agreement": 0.8
+    }
+  ]
+}
