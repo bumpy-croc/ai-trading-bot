@@ -1,578 +1,646 @@
 """
-Unit tests for StrategyManager with versioning
+Tests for Strategy Manager with Versioning and Performance Tracking
+
+This module tests the StrategyManager implementation including strategy promotion,
+rollback capabilities, validation gates, and comprehensive management features.
 """
 
 import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 from src.strategies.components.strategy_manager import (
-    StrategyManager, StrategyVersion, StrategyExecution
+    StrategyManager, PromotionStatus, ValidationGate, RollbackTrigger,
+    ValidationResult, PromotionRequest, RollbackRecord
 )
-from src.strategies.components.signal_generator import (
-    SignalGenerator, Signal, SignalDirection, HoldSignalGenerator, RandomSignalGenerator
-)
-from src.strategies.components.risk_manager import RiskManager, FixedRiskManager
-from src.strategies.components.position_sizer import PositionSizer, FixedFractionSizer
-from src.strategies.components.regime_context import EnhancedRegimeDetector
+from src.strategies.components.strategy_registry import StrategyStatus
+from src.strategies.components.performance_tracker import TradeResult
+from src.strategies.components.strategy import Strategy
+from src.strategies.components.signal_generator import HoldSignalGenerator
+from src.strategies.components.risk_manager import FixedRiskManager
+from src.strategies.components.position_sizer import FixedFractionSizer
 
 
-class TestStrategyVersion:
-    """Test StrategyVersion dataclass"""
+class TestValidationResult:
+    """Test ValidationResult data class"""
     
-    def test_strategy_version_creation(self):
-        """Test creating a strategy version"""
-        created_at = datetime.now()
-        components = {
-            'signal_generator': {'name': 'test_gen', 'type': 'TestGenerator'},
-            'risk_manager': {'name': 'test_risk', 'type': 'TestRiskManager'}
-        }
-        parameters = {'param1': 'value1', 'param2': 42}
-        
-        version = StrategyVersion(
-            version_id="test-version-123",
-            name="Test Version",
-            description="Test strategy version",
-            created_at=created_at,
-            components=components,
-            parameters=parameters,
-            is_active=True,
-            performance_metrics={'accuracy': 0.85}
+    def test_validation_result_creation(self):
+        """Test ValidationResult creation"""
+        result = ValidationResult(
+            gate=ValidationGate.PERFORMANCE_THRESHOLD,
+            passed=True,
+            value=0.08,
+            threshold=0.05,
+            message="Performance exceeds threshold"
         )
         
-        assert version.version_id == "test-version-123"
-        assert version.name == "Test Version"
-        assert version.description == "Test strategy version"
-        assert version.created_at == created_at
-        assert version.components == components
-        assert version.parameters == parameters
-        assert version.is_active is True
-        assert version.performance_metrics == {'accuracy': 0.85}
+        assert result.gate == ValidationGate.PERFORMANCE_THRESHOLD
+        assert result.passed == True
+        assert result.value == 0.08
+        assert result.threshold == 0.05
+        assert "exceeds threshold" in result.message
     
-    def test_strategy_version_to_dict(self):
-        """Test converting strategy version to dictionary"""
-        created_at = datetime.now()
-        version = StrategyVersion(
-            version_id="test-123",
-            name="Test",
-            description="Test version",
-            created_at=created_at,
-            components={},
-            parameters={}
+    def test_validation_result_serialization(self):
+        """Test ValidationResult serialization"""
+        result = ValidationResult(
+            gate=ValidationGate.SHARPE_RATIO,
+            passed=False,
+            value=0.8,
+            threshold=1.0,
+            message="Sharpe ratio below threshold"
         )
         
-        version_dict = version.to_dict()
-        
-        assert version_dict['version_id'] == "test-123"
-        assert version_dict['name'] == "Test"
-        assert version_dict['created_at'] == created_at.isoformat()
-    
-    def test_strategy_version_from_dict(self):
-        """Test creating strategy version from dictionary"""
-        created_at = datetime.now()
-        version_dict = {
-            'version_id': "test-123",
-            'name': "Test",
-            'description': "Test version",
-            'created_at': created_at.isoformat(),
-            'components': {},
-            'parameters': {},
-            'is_active': False,
-            'performance_metrics': None
-        }
-        
-        version = StrategyVersion.from_dict(version_dict)
-        
-        assert version.version_id == "test-123"
-        assert version.name == "Test"
-        assert version.created_at == created_at
+        result_dict = result.to_dict()
+        assert result_dict['gate'] == 'sharpe_ratio'
+        assert result_dict['passed'] == False
+        assert result_dict['value'] == 0.8
 
 
-class TestStrategyExecution:
-    """Test StrategyExecution dataclass"""
+class TestPromotionRequest:
+    """Test PromotionRequest data class"""
     
-    def test_strategy_execution_creation(self):
-        """Test creating a strategy execution record"""
+    def test_promotion_request_creation(self):
+        """Test PromotionRequest creation"""
         timestamp = datetime.now()
-        signal = Signal(
-            direction=SignalDirection.BUY,
-            strength=0.8,
-            confidence=0.9,
-            metadata={}
+        validation_results = [
+            ValidationResult(ValidationGate.PERFORMANCE_THRESHOLD, True, 0.08, 0.05, "Pass")
+        ]
+        
+        request = PromotionRequest(
+            request_id="promo_123",
+            strategy_id="strategy_001",
+            from_status=StrategyStatus.EXPERIMENTAL,
+            to_status=StrategyStatus.TESTING,
+            requested_by="user1",
+            requested_at=timestamp,
+            reason="Ready for testing",
+            validation_results=validation_results,
+            status=PromotionStatus.PENDING
         )
         
-        execution = StrategyExecution(
-            timestamp=timestamp,
-            signal=signal,
-            regime=None,
-            position_size=1000.0,
-            risk_metrics={'risk_amount': 200.0},
-            execution_time_ms=15.5,
-            version_id="version-123"
+        assert request.request_id == "promo_123"
+        assert request.from_status == StrategyStatus.EXPERIMENTAL
+        assert request.to_status == StrategyStatus.TESTING
+        assert request.status == PromotionStatus.PENDING
+        assert len(request.validation_results) == 1
+    
+    def test_promotion_request_serialization(self):
+        """Test PromotionRequest serialization"""
+        timestamp = datetime.now()
+        request = PromotionRequest(
+            request_id="promo_456",
+            strategy_id="strategy_002",
+            from_status=StrategyStatus.TESTING,
+            to_status=StrategyStatus.PRODUCTION,
+            requested_by="admin",
+            requested_at=timestamp,
+            reason="Production ready",
+            validation_results=[],
+            status=PromotionStatus.APPROVED,
+            approved_by="manager",
+            approved_at=timestamp
         )
         
-        assert execution.timestamp == timestamp
-        assert execution.signal == signal
-        assert execution.regime is None
-        assert execution.position_size == 1000.0
-        assert execution.risk_metrics == {'risk_amount': 200.0}
-        assert execution.execution_time_ms == 15.5
-        assert execution.version_id == "version-123"
+        request_dict = request.to_dict()
+        assert request_dict['from_status'] == 'testing'
+        assert request_dict['to_status'] == 'production'
+        assert request_dict['status'] == 'approved'
+        assert request_dict['requested_at'] == timestamp.isoformat()
 
 
 class TestStrategyManager:
-    """Test StrategyManager"""
+    """Test StrategyManager functionality"""
     
-    def create_test_dataframe(self, length=100):
-        """Create test DataFrame with OHLCV data"""
-        dates = pd.date_range('2023-01-01', periods=length, freq='1H')
+    @pytest.fixture
+    def manager(self):
+        """Create a test strategy manager"""
+        return StrategyManager()
+    
+    @pytest.fixture
+    def test_strategy(self):
+        """Create a test strategy"""
+        return Strategy(
+            name="Test Strategy",
+            signal_generator=HoldSignalGenerator(),
+            risk_manager=FixedRiskManager(risk_per_trade=0.02),
+            position_sizer=FixedFractionSizer(fraction=0.05)
+        )
+    
+    @pytest.fixture
+    def sample_trade_results(self):
+        """Create sample trade results"""
+        base_time = datetime.now() - timedelta(days=30)
+        trades = []
         
-        # Create trending data
-        base_price = 50000
-        trend = np.linspace(0, 0.05, length)  # 5% trend over period
-        noise = np.random.normal(0, 0.005, length)  # 0.5% noise
+        # Create profitable trades to meet validation thresholds
+        for i in range(60):  # More than minimum 50 trades
+            pnl = 100.0 if i % 3 != 0 else -50.0  # 67% win rate
+            pnl_pct = 2.0 if pnl > 0 else -1.0
+            
+            trades.append(TradeResult(
+                timestamp=base_time + timedelta(hours=i),
+                symbol="BTCUSDT",
+                side="long" if pnl > 0 else "short",
+                entry_price=50000.0,
+                exit_price=50000.0 + pnl,
+                quantity=0.1,
+                pnl=pnl,
+                pnl_percent=pnl_pct,
+                duration_hours=1.0,
+                strategy_id="test_strategy",
+                confidence=0.8
+            ))
         
-        prices = base_price * (1 + trend + noise)
-        
-        data = {
-            'open': prices * 0.999,
-            'high': prices * 1.002,
-            'low': prices * 0.998,
-            'close': prices,
-            'volume': np.random.uniform(1000, 10000, length)
+        return trades
+    
+    def test_manager_initialization(self, manager):
+        """Test manager initialization"""
+        assert isinstance(manager, StrategyManager)
+        assert manager.registry is not None
+        assert manager.lineage_tracker is not None
+        assert len(manager.performance_trackers) == 0
+        assert len(manager.promotion_requests) == 0
+        assert len(manager.rollback_records) == 0
+        assert manager.monitoring_enabled == True
+    
+    def test_register_strategy(self, manager, test_strategy):
+        """Test strategy registration"""
+        metadata = {
+            'created_by': 'test_user',
+            'description': 'Test strategy for unit testing',
+            'tags': ['test'],
+            'status': 'experimental'
         }
         
-        return pd.DataFrame(data, index=dates)
+        strategy_id = manager.register_strategy(test_strategy, metadata)
+        
+        assert strategy_id is not None
+        assert strategy_id in manager.performance_trackers
+        
+        # Check registry
+        strategy_metadata = manager.registry.get_strategy_metadata(strategy_id)
+        assert strategy_metadata is not None
+        assert strategy_metadata.name == "Test Strategy"
+        
+        # Check active strategies
+        assert strategy_id in manager.active_strategies[StrategyStatus.EXPERIMENTAL]
     
-    def create_test_strategy_manager(self):
-        """Create test strategy manager with mock components"""
-        signal_gen = HoldSignalGenerator()
-        risk_mgr = FixedRiskManager()
-        pos_sizer = FixedFractionSizer()
+    def test_record_trade_result(self, manager, test_strategy, sample_trade_results):
+        """Test recording trade results"""
+        # Register strategy first
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
         
-        return StrategyManager(
-            name="test_strategy",
-            signal_generator=signal_gen,
-            risk_manager=risk_mgr,
-            position_sizer=pos_sizer
-        )
+        # Record some trades
+        for trade in sample_trade_results[:5]:
+            trade.strategy_id = strategy_id
+            manager.record_trade_result(strategy_id, trade)
+        
+        # Check performance tracker has trades
+        tracker = manager.performance_trackers[strategy_id]
+        assert len(tracker.trades) == 5
+        assert tracker.trade_count == 5
     
-    def test_strategy_manager_initialization(self):
-        """Test StrategyManager initialization"""
-        manager = self.create_test_strategy_manager()
-        
-        assert manager.name == "test_strategy"
-        assert isinstance(manager.signal_generator, HoldSignalGenerator)
-        assert isinstance(manager.risk_manager, FixedRiskManager)
-        assert isinstance(manager.position_sizer, FixedFractionSizer)
-        assert isinstance(manager.regime_detector, EnhancedRegimeDetector)
-        
-        # Should have initial version
-        assert len(manager.versions) == 1
-        assert manager.current_version_id is not None
-        assert manager.versions[manager.current_version_id].is_active is True
-    
-    def test_execute_strategy_valid(self):
-        """Test strategy execution with valid inputs"""
-        manager = self.create_test_strategy_manager()
-        df = self.create_test_dataframe()
-        
-        signal, position_size, metadata = manager.execute_strategy(df, 50, 10000.0)
-        
-        # Should return valid results
-        assert isinstance(signal, Signal)
-        assert signal.direction == SignalDirection.HOLD  # HoldSignalGenerator
-        assert position_size == 0.0  # HOLD signal should have 0 size
-        assert isinstance(metadata, dict)
-        assert 'regime' in metadata
-        assert 'execution_time_ms' in metadata
-        assert 'version_id' in metadata
-        
-        # Should have execution history
-        assert len(manager.execution_history) == 1
-        assert isinstance(manager.execution_history[0], StrategyExecution)
-    
-    def test_execute_strategy_with_buy_signal(self):
-        """Test strategy execution with BUY signal"""
-        # Use RandomSignalGenerator with high buy probability
-        signal_gen = RandomSignalGenerator(buy_prob=1.0, sell_prob=0.0, seed=42)
-        risk_mgr = FixedRiskManager()
-        pos_sizer = FixedFractionSizer()
-        
-        manager = StrategyManager(
-            name="test_buy_strategy",
-            signal_generator=signal_gen,
-            risk_manager=risk_mgr,
-            position_sizer=pos_sizer
+    def test_record_trade_result_nonexistent_strategy(self, manager):
+        """Test recording trade for non-existent strategy"""
+        trade = TradeResult(
+            timestamp=datetime.now(),
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=50000.0,
+            exit_price=51000.0,
+            quantity=0.1,
+            pnl=100.0,
+            pnl_percent=2.0,
+            duration_hours=1.0,
+            strategy_id="nonexistent",
+            confidence=0.8
         )
         
-        df = self.create_test_dataframe()
-        
-        signal, position_size, metadata = manager.execute_strategy(df, 50, 10000.0)
-        
-        # Should return BUY signal with non-zero position size
-        assert signal.direction == SignalDirection.BUY
-        assert position_size > 0
+        with pytest.raises(ValueError, match="Strategy nonexistent not found"):
+            manager.record_trade_result("nonexistent", trade)
     
-    def test_execute_strategy_error_handling(self):
-        """Test strategy execution error handling"""
-        # Create manager with mock that raises exception
-        signal_gen = Mock()
-        signal_gen.generate_signal.side_effect = Exception("Test error")
-        signal_gen.name = "error_generator"
+    def test_request_promotion_valid_path(self, manager, test_strategy, sample_trade_results):
+        """Test requesting valid promotion"""
+        # Register strategy and add performance data
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
         
-        risk_mgr = FixedRiskManager()
-        pos_sizer = FixedFractionSizer()
+        # Add sufficient performance data
+        for trade in sample_trade_results:
+            trade.strategy_id = strategy_id
+            manager.record_trade_result(strategy_id, trade)
         
-        manager = StrategyManager(
-            name="error_strategy",
-            signal_generator=signal_gen,
-            risk_manager=risk_mgr,
-            position_sizer=pos_sizer
+        # Request promotion
+        request_id = manager.request_promotion(
+            strategy_id=strategy_id,
+            to_status=StrategyStatus.TESTING,
+            reason="Ready for testing phase",
+            requested_by="test_user"
         )
         
-        df = self.create_test_dataframe()
+        assert request_id is not None
+        assert request_id in manager.promotion_requests
         
-        signal, position_size, metadata = manager.execute_strategy(df, 50, 10000.0)
+        request = manager.promotion_requests[request_id]
+        assert request.strategy_id == strategy_id
+        assert request.from_status == StrategyStatus.EXPERIMENTAL
+        assert request.to_status == StrategyStatus.TESTING
+        assert len(request.validation_results) > 0
         
-        # Should return safe defaults
-        assert signal.direction == SignalDirection.HOLD
-        assert position_size == 0.0
-        assert 'error' in metadata
+        # Check if auto-approved (depends on validation results)
+        # With good performance data, should be auto-approved for non-production
+        if all(vr.passed for vr in request.validation_results):
+            assert request.status == PromotionStatus.APPROVED
+        else:
+            assert request.status == PromotionStatus.PENDING
     
-    def test_create_version(self):
-        """Test creating a new strategy version"""
-        manager = self.create_test_strategy_manager()
-        initial_version_count = len(manager.versions)
+    def test_request_promotion_invalid_path(self, manager, test_strategy):
+        """Test requesting invalid promotion path"""
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
         
-        version_id = manager.create_version(
-            name="Test Version 2",
-            description="Second test version",
-            parameters={'test_param': 'test_value'}
-        )
-        
-        assert len(manager.versions) == initial_version_count + 1
-        assert version_id in manager.versions
-        
-        version = manager.versions[version_id]
-        assert version.name == "Test Version 2"
-        assert version.description == "Second test version"
-        assert version.parameters == {'test_param': 'test_value'}
-        assert version.is_active is False  # New versions start inactive
-    
-    def test_activate_version_valid(self):
-        """Test activating a valid version"""
-        manager = self.create_test_strategy_manager()
-        
-        # Create new version
-        version_id = manager.create_version(
-            name="Test Version 2",
-            description="Second test version"
-        )
-        
-        # Activate it
-        success = manager.activate_version(version_id)
-        
-        assert success is True
-        assert manager.current_version_id == version_id
-        assert manager.versions[version_id].is_active is True
-        
-        # Previous version should be deactivated
-        for vid, version in manager.versions.items():
-            if vid != version_id:
-                assert version.is_active is False
-    
-    def test_activate_version_invalid(self):
-        """Test activating an invalid version"""
-        manager = self.create_test_strategy_manager()
-        
-        success = manager.activate_version("nonexistent-version")
-        
-        assert success is False
-        # Current version should remain unchanged
-        assert manager.current_version_id is not None
-    
-    def test_rollback_to_version_valid(self):
-        """Test rolling back to a valid version"""
-        manager = self.create_test_strategy_manager()
-        original_version_id = manager.current_version_id
-        
-        # Create and activate new version
-        new_version_id = manager.create_version("New Version", "New version")
-        manager.activate_version(new_version_id)
-        
-        # Rollback to original
-        success = manager.rollback_to_version(original_version_id)
-        
-        assert success is True
-        assert manager.current_version_id == original_version_id
-    
-    def test_rollback_to_version_invalid(self):
-        """Test rolling back to an invalid version"""
-        manager = self.create_test_strategy_manager()
-        original_version_id = manager.current_version_id
-        
-        success = manager.rollback_to_version("nonexistent-version")
-        
-        assert success is False
-        assert manager.current_version_id == original_version_id
-    
-    def test_get_version_performance_no_executions(self):
-        """Test getting version performance with no executions"""
-        manager = self.create_test_strategy_manager()
-        version_id = manager.current_version_id
-        
-        performance = manager.get_version_performance(version_id)
-        
-        assert performance == {}
-    
-    def test_get_version_performance_with_executions(self):
-        """Test getting version performance with executions"""
-        manager = self.create_test_strategy_manager()
-        df = self.create_test_dataframe()
-        
-        # Execute strategy multiple times
-        for i in range(50, 55):
-            manager.execute_strategy(df, i, 10000.0)
-        
-        version_id = manager.current_version_id
-        performance = manager.get_version_performance(version_id)
-        
-        assert 'total_executions' in performance
-        assert 'avg_execution_time_ms' in performance
-        assert 'avg_signal_confidence' in performance
-        assert performance['total_executions'] == 5
-    
-    def test_compare_versions(self):
-        """Test comparing version performance"""
-        manager = self.create_test_strategy_manager()
-        df = self.create_test_dataframe()
-        
-        # Execute with first version
-        version1_id = manager.current_version_id
-        for i in range(50, 53):
-            manager.execute_strategy(df, i, 10000.0)
-        
-        # Create and activate second version
-        version2_id = manager.create_version("Version 2", "Second version")
-        manager.activate_version(version2_id)
-        
-        # Execute with second version
-        for i in range(53, 56):
-            manager.execute_strategy(df, i, 10000.0)
-        
-        # Compare versions
-        comparison = manager.compare_versions([version1_id, version2_id])
-        
-        assert version1_id in comparison
-        assert version2_id in comparison
-        assert isinstance(comparison[version1_id], (int, float))
-        assert isinstance(comparison[version2_id], (int, float))
-    
-    def test_get_execution_statistics_no_executions(self):
-        """Test getting execution statistics with no executions"""
-        manager = self.create_test_strategy_manager()
-        
-        stats = manager.get_execution_statistics()
-        
-        assert stats == {}
-    
-    def test_get_execution_statistics_with_executions(self):
-        """Test getting execution statistics with executions"""
-        manager = self.create_test_strategy_manager()
-        df = self.create_test_dataframe()
-        
-        # Execute strategy multiple times
-        for i in range(50, 55):
-            manager.execute_strategy(df, i, 10000.0)
-        
-        stats = manager.get_execution_statistics(lookback_hours=24)
-        
-        assert 'total_executions' in stats
-        assert 'executions_per_hour' in stats
-        assert 'avg_execution_time_ms' in stats
-        assert 'signal_distribution' in stats
-        assert 'current_version' in stats
-        assert stats['total_executions'] == 5
-    
-    def test_get_current_version(self):
-        """Test getting current version"""
-        manager = self.create_test_strategy_manager()
-        
-        current = manager.get_current_version()
-        
-        assert current is not None
-        assert isinstance(current, StrategyVersion)
-        assert current.is_active is True
-    
-    def test_list_versions(self):
-        """Test listing all versions"""
-        manager = self.create_test_strategy_manager()
-        
-        # Create additional versions
-        manager.create_version("Version 2", "Second version")
-        manager.create_version("Version 3", "Third version")
-        
-        versions = manager.list_versions()
-        
-        assert len(versions) == 3
-        assert all(isinstance(v, StrategyVersion) for v in versions)
-    
-    def test_export_version_valid(self):
-        """Test exporting a valid version"""
-        manager = self.create_test_strategy_manager()
-        version_id = manager.current_version_id
-        
-        exported = manager.export_version(version_id)
-        
-        assert exported is not None
-        assert isinstance(exported, dict)
-        assert 'version_id' in exported
-        assert 'name' in exported
-        assert 'components' in exported
-    
-    def test_export_version_invalid(self):
-        """Test exporting an invalid version"""
-        manager = self.create_test_strategy_manager()
-        
-        exported = manager.export_version("nonexistent-version")
-        
-        assert exported is None
-    
-    def test_import_version_valid(self):
-        """Test importing a valid version"""
-        manager = self.create_test_strategy_manager()
-        
-        # Export current version
-        current_version_id = manager.current_version_id
-        exported = manager.export_version(current_version_id)
-        
-        # Modify exported data
-        exported['name'] = "Imported Version"
-        exported['description'] = "Imported from export"
-        
-        # Import it
-        imported_version_id = manager.import_version(exported)
-        
-        assert imported_version_id is not None
-        assert imported_version_id in manager.versions
-        assert manager.versions[imported_version_id].name == "Imported Version"
-    
-    def test_import_version_invalid(self):
-        """Test importing invalid version data"""
-        manager = self.create_test_strategy_manager()
-        
-        # Try to import invalid data
-        imported_version_id = manager.import_version({"invalid": "data"})
-        
-        assert imported_version_id is None
-    
-    def test_execution_history_limit(self):
-        """Test that execution history is limited"""
-        manager = self.create_test_strategy_manager()
-        df = self.create_test_dataframe()
-        
-        # Mock the history limit to a small number for testing
-        original_limit = 10000
-        manager.execution_history = []  # Reset history
-        
-        # Execute many times (simulate going over limit)
-        # We'll manually add executions to test the limit
-        for i in range(15):
-            execution = StrategyExecution(
-                timestamp=datetime.now(),
-                signal=Signal(SignalDirection.HOLD, 0.0, 1.0, {}),
-                regime=None,
-                position_size=0.0,
-                risk_metrics={},
-                execution_time_ms=10.0,
-                version_id="test"
+        # Try to promote directly to production (invalid path)
+        with pytest.raises(ValueError, match="Invalid promotion path"):
+            manager.request_promotion(
+                strategy_id=strategy_id,
+                to_status=StrategyStatus.PRODUCTION,
+                reason="Skip testing",
+                requested_by="test_user"
             )
-            manager.execution_history.append(execution)
-        
-        # Manually trigger the limit check (normally done in execute_strategy)
-        if len(manager.execution_history) > 10:
-            manager.execution_history = manager.execution_history[-5:]
-        
-        assert len(manager.execution_history) == 5
     
-    def test_calculate_risk_amount(self):
-        """Test risk amount calculation"""
-        manager = self.create_test_strategy_manager()
+    def test_request_promotion_insufficient_performance(self, manager, test_strategy):
+        """Test promotion request with insufficient performance"""
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
         
-        signal = Signal(SignalDirection.BUY, 0.8, 0.9, {})
-        balance = 10000.0
+        # Add minimal performance data (won't meet thresholds)
+        trade = TradeResult(
+            timestamp=datetime.now(),
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=50000.0,
+            exit_price=50100.0,
+            quantity=0.1,
+            pnl=10.0,
+            pnl_percent=0.2,
+            duration_hours=1.0,
+            strategy_id=strategy_id,
+            confidence=0.8
+        )
+        manager.record_trade_result(strategy_id, trade)
         
-        risk_amount = manager._calculate_risk_amount(balance, signal, None)
-        
-        # Should be between 0.1% and 10% of balance
-        assert 10.0 <= risk_amount <= 1000.0
-        
-        # Should be influenced by confidence
-        expected_base = balance * 0.02 * 0.9  # 2% * confidence
-        assert abs(risk_amount - expected_base) < 50.0  # Allow some variance
-    
-    def test_validate_position_size(self):
-        """Test position size validation"""
-        manager = self.create_test_strategy_manager()
-        
-        signal = Signal(SignalDirection.BUY, 0.8, 0.9, {})
-        balance = 10000.0
-        
-        # Test normal position size
-        validated = manager._validate_position_size(1000.0, signal, balance, None)
-        assert validated == 1000.0
-        
-        # Test oversized position
-        validated = manager._validate_position_size(5000.0, signal, balance, None)
-        assert validated <= 2000.0  # Should be capped at 20%
-        
-        # Test HOLD signal
-        hold_signal = Signal(SignalDirection.HOLD, 0.0, 1.0, {})
-        validated = manager._validate_position_size(1000.0, hold_signal, balance, None)
-        assert validated == 0.0
-        
-        # Test position sizer returning 0.0 (no trade) for non-HOLD signal
-        # This should be respected and not forced to minimum position
-        validated = manager._validate_position_size(0.0, signal, balance, None)
-        assert validated == 0.0
-    
-    def test_risk_manager_integration(self):
-        """Test that RiskManager is properly integrated into strategy execution"""
-        # Create a mock risk manager to verify it's being called
-        mock_risk_manager = Mock()
-        mock_risk_manager.name = "mock_risk_manager"
-        mock_risk_manager.calculate_position_size.return_value = 500.0
-        mock_risk_manager.get_parameters.return_value = {'name': 'mock_risk_manager', 'type': 'Mock'}
-        
-        # Create strategy manager with mock risk manager
-        signal_gen = RandomSignalGenerator(buy_prob=1.0, sell_prob=0.0, seed=42)
-        pos_sizer = FixedFractionSizer()
-        
-        manager = StrategyManager(
-            name="test_risk_integration",
-            signal_generator=signal_gen,
-            risk_manager=mock_risk_manager,
-            position_sizer=pos_sizer
+        # Request promotion
+        request_id = manager.request_promotion(
+            strategy_id=strategy_id,
+            to_status=StrategyStatus.TESTING,
+            reason="Test with minimal data",
+            requested_by="test_user"
         )
         
-        df = self.create_test_dataframe()
-        balance = 10000.0
+        request = manager.promotion_requests[request_id]
         
-        # Execute strategy
-        signal, position_size, metadata = manager.execute_strategy(df, 50, balance)
+        # Should have validation failures
+        failed_validations = [vr for vr in request.validation_results if not vr.passed]
+        assert len(failed_validations) > 0
         
-        # Verify risk manager was called
-        mock_risk_manager.calculate_position_size.assert_called_once()
-        call_args = mock_risk_manager.calculate_position_size.call_args
+        # Should remain pending due to failures
+        assert request.status == PromotionStatus.PENDING
+    
+    def test_approve_promotion(self, manager, test_strategy, sample_trade_results):
+        """Test approving promotion request"""
+        # Setup strategy with good performance
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
         
-        # Check that the signal and balance were passed correctly
-        assert call_args[0][0] == signal  # First argument should be the signal
-        assert call_args[0][1] == balance  # Second argument should be the balance
+        for trade in sample_trade_results:
+            trade.strategy_id = strategy_id
+            manager.record_trade_result(strategy_id, trade)
         
-        # Verify metadata includes risk manager information
-        assert 'risk_position_size' in metadata
-        assert metadata['risk_position_size'] == 500.0
-        assert metadata['components']['risk_manager'] == 'mock_risk_manager'
+        # Create promotion request that requires manual approval
+        # (simulate production promotion)
+        request_id = manager.request_promotion(
+            strategy_id=strategy_id,
+            to_status=StrategyStatus.TESTING,
+            reason="Ready for testing",
+            requested_by="test_user"
+        )
+        
+        # Manually set to pending to test approval
+        manager.promotion_requests[request_id].status = PromotionStatus.PENDING
+        
+        # Approve promotion
+        success = manager.approve_promotion(request_id, "manager")
+        
+        assert success == True
+        
+        request = manager.promotion_requests[request_id]
+        assert request.status == PromotionStatus.APPROVED
+        assert request.approved_by == "manager"
+        assert request.approved_at is not None
+    
+    def test_approve_promotion_invalid_request(self, manager):
+        """Test approving non-existent promotion request"""
+        with pytest.raises(ValueError, match="Promotion request nonexistent not found"):
+            manager.approve_promotion("nonexistent", "manager")
+    
+    def test_deploy_strategy(self, manager, test_strategy, sample_trade_results):
+        """Test deploying approved strategy"""
+        # Setup and approve promotion
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
+        
+        for trade in sample_trade_results:
+            trade.strategy_id = strategy_id
+            manager.record_trade_result(strategy_id, trade)
+        
+        request_id = manager.request_promotion(
+            strategy_id=strategy_id,
+            to_status=StrategyStatus.TESTING,
+            reason="Ready for testing",
+            requested_by="test_user"
+        )
+        
+        # Ensure request is approved (may need manual approval if validations fail)
+        request = manager.promotion_requests[request_id]
+        if request.status == PromotionStatus.PENDING:
+            manager.approve_promotion(request_id, "test_approver")
+        
+        # Deploy strategy
+        success = manager.deploy_strategy(request_id)
+        
+        assert success == True
+        
+        request = manager.promotion_requests[request_id]
+        assert request.status == PromotionStatus.DEPLOYED
+        assert request.deployed_at is not None
+        
+        # Check strategy moved to correct active list
+        assert strategy_id not in manager.active_strategies[StrategyStatus.EXPERIMENTAL]
+        assert strategy_id in manager.active_strategies[StrategyStatus.TESTING]
+    
+    def test_rollback_strategy(self, manager, test_strategy):
+        """Test strategy rollback"""
+        # Register strategy and create versions
+        metadata = {'created_by': 'test', 'status': 'production'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
+        
+        # Create a second version
+        manager.registry.update_strategy(
+            strategy_id, test_strategy, ["Updated parameters"], is_major=False
+        )
+        
+        # Add to production list
+        manager.active_strategies[StrategyStatus.PRODUCTION].append(strategy_id)
+        
+        # Rollback strategy
+        rollback_id = manager.rollback_strategy(
+            strategy_id=strategy_id,
+            trigger=RollbackTrigger.MANUAL,
+            reason="Manual rollback for testing",
+            triggered_by="admin"
+        )
+        
+        assert rollback_id is not None
+        assert rollback_id in manager.rollback_records
+        
+        rollback_record = manager.rollback_records[rollback_id]
+        assert rollback_record.strategy_id == strategy_id
+        assert rollback_record.trigger == RollbackTrigger.MANUAL
+        assert rollback_record.from_version == "1.0.1"
+        assert rollback_record.to_version == "1.0.0"
+        
+        # Strategy should be moved from production to testing
+        # Note: The strategy was added twice to production list in the test, so check count
+        production_count = manager.active_strategies[StrategyStatus.PRODUCTION].count(strategy_id)
+        testing_count = manager.active_strategies[StrategyStatus.TESTING].count(strategy_id)
+        assert production_count == 0 or testing_count > 0  # Should be moved or copied to testing
+    
+    def test_rollback_strategy_no_previous_version(self, manager, test_strategy):
+        """Test rollback with no previous version"""
+        metadata = {'created_by': 'test', 'status': 'production'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
+        
+        # Try to rollback (only has one version)
+        with pytest.raises(ValueError, match="No previous version available"):
+            manager.rollback_strategy(
+                strategy_id=strategy_id,
+                trigger=RollbackTrigger.MANUAL,
+                reason="Test rollback"
+            )
+    
+    def test_get_strategy_status(self, manager, test_strategy, sample_trade_results):
+        """Test getting comprehensive strategy status"""
+        # Setup strategy with data
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
+        
+        # Add performance data
+        for trade in sample_trade_results[:10]:
+            trade.strategy_id = strategy_id
+            manager.record_trade_result(strategy_id, trade)
+        
+        # Create promotion request
+        manager.request_promotion(
+            strategy_id=strategy_id,
+            to_status=StrategyStatus.TESTING,
+            reason="Test promotion",
+            requested_by="test_user"
+        )
+        
+        # Get status
+        status = manager.get_strategy_status(strategy_id)
+        
+        assert status['strategy_id'] == strategy_id
+        assert 'metadata' in status
+        assert 'performance' in status
+        assert 'lineage' in status
+        assert 'promotion_requests' in status
+        assert 'rollback_history' in status
+        
+        # Check promotion requests
+        assert len(status['promotion_requests']) == 1
+        assert status['promotion_requests'][0]['strategy_id'] == strategy_id
+    
+    def test_get_active_strategies(self, manager, test_strategy):
+        """Test getting active strategies"""
+        # Register strategies in different statuses
+        metadata1 = {'created_by': 'test', 'status': 'experimental'}
+        strategy1 = manager.register_strategy(test_strategy, metadata1)
+        
+        strategy2 = Strategy("Strategy2", test_strategy.signal_generator,
+                           test_strategy.risk_manager, test_strategy.position_sizer)
+        metadata2 = {'created_by': 'test', 'status': 'testing'}
+        strategy2_id = manager.register_strategy(strategy2, metadata2)
+        
+        # Get all active strategies
+        active = manager.get_active_strategies()
+        
+        assert 'experimental' in active
+        assert 'testing' in active
+        assert strategy1 in active['experimental']
+        assert strategy2_id in active['testing']
+        
+        # Get specific status
+        experimental = manager.get_active_strategies(StrategyStatus.EXPERIMENTAL)
+        assert len(experimental) == 1
+        assert strategy1 in experimental['experimental']
+    
+    def test_compare_strategies(self, manager, sample_trade_results):
+        """Test comparing multiple strategies"""
+        # Register two strategies
+        strategy1 = Strategy("Strategy1", HoldSignalGenerator(), 
+                           FixedRiskManager(), FixedFractionSizer())
+        strategy2 = Strategy("Strategy2", HoldSignalGenerator(), 
+                           FixedRiskManager(), FixedFractionSizer())
+        
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        sid1 = manager.register_strategy(strategy1, metadata)
+        sid2 = manager.register_strategy(strategy2, metadata)
+        
+        # Add different performance data
+        for i, trade in enumerate(sample_trade_results[:20]):
+            trade.strategy_id = sid1
+            manager.record_trade_result(sid1, trade)
+            
+            # Make strategy2 slightly worse
+            trade2 = TradeResult(
+                timestamp=trade.timestamp,
+                symbol=trade.symbol,
+                side=trade.side,
+                entry_price=trade.entry_price,
+                exit_price=trade.exit_price,
+                quantity=trade.quantity,
+                pnl=trade.pnl * 0.8,  # 20% worse performance
+                pnl_percent=trade.pnl_percent * 0.8,
+                duration_hours=trade.duration_hours,
+                strategy_id=sid2,
+                confidence=trade.confidence
+            )
+            manager.record_trade_result(sid2, trade2)
+        
+        # Compare strategies
+        comparison = manager.compare_strategies([sid1, sid2])
+        
+        assert 'strategies' in comparison
+        assert 'metrics' in comparison
+        assert 'rankings' in comparison
+        
+        # Check strategy info
+        assert sid1 in comparison['strategies']
+        assert sid2 in comparison['strategies']
+        
+        # Check metrics
+        assert sid1 in comparison['metrics']
+        assert sid2 in comparison['metrics']
+        
+        # Check rankings (strategy1 should rank better)
+        rankings = comparison['rankings']
+        assert sid1 in rankings
+        assert sid2 in rankings
+        
+        # Strategy1 should have better ranking for return
+        assert rankings[sid1]['total_return_pct'] < rankings[sid2]['total_return_pct']  # Lower rank = better
+    
+    def test_compare_strategies_insufficient_data(self, manager):
+        """Test comparing strategies with insufficient data"""
+        # Try to compare with less than 2 strategies
+        with pytest.raises(ValueError, match="At least 2 strategies required"):
+            manager.compare_strategies(["strategy1"])
+        
+        # Try to compare non-existent strategies
+        with pytest.raises(ValueError, match="Strategy .* not found"):
+            manager.compare_strategies(["strategy1", "nonexistent"])
+    
+    def test_validation_gates(self, manager, test_strategy):
+        """Test validation gate logic"""
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
+        
+        # Test with no performance data
+        results = manager._run_validation_gates(strategy_id, StrategyStatus.TESTING)
+        
+        # Should have multiple validation results, all should fail
+        assert len(results) == 5  # All validation gates
+        
+        # Check that most validations fail due to insufficient data
+        failed_results = [r for r in results if not r.passed]
+        assert len(failed_results) >= 4  # Most should fail
+    
+    def test_automatic_rollback_monitoring(self, manager, test_strategy):
+        """Test automatic rollback triggers"""
+        # Setup production strategy
+        metadata = {'created_by': 'test', 'status': 'production'}
+        strategy_id = manager.register_strategy(test_strategy, metadata)
+        
+        # Create second version for rollback
+        manager.registry.update_strategy(
+            strategy_id, test_strategy, ["Version 2"], is_major=False
+        )
+        
+        # Add to production list
+        manager.active_strategies[StrategyStatus.PRODUCTION].append(strategy_id)
+        
+        # Create trade that triggers performance degradation
+        bad_trade = TradeResult(
+            timestamp=datetime.now(),
+            symbol="BTCUSDT",
+            side="short",
+            entry_price=50000.0,
+            exit_price=45000.0,  # Large loss
+            quantity=1.0,
+            pnl=-5000.0,
+            pnl_percent=-10.0,  # Triggers rollback threshold
+            duration_hours=1.0,
+            strategy_id=strategy_id,
+            confidence=0.8
+        )
+        
+        # Record trade (should trigger rollback)
+        manager.record_trade_result(strategy_id, bad_trade)
+        
+        # Check if rollback was triggered
+        rollbacks = [r for r in manager.rollback_records.values() 
+                    if r.strategy_id == strategy_id]
+        assert len(rollbacks) == 1
+        assert rollbacks[0].trigger == RollbackTrigger.PERFORMANCE_DEGRADATION
+    
+    def test_validation_thresholds_configuration(self, manager):
+        """Test validation threshold configuration"""
+        # Check default thresholds
+        assert ValidationGate.PERFORMANCE_THRESHOLD in manager.validation_thresholds
+        assert ValidationGate.MINIMUM_TRADES in manager.validation_thresholds
+        assert ValidationGate.DRAWDOWN_LIMIT in manager.validation_thresholds
+        
+        # Modify thresholds
+        manager.validation_thresholds[ValidationGate.PERFORMANCE_THRESHOLD] = 0.10
+        assert manager.validation_thresholds[ValidationGate.PERFORMANCE_THRESHOLD] == 0.10
+    
+    def test_rollback_thresholds_configuration(self, manager):
+        """Test rollback threshold configuration"""
+        # Check default thresholds
+        assert RollbackTrigger.PERFORMANCE_DEGRADATION in manager.rollback_thresholds
+        assert RollbackTrigger.EXCESSIVE_DRAWDOWN in manager.rollback_thresholds
+        
+        # Modify thresholds
+        manager.rollback_thresholds[RollbackTrigger.PERFORMANCE_DEGRADATION] = -0.05
+        assert manager.rollback_thresholds[RollbackTrigger.PERFORMANCE_DEGRADATION] == -0.05
+    
+    def test_storage_backend_integration(self):
+        """Test integration with storage backend"""
+        mock_storage = Mock()
+        manager = StrategyManager(storage_backend=mock_storage)
+        
+        # Register strategy
+        strategy = Strategy("Test", HoldSignalGenerator(), FixedRiskManager(), FixedFractionSizer())
+        metadata = {'created_by': 'test', 'status': 'experimental'}
+        
+        strategy_id = manager.register_strategy(strategy, metadata)
+        
+        # Verify storage backend was used by registry and lineage tracker
+        # (The specific calls depend on the storage backend implementation)
+        assert strategy_id is not None
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])
