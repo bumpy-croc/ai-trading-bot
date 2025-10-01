@@ -410,8 +410,9 @@ class MLSignalGenerator(SignalGenerator):
         # Adjust based on regime confidence
         # Higher confidence = more aggressive threshold (closer to 0)
         # Lower confidence = more conservative threshold (further from 0)
-        confidence_adjustment = (1 - regime.confidence) * self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
-        threshold = threshold * (1 - confidence_adjustment)
+        # Since threshold is negative, we scale it: high confidence reduces magnitude, low confidence increases magnitude
+        confidence_factor = 1 + regime.confidence * self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
+        threshold = threshold / confidence_factor
         
         # Ensure threshold is within reasonable bounds
         threshold = max(-0.01, min(-0.0001, threshold))  # Between -1% and -0.01%

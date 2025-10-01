@@ -186,6 +186,58 @@ class TestMLSignalGenerator:
             assert isinstance(threshold, float)
     
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
+    def test_confidence_scaling_for_short_threshold(self, mock_ort):
+        """Test that confidence scaling works correctly for short thresholds"""
+        mock_session = Mock()
+        mock_session.get_inputs.return_value = [Mock(name='input')]
+        mock_ort.return_value = mock_session
+        
+        generator = MLSignalGenerator()
+        
+        # Test with same trend/volatility but different confidence levels
+        base_regime_params = {
+            'trend': TrendLabel.RANGE,
+            'volatility': VolLabel.LOW,
+            'duration': 10,
+            'strength': 0.7
+        }
+        
+        # High confidence regime
+        high_confidence_regime = RegimeContext(
+            confidence=0.9,
+            **base_regime_params
+        )
+        
+        # Low confidence regime
+        low_confidence_regime = RegimeContext(
+            confidence=0.3,
+            **base_regime_params
+        )
+        
+        high_conf_threshold = generator._calculate_dynamic_short_threshold(high_confidence_regime)
+        low_conf_threshold = generator._calculate_dynamic_short_threshold(low_confidence_regime)
+        
+        # High confidence should result in more aggressive threshold (closer to 0)
+        assert high_conf_threshold > low_conf_threshold, \
+            f"High confidence threshold ({high_conf_threshold}) should be more aggressive (closer to 0) than low confidence ({low_conf_threshold})"
+        
+        # Both should be negative and within bounds
+        assert high_conf_threshold < 0 and low_conf_threshold < 0
+        assert -0.01 <= high_conf_threshold <= -0.0001
+        assert -0.01 <= low_conf_threshold <= -0.0001
+        
+        # Test extreme cases
+        perfect_confidence_regime = RegimeContext(confidence=1.0, **base_regime_params)
+        no_confidence_regime = RegimeContext(confidence=0.0, **base_regime_params)
+        
+        perfect_threshold = generator._calculate_dynamic_short_threshold(perfect_confidence_regime)
+        no_conf_threshold = generator._calculate_dynamic_short_threshold(no_confidence_regime)
+        
+        # Perfect confidence should be most aggressive
+        assert perfect_threshold > high_conf_threshold > low_conf_threshold > no_conf_threshold, \
+            "Thresholds should be ordered by confidence level (higher confidence = more aggressive)"
+    
+    @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
     def test_confidence_calculation(self, mock_ort):
         """Test confidence calculation based on predicted return"""
         mock_session = Mock()
