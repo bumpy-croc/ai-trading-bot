@@ -325,12 +325,15 @@ class MLSignalGenerator(SignalGenerator):
             
             # Get prediction
             if self.use_prediction_engine and self.prediction_engine is not None and self.model_name:
-                # Use prediction engine
+                # Use prediction engine - returns real price, no denormalization needed
                 window_df = df[["open", "high", "low", "close", "volume"]].iloc[
                     index - self.sequence_length : index
                 ]
                 result = self.prediction_engine.predict(window_df, model_name=self.model_name)
                 pred = float(result.price)
+                
+                # Prediction engine returns real prices, return directly
+                return pred
             else:
                 # Use local ONNX session; initialize lazily
                 if self.ort_session is None:
@@ -339,24 +342,24 @@ class MLSignalGenerator(SignalGenerator):
                 
                 output = self.ort_session.run(None, {self.input_name: input_data})
                 pred = output[0][0][0]
-            
-            # Ensure pred is a scalar value
-            if isinstance(pred, (list, tuple, np.ndarray)):
-                pred = float(np.array(pred).flatten()[0])
-            else:
-                pred = float(pred)
-            
-            # Denormalize prediction
-            recent_close = df["close"].iloc[index - self.sequence_length : index].values
-            min_close = np.min(recent_close)
-            max_close = np.max(recent_close)
-            
-            if max_close != min_close:
-                pred_denormalized = pred * (max_close - min_close) + min_close
-            else:
-                pred_denormalized = df["close"].iloc[index - 1]
-            
-            return pred_denormalized
+                
+                # Ensure pred is a scalar value
+                if isinstance(pred, (list, tuple, np.ndarray)):
+                    pred = float(np.array(pred).flatten()[0])
+                else:
+                    pred = float(pred)
+                
+                # Denormalize prediction (only for ONNX model outputs)
+                recent_close = df["close"].iloc[index - self.sequence_length : index].values
+                min_close = np.min(recent_close)
+                max_close = np.max(recent_close)
+                
+                if max_close != min_close:
+                    pred_denormalized = pred * (max_close - min_close) + min_close
+                else:
+                    pred_denormalized = df["close"].iloc[index - 1]
+                
+                return pred_denormalized
             
         except Exception as e:
             print(f"[MLSignalGenerator] Prediction error at index {index}: {e}")
@@ -764,7 +767,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             
             # Get prediction
             if self.use_prediction_engine and self.prediction_engine is not None:
-                # Use prediction engine
+                # Use prediction engine - returns real price, no denormalization needed
                 window_df = df[["open", "high", "low", "close", "volume"]].iloc[
                     index - self.sequence_length : index
                 ]
@@ -783,6 +786,9 @@ class MLBasicSignalGenerator(SignalGenerator):
                     result = self.prediction_engine.predict(window_df)
                 
                 pred = float(result.price)
+                
+                # Prediction engine returns real prices, return directly
+                return pred
             else:
                 # Use local ONNX session; initialize lazily
                 if self.ort_session is None:
@@ -791,24 +797,24 @@ class MLBasicSignalGenerator(SignalGenerator):
                 
                 output = self.ort_session.run(None, {self.input_name: input_data})
                 pred = output[0][0][0]
-            
-            # Ensure pred is a scalar value
-            if isinstance(pred, (list, tuple, np.ndarray)):
-                pred = float(np.array(pred).flatten()[0])
-            else:
-                pred = float(pred)
-            
-            # Denormalize prediction
-            recent_close = df["close"].iloc[index - self.sequence_length : index].values
-            min_close = np.min(recent_close)
-            max_close = np.max(recent_close)
-            
-            if max_close != min_close:
-                pred_denormalized = pred * (max_close - min_close) + min_close
-            else:
-                pred_denormalized = df["close"].iloc[index - 1]
-            
-            return pred_denormalized
+                
+                # Ensure pred is a scalar value
+                if isinstance(pred, (list, tuple, np.ndarray)):
+                    pred = float(np.array(pred).flatten()[0])
+                else:
+                    pred = float(pred)
+                
+                # Denormalize prediction (only for ONNX model outputs)
+                recent_close = df["close"].iloc[index - self.sequence_length : index].values
+                min_close = np.min(recent_close)
+                max_close = np.max(recent_close)
+                
+                if max_close != min_close:
+                    pred_denormalized = pred * (max_close - min_close) + min_close
+                else:
+                    pred_denormalized = df["close"].iloc[index - 1]
+                
+                return pred_denormalized
             
         except Exception as e:
             print(f"[MLBasicSignalGenerator] Prediction error at index {index}: {e}")

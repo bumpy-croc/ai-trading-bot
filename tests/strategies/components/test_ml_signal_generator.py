@@ -237,6 +237,35 @@ class TestMLSignalGenerator:
         assert perfect_threshold > high_conf_threshold > low_conf_threshold > no_conf_threshold, \
             "Thresholds should be ordered by confidence level (higher confidence = more aggressive)"
     
+    @patch('src.strategies.components.ml_signal_generator.PredictionEngine')
+    def test_prediction_engine_no_denormalization(self, mock_engine_class):
+        """Test that prediction engine results are not denormalized"""
+        # Mock prediction engine
+        mock_engine = Mock()
+        mock_result = Mock()
+        real_price = 50000.0  # Real price from prediction engine
+        mock_result.price = real_price
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+        
+        generator = MLSignalGenerator(
+            model_path="dummy.onnx",
+            use_prediction_engine=True,
+            model_name="test_model"
+        )
+        generator.prediction_engine = mock_engine
+        
+        # Create test data
+        df = self.create_test_dataframe(200)
+        
+        # Get prediction
+        prediction = generator._get_ml_prediction(df, 150)
+        
+        # Should return the real price directly (no denormalization)
+        assert prediction == real_price, \
+            f"Prediction engine result should not be denormalized: expected {real_price}, got {prediction}"
+    
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
     def test_confidence_calculation(self, mock_ort):
         """Test confidence calculation based on predicted return"""
@@ -531,6 +560,35 @@ class TestMLBasicSignalGenerator:
         assert 'engine_enabled' in signal.metadata
         assert 'engine_model_name' in signal.metadata
         assert 'engine_batch' in signal.metadata
+    
+    @patch('src.strategies.components.ml_signal_generator.PredictionEngine')
+    def test_mlbasic_prediction_engine_no_denormalization(self, mock_engine_class):
+        """Test that MLBasicSignalGenerator prediction engine results are not denormalized"""
+        # Mock prediction engine
+        mock_engine = Mock()
+        mock_result = Mock()
+        real_price = 45000.0  # Real price from prediction engine
+        mock_result.price = real_price
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+        
+        generator = MLBasicSignalGenerator(
+            model_path="dummy.onnx",
+            use_prediction_engine=True,
+            model_name="test_model"
+        )
+        generator.prediction_engine = mock_engine
+        
+        # Create test data
+        df = self.create_test_dataframe(200)
+        
+        # Get prediction
+        prediction = generator._get_ml_prediction(df, 150)
+        
+        # Should return the real price directly (no denormalization)
+        assert prediction == real_price, \
+            f"MLBasic prediction engine result should not be denormalized: expected {real_price}, got {prediction}"
 
 
 class TestMLSignalGeneratorEdgeCases:
