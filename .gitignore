@@ -16,6 +16,7 @@ __pycache__/
 .claude/
 .cursor/commands/
 .cursor/mcp.json
+.kiro/
 
 # OS generated files
 .DS_Store
