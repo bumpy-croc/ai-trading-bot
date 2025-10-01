@@ -352,3 +352,322 @@ class FixedRiskManager(RiskManager):
             'stop_loss_pct': self.stop_loss_pct
         })
         return params
+
+
+class VolatilityRiskManager(RiskManager):
+    """
+    ATR-based volatility risk manager
+    
+    Adjusts position sizing and stop losses based on market volatility
+    using Average True Range (ATR) calculations.
+    """
+    
+    def __init__(self, base_risk: float = 0.02, atr_multiplier: float = 2.0, 
+                 min_risk: float = 0.005, max_risk: float = 0.05):
+        """
+        Initialize volatility risk manager
+        
+        Args:
+            base_risk: Base risk percentage per trade (0.02 = 2%)
+            atr_multiplier: ATR multiplier for stop loss calculation
+            min_risk: Minimum risk percentage (0.005 = 0.5%)
+            max_risk: Maximum risk percentage (0.05 = 5%)
+        """
+        super().__init__("volatility_risk_manager")
+        
+        if not 0.001 <= base_risk <= 0.1:
+            raise ValueError(f"base_risk must be between 0.001 and 0.1, got {base_risk}")
+        
+        if not 0.5 <= atr_multiplier <= 5.0:
+            raise ValueError(f"atr_multiplier must be between 0.5 and 5.0, got {atr_multiplier}")
+        
+        if not 0.001 <= min_risk <= max_risk:
+            raise ValueError(f"min_risk must be between 0.001 and max_risk, got {min_risk}")
+        
+        if not min_risk <= max_risk <= 0.2:
+            raise ValueError(f"max_risk must be between min_risk and 0.2, got {max_risk}")
+        
+        self.base_risk = base_risk
+        self.atr_multiplier = atr_multiplier
+        self.min_risk = min_risk
+        self.max_risk = max_risk
+    
+    def calculate_position_size(self, signal: 'Signal', balance: float, 
+                              regime: Optional['RegimeContext'] = None) -> float:
+        """Calculate position size based on volatility-adjusted risk"""
+        self.validate_inputs(balance)
+        
+        if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Get volatility from signal metadata or use default
+        volatility = signal.metadata.get('atr', 0.02)  # Default 2% ATR
+        
+        # Adjust risk based on volatility (higher volatility = lower risk)
+        volatility_multiplier = min(2.0, max(0.5, 0.02 / max(volatility, 0.005)))
+        adjusted_risk = self.base_risk * volatility_multiplier
+        
+        # Apply bounds
+        adjusted_risk = max(self.min_risk, min(self.max_risk, adjusted_risk))
+        
+        # Base risk amount
+        risk_amount = balance * adjusted_risk
+        
+        # Adjust for signal confidence and strength
+        confidence_multiplier = max(0.1, signal.confidence)
+        strength_multiplier = max(0.1, signal.strength)
+        
+        position_size = risk_amount * confidence_multiplier * strength_multiplier
+        
+        # Apply regime-based adjustments if available
+        if regime is not None:
+            regime_multiplier = self._get_regime_multiplier(regime)
+            position_size *= regime_multiplier
+        
+        # Ensure reasonable bounds
+        min_position = balance * 0.001  # 0.1% minimum
+        max_position = balance * 0.15   # 15% maximum
+        
+        return max(min_position, min(max_position, position_size))
+    
+    def should_exit(self, position: Position, current_data: MarketData, 
+                   regime: Optional['RegimeContext'] = None) -> bool:
+        """Determine exit based on volatility-adjusted stop loss"""
+        # Use volatility from market data if available
+        volatility = current_data.volatility or 0.02
+        
+        # Calculate dynamic stop loss percentage based on volatility
+        stop_loss_pct = volatility * self.atr_multiplier
+        stop_loss_pct = max(0.01, min(0.15, stop_loss_pct))  # 1% to 15% bounds
+        
+        # Calculate current loss percentage
+        loss_pct = abs(position.get_pnl_percentage()) / 100
+        
+        # Exit if loss exceeds dynamic stop loss threshold
+        if position.get_pnl_percentage() < 0 and loss_pct >= stop_loss_pct:
+            return True
+        
+        return False
+    
+    def get_stop_loss(self, entry_price: float, signal: 'Signal', 
+                     regime: Optional['RegimeContext'] = None) -> float:
+        """Calculate stop loss based on ATR"""
+        if entry_price <= 0:
+            raise ValueError(f"entry_price must be positive, got {entry_price}")
+        
+        # Get ATR from signal metadata or use default
+        atr = signal.metadata.get('atr', entry_price * 0.02)  # Default 2% of price
+        
+        # Calculate stop loss distance
+        stop_distance = atr * self.atr_multiplier
+        
+        if signal.direction.value == 'buy':
+            # For long positions, stop loss is below entry price
+            return entry_price - stop_distance
+        elif signal.direction.value == 'sell':
+            # For short positions, stop loss is above entry price
+            return entry_price + stop_distance
+        else:
+            # No stop loss for hold signals
+            return entry_price
+    
+    def _get_regime_multiplier(self, regime: 'RegimeContext') -> float:
+        """Get position size multiplier based on regime"""
+        multiplier = 1.0
+        
+        # Reduce size in high volatility regimes
+        if hasattr(regime, 'volatility') and regime.volatility.value == 'high_vol':
+            multiplier *= 0.6
+        elif hasattr(regime, 'volatility') and regime.volatility.value == 'low_vol':
+            multiplier *= 1.2
+        
+        # Adjust for trend
+        if hasattr(regime, 'trend') and regime.trend.value == 'trend_down':
+            multiplier *= 0.7
+        
+        # Adjust for regime confidence
+        if hasattr(regime, 'confidence') and regime.confidence < 0.5:
+            multiplier *= 0.8
+        
+        return max(0.2, min(2.0, multiplier))  # 20% to 200% of base size
+    
+    def get_parameters(self) -> Dict[str, Any]:
+        """Get volatility risk manager parameters"""
+        params = super().get_parameters()
+        params.update({
+            'base_risk': self.base_risk,
+            'atr_multiplier': self.atr_multiplier,
+            'min_risk': self.min_risk,
+            'max_risk': self.max_risk
+        })
+        return params
+
+
+class RegimeAdaptiveRiskManager(RiskManager):
+    """
+    Regime-adaptive risk manager
+    
+    Adjusts risk parameters based on detected market regimes,
+    with different risk profiles for different market conditions.
+    """
+    
+    def __init__(self, base_risk: float = 0.02, regime_multipliers: Optional[Dict[str, float]] = None):
+        """
+        Initialize regime-adaptive risk manager
+        
+        Args:
+            base_risk: Base risk percentage per trade (0.02 = 2%)
+            regime_multipliers: Custom multipliers for different regimes
+        """
+        super().__init__("regime_adaptive_risk_manager")
+        
+        if not 0.001 <= base_risk <= 0.1:
+            raise ValueError(f"base_risk must be between 0.001 and 0.1, got {base_risk}")
+        
+        self.base_risk = base_risk
+        
+        # Default regime multipliers
+        self.regime_multipliers = regime_multipliers or {
+            'bull_low_vol': 1.5,    # Aggressive in favorable conditions
+            'bull_high_vol': 1.0,   # Normal in volatile bull market
+            'bear_low_vol': 0.5,    # Conservative in bear market
+            'bear_high_vol': 0.3,   # Very conservative in volatile bear
+            'sideways_low_vol': 0.8, # Reduced in sideways markets
+            'sideways_high_vol': 0.4, # Very reduced in volatile sideways
+            'unknown': 0.6          # Conservative when regime unclear
+        }
+        
+        # Validate multipliers
+        for regime, multiplier in self.regime_multipliers.items():
+            if not 0.1 <= multiplier <= 3.0:
+                raise ValueError(f"regime multiplier for {regime} must be between 0.1 and 3.0, got {multiplier}")
+    
+    def calculate_position_size(self, signal: 'Signal', balance: float, 
+                              regime: Optional['RegimeContext'] = None) -> float:
+        """Calculate position size based on regime-specific risk parameters"""
+        self.validate_inputs(balance)
+        
+        if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Get regime-specific risk multiplier
+        regime_multiplier = self._get_regime_risk_multiplier(regime)
+        adjusted_risk = self.base_risk * regime_multiplier
+        
+        # Base risk amount
+        risk_amount = balance * adjusted_risk
+        
+        # Adjust for signal confidence and strength
+        confidence_multiplier = max(0.1, signal.confidence)
+        strength_multiplier = max(0.1, signal.strength)
+        
+        position_size = risk_amount * confidence_multiplier * strength_multiplier
+        
+        # Apply regime confidence scaling
+        if regime is not None and hasattr(regime, 'confidence'):
+            confidence_scaling = max(0.5, regime.confidence)  # Min 50% scaling
+            position_size *= confidence_scaling
+        
+        # Ensure reasonable bounds
+        min_position = balance * 0.001  # 0.1% minimum
+        max_position = balance * 0.2    # 20% maximum
+        
+        return max(min_position, min(max_position, position_size))
+    
+    def should_exit(self, position: Position, current_data: MarketData, 
+                   regime: Optional['RegimeContext'] = None) -> bool:
+        """Determine exit based on regime-specific criteria"""
+        # Get regime-specific stop loss percentage
+        stop_loss_pct = self._get_regime_stop_loss(regime)
+        
+        # Calculate current loss percentage
+        loss_pct = abs(position.get_pnl_percentage()) / 100
+        
+        # Exit if loss exceeds regime-specific stop loss threshold
+        if position.get_pnl_percentage() < 0 and loss_pct >= stop_loss_pct:
+            return True
+        
+        # Check for regime transition exit conditions
+        if regime is not None and self._should_exit_on_regime_change(regime):
+            return True
+        
+        return False
+    
+    def get_stop_loss(self, entry_price: float, signal: 'Signal', 
+                     regime: Optional['RegimeContext'] = None) -> float:
+        """Calculate stop loss based on regime-specific parameters"""
+        if entry_price <= 0:
+            raise ValueError(f"entry_price must be positive, got {entry_price}")
+        
+        # Get regime-specific stop loss percentage
+        stop_loss_pct = self._get_regime_stop_loss(regime)
+        
+        if signal.direction.value == 'buy':
+            # For long positions, stop loss is below entry price
+            return entry_price * (1 - stop_loss_pct)
+        elif signal.direction.value == 'sell':
+            # For short positions, stop loss is above entry price
+            return entry_price * (1 + stop_loss_pct)
+        else:
+            # No stop loss for hold signals
+            return entry_price
+    
+    def _get_regime_risk_multiplier(self, regime: Optional['RegimeContext']) -> float:
+        """Get risk multiplier based on current regime"""
+        if regime is None:
+            return self.regime_multipliers['unknown']
+        
+        # Determine regime key based on trend and volatility
+        trend_key = 'unknown'
+        if hasattr(regime, 'trend'):
+            if regime.trend.value == 'trend_up':
+                trend_key = 'bull'
+            elif regime.trend.value == 'trend_down':
+                trend_key = 'bear'
+            else:
+                trend_key = 'sideways'
+        
+        vol_key = 'high_vol'
+        if hasattr(regime, 'volatility'):
+            vol_key = 'low_vol' if regime.volatility.value == 'low_vol' else 'high_vol'
+        
+        regime_key = f"{trend_key}_{vol_key}"
+        
+        return self.regime_multipliers.get(regime_key, self.regime_multipliers['unknown'])
+    
+    def _get_regime_stop_loss(self, regime: Optional['RegimeContext']) -> float:
+        """Get stop loss percentage based on regime"""
+        if regime is None:
+            return 0.05  # 5% default
+        
+        # More aggressive stops in favorable regimes, wider in unfavorable
+        if hasattr(regime, 'trend') and hasattr(regime, 'volatility'):
+            if regime.trend.value == 'trend_up' and regime.volatility.value == 'low_vol':
+                return 0.03  # 3% tight stop in bull low vol
+            elif regime.trend.value == 'trend_down':
+                return 0.08  # 8% wider stop in bear market
+            elif regime.volatility.value == 'high_vol':
+                return 0.07  # 7% wider stop in high volatility
+        
+        return 0.05  # 5% default
+    
+    def _should_exit_on_regime_change(self, regime: 'RegimeContext') -> bool:
+        """Check if position should be exited due to regime change"""
+        # Exit if regime confidence is very low (regime transition)
+        if hasattr(regime, 'confidence') and regime.confidence < 0.3:
+            return True
+        
+        # Exit if regime duration is very short (unstable regime)
+        if hasattr(regime, 'duration') and regime.duration < 3:
+            return True
+        
+        return False
+    
+    def get_parameters(self) -> Dict[str, Any]:
+        """Get regime-adaptive risk manager parameters"""
+        params = super().get_parameters()
+        params.update({
+            'base_risk': self.base_risk,
+            'regime_multipliers': self.regime_multipliers
+        })
+        return params
