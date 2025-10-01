@@ -57,23 +57,53 @@ class TestMLSignalGenerator:
             strength=0.7
         )
     
-    @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
-    def test_ml_signal_generator_initialization(self, mock_ort):
-        """Test MLSignalGenerator initialization"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name='input')]
-        mock_ort.return_value = mock_session
-        
+    def test_ml_signal_generator_initialization(self):
+        """Test MLSignalGenerator initialization with lazy ONNX session loading"""
         generator = MLSignalGenerator(
             name="test_ml_generator",
             model_path="test_model.onnx",
-            sequence_length=120
+            sequence_length=120,
+            use_prediction_engine=True  # This should prevent ONNX session initialization
         )
         
         assert generator.name == "test_ml_generator"
         assert generator.model_path == "test_model.onnx"
         assert generator.sequence_length == 120
-        assert generator.ort_session == mock_session
+        # ONNX session should be None initially for dual-backend support
+        assert generator.ort_session is None
+        assert generator.input_name is None
+        assert generator.use_prediction_engine is True
+    
+    @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
+    def test_lazy_onnx_session_initialization(self, mock_ort):
+        """Test that ONNX session is initialized lazily when needed"""
+        mock_session = Mock()
+        mock_session.get_inputs.return_value = [Mock(name='input')]
+        mock_session.run.return_value = [[[[0.5]]]]
+        mock_ort.return_value = mock_session
+        
+        # Create generator without prediction engine
+        generator = MLSignalGenerator(
+            name="test_ml_generator",
+            model_path="test_model.onnx",
+            sequence_length=120,
+            use_prediction_engine=False
+        )
+        
+        # Initially, session should be None
+        assert generator.ort_session is None
+        assert generator.input_name is None
+        
+        # Create test data
+        df = self.create_test_dataframe(200)
+        
+        # Generate signal - this should trigger lazy initialization
+        signal = generator.generate_signal(df, 150)
+        
+        # Now session should be initialized
+        assert generator.ort_session is not None
+        assert generator.input_name is not None
+        mock_ort.assert_called_once_with("test_model.onnx")
     
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
     def test_generate_signal_insufficient_history(self, mock_ort):
