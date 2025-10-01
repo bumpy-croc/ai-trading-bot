@@ -533,3 +533,8 @@ class TestStrategyManager:
         hold_signal = Signal(SignalDirection.HOLD, 0.0, 1.0, {})
         validated = manager._validate_position_size(1000.0, hold_signal, balance, None)
         assert validated == 0.0
+        
+        # Test position sizer returning 0.0 (no trade) for non-HOLD signal
+        # This should be respected and not forced to minimum position
+        validated = manager._validate_position_size(0.0, signal, balance, None)
+        assert validated == 0.0

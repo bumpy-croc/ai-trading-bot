@@ -478,6 +478,11 @@ class StrategyManager:
         if signal.direction.value == 'hold':
             return 0.0
         
+        # Respect position sizer's decision to return 0.0 (no trade)
+        if position_size == 0.0:
+            return 0.0
+        
+        # Only apply minimum bound when position sizer produced a positive size
         return max(min_position, min(max_position, position_size))
     
     def get_current_version(self) -> Optional[StrategyVersion]:
