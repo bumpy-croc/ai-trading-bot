@@ -144,13 +144,14 @@ class StrategyManager:
             # Generate trading signal
             signal = self.signal_generator.generate_signal(df, index, regime)
             
-            # Calculate risk amount
-            risk_amount = self._calculate_risk_amount(balance, signal, regime)
+            # Calculate position size using risk manager
+            risk_position_size = self.risk_manager.calculate_position_size(signal, balance, regime)
             
-            # Calculate position size
-            position_size = self.position_sizer.calculate_size(signal, balance, risk_amount, regime)
+            # Allow position sizer to further adjust the risk manager's position size
+            # Position sizer gets the risk manager's position as the "risk amount"
+            position_size = self.position_sizer.calculate_size(signal, balance, risk_position_size, regime)
             
-            # Validate position size with risk manager
+            # Final validation to ensure position size is within reasonable bounds
             position_size = self._validate_position_size(position_size, signal, balance, regime)
             
             # Calculate execution time
@@ -159,7 +160,7 @@ class StrategyManager:
             # Create execution metadata
             metadata = {
                 'regime': regime,
-                'risk_amount': risk_amount,
+                'risk_position_size': risk_position_size,
                 'execution_time_ms': execution_time,
                 'version_id': self.current_version_id,
                 'signal_confidence': signal.confidence,
@@ -178,7 +179,7 @@ class StrategyManager:
                 signal=signal,
                 regime=regime,
                 position_size=position_size,
-                risk_metrics={'risk_amount': risk_amount},
+                risk_metrics={'risk_position_size': risk_position_size},
                 execution_time_ms=execution_time,
                 version_id=self.current_version_id or 'unknown'
             )
@@ -451,7 +452,12 @@ class StrategyManager:
     
     def _calculate_risk_amount(self, balance: float, signal: Signal, 
                              regime: Optional[RegimeContext]) -> float:
-        """Calculate risk amount based on signal and regime"""
+        """
+        Calculate risk amount based on signal and regime
+        
+        DEPRECATED: This method is deprecated in favor of using RiskManager.calculate_position_size()
+        directly. It's kept for backward compatibility but should not be used in new code.
+        """
         # Base risk percentage (could be configurable)
         base_risk_pct = 0.02  # 2%
         
@@ -478,6 +484,11 @@ class StrategyManager:
         if signal.direction.value == 'hold':
             return 0.0
         
+        # Respect position sizer's decision to return 0.0 (no trade)
+        if position_size == 0.0:
+            return 0.0
+        
+        # Only apply minimum bound when position sizer produced a positive size
         return max(min_position, min(max_position, position_size))
     
     def get_current_version(self) -> Optional[StrategyVersion]:

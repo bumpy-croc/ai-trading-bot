@@ -533,3 +533,46 @@ class TestStrategyManager:
         hold_signal = Signal(SignalDirection.HOLD, 0.0, 1.0, {})
         validated = manager._validate_position_size(1000.0, hold_signal, balance, None)
         assert validated == 0.0
+        
+        # Test position sizer returning 0.0 (no trade) for non-HOLD signal
+        # This should be respected and not forced to minimum position
+        validated = manager._validate_position_size(0.0, signal, balance, None)
+        assert validated == 0.0
+    
+    def test_risk_manager_integration(self):
+        """Test that RiskManager is properly integrated into strategy execution"""
+        # Create a mock risk manager to verify it's being called
+        mock_risk_manager = Mock()
+        mock_risk_manager.name = "mock_risk_manager"
+        mock_risk_manager.calculate_position_size.return_value = 500.0
+        mock_risk_manager.get_parameters.return_value = {'name': 'mock_risk_manager', 'type': 'Mock'}
+        
+        # Create strategy manager with mock risk manager
+        signal_gen = RandomSignalGenerator(buy_prob=1.0, sell_prob=0.0, seed=42)
+        pos_sizer = FixedFractionSizer()
+        
+        manager = StrategyManager(
+            name="test_risk_integration",
+            signal_generator=signal_gen,
+            risk_manager=mock_risk_manager,
+            position_sizer=pos_sizer
+        )
+        
+        df = self.create_test_dataframe()
+        balance = 10000.0
+        
+        # Execute strategy
+        signal, position_size, metadata = manager.execute_strategy(df, 50, balance)
+        
+        # Verify risk manager was called
+        mock_risk_manager.calculate_position_size.assert_called_once()
+        call_args = mock_risk_manager.calculate_position_size.call_args
+        
+        # Check that the signal and balance were passed correctly
+        assert call_args[0][0] == signal  # First argument should be the signal
+        assert call_args[0][1] == balance  # Second argument should be the balance
+        
+        # Verify metadata includes risk manager information
+        assert 'risk_position_size' in metadata
+        assert metadata['risk_position_size'] == 500.0
+        assert metadata['components']['risk_manager'] == 'mock_risk_manager'
