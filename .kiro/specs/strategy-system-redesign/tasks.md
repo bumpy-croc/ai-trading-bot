@@ -40,6 +40,14 @@ This implementation plan converts the current strategy system into a component-b
   - Implement regime history tracking
   - _Requirements: 2.4, 3.1, 3.2_
 
+- [x] 1.5 Create unit tests for core components
+  - Test SignalGenerator interface and implementations (Signal validation, HoldSignalGenerator, RandomSignalGenerator)
+  - Test RiskManager interface and implementations (Position/MarketData validation, FixedRiskManager)
+  - Test PositionSizer interface and implementations (FixedFractionSizer, bounds checking, utility functions)
+  - Test RegimeContext and EnhancedRegimeDetector functionality
+  - Test StrategyManager versioning and execution capabilities
+  - _Requirements: 8.1, 8.2_
+
 - [ ] 2. Implement legacy adapter system for backward compatibility
   - Create LegacyStrategyAdapter that wraps new components to maintain existing BaseStrategy interface
   - Implement adapter methods for check_entry_conditions(), check_exit_conditions(), calculate_position_size()
@@ -60,6 +68,13 @@ This implementation plan converts the current strategy system into a component-b
   - Implement adapter validation and testing utilities
   - Create migration helper functions
   - _Requirements: 4.1, 4.2, 5.1_
+
+- [ ] 2.3 Create unit tests for legacy adapter system
+  - Test LegacyStrategyAdapter interface compatibility with BaseStrategy
+  - Test adapter factory and strategy conversion utilities
+  - Test adapter performance and logging functionality
+  - Test migration helper functions and validation
+  - _Requirements: 4.1, 4.2, 8.1_
 
 - [ ] 3. Extract signal generation logic from existing strategies
   - Convert MlAdaptive strategy logic to MLSignalGenerator component
