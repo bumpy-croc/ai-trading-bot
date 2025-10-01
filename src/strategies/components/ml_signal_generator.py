@@ -334,6 +334,12 @@ class MLSignalGenerator(SignalGenerator):
                 output = self.ort_session.run(None, {self.input_name: input_data})
                 pred = output[0][0][0]
             
+            # Ensure pred is a scalar value
+            if isinstance(pred, (list, tuple, np.ndarray)):
+                pred = float(np.array(pred).flatten()[0])
+            else:
+                pred = float(pred)
+            
             # Denormalize prediction
             recent_close = df["close"].iloc[index - self.sequence_length : index].values
             min_close = np.min(recent_close)
@@ -778,6 +784,12 @@ class MLBasicSignalGenerator(SignalGenerator):
                 
                 output = self.ort_session.run(None, {self.input_name: input_data})
                 pred = output[0][0][0]
+            
+            # Ensure pred is a scalar value
+            if isinstance(pred, (list, tuple, np.ndarray)):
+                pred = float(np.array(pred).flatten()[0])
+            else:
+                pred = float(pred)
             
             # Denormalize prediction
             recent_close = df["close"].iloc[index - self.sequence_length : index].values
