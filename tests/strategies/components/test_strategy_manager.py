@@ -18,6 +18,7 @@ from src.strategies.components.performance_tracker import TradeResult
 from src.strategies.components.strategy import Strategy
 from src.strategies.components.signal_generator import HoldSignalGenerator
 from src.strategies.components.risk_manager import FixedRiskManager
+from src.strategies.components.regime_context import EnhancedRegimeDetector
 from src.strategies.components.position_sizer import FixedFractionSizer
 
 
@@ -114,7 +115,12 @@ class TestStrategyManager:
     @pytest.fixture
     def manager(self):
         """Create a test strategy manager"""
-        return StrategyManager()
+        return StrategyManager(
+            name="Test Manager",
+            signal_generator=HoldSignalGenerator(),
+            risk_manager=FixedRiskManager(risk_per_trade=0.02),
+            position_sizer=FixedFractionSizer(fraction=0.05)
+        )
     
     @pytest.fixture
     def test_strategy(self):
@@ -156,104 +162,73 @@ class TestStrategyManager:
     def test_manager_initialization(self, manager):
         """Test manager initialization"""
         assert isinstance(manager, StrategyManager)
-        assert manager.registry is not None
-        assert manager.lineage_tracker is not None
-        assert len(manager.performance_trackers) == 0
-        assert len(manager.promotion_requests) == 0
-        assert len(manager.rollback_records) == 0
-        assert manager.monitoring_enabled == True
+        assert len(manager.versions) == 1  # Initial version is created
+        assert manager.current_version_id is not None
+        assert len(manager.execution_history) == 0
+        assert len(manager.performance_metrics) == 0
     
-    def test_register_strategy(self, manager, test_strategy):
-        """Test strategy registration"""
-        metadata = {
-            'created_by': 'test_user',
-            'description': 'Test strategy for unit testing',
-            'tags': ['test'],
-            'status': 'experimental'
-        }
-        
-        strategy_id = manager.register_strategy(test_strategy, metadata)
-        
-        assert strategy_id is not None
-        assert strategy_id in manager.performance_trackers
-        
-        # Check registry
-        strategy_metadata = manager.registry.get_strategy_metadata(strategy_id)
-        assert strategy_metadata is not None
-        assert strategy_metadata.name == "Test Strategy"
-        
-        # Check active strategies
-        assert strategy_id in manager.active_strategies[StrategyStatus.EXPERIMENTAL]
-    
-    def test_record_trade_result(self, manager, test_strategy, sample_trade_results):
-        """Test recording trade results"""
-        # Register strategy first
-        metadata = {'created_by': 'test', 'status': 'experimental'}
-        strategy_id = manager.register_strategy(test_strategy, metadata)
-        
-        # Record some trades
-        for trade in sample_trade_results[:5]:
-            trade.strategy_id = strategy_id
-            manager.record_trade_result(strategy_id, trade)
-        
-        # Check performance tracker has trades
-        tracker = manager.performance_trackers[strategy_id]
-        assert len(tracker.trades) == 5
-        assert tracker.trade_count == 5
-    
-    def test_record_trade_result_nonexistent_strategy(self, manager):
-        """Test recording trade for non-existent strategy"""
-        trade = TradeResult(
-            timestamp=datetime.now(),
-            symbol="BTCUSDT",
-            side="long",
-            entry_price=50000.0,
-            exit_price=51000.0,
-            quantity=0.1,
-            pnl=100.0,
-            pnl_percent=2.0,
-            duration_hours=1.0,
-            strategy_id="nonexistent",
-            confidence=0.8
+    def test_create_version(self, manager, test_strategy):
+        """Test version creation"""
+        version_id = manager.create_version(
+            name="Test Version",
+            description="Test strategy version",
+            signal_generator=test_strategy.signal_generator,
+            risk_manager=test_strategy.risk_manager,
+            position_sizer=test_strategy.position_sizer
         )
-        
-        with pytest.raises(ValueError, match="Strategy nonexistent not found"):
-            manager.record_trade_result("nonexistent", trade)
+
+        assert version_id is not None
+        assert version_id in manager.versions
+        version = manager.versions[version_id]
+        assert version.name == "Test Version"
+        assert version.description == "Test strategy version"
     
-    def test_request_promotion_valid_path(self, manager, test_strategy, sample_trade_results):
-        """Test requesting valid promotion"""
-        # Register strategy and add performance data
-        metadata = {'created_by': 'test', 'status': 'experimental'}
-        strategy_id = manager.register_strategy(test_strategy, metadata)
-        
-        # Add sufficient performance data
-        for trade in sample_trade_results:
-            trade.strategy_id = strategy_id
-            manager.record_trade_result(strategy_id, trade)
-        
-        # Request promotion
-        request_id = manager.request_promotion(
-            strategy_id=strategy_id,
-            to_status=StrategyStatus.TESTING,
-            reason="Ready for testing phase",
-            requested_by="test_user"
+    def test_execute_strategy(self, manager, test_strategy, sample_ohlcv_data):
+        """Test strategy execution"""
+        # Create a version first
+        version_id = manager.create_version(
+            name="Test Version",
+            description="Test strategy version",
+            signal_generator=test_strategy.signal_generator,
+            risk_manager=test_strategy.risk_manager,
+            position_sizer=test_strategy.position_sizer
         )
-        
-        assert request_id is not None
-        assert request_id in manager.promotion_requests
-        
-        request = manager.promotion_requests[request_id]
-        assert request.strategy_id == strategy_id
-        assert request.from_status == StrategyStatus.EXPERIMENTAL
-        assert request.to_status == StrategyStatus.TESTING
-        assert len(request.validation_results) > 0
-        
-        # Check if auto-approved (depends on validation results)
-        # With good performance data, should be auto-approved for non-production
-        if all(vr.passed for vr in request.validation_results):
-            assert request.status == PromotionStatus.APPROVED
-        else:
-            assert request.status == PromotionStatus.PENDING
+
+        # Execute strategy
+        df = sample_ohlcv_data.head(100)  # Use first 100 rows
+        signal, position_size, metadata = manager.execute_strategy(df, 50, 10000.0)
+
+        assert signal is not None
+        assert position_size >= 0
+        assert isinstance(metadata, dict)
+        assert len(manager.execution_history) > 0
+    
+    def test_execute_strategy_nonexistent_version(self, manager):
+        """Test executing strategy with non-existent version"""
+        df = pd.DataFrame({'close': [50000, 51000, 52000]})
+        signal, position_size, metadata = manager.execute_strategy(df, 0, 10000.0)
+        # Should work even without a version (uses default behavior)
+        assert signal is not None
+    
+    def test_create_and_activate_version(self, manager, test_strategy):
+        """Test creating and activating a version"""
+        # Create a version
+        version_id = manager.create_version(
+            name="Test Version",
+            description="Test strategy version",
+            signal_generator=test_strategy.signal_generator,
+            risk_manager=test_strategy.risk_manager,
+            position_sizer=test_strategy.position_sizer
+        )
+
+        # Activate the version
+        success = manager.activate_version(version_id, "test_user")
+        assert success
+        assert manager.current_version_id == version_id
+
+        # Test version performance tracking
+        version = manager.versions[version_id]
+        assert version.performance_metrics is not None
     
     def test_request_promotion_invalid_path(self, manager, test_strategy):
         """Test requesting invalid promotion path"""

@@ -121,114 +121,23 @@ jobs:
           # Define prompts for each mode
           case "$REVIEW_MODE" in
             hunt)
-              PROMPT=$(cat << 'EOF'
-You are performing a focused code review for a GitHub Pull Request.
-
-Hunt for critical bugs, security vulnerabilities, and performance issues.
-Provide concise, actionable feedback focusing on:
-- Logic errors and edge cases
-- Security vulnerabilities
-- Performance bottlenecks
-- Critical bugs that could cause failures
-
-Be direct and focused. Prioritize the most important issues.
-
-Post your review as a PR comment using the GitHub API or MCP server.
-Use a clear, structured format with severity indicators (🔴 Critical, 🟡 Warning, 🔵 Info).
-Format code references using markdown code blocks with file paths.
-EOF
-)
+              PROMPT="You are performing a focused code review for a GitHub Pull Request. Hunt for critical bugs, security vulnerabilities, and performance issues. Provide concise, actionable feedback focusing on: - Logic errors and edge cases - Security vulnerabilities - Performance bottlenecks - Critical bugs that could cause failures Be direct and focused. Prioritize the most important issues. Post your review as a PR comment using the GitHub API or MCP server. Use a clear, structured format with severity indicators (🔴 Critical, 🟡 Warning, 🔵 Info). Format code references using markdown code blocks with file paths."
               ;;
             
             analyze)
-              PROMPT=$(cat << 'EOF'
-You are performing a comprehensive code review for a GitHub Pull Request.
-
-Provide detailed analysis covering:
-- Code structure and design patterns
-- Potential bugs and edge cases
-- Security considerations
-- Performance implications
-- Best practices and maintainability
-- Test coverage and quality
-
-Post your review as a PR comment using the GitHub API or MCP server.
-Structure your feedback with clear sections and severity levels (🔴 Critical, 🟡 Warning, 🔵 Info).
-Use markdown formatting with code blocks and clear headings.
-EOF
-)
+              PROMPT="You are performing a comprehensive code review for a GitHub Pull Request. Provide detailed analysis covering: - Code structure and design patterns - Potential bugs and edge cases - Security considerations - Performance implications - Best practices and maintainability - Test coverage and quality Post your review as a PR comment using the GitHub API or MCP server. Structure your feedback with clear sections and severity levels (🔴 Critical, 🟡 Warning, 🔵 Info). Use markdown formatting with code blocks and clear headings."
               ;;
             
             security)
-              PROMPT=$(cat << 'EOF'
-You are performing a security-focused code review for a GitHub Pull Request.
-
-Focus exclusively on security aspects:
-- Authentication and authorization vulnerabilities
-- Input validation and sanitization
-- SQL injection, XSS, CSRF vulnerabilities
-- Sensitive data exposure
-- Cryptographic weaknesses
-- Dependency vulnerabilities
-- API security issues
-
-Be thorough and flag even potential security concerns.
-
-Post your review as a PR comment using the GitHub API or MCP server.
-Use severity indicators: 🔴 Critical, 🟠 High, 🟡 Medium, 🔵 Low
-Include specific remediation recommendations for each issue.
-EOF
-)
+              PROMPT="You are performing a security-focused code review for a GitHub Pull Request. Focus exclusively on security aspects: - Authentication and authorization vulnerabilities - Input validation and sanitization - SQL injection, XSS, CSRF vulnerabilities - Sensitive data exposure - Cryptographic weaknesses - Dependency vulnerabilities - API security issues Be thorough and flag even potential security concerns. Post your review as a PR comment using the GitHub API or MCP server. Use severity indicators: 🔴 Critical, 🟠 High, 🟡 Medium, 🔵 Low Include specific remediation recommendations for each issue."
               ;;
             
             performance)
-              PROMPT=$(cat << 'EOF'
-You are performing a performance-focused code review for a GitHub Pull Request.
-
-Focus on performance optimization opportunities:
-- Algorithmic efficiency (time and space complexity)
-- Database query optimization
-- Caching opportunities
-- Resource usage (memory, CPU, I/O)
-- Unnecessary computations or loops
-- Network request optimization
-- Potential bottlenecks
-
-Provide specific, actionable optimization suggestions with expected impact.
-
-Post your review as a PR comment using the GitHub API or MCP server.
-Use clear severity indicators: 🔴 Major Impact, 🟡 Moderate Impact, 🔵 Minor Impact
-Include code examples where applicable.
-EOF
-)
+              PROMPT="You are performing a performance-focused code review for a GitHub Pull Request. Focus on performance optimization opportunities: - Algorithmic efficiency (time and space complexity) - Database query optimization - Caching opportunities - Resource usage (memory, CPU, I/O) - Unnecessary computations or loops - Network request optimization - Potential bottlenecks Provide specific, actionable optimization suggestions with expected impact. Post your review as a PR comment using the GitHub API or MCP server. Use clear severity indicators: 🔴 Major Impact, 🟡 Moderate Impact, 🔵 Minor Impact Include code examples where applicable."
               ;;
             
             review)
-              PROMPT=$(cat << 'EOF'
-You are performing a comprehensive code review for a GitHub Pull Request.
-
-Provide a thorough, balanced review covering all aspects:
-- Correctness and logic
-- Security considerations
-- Performance implications
-- Code quality and maintainability
-- Testing and documentation
-- Best practices and patterns
-- Edge cases and error handling
-
-Be constructive and thorough. Balance critique with recognition of good practices.
-
-Post your review as a PR comment using the GitHub API or MCP server.
-Structure your feedback with clear sections:
-1. Summary
-2. Critical Issues (🔴)
-3. Important Considerations (🟡)
-4. Suggestions (🔵)
-5. Positive Observations (✅)
-
-Use markdown formatting with code blocks and clear explanations.
-EOF
-)
+              PROMPT="You are performing a comprehensive code review for a GitHub Pull Request. Provide a thorough, balanced review covering all aspects: - Correctness and logic - Security considerations - Performance implications - Code quality and maintainability - Testing and documentation - Best practices and patterns - Edge cases and error handling Be constructive and thorough. Balance critique with recognition of good practices. Post your review as a PR comment using the GitHub API or MCP server. Structure your feedback with clear sections: 1. Summary 2. Critical Issues (🔴) 3. Important Considerations (🟡) 4. Suggestions (🔵) 5. Positive Observations (✅) Use markdown formatting with code blocks and clear explanations."
               ;;
             
             *)
@@ -239,13 +148,7 @@ EOF
           
           # Add verbose flag context if enabled
           if [[ "$VERBOSE" == "true" ]]; then
-            PROMPT="$PROMPT
-
-VERBOSE MODE ENABLED: Provide extended analysis with:
-- Detailed explanations for each issue
-- Code examples showing both problematic and improved versions
-- Additional context about why each issue matters
-- Links to relevant documentation or best practices where applicable"
+            PROMPT="$PROMPT VERBOSE MODE ENABLED: Provide extended analysis with: - Detailed explanations for each issue - Code examples showing both problematic and improved versions - Additional context about why each issue matters - Links to relevant documentation or best practices where applicable"
           fi
           
           # Save prompt to file for easier handling
@@ -268,24 +171,25 @@ VERBOSE MODE ENABLED: Provide extended analysis with:
           PROMPT_TEXT=$(cat /tmp/review_prompt.txt)
           
           # Build full prompt with PR context
-          FULL_PROMPT="Pull Request Review Request
-
-PR #$PR_NUMBER: $PR_URL
-Review Mode: $REVIEW_MODE
-
-$PROMPT_TEXT
-
----
-IMPORTANT: After completing your review, post your findings as a comment on this pull request using the GitHub MCP server or GitHub API.
-Make sure to format your review with clear markdown, severity indicators, and actionable feedback."
+          FULL_PROMPT="Pull Request Review Request PR #$PR_NUMBER: $PR_URL Review Mode: $REVIEW_MODE $PROMPT_TEXT --- IMPORTANT: After completing your review, post your findings as a comment on this pull request using the GitHub MCP server or GitHub API. Make sure to format your review with clear markdown, severity indicators, and actionable feedback."
           
           # Get PR head ref
           if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
-            HEAD_REF=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
+            PR_DATA=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER 2>/dev/null || echo "")
+            if [[ -n "$PR_DATA" && "$PR_DATA" != *"Not Found"* ]]; then
+              HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref // empty' 2>/dev/null || echo "main")
+            else
+              HEAD_REF="main"
+            fi
           elif [[ "${{ github.event_name }}" == "pull_request_review_comment" ]]; then
             HEAD_REF="${{ github.event.pull_request.head.ref }}"
           else
             HEAD_REF="${{ github.ref_name }}"
+          fi
+
+          # Final fallback for HEAD_REF
+          if [[ -z "$HEAD_REF" || "$HEAD_REF" == "null" ]]; then
+            HEAD_REF="main"
           fi
           
           echo "=== Launching Cursor Background Agent ==="
@@ -295,22 +199,28 @@ Make sure to format your review with clear markdown, severity indicators, and ac
           echo "Verbose: ${{ steps.parse-command.outputs.verbose }}"
           
           # Call Cursor API
+          # Create JSON payload
+          cat > /tmp/cursor_payload.json << 'EOF'
+{
+  "prompt": {
+    "text": "FULL_PROMPT_PLACEHOLDER"
+  },
+  "source": {
+    "repository": "REPO_PLACEHOLDER",
+    "ref": "REF_PLACEHOLDER"
+  }
+}
+EOF
+
+          # Replace placeholders
+          sed -i "s|FULL_PROMPT_PLACEHOLDER|$(echo "$FULL_PROMPT" | jq -Rs .)|" /tmp/cursor_payload.json
+          sed -i "s|REPO_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}|" /tmp/cursor_payload.json
+          sed -i "s|REF_PLACEHOLDER|$HEAD_REF|" /tmp/cursor_payload.json
+
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.cursor.com/v0/agents" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
-            -d "$(jq -n \
-              --arg prompt "$FULL_PROMPT" \
-              --arg repo "${{ github.server_url }}/${{ github.repository }}" \
-              --arg ref "$HEAD_REF" \
-              '{
-                "prompt": {
-                  "text": $prompt
-                },
-                "source": {
-                  "repository": $repo,
-                  "ref": $ref
-                }
-              }')")
+            -d @/tmp/cursor_payload.json)
           
           # Extract HTTP status code and response body
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
