@@ -7,15 +7,15 @@ allowing isolated testing of SignalGenerator, RiskManager, and PositionSizer com
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from ..signal_generator import SignalGenerator, Signal, SignalDirection
-from ..risk_manager import RiskManager, Position, MarketData
 from ..position_sizer import PositionSizer
+from ..risk_manager import MarketData, Position, RiskManager
+from ..signal_generator import Signal, SignalDirection, SignalGenerator
 
 
 @dataclass
@@ -123,7 +123,7 @@ class SizingTestResults:
     volatility_responsiveness: float
     
     # Size distribution analysis
-    avg_position_size: float
+    average_position_size: float
     position_size_std: float
     size_range_utilization: float  # How well it uses the full size range
     
@@ -386,8 +386,6 @@ class ComponentPerformanceTester:
         
         # Initialize tracking variables
         all_signals = []
-        all_accuracies = []
-        all_returns = []
         signal_times = []
         error_count = 0
         
@@ -399,7 +397,6 @@ class ComponentPerformanceTester:
             scenario_data = self.test_data.iloc[scenario['start_idx']:scenario['end_idx']].copy()
             
             scenario_signals = []
-            scenario_returns = []
             
             # Generate signals for this scenario
             for i in range(len(scenario_data)):
@@ -601,7 +598,6 @@ class ComponentPerformanceTester:
         
         # Initialize tracking variables
         all_positions = []
-        all_exits = []
         calculation_times = []
         error_count = 0
         
@@ -692,7 +688,7 @@ class ComponentPerformanceTester:
         premature_exits = 0
         late_exits = 0
         
-        for i, (should_exit, actual_return) in enumerate(zip(exit_decisions, actual_returns)):
+        for should_exit, actual_return in zip(exit_decisions, actual_returns):
             if should_exit and actual_return < -0.02:  # Correctly exited before big loss
                 correct_exits += 1
             elif should_exit and actual_return > 0.01:  # Exited too early (missed profit)
@@ -862,7 +858,7 @@ class ComponentPerformanceTester:
             regime_consistency_score=0.85,  # Placeholder
             volatility_adjustment_quality=0.7,  # Placeholder
             volatility_responsiveness=0.6,  # Placeholder
-            avg_position_size=avg_position_size,
+            average_position_size=avg_position_size,
             position_size_std=position_size_std,
             size_range_utilization=size_range_utilization,
             size_adjusted_sharpe=1.2,  # Placeholder
