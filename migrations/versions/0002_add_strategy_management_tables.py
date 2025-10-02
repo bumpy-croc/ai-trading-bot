@@ -56,7 +56,7 @@ def upgrade() -> None:
         sa.Column('description', sa.Text(), nullable=True),
         sa.Column('tags', JSONB, nullable=True),
         sa.Column('status', sa.Enum('EXPERIMENTAL', 'TESTING', 'PRODUCTION', 'RETIRED', 'DEPRECATED', 
-                                    name='strategystatus', create_type=False), nullable=False),
+                                    name='strategystatus', native_enum=False, create_type=False), nullable=False),
         sa.Column('signal_generator_config', JSONB, nullable=False),
         sa.Column('risk_manager_config', JSONB, nullable=False),
         sa.Column('position_sizer_config', JSONB, nullable=False),
