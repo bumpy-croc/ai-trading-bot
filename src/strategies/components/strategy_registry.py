@@ -111,6 +111,15 @@ class StrategyVersion:
     performance_delta: Optional[Dict[str, float]]
     is_major: bool
     
+    # Configuration snapshot for this version
+    signal_generator_config: Optional[Dict[str, Any]] = None
+    risk_manager_config: Optional[Dict[str, Any]] = None
+    position_sizer_config: Optional[Dict[str, Any]] = None
+    regime_detector_config: Optional[Dict[str, Any]] = None
+    parameters: Optional[Dict[str, Any]] = None
+    config_hash: Optional[str] = None
+    component_hash: Optional[str] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
@@ -230,7 +239,14 @@ class StrategyRegistry:
                 created_at=datetime.now(),
                 changes=["Initial version"],
                 performance_delta=None,
-                is_major=True
+                is_major=True,
+                signal_generator_config=component_configs['signal_generator'].to_dict(),
+                risk_manager_config=component_configs['risk_manager'].to_dict(),
+                position_sizer_config=component_configs['position_sizer'].to_dict(),
+                regime_detector_config=component_configs['regime_detector'].to_dict(),
+                parameters=metadata.get('parameters', {}),
+                config_hash=config_hash,
+                component_hash=component_hash
             )
         ]
         
@@ -313,14 +329,21 @@ class StrategyRegistry:
         # Store updated metadata
         self._strategies[strategy_id] = updated_metadata
         
-        # Add version record
+        # Add version record with configuration snapshot
         version_record = StrategyVersion(
             version=new_version,
             strategy_id=strategy_id,
             created_at=datetime.now(),
             changes=changes,
             performance_delta=None,
-            is_major=is_major
+            is_major=is_major,
+            signal_generator_config=component_configs['signal_generator'].to_dict(),
+            risk_manager_config=component_configs['risk_manager'].to_dict(),
+            position_sizer_config=component_configs['position_sizer'].to_dict(),
+            regime_detector_config=component_configs['regime_detector'].to_dict(),
+            parameters=current_metadata.parameters,
+            config_hash=config_hash,
+            component_hash=component_hash
         )
         self._versions[strategy_id].append(version_record)
         
@@ -430,9 +453,22 @@ class StrategyRegistry:
         if not target_version_record:
             raise ValueError(f"Version {target_version} not found for strategy {strategy_id}")
         
+        # Verify the version record has configuration snapshot
+        if not target_version_record.signal_generator_config:
+            raise ValueError(
+                f"Version {target_version} does not have configuration snapshot. "
+                "Cannot revert to this version."
+            )
+        
         metadata = self._strategies[strategy_id]
         
-        # Create updated metadata with reverted version
+        # Reconstruct ComponentConfig objects from the version snapshot
+        signal_gen_config = ComponentConfig.from_dict(target_version_record.signal_generator_config)
+        risk_mgr_config = ComponentConfig.from_dict(target_version_record.risk_manager_config)
+        pos_sizer_config = ComponentConfig.from_dict(target_version_record.position_sizer_config)
+        regime_det_config = ComponentConfig.from_dict(target_version_record.regime_detector_config)
+        
+        # Create updated metadata with configuration from target version
         updated_metadata = StrategyMetadata(
             id=metadata.id,
             name=metadata.name,
@@ -443,18 +479,18 @@ class StrategyRegistry:
             description=metadata.description,
             tags=metadata.tags,
             status=metadata.status,
-            signal_generator_config=metadata.signal_generator_config,
-            risk_manager_config=metadata.risk_manager_config,
-            position_sizer_config=metadata.position_sizer_config,
-            regime_detector_config=metadata.regime_detector_config,
-            parameters=metadata.parameters,
-            performance_summary=metadata.performance_summary,
-            validation_results=metadata.validation_results,
+            signal_generator_config=signal_gen_config,
+            risk_manager_config=risk_mgr_config,
+            position_sizer_config=pos_sizer_config,
+            regime_detector_config=regime_det_config,
+            parameters=target_version_record.parameters or {},
+            performance_summary=None,  # Reset performance summary on revert
+            validation_results=None,  # Reset validation on revert
             lineage_path=metadata.lineage_path,
             branch_name=metadata.branch_name,
             merge_source=metadata.merge_source,
-            config_hash=metadata.config_hash,
-            component_hash=metadata.component_hash
+            config_hash=target_version_record.config_hash or metadata.config_hash,
+            component_hash=target_version_record.component_hash or metadata.component_hash
         )
         
         # Update in-memory storage
