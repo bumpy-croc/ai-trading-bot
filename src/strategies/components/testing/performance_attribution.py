@@ -880,8 +880,23 @@ class PerformanceAttributionAnalyzer:
         Returns:
             Dictionary with replacement impact analysis
         """
+        # Translate documented component types to internal types
+        component_type_map = {
+            'signal': 'signal_generator',
+            'risk': 'risk_manager',
+            'sizing': 'position_sizer',
+            # Also accept internal names for backward compatibility
+            'signal_generator': 'signal_generator',
+            'risk_manager': 'risk_manager',
+            'position_sizer': 'position_sizer'
+        }
+        
+        internal_component_type = component_type_map.get(component_type)
+        if internal_component_type is None:
+            raise ValueError(f"Invalid component_type: '{component_type}'. Must be one of: {list(component_type_map.keys())}")
+        
         # Create modified strategy with replacement component
-        modified_strategy = self._create_modified_strategy(strategy, component_type, replacement_component)
+        modified_strategy = self._create_modified_strategy(strategy, internal_component_type, replacement_component)
 
         # Run simulations
         original_results = self._simulate_strategy(strategy, initial_balance)
