@@ -217,6 +217,8 @@ class EmergencyControls:
         
         # Performance tracking for emergency detection
         self.performance_snapshots: dict[str, list[dict[str, float]]] = {}
+        self.active_strategies: set[str] = set()  # Track active strategies
+        self.last_cleanup_time: datetime = datetime.now()
         
         self.logger.info("EmergencyControls initialized")
     
@@ -651,6 +653,9 @@ class EmergencyControls:
     def _detect_performance_degradation(self, strategy_id: str,
                                       current_metrics: PerformanceMetrics) -> bool:
         """Detect significant performance degradation"""
+        # Track active strategy
+        self.active_strategies.add(strategy_id)
+        
         # Store performance snapshot
         if strategy_id not in self.performance_snapshots:
             self.performance_snapshots[strategy_id] = []
@@ -672,6 +677,11 @@ class EmergencyControls:
             if s['timestamp'] > cutoff_time
         ]
         
+        # Periodic cleanup of inactive strategies (every hour)
+        if (datetime.now() - self.last_cleanup_time).total_seconds() > 3600:
+            self._cleanup_inactive_strategies()
+            self.last_cleanup_time = datetime.now()
+        
         # Need at least 2 snapshots to detect degradation
         if len(self.performance_snapshots[strategy_id]) < 2:
             return False
@@ -686,12 +696,47 @@ class EmergencyControls:
         avg_sharpe = sum(s['sharpe_ratio'] for s in recent_snapshots) / len(recent_snapshots)
         avg_win_rate = sum(s['win_rate'] for s in recent_snapshots) / len(recent_snapshots)
         
-        # Check for significant degradation
-        sharpe_degradation = (avg_sharpe - current_metrics.sharpe_ratio) / max(0.1, abs(avg_sharpe))
-        win_rate_degradation = (avg_win_rate - current_metrics.win_rate) / max(0.1, avg_win_rate)
+        # Check for significant degradation using absolute differences
+        # Avoid division by zero by using absolute differences instead of ratios
+        if abs(avg_sharpe) > 0.01:
+            sharpe_degradation = (avg_sharpe - current_metrics.sharpe_ratio) / abs(avg_sharpe)
+        else:
+            # Use absolute difference when baseline is near zero
+            sharpe_degradation = avg_sharpe - current_metrics.sharpe_ratio
+        
+        if avg_win_rate > 0.01:
+            win_rate_degradation = (avg_win_rate - current_metrics.win_rate) / avg_win_rate
+        else:
+            # Use absolute difference when baseline is near zero
+            win_rate_degradation = avg_win_rate - current_metrics.win_rate
         
         # Trigger if either metric has degraded significantly
         return sharpe_degradation > 0.3 or win_rate_degradation > 0.2
+    
+    def _cleanup_inactive_strategies(self) -> None:
+        """Clean up performance snapshots for inactive strategies"""
+        # Find strategies with snapshots but not seen recently
+        inactive_strategies = []
+        cutoff_time = datetime.now().timestamp() - (48 * 3600)  # 48 hours
+        
+        for strategy_id in list(self.performance_snapshots.keys()):
+            if strategy_id not in self.active_strategies:
+                # Check if strategy has any recent snapshots
+                recent_snapshots = [
+                    s for s in self.performance_snapshots[strategy_id]
+                    if s['timestamp'] > cutoff_time
+                ]
+                
+                if not recent_snapshots:
+                    inactive_strategies.append(strategy_id)
+        
+        # Remove inactive strategy snapshots
+        for strategy_id in inactive_strategies:
+            del self.performance_snapshots[strategy_id]
+            self.logger.debug(f"Cleaned up snapshots for inactive strategy: {strategy_id}")
+        
+        # Clear active strategies set for next tracking period
+        self.active_strategies.clear()
     
     def cleanup_expired_requests(self) -> None:
         """Clean up expired approval requests"""

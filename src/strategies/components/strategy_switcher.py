@@ -339,11 +339,26 @@ class StrategySwitcher:
             success = strategy_activation_callback(request.to_strategy)
             
             if not success:
-                switch_record.status = SwitchStatus.FAILED
-                switch_record.error_message = "Strategy activation failed"
+                # Rollback: try to reactivate the old strategy
+                self.logger.warning(f"Strategy activation failed for {request.to_strategy}, attempting rollback")
+                try:
+                    rollback_success = strategy_activation_callback(request.from_strategy)
+                    if rollback_success:
+                        switch_record.status = SwitchStatus.FAILED
+                        switch_record.error_message = "Strategy activation failed, successfully rolled back to previous strategy"
+                        self.logger.info(f"Successfully rolled back to {request.from_strategy}")
+                    else:
+                        switch_record.status = SwitchStatus.FAILED
+                        switch_record.error_message = "Strategy activation failed, rollback also failed - manual intervention required"
+                        self.logger.error("Rollback failed - manual intervention required")
+                except Exception as rollback_error:
+                    switch_record.status = SwitchStatus.FAILED
+                    switch_record.error_message = f"Strategy activation failed, rollback error: {rollback_error}"
+                    self.logger.error(f"Rollback error: {rollback_error}")
+                
                 return switch_record
             
-            # Update switch state
+            # Update switch state only after successful activation
             self.last_switch_time = datetime.now()
             switch_record.status = SwitchStatus.COMPLETED
             switch_record.completed_at = datetime.now()
@@ -607,9 +622,27 @@ class StrategySwitcher:
         if not target_score:
             return False
         
-        # Check if target strategy has high drawdown risk
-        # This is a simplified check - in practice you'd compare risk metrics
-        return False  # Placeholder implementation
+        # Check risk metrics from the criteria scores
+        criteria_scores = target_score.criteria_scores
+        
+        # High risk if drawdown score is low (meaning high drawdown)
+        from .strategy_selector import SelectionCriteria
+        drawdown_score = criteria_scores.get(SelectionCriteria.MAX_DRAWDOWN, 1.0)
+        
+        # High risk if volatility score is low (meaning high volatility)
+        volatility_score = criteria_scores.get(SelectionCriteria.VOLATILITY, 1.0)
+        
+        # High risk if risk-adjusted score is low
+        risk_adjusted_score = target_score.risk_adjusted_score
+        
+        # Consider high risk if any of these conditions are met
+        is_high_risk = (
+            drawdown_score < 0.3 or  # Poor drawdown control
+            volatility_score < 0.3 or  # Very high volatility
+            risk_adjusted_score < 0.4  # Poor risk-adjusted performance
+        )
+        
+        return is_high_risk
     
     def _determine_priority(self, severity: DegradationSeverity) -> int:
         """Determine switch priority based on degradation severity"""
@@ -622,14 +655,31 @@ class StrategySwitcher:
         else:
             return 1  # Low
     
-    def _capture_performance_snapshot(self, strategy_id: str) -> dict[str, float]:
-        """Capture performance snapshot before switch"""
-        # Placeholder implementation
-        # In practice, you'd capture key metrics from the performance tracker
-        return {
+    def _capture_performance_snapshot(self, strategy_id: str, 
+                                     performance_tracker: Optional[PerformanceTracker] = None) -> dict[str, float]:
+        """Capture performance snapshot before/after switch"""
+        snapshot = {
             'timestamp': datetime.now().timestamp(),
             'strategy_id': strategy_id
         }
+        
+        # If performance tracker is provided, capture detailed metrics
+        if performance_tracker:
+            try:
+                metrics = performance_tracker.get_performance_metrics()
+                snapshot.update({
+                    'sharpe_ratio': metrics.sharpe_ratio,
+                    'total_return_pct': metrics.total_return_pct,
+                    'max_drawdown': metrics.max_drawdown,
+                    'win_rate': metrics.win_rate,
+                    'total_trades': metrics.total_trades,
+                    'avg_trade_return': metrics.avg_trade_return,
+                    'volatility': metrics.volatility
+                })
+            except Exception as e:
+                self.logger.warning(f"Failed to capture detailed metrics: {e}")
+        
+        return snapshot
     
     def _start_switch_performance_tracking(self, switch_record: SwitchRecord) -> None:
         """Start tracking performance after a switch"""
@@ -687,9 +737,49 @@ class StrategySwitcher:
     def _calculate_performance_impact(self, pre_performance: dict[str, float],
                                     post_performance: dict[str, float]) -> dict[str, float]:
         """Calculate performance impact of a switch"""
-        # Placeholder implementation
-        # In practice, you'd calculate meaningful performance differences
-        return {
-            'performance_change': 0.0,  # Placeholder
+        impact = {
             'calculated_at': datetime.now().timestamp()
         }
+        
+        # Calculate changes in key metrics
+        metrics_to_compare = ['sharpe_ratio', 'total_return_pct', 'max_drawdown', 
+                            'win_rate', 'avg_trade_return', 'volatility']
+        
+        for metric in metrics_to_compare:
+            if metric in pre_performance and metric in post_performance:
+                pre_value = pre_performance[metric]
+                post_value = post_performance[metric]
+                
+                # Calculate absolute and relative changes
+                absolute_change = post_value - pre_value
+                
+                # Avoid division by zero
+                if abs(pre_value) > 0.0001:
+                    relative_change = (post_value - pre_value) / abs(pre_value)
+                else:
+                    relative_change = 0.0 if abs(post_value) < 0.0001 else (1.0 if post_value > 0 else -1.0)
+                
+                impact[f'{metric}_change'] = absolute_change
+                impact[f'{metric}_change_pct'] = relative_change
+        
+        # Calculate overall performance score change
+        # Positive changes in sharpe, return, win_rate are good
+        # Negative changes in drawdown and volatility are good
+        positive_changes = []
+        if 'sharpe_ratio_change' in impact:
+            positive_changes.append(impact['sharpe_ratio_change'])
+        if 'total_return_pct_change' in impact:
+            positive_changes.append(impact['total_return_pct_change'])
+        if 'win_rate_change' in impact:
+            positive_changes.append(impact['win_rate_change'])
+        if 'max_drawdown_change' in impact:
+            positive_changes.append(-impact['max_drawdown_change'])  # Negative is good
+        if 'volatility_change' in impact:
+            positive_changes.append(-impact['volatility_change'])  # Negative is good
+        
+        if positive_changes:
+            impact['overall_performance_change'] = sum(positive_changes) / len(positive_changes)
+        else:
+            impact['overall_performance_change'] = 0.0
+        
+        return impact

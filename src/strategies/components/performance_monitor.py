@@ -417,8 +417,27 @@ class PerformanceMonitor:
         # Get returns for statistical test
         recent_returns = [t.pnl_percent for t in recent_trades]
         
-        # Use one-sample t-test against baseline mean return
-        baseline_mean = baseline.total_return_pct / max(1, baseline.total_trades)
+        # Calculate baseline mean from historical individual trade returns
+        # Get historical trades excluding the recent period
+        historical_end = cutoff_date
+        historical_start = historical_end - timedelta(days=days * 2)  # Use 2x period for baseline
+        historical_trades = [
+            t for t in performance_tracker.trades
+            if historical_start <= t.timestamp < historical_end
+        ]
+        
+        if len(historical_trades) < 10:
+            # Fallback: use all historical trades if insufficient data
+            historical_trades = [
+                t for t in performance_tracker.trades
+                if t.timestamp < cutoff_date
+            ]
+        
+        if len(historical_trades) < 10:
+            return 0.0  # Insufficient baseline data
+        
+        # Calculate mean from individual trade returns (not aggregated metrics)
+        baseline_mean = statistics.mean([t.pnl_percent for t in historical_trades])
         
         try:
             t_stat, p_value = stats.ttest_1samp(recent_returns, baseline_mean)
