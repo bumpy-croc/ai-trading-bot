@@ -5,7 +5,7 @@ This module contains technical indicator-based signal generators that use
 traditional technical analysis methods to generate trading signals.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -516,7 +516,7 @@ class TechnicalSignalGenerator(SignalGenerator):
         else:
             return 0.5  # Default confidence
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
         params.update({
@@ -567,21 +567,21 @@ class RSISignalGenerator(SignalGenerator):
     def generate_signal(self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None) -> Signal:
         """Generate signal based on RSI levels"""
         self.validate_inputs(df, index)
-        
-        if index < self.period:
-            return Signal(
-                direction=SignalDirection.HOLD,
-                strength=0.0,
-                confidence=0.0,
-                metadata={
-                    'generator': self.name,
-                    'reason': 'insufficient_history',
-                    'index': index
-                }
-            )
-        
+
         # Calculate RSI if not present
         if 'rsi' not in df.columns:
+            # Check if we have enough data for RSI calculation
+            if len(df) < self.period:
+                return Signal(
+                    direction=SignalDirection.HOLD,
+                    strength=0.0,
+                    confidence=0.0,
+                    metadata={
+                        'generator': self.name,
+                        'reason': 'insufficient_history',
+                        'index': index
+                    }
+                )
             df = df.copy()
             df['rsi'] = calculate_rsi(df, self.period)
         
@@ -634,11 +634,10 @@ class RSISignalGenerator(SignalGenerator):
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
         """Get confidence based on RSI extremity"""
         self.validate_inputs(df, index)
-        
-        if index < self.period:
-            return 0.0
-        
+
         if 'rsi' not in df.columns:
+            if len(df) < self.period:
+                return 0.0
             df = df.copy()
             df['rsi'] = calculate_rsi(df, self.period)
         
@@ -655,7 +654,7 @@ class RSISignalGenerator(SignalGenerator):
         else:
             return 0.3
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get RSI signal generator parameters"""
         params = super().get_parameters()
         params.update({
@@ -746,7 +745,19 @@ class MACDSignalGenerator(SignalGenerator):
             strength = 0.0
         
         # Calculate confidence based on histogram strength
-        confidence = min(1.0, abs(macd_hist) * 100) if not pd.isna(macd_hist) else 0.5
+        if not pd.isna(macd_hist):
+            # Scale histogram to confidence - use a more gradual scaling
+            hist_abs = abs(macd_hist)
+            if hist_abs >= 0.05:
+                confidence = 0.9
+            elif hist_abs >= 0.02:
+                confidence = 0.7
+            elif hist_abs >= 0.01:
+                confidence = 0.5
+            else:
+                confidence = 0.3
+        else:
+            confidence = 0.5
         
         return Signal(
             direction=direction,
@@ -777,10 +788,18 @@ class MACDSignalGenerator(SignalGenerator):
         
         if pd.isna(macd_hist):
             return 0.0
-        
-        return min(1.0, abs(macd_hist) * 100)
-    
-    def get_parameters(self) -> Dict[str, Any]:
+        # Use same scaling as in generate_signal
+        hist_abs = abs(macd_hist)
+        if hist_abs >= 0.05:
+            return 0.9
+        elif hist_abs >= 0.02:
+            return 0.7
+        elif hist_abs >= 0.01:
+            return 0.5
+        else:
+            return 0.3
+
+    def get_parameters(self) -> dict[str, Any]:
         """Get MACD signal generator parameters"""
         params = super().get_parameters()
         params.update({

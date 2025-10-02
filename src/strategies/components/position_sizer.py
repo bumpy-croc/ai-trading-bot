@@ -6,9 +6,8 @@ for calculating position sizes based on various factors in the component-based
 strategy architecture.
 """
 
-import math
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -90,7 +89,7 @@ class PositionSizer(ABC):
         
         return max(min_size, min(max_size, size))
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """
         Get position sizer parameters for logging and serialization
         
@@ -136,6 +135,10 @@ class FixedFractionSizer(PositionSizer):
         self.validate_inputs(balance, risk_amount)
         
         if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Respect zero risk limit from RiskManager (veto)
+        if risk_amount <= 0:
             return 0.0
         
         # Base position size
@@ -191,7 +194,7 @@ class FixedFractionSizer(PositionSizer):
         
         return max(0.1, multiplier)  # Minimum 10% of base size
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get fixed fraction sizer parameters"""
         params = super().get_parameters()
         params.update({
@@ -235,6 +238,10 @@ class ConfidenceWeightedSizer(PositionSizer):
         self.validate_inputs(balance, risk_amount)
         
         if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Respect zero risk limit from RiskManager (veto)
+        if risk_amount <= 0:
             return 0.0
         
         # Check minimum confidence threshold
@@ -285,7 +292,7 @@ class ConfidenceWeightedSizer(PositionSizer):
         
         return max(0.1, multiplier)
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get confidence-weighted sizer parameters"""
         params = super().get_parameters()
         params.update({
@@ -344,6 +351,10 @@ class KellySizer(PositionSizer):
         self.validate_inputs(balance, risk_amount)
         
         if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Respect zero risk limit from RiskManager (veto)
+        if risk_amount <= 0:
             return 0.0
         
         # Calculate Kelly percentage
@@ -446,7 +457,7 @@ class KellySizer(PositionSizer):
         
         return max(0.2, multiplier)
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get Kelly sizer parameters"""
         params = super().get_parameters()
         params.update({
@@ -468,8 +479,8 @@ class RegimeAdaptiveSizer(PositionSizer):
     with different sizing strategies for different market conditions.
     """
     
-    def __init__(self, base_fraction: float = 0.03, 
-                 regime_multipliers: Optional[Dict[str, float]] = None,
+    def __init__(self, base_fraction: float = 0.03,
+                 regime_multipliers: Optional[dict[str, float]] = None,
                  volatility_adjustment: bool = True):
         """
         Initialize regime-adaptive sizer
@@ -488,7 +499,7 @@ class RegimeAdaptiveSizer(PositionSizer):
         self.volatility_adjustment = volatility_adjustment
         
         # Default regime multipliers
-        self.regime_multipliers = regime_multipliers or {
+        default_multipliers = {
             'bull_low_vol': 1.8,     # Aggressive in favorable conditions
             'bull_high_vol': 1.2,    # Moderate in volatile bull market
             'bear_low_vol': 0.4,     # Conservative in bear market
@@ -497,7 +508,12 @@ class RegimeAdaptiveSizer(PositionSizer):
             'range_high_vol': 0.3,   # Very reduced in volatile sideways
             'unknown': 0.5           # Conservative when regime unclear
         }
-        
+
+        # Merge custom multipliers with defaults
+        if regime_multipliers:
+            self.regime_multipliers = {**default_multipliers, **regime_multipliers}
+        else:
+            self.regime_multipliers = default_multipliers
         # Validate multipliers
         for regime, multiplier in self.regime_multipliers.items():
             if not 0.1 <= multiplier <= 3.0:
@@ -597,8 +613,8 @@ class RegimeAdaptiveSizer(PositionSizer):
                 return 0.12  # 12% max in high volatility
         
         return 0.15  # 15% default max
-    
-    def update_regime_multipliers(self, new_multipliers: Dict[str, float]) -> None:
+
+    def update_regime_multipliers(self, new_multipliers: dict[str, float]) -> None:
         """
         Update regime multipliers (useful for optimization)
         
@@ -611,8 +627,8 @@ class RegimeAdaptiveSizer(PositionSizer):
                 raise ValueError(f"regime multiplier for {regime} must be between 0.1 and 3.0, got {multiplier}")
         
         self.regime_multipliers.update(new_multipliers)
-    
-    def get_regime_allocation(self, regime: Optional['RegimeContext']) -> Dict[str, float]:
+
+    def get_regime_allocation(self, regime: Optional['RegimeContext']) -> dict[str, float]:
         """
         Get detailed allocation breakdown for a regime
         
@@ -652,8 +668,8 @@ class RegimeAdaptiveSizer(PositionSizer):
             'volatility_adjustment': self._get_volatility_adjustment(regime),
             'max_fraction': self._get_max_fraction_for_regime(regime)
         }
-    
-    def get_parameters(self) -> Dict[str, Any]:
+
+    def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive sizer parameters"""
         params = super().get_parameters()
         params.update({
