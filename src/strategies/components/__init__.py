@@ -13,22 +13,20 @@ Components:
 - Technical Signal Generators: Technical indicator-based signal generation components
 """
 
-from .signal_generator import SignalGenerator, Signal, SignalDirection
-from .risk_manager import RiskManager, Position, MarketData
-from .position_sizer import PositionSizer
-from .regime_context import RegimeContext, TrendLabel, VolLabel, EnhancedRegimeDetector
-from .strategy_manager import StrategyManager
-from .strategy_registry import StrategyVersion
-from .ml_signal_generator import MLSignalGenerator, MLBasicSignalGenerator
-from .technical_signal_generator import (
-    TechnicalSignalGenerator, 
-    RSISignalGenerator, 
-    MACDSignalGenerator
-)
 from src.database.models import StrategyExecution
 
-# Re-export TrendLabel and VolLabel from existing regime module for compatibility
-from src.regime.detector import TrendLabel, VolLabel
+from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
+from .position_sizer import PositionSizer
+from .regime_context import EnhancedRegimeDetector, RegimeContext, TrendLabel, VolLabel
+from .risk_manager import MarketData, Position, RiskManager
+from .signal_generator import Signal, SignalDirection, SignalGenerator
+from .strategy_manager import StrategyManager
+from .strategy_registry import StrategyVersion
+from .technical_signal_generator import (
+    MACDSignalGenerator,
+    RSISignalGenerator,
+    TechnicalSignalGenerator,
+)
 
 __all__ = [
     "SignalGenerator",

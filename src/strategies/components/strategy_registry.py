@@ -11,7 +11,7 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from .position_sizer import PositionSizer
@@ -35,15 +35,15 @@ class ComponentConfig:
     """Configuration for a strategy component"""
     type: str
     class_name: str
-    parameters: Dict[str, Any]
+    parameters: dict[str, Any]
     version: str
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         return asdict(self)
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ComponentConfig':
+    def from_dict(cls, data: dict[str, Any]) -> 'ComponentConfig':
         """Create from dictionary"""
         return cls(**data)
 
@@ -58,7 +58,7 @@ class StrategyMetadata:
     created_at: datetime
     created_by: str
     description: str
-    tags: List[str]
+    tags: list[str]
     status: StrategyStatus
     
     # Component configurations
@@ -68,12 +68,12 @@ class StrategyMetadata:
     regime_detector_config: ComponentConfig
     
     # Additional metadata
-    parameters: Dict[str, Any]
-    performance_summary: Optional[Dict[str, Any]]
-    validation_results: Optional[Dict[str, Any]]
+    parameters: dict[str, Any]
+    performance_summary: Optional[dict[str, Any]]
+    validation_results: Optional[dict[str, Any]]
     
     # Lineage tracking
-    lineage_path: List[str]  # Path from root ancestor to this strategy
+    lineage_path: list[str]  # Path from root ancestor to this strategy
     branch_name: Optional[str]
     merge_source: Optional[str]
     
@@ -81,7 +81,7 @@ class StrategyMetadata:
     config_hash: str
     component_hash: str
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
@@ -89,7 +89,7 @@ class StrategyMetadata:
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'StrategyMetadata':
+    def from_dict(cls, data: dict[str, Any]) -> 'StrategyMetadata':
         """Create from dictionary"""
         data = data.copy()
         data['created_at'] = datetime.fromisoformat(data['created_at'])
@@ -107,27 +107,27 @@ class StrategyVersion:
     version: str
     strategy_id: str
     created_at: datetime
-    changes: List[str]
-    performance_delta: Optional[Dict[str, float]]
+    changes: list[str]
+    performance_delta: Optional[dict[str, float]]
     is_major: bool
     
     # Configuration snapshot for this version
-    signal_generator_config: Optional[Dict[str, Any]] = None
-    risk_manager_config: Optional[Dict[str, Any]] = None
-    position_sizer_config: Optional[Dict[str, Any]] = None
-    regime_detector_config: Optional[Dict[str, Any]] = None
-    parameters: Optional[Dict[str, Any]] = None
+    signal_generator_config: Optional[dict[str, Any]] = None
+    risk_manager_config: Optional[dict[str, Any]] = None
+    position_sizer_config: Optional[dict[str, Any]] = None
+    regime_detector_config: Optional[dict[str, Any]] = None
+    parameters: Optional[dict[str, Any]] = None
     config_hash: Optional[str] = None
     component_hash: Optional[str] = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'StrategyVersion':
+    def from_dict(cls, data: dict[str, Any]) -> 'StrategyVersion':
         """Create from dictionary"""
         data = data.copy()
         data['created_at'] = datetime.fromisoformat(data['created_at'])
@@ -159,9 +159,9 @@ class StrategyRegistry:
         self.storage_backend = storage_backend
         
         # In-memory storage
-        self._strategies: Dict[str, StrategyMetadata] = {}
-        self._versions: Dict[str, List[StrategyVersion]] = {}
-        self._lineage: Dict[str, List[str]] = {}  # parent_id -> [child_ids]
+        self._strategies: dict[str, StrategyMetadata] = {}
+        self._versions: dict[str, list[StrategyVersion]] = {}
+        self._lineage: dict[str, list[str]] = {}  # parent_id -> [child_ids]
         
         # Component type registry for validation
         self._component_types = {
@@ -173,7 +173,7 @@ class StrategyRegistry:
         
         self.logger.info("StrategyRegistry initialized")
     
-    def register_strategy(self, strategy: Strategy, metadata: Dict[str, Any],
+    def register_strategy(self, strategy: Strategy, metadata: dict[str, Any],
                          parent_id: Optional[str] = None) -> str:
         """
         Register a new strategy with metadata
@@ -264,7 +264,7 @@ class StrategyRegistry:
         return strategy_id
     
     def update_strategy(self, strategy_id: str, strategy: Strategy,
-                       changes: List[str], is_major: bool = False) -> str:
+                       changes: list[str], is_major: bool = False) -> str:
         """
         Update an existing strategy with a new version
         
@@ -366,7 +366,7 @@ class StrategyRegistry:
         """
         return self._strategies.get(strategy_id)
     
-    def get_strategy_versions(self, strategy_id: str) -> List[StrategyVersion]:
+    def get_strategy_versions(self, strategy_id: str) -> list[StrategyVersion]:
         """
         Get all versions for a strategy
         
@@ -503,7 +503,7 @@ class StrategyRegistry:
         self.logger.info(f"Reverted strategy {strategy_id} to version {target_version}")
     
     def list_strategies(self, status: Optional[StrategyStatus] = None,
-                       tags: Optional[List[str]] = None) -> List[StrategyMetadata]:
+                       tags: Optional[list[str]] = None) -> list[StrategyMetadata]:
         """
         List strategies with optional filtering
         
@@ -524,7 +524,7 @@ class StrategyRegistry:
         
         return strategies
     
-    def get_strategy_lineage(self, strategy_id: str) -> Dict[str, Any]:
+    def get_strategy_lineage(self, strategy_id: str) -> dict[str, Any]:
         """
         Get complete lineage information for a strategy
         
@@ -564,7 +564,7 @@ class StrategyRegistry:
             'merge_source': metadata.merge_source
         }
     
-    def serialize_strategy(self, strategy_id: str) -> Dict[str, Any]:
+    def serialize_strategy(self, strategy_id: str) -> dict[str, Any]:
         """
         Serialize strategy to dictionary
         
@@ -589,7 +589,7 @@ class StrategyRegistry:
             'lineage': self.get_strategy_lineage(strategy_id)
         }
     
-    def deserialize_strategy(self, data: Dict[str, Any]) -> str:
+    def deserialize_strategy(self, data: dict[str, Any]) -> str:
         """
         Deserialize strategy from dictionary
         
@@ -628,9 +628,9 @@ class StrategyRegistry:
             return strategy_id
             
         except Exception as e:
-            raise StrategyValidationError(f"Failed to deserialize strategy: {e}")
+            raise StrategyValidationError(f"Failed to deserialize strategy: {e}") from e
     
-    def validate_strategy_integrity(self, strategy_id: str) -> Dict[str, Any]:
+    def validate_strategy_integrity(self, strategy_id: str) -> dict[str, Any]:
         """
         Validate strategy integrity and consistency
         
@@ -708,7 +708,7 @@ class StrategyRegistry:
         if not hasattr(strategy, 'position_sizer') or strategy.position_sizer is None:
             raise StrategyValidationError("Strategy missing position_sizer")
     
-    def _extract_component_configs(self, strategy: Strategy) -> Dict[str, ComponentConfig]:
+    def _extract_component_configs(self, strategy: Strategy) -> dict[str, ComponentConfig]:
         """Extract component configurations from strategy"""
         return {
             'signal_generator': ComponentConfig(
@@ -737,8 +737,8 @@ class StrategyRegistry:
             )
         }
     
-    def _calculate_config_hash(self, component_configs: Dict[str, ComponentConfig],
-                              parameters: Dict[str, Any]) -> str:
+    def _calculate_config_hash(self, component_configs: dict[str, ComponentConfig],
+                              parameters: dict[str, Any]) -> str:
         """Calculate configuration hash for integrity checking"""
         config_data = {
             'components': {k: v.to_dict() for k, v in component_configs.items()},
@@ -766,7 +766,7 @@ class StrategyRegistry:
         component_str = json.dumps(component_data, sort_keys=True)
         return hashlib.sha256(component_str.encode()).hexdigest()
     
-    def _build_lineage_path(self, parent_id: Optional[str]) -> List[str]:
+    def _build_lineage_path(self, parent_id: Optional[str]) -> list[str]:
         """Build lineage path from root to current strategy"""
         if not parent_id or parent_id not in self._strategies:
             return []
@@ -787,7 +787,7 @@ class StrategyRegistry:
         else:
             return f"{major}.{minor}.{patch + 1}"
     
-    def _get_descendants(self, strategy_id: str) -> List[Dict[str, Any]]:
+    def _get_descendants(self, strategy_id: str) -> list[dict[str, Any]]:
         """Get all descendants of a strategy"""
         descendants = []
         
@@ -816,7 +816,7 @@ class StrategyRegistry:
         if not isinstance(config.parameters, dict):
             raise StrategyValidationError(f"Invalid parameters for {component_type}")
     
-    def _validate_serialized_data(self, metadata: StrategyMetadata, versions: List[StrategyVersion]) -> None:
+    def _validate_serialized_data(self, metadata: StrategyMetadata, versions: list[StrategyVersion]) -> None:
         """Validate serialized data consistency"""
         if not versions:
             raise StrategyValidationError("No versions provided")

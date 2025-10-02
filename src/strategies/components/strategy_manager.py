@@ -5,7 +5,6 @@ This module defines the StrategyManager class that orchestrates the component-ba
 strategy architecture with versioning capabilities for A/B testing and rollbacks.
 """
 
-import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -15,10 +14,10 @@ from uuid import uuid4
 
 import pandas as pd
 
-from .signal_generator import Signal, SignalGenerator
-from .risk_manager import RiskManager, Position, MarketData
 from .position_sizer import PositionSizer
-from .regime_context import RegimeContext, EnhancedRegimeDetector
+from .regime_context import EnhancedRegimeDetector, RegimeContext
+from .risk_manager import Position, RiskManager
+from .signal_generator import Signal, SignalGenerator
 
 
 class ValidationGate(Enum):

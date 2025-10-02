@@ -6,15 +6,15 @@ for providing market regime information to strategy components.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from enum import Enum
+from datetime import datetime
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
 # Import existing regime detection components
-from src.regime.detector import RegimeDetector as BaseRegimeDetector, TrendLabel, VolLabel
+from src.regime.detector import RegimeDetector as BaseRegimeDetector
+from src.regime.detector import TrendLabel, VolLabel
 
 
 @dataclass

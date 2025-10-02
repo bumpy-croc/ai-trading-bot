@@ -7,9 +7,13 @@ strategy architecture.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .regime_context import RegimeContext
+    from .signal_generator import Signal
 
 
 class PositionSizer(ABC):

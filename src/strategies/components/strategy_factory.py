@@ -5,20 +5,31 @@ This module provides factory methods and builder patterns for creating
 pre-configured strategies and custom strategy compositions.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-from .strategy import Strategy
-from .signal_generator import (
-    SignalGenerator, HoldSignalGenerator, RandomSignalGenerator,
-    WeightedVotingSignalGenerator, HierarchicalSignalGenerator,
-    RegimeAdaptiveSignalGenerator
-)
-from .risk_manager import RiskManager, FixedRiskManager, VolatilityRiskManager, RegimeAdaptiveRiskManager
 from .position_sizer import (
-    PositionSizer, FixedFractionSizer, ConfidenceWeightedSizer, 
-    KellySizer, RegimeAdaptiveSizer
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+    KellySizer,
+    PositionSizer,
+    RegimeAdaptiveSizer,
 )
 from .regime_context import EnhancedRegimeDetector
+from .risk_manager import (
+    FixedRiskManager,
+    RegimeAdaptiveRiskManager,
+    RiskManager,
+    VolatilityRiskManager,
+)
+from .signal_generator import (
+    HierarchicalSignalGenerator,
+    HoldSignalGenerator,
+    RandomSignalGenerator,
+    RegimeAdaptiveSignalGenerator,
+    SignalGenerator,
+    WeightedVotingSignalGenerator,
+)
+from .strategy import Strategy
 
 
 class StrategyFactory:
@@ -343,7 +354,7 @@ class StrategyBuilder:
         )
 
 
-def create_strategy_template(template_name: str, **kwargs) -> Dict[str, Any]:
+def create_strategy_template(template_name: str, **kwargs) -> dict[str, Any]:
     """
     Create strategy template configuration
     
@@ -388,7 +399,7 @@ def create_strategy_template(template_name: str, **kwargs) -> Dict[str, Any]:
     return template
 
 
-def validate_strategy_configuration(config: Dict[str, Any]) -> bool:
+def validate_strategy_configuration(config: dict[str, Any]) -> bool:
     """
     Validate strategy configuration
     
