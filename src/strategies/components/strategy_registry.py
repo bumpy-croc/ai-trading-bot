@@ -37,11 +37,11 @@ class ComponentConfig:
     class_name: str
     parameters: Dict[str, Any]
     version: str
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ComponentConfig':
         """Create from dictionary"""
@@ -60,34 +60,34 @@ class StrategyMetadata:
     description: str
     tags: List[str]
     status: StrategyStatus
-    
+
     # Component configurations
     signal_generator_config: ComponentConfig
     risk_manager_config: ComponentConfig
     position_sizer_config: ComponentConfig
     regime_detector_config: ComponentConfig
-    
+
     # Additional metadata
     parameters: Dict[str, Any]
     performance_summary: Optional[Dict[str, Any]]
     validation_results: Optional[Dict[str, Any]]
-    
+
     # Lineage tracking
     lineage_path: List[str]  # Path from root ancestor to this strategy
     branch_name: Optional[str]
     merge_source: Optional[str]
-    
+
     # Checksums for integrity
     config_hash: str
     component_hash: str
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
         data['status'] = self.status.value
         return data
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'StrategyMetadata':
         """Create from dictionary"""
@@ -110,7 +110,7 @@ class StrategyVersion:
     changes: List[str]
     performance_delta: Optional[Dict[str, float]]
     is_major: bool
-    
+
     # Configuration snapshot for this version
     signal_generator_config: Optional[Dict[str, Any]] = None
     risk_manager_config: Optional[Dict[str, Any]] = None
@@ -119,13 +119,13 @@ class StrategyVersion:
     parameters: Optional[Dict[str, Any]] = None
     config_hash: Optional[str] = None
     component_hash: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
         return data
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'StrategyVersion':
         """Create from dictionary"""
@@ -147,7 +147,7 @@ class StrategyRegistry:
     and validation. It provides a centralized repository for all strategies
     with comprehensive metadata tracking.
     """
-    
+
     def __init__(self, storage_backend: Optional[Any] = None):
         """
         Initialize strategy registry
@@ -157,12 +157,12 @@ class StrategyRegistry:
         """
         self.logger = logging.getLogger(__name__)
         self.storage_backend = storage_backend
-        
+
         # In-memory storage
         self._strategies: Dict[str, StrategyMetadata] = {}
         self._versions: Dict[str, List[StrategyVersion]] = {}
         self._lineage: Dict[str, List[str]] = {}  # parent_id -> [child_ids]
-        
+
         # Component type registry for validation
         self._component_types = {
             'signal_generator': SignalGenerator,
@@ -170,9 +170,9 @@ class StrategyRegistry:
             'position_sizer': PositionSizer,
             'regime_detector': EnhancedRegimeDetector
         }
-        
+
         self.logger.info("StrategyRegistry initialized")
-    
+
     def register_strategy(self, strategy: Strategy, metadata: Dict[str, Any],
                          parent_id: Optional[str] = None) -> str:
         """
@@ -191,20 +191,20 @@ class StrategyRegistry:
         """
         # Validate strategy first
         self._validate_strategy(strategy)
-        
+
         # Generate unique ID
         strategy_id = self._generate_strategy_id(strategy.name)
-        
+
         # Extract component configurations
         component_configs = self._extract_component_configs(strategy)
-        
+
         # Calculate checksums
         config_hash = self._calculate_config_hash(component_configs, metadata.get('parameters', {}))
         component_hash = self._calculate_component_hash(strategy)
-        
+
         # Build lineage path
         lineage_path = self._build_lineage_path(parent_id)
-        
+
         # Create strategy metadata
         strategy_metadata = StrategyMetadata(
             id=strategy_id,
@@ -229,7 +229,7 @@ class StrategyRegistry:
             config_hash=config_hash,
             component_hash=component_hash
         )
-        
+
         # Store strategy
         self._strategies[strategy_id] = strategy_metadata
         self._versions[strategy_id] = [
@@ -249,20 +249,20 @@ class StrategyRegistry:
                 component_hash=component_hash
             )
         ]
-        
+
         # Update lineage tracking
         if parent_id:
             if parent_id not in self._lineage:
                 self._lineage[parent_id] = []
             self._lineage[parent_id].append(strategy_id)
-        
+
         # Persist if backend available
         if self.storage_backend:
             self._persist_strategy(strategy_metadata)
-        
+
         self.logger.info(f"Registered strategy '{strategy.name}' with ID {strategy_id}")
         return strategy_id
-    
+
     def update_strategy(self, strategy_id: str, strategy: Strategy,
                        changes: List[str], is_major: bool = False) -> str:
         """
@@ -283,24 +283,24 @@ class StrategyRegistry:
         """
         if strategy_id not in self._strategies:
             raise ValueError(f"Strategy ID {strategy_id} not found")
-        
+
         # Validate updated strategy
         self._validate_strategy(strategy)
-        
+
         # Get current metadata
         current_metadata = self._strategies[strategy_id]
-        
+
         # Calculate new version
         current_version = current_metadata.version
         new_version = self._calculate_next_version(current_version, is_major)
-        
+
         # Extract updated component configurations
         component_configs = self._extract_component_configs(strategy)
-        
+
         # Calculate new checksums
         config_hash = self._calculate_config_hash(component_configs, current_metadata.parameters)
         component_hash = self._calculate_component_hash(strategy)
-        
+
         # Update metadata
         updated_metadata = StrategyMetadata(
             id=strategy_id,
@@ -325,10 +325,10 @@ class StrategyRegistry:
             config_hash=config_hash,
             component_hash=component_hash
         )
-        
+
         # Store updated metadata
         self._strategies[strategy_id] = updated_metadata
-        
+
         # Add version record
         # Add version record with configuration snapshot
         version_record = StrategyVersion(
@@ -347,14 +347,14 @@ class StrategyRegistry:
             component_hash=component_hash
         )
         self._versions[strategy_id].append(version_record)
-        
+
         # Persist if backend available
         if self.storage_backend:
             self._persist_strategy(updated_metadata)
-        
+
         self.logger.info(f"Updated strategy {strategy_id} to version {new_version}")
         return new_version
-    
+
     def get_strategy_metadata(self, strategy_id: str) -> Optional[StrategyMetadata]:
         """
         Get strategy metadata by ID
@@ -366,7 +366,7 @@ class StrategyRegistry:
             Strategy metadata or None if not found
         """
         return self._strategies.get(strategy_id)
-    
+
     def get_strategy_versions(self, strategy_id: str) -> List[StrategyVersion]:
         """
         Get all versions for a strategy
@@ -378,7 +378,7 @@ class StrategyRegistry:
             List of strategy versions
         """
         return self._versions.get(strategy_id, [])
-    
+
     def update_strategy_status(self, strategy_id: str, new_status: StrategyStatus) -> None:
         """
         Update strategy status
@@ -392,9 +392,9 @@ class StrategyRegistry:
         """
         if strategy_id not in self._strategies:
             raise ValueError(f"Strategy ID {strategy_id} not found")
-        
+
         metadata = self._strategies[strategy_id]
-        
+
         # Create updated metadata with new status
         updated_metadata = StrategyMetadata(
             id=metadata.id,
@@ -419,16 +419,16 @@ class StrategyRegistry:
             config_hash=metadata.config_hash,
             component_hash=metadata.component_hash
         )
-        
+
         # Update in-memory storage
         self._strategies[strategy_id] = updated_metadata
-        
+
         # Persist if backend available
         if self.storage_backend:
             self._persist_strategy(updated_metadata)
-        
+
         self.logger.info(f"Updated strategy {strategy_id} status to {new_status.value}")
-    
+
     def revert_to_version(self, strategy_id: str, target_version: str) -> None:
         """
         Revert strategy to a previous version
@@ -442,20 +442,20 @@ class StrategyRegistry:
         """
         if strategy_id not in self._strategies:
             raise ValueError(f"Strategy ID {strategy_id} not found")
-        
+
         versions = self._versions.get(strategy_id, [])
         target_version_record = None
-        
+
         for version_record in versions:
             if version_record.version == target_version:
                 target_version_record = version_record
                 break
-        
+
         if not target_version_record:
             raise ValueError(f"Version {target_version} not found for strategy {strategy_id}")
-        
+
         metadata = self._strategies[strategy_id]
-        
+
         # Create updated metadata with reverted version
         # Verify the version record has configuration snapshot
         if not target_version_record.signal_generator_config:
@@ -463,23 +463,23 @@ class StrategyRegistry:
                 f"Version {target_version} does not have configuration snapshot. "
                 "Cannot revert to this version."
             )
-        
+
         metadata = self._strategies[strategy_id]
-        
+
         # Reconstruct ComponentConfig objects from the version snapshot
         signal_gen_config = ComponentConfig.from_dict(target_version_record.signal_generator_config)
         risk_mgr_config = ComponentConfig.from_dict(target_version_record.risk_manager_config)
         pos_sizer_config = ComponentConfig.from_dict(target_version_record.position_sizer_config)
         regime_det_config = ComponentConfig.from_dict(target_version_record.regime_detector_config)
-        
+
         # Use parameters from target version if available, otherwise use current
         reverted_parameters = target_version_record.parameters if target_version_record.parameters is not None else metadata.parameters
-        
+
         # Use hashes from target version, but fall back to current if target version has None
         # (for older version records created before hashes were persisted)
         reverted_config_hash = target_version_record.config_hash or metadata.config_hash
         reverted_component_hash = target_version_record.component_hash or metadata.component_hash
-        
+
         # Create updated metadata with configuration from target version
         updated_metadata = StrategyMetadata(
             id=metadata.id,
@@ -504,16 +504,16 @@ class StrategyRegistry:
             config_hash=reverted_config_hash,
             component_hash=reverted_component_hash
         )
-        
+
         # Update in-memory storage
         self._strategies[strategy_id] = updated_metadata
-        
+
         # Persist if backend available
         if self.storage_backend:
             self._persist_strategy(updated_metadata)
-        
+
         self.logger.info(f"Reverted strategy {strategy_id} to version {target_version}")
-    
+
     def list_strategies(self, status: Optional[StrategyStatus] = None,
                        tags: Optional[List[str]] = None) -> List[StrategyMetadata]:
         """
@@ -527,15 +527,15 @@ class StrategyRegistry:
             List of strategy metadata
         """
         strategies = list(self._strategies.values())
-        
+
         if status:
             strategies = [s for s in strategies if s.status == status]
-        
+
         if tags:
             strategies = [s for s in strategies if all(tag in s.tags for tag in tags)]
-        
+
         return strategies
-    
+
     def get_strategy_lineage(self, strategy_id: str) -> Dict[str, Any]:
         """
         Get complete lineage information for a strategy
@@ -548,9 +548,9 @@ class StrategyRegistry:
         """
         if strategy_id not in self._strategies:
             return {}
-        
+
         metadata = self._strategies[strategy_id]
-        
+
         # Get ancestors
         ancestors = []
         current_id = metadata.parent_id
@@ -563,10 +563,10 @@ class StrategyRegistry:
                 'created_at': ancestor.created_at.isoformat()
             })
             current_id = ancestor.parent_id
-        
+
         # Get descendants
         descendants = self._get_descendants(strategy_id)
-        
+
         return {
             'strategy_id': strategy_id,
             'lineage_path': metadata.lineage_path,
@@ -575,7 +575,7 @@ class StrategyRegistry:
             'branch_name': metadata.branch_name,
             'merge_source': metadata.merge_source
         }
-    
+
     def serialize_strategy(self, strategy_id: str) -> Dict[str, Any]:
         """
         Serialize strategy to dictionary
@@ -591,16 +591,16 @@ class StrategyRegistry:
         """
         if strategy_id not in self._strategies:
             raise ValueError(f"Strategy ID {strategy_id} not found")
-        
+
         metadata = self._strategies[strategy_id]
         versions = self._versions[strategy_id]
-        
+
         return {
             'metadata': metadata.to_dict(),
             'versions': [v.to_dict() for v in versions],
             'lineage': self.get_strategy_lineage(strategy_id)
         }
-    
+
     def deserialize_strategy(self, data: Dict[str, Any]) -> str:
         """
         Deserialize strategy from dictionary
@@ -617,31 +617,31 @@ class StrategyRegistry:
         try:
             # Deserialize metadata
             metadata = StrategyMetadata.from_dict(data['metadata'])
-            
+
             # Deserialize versions
             versions = [StrategyVersion.from_dict(v) for v in data['versions']]
-            
+
             # Validate integrity
             self._validate_serialized_data(metadata, versions)
-            
+
             # Store in registry
             strategy_id = metadata.id
             self._strategies[strategy_id] = metadata
             self._versions[strategy_id] = versions
-            
+
             # Update lineage if parent exists
             if metadata.parent_id and metadata.parent_id in self._strategies:
                 if metadata.parent_id not in self._lineage:
                     self._lineage[metadata.parent_id] = []
                 if strategy_id not in self._lineage[metadata.parent_id]:
                     self._lineage[metadata.parent_id].append(strategy_id)
-            
+
             self.logger.info(f"Deserialized strategy {strategy_id}")
             return strategy_id
-            
+
         except Exception as e:
             raise StrategyValidationError(f"Failed to deserialize strategy: {e}")
-    
+
     def validate_strategy_integrity(self, strategy_id: str) -> Dict[str, Any]:
         """
         Validate strategy integrity and consistency
@@ -654,11 +654,11 @@ class StrategyRegistry:
         """
         if strategy_id not in self._strategies:
             return {'valid': False, 'errors': ['Strategy not found']}
-        
+
         metadata = self._strategies[strategy_id]
         errors = []
         warnings = []
-        
+
         # Validate component configurations
         try:
             self._validate_component_config(metadata.signal_generator_config, 'signal_generator')
@@ -667,7 +667,7 @@ class StrategyRegistry:
             self._validate_component_config(metadata.regime_detector_config, 'regime_detector')
         except Exception as e:
             errors.append(f"Component validation failed: {e}")
-        
+
         # Validate lineage consistency
         if metadata.parent_id:
             if metadata.parent_id not in self._strategies:
@@ -677,7 +677,7 @@ class StrategyRegistry:
                 expected_lineage = parent_lineage + [metadata.parent_id]
                 if metadata.lineage_path != expected_lineage:
                     warnings.append("Lineage path inconsistency detected")
-        
+
         # Validate version consistency
         versions = self._versions.get(strategy_id, [])
         if not versions:
@@ -686,40 +686,40 @@ class StrategyRegistry:
             current_version = versions[-1].version
             if current_version != metadata.version:
                 errors.append(f"Version mismatch: metadata={metadata.version}, latest={current_version}")
-        
+
         # Validate checksums if possible
         # Note: This would require reconstructing the strategy, which we can't do without the actual components
-        
+
         return {
             'valid': len(errors) == 0,
             'errors': errors,
             'warnings': warnings,
             'validated_at': datetime.now().isoformat()
         }
-    
+
     def _generate_strategy_id(self, name: str) -> str:
         """Generate unique strategy ID"""
         base_id = f"{name.lower().replace(' ', '_')}_{uuid4().hex[:8]}"
         return base_id
-    
+
     def _validate_strategy(self, strategy: Strategy) -> None:
         """Validate strategy instance"""
         if not isinstance(strategy, Strategy):
             raise StrategyValidationError("Invalid strategy type")
-        
+
         if not strategy.name or not strategy.name.strip():
             raise StrategyValidationError("Strategy name cannot be empty")
-        
+
         # Validate components exist and are correct types
         if not hasattr(strategy, 'signal_generator') or strategy.signal_generator is None:
             raise StrategyValidationError("Strategy missing signal_generator")
-        
+
         if not hasattr(strategy, 'risk_manager') or strategy.risk_manager is None:
             raise StrategyValidationError("Strategy missing risk_manager")
-        
+
         if not hasattr(strategy, 'position_sizer') or strategy.position_sizer is None:
             raise StrategyValidationError("Strategy missing position_sizer")
-    
+
     def _extract_component_configs(self, strategy: Strategy) -> Dict[str, ComponentConfig]:
         """Extract component configurations from strategy"""
         return {
@@ -748,7 +748,7 @@ class StrategyRegistry:
                 version="1.0.0"
             )
         }
-    
+
     def _calculate_config_hash(self, component_configs: Dict[str, ComponentConfig],
                               parameters: Dict[str, Any]) -> str:
         """Calculate configuration hash for integrity checking"""
@@ -758,7 +758,7 @@ class StrategyRegistry:
         }
         config_str = json.dumps(config_data, sort_keys=True)
         return hashlib.sha256(config_str.encode()).hexdigest()
-    
+
     def _calculate_component_hash(self, strategy: Strategy) -> str:
         """Calculate component hash based on component types and parameters"""
         component_data = {
@@ -777,32 +777,32 @@ class StrategyRegistry:
         }
         component_str = json.dumps(component_data, sort_keys=True)
         return hashlib.sha256(component_str.encode()).hexdigest()
-    
+
     def _build_lineage_path(self, parent_id: Optional[str]) -> List[str]:
         """Build lineage path from root to current strategy"""
         if not parent_id or parent_id not in self._strategies:
             return []
-        
+
         parent_metadata = self._strategies[parent_id]
         return parent_metadata.lineage_path + [parent_id]
-    
+
     def _calculate_next_version(self, current_version: str, is_major: bool) -> str:
         """Calculate next version number"""
         parts = current_version.split('.')
         if len(parts) != 3:
             return "1.0.0"
-        
+
         major, minor, patch = map(int, parts)
-        
+
         if is_major:
             return f"{major + 1}.0.0"
         else:
             return f"{major}.{minor}.{patch + 1}"
-    
+
     def _get_descendants(self, strategy_id: str) -> List[Dict[str, Any]]:
         """Get all descendants of a strategy"""
         descendants = []
-        
+
         if strategy_id in self._lineage:
             for child_id in self._lineage[strategy_id]:
                 if child_id in self._strategies:
@@ -814,33 +814,33 @@ class StrategyRegistry:
                         'created_at': child.created_at.isoformat(),
                         'descendants': self._get_descendants(child_id)
                     })
-        
+
         return descendants
-    
+
     def _validate_component_config(self, config: ComponentConfig, component_type: str) -> None:
         """Validate component configuration"""
         if config.type != component_type:
             raise StrategyValidationError(f"Component type mismatch: expected {component_type}, got {config.type}")
-        
+
         if not config.class_name:
             raise StrategyValidationError(f"Missing class name for {component_type}")
-        
+
         if not isinstance(config.parameters, dict):
             raise StrategyValidationError(f"Invalid parameters for {component_type}")
-    
+
     def _validate_serialized_data(self, metadata: StrategyMetadata, versions: List[StrategyVersion]) -> None:
         """Validate serialized data consistency"""
         if not versions:
             raise StrategyValidationError("No versions provided")
-        
+
         # Check version consistency
         latest_version = versions[-1]
         if latest_version.version != metadata.version:
             raise StrategyValidationError("Version mismatch between metadata and versions")
-        
+
         if latest_version.strategy_id != metadata.id:
             raise StrategyValidationError("Strategy ID mismatch between metadata and versions")
-    
+
     def _persist_strategy(self, metadata: StrategyMetadata) -> None:
         """Persist strategy to storage backend"""
         if self.storage_backend:

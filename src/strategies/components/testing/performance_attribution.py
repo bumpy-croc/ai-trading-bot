@@ -26,35 +26,35 @@ class ComponentAttribution:
     """Attribution analysis for a single component"""
     component_name: str
     component_type: str
-    
+
     # Performance contribution
     total_contribution: float  # Total performance contribution
     positive_contribution: float  # Contribution from positive trades
     negative_contribution: float  # Contribution from negative trades
-    
+
     # Trade impact analysis
     trade_count_impact: int  # Number of trades influenced by this component
     avg_trade_impact: float  # Average impact per trade
     best_trade_contribution: float  # Best single trade contribution
     worst_trade_contribution: float  # Worst single trade contribution
-    
+
     # Risk-adjusted metrics
     risk_adjusted_contribution: float  # Sharpe-adjusted contribution
     volatility_contribution: float  # Contribution to portfolio volatility
     drawdown_contribution: float  # Contribution to maximum drawdown
-    
+
     # Component-specific metrics
     component_effectiveness: float  # How effective the component is
     component_consistency: float  # How consistent the component is
     component_reliability: float  # How reliable the component is
-    
+
     # Interaction effects
     synergy_score: float  # How well it works with other components
     substitution_impact: float  # Impact if this component were replaced
-    
+
     # Regime-specific attribution
     regime_attribution: Dict[str, float]  # Performance by regime
-    
+
     # Optimization recommendations
     optimization_potential: float  # Potential for improvement
     recommended_adjustments: List[str]  # Specific recommendations
@@ -66,26 +66,26 @@ class AttributionReport:
     strategy_name: str
     analysis_period: str
     total_return: float
-    
+
     # Component attributions
     signal_attribution: Optional[ComponentAttribution] = None
     risk_attribution: Optional[ComponentAttribution] = None
     sizing_attribution: Optional[ComponentAttribution] = None
-    
+
     # Cross-component analysis
     component_correlations: Dict[str, Dict[str, float]] = None
     interaction_effects: Dict[str, float] = None
-    
+
     # Overall attribution summary
     explained_performance: float = 0.0  # % of performance explained by components
     unexplained_performance: float = 0.0  # Residual performance
     attribution_quality: float = 0.0  # Quality of attribution analysis
-    
+
     # Optimization insights
     primary_performance_driver: str = ""
     weakest_component: str = ""
     optimization_priority: List[str] = None
-    
+
     # Replacement analysis
     component_replacement_impact: Dict[str, float] = None
 
@@ -97,7 +97,7 @@ class PerformanceAttributionAnalyzer:
     Analyzes how individual components contribute to overall strategy performance,
     providing detailed insights for optimization and component replacement decisions.
     """
-    
+
     def __init__(self, test_data: pd.DataFrame, regime_data: Optional[pd.DataFrame] = None):
         """
         Initialize performance attribution analyzer
@@ -108,27 +108,27 @@ class PerformanceAttributionAnalyzer:
         """
         self.test_data = test_data.copy()
         self.regime_data = regime_data
-        
+
         # Validate test data
         self._validate_test_data()
-        
+
         # Prepare test data with indicators
         self._prepare_test_data()
-        
+
         # Initialize baseline performance metrics
         self.baseline_metrics = self._calculate_baseline_metrics()
-    
+
     def _validate_test_data(self) -> None:
         """Validate that test data has required columns and format"""
         required_columns = ['open', 'high', 'low', 'close', 'volume']
         missing_columns = [col for col in required_columns if col not in self.test_data.columns]
-        
+
         if missing_columns:
             raise ValueError(f"Test data missing required columns: {missing_columns}")
-        
+
         if len(self.test_data) < 100:
             raise ValueError("Test data must have at least 100 rows for meaningful attribution analysis")
-    
+
     def _prepare_test_data(self) -> None:
         """Prepare test data with technical indicators and returns"""
         # Add basic technical indicators
@@ -136,17 +136,17 @@ class PerformanceAttributionAnalyzer:
         self.test_data['sma_50'] = self.test_data['close'].rolling(50).mean()
         self.test_data['returns'] = self.test_data['close'].pct_change()
         self.test_data['log_returns'] = np.log(self.test_data['close'] / self.test_data['close'].shift(1))
-        
+
         # Calculate volatility
         self.test_data['volatility'] = self.test_data['returns'].rolling(20).std()
-        
+
         # Drop initial NaN rows
         self.test_data = self.test_data.dropna()
-    
+
     def _calculate_baseline_metrics(self) -> Dict[str, float]:
         """Calculate baseline performance metrics for comparison"""
         returns = self.test_data['returns']
-        
+
         return {
             'total_return': (self.test_data['close'].iloc[-1] / self.test_data['close'].iloc[0]) - 1,
             'volatility': returns.std() * np.sqrt(252),
@@ -155,14 +155,14 @@ class PerformanceAttributionAnalyzer:
             'avg_return': returns.mean(),
             'return_std': returns.std()
         }
-    
+
     def _calculate_max_drawdown(self, prices: pd.Series) -> float:
         """Calculate maximum drawdown from price series"""
         running_max = prices.expanding().max()
         drawdown = (prices - running_max) / running_max
         return abs(drawdown.min())
-    
-    def analyze_strategy_attribution(self, strategy: Strategy, 
+
+    def analyze_strategy_attribution(self, strategy: Strategy,
                                    initial_balance: float = 10000.0) -> AttributionReport:
         """
         Perform comprehensive attribution analysis for a complete strategy
@@ -175,39 +175,39 @@ class PerformanceAttributionAnalyzer:
             AttributionReport with detailed attribution analysis
         """
         start_time = time.time()
-        
+
         # Run baseline strategy simulation
         baseline_results = self._simulate_strategy(strategy, initial_balance)
-        
+
         # Analyze individual component contributions
         signal_attribution = None
         risk_attribution = None
         sizing_attribution = None
-        
+
         if hasattr(strategy, 'signal_generator') and strategy.signal_generator:
             signal_attribution = self._analyze_signal_generator_attribution(
                 strategy.signal_generator, baseline_results
             )
-        
+
         if hasattr(strategy, 'risk_manager') and strategy.risk_manager:
             risk_attribution = self._analyze_risk_manager_attribution(
                 strategy.risk_manager, baseline_results
             )
-        
+
         if hasattr(strategy, 'position_sizer') and strategy.position_sizer:
             sizing_attribution = self._analyze_position_sizer_attribution(
                 strategy.position_sizer, baseline_results
             )
-        
+
         # Calculate component correlations and interactions
         component_correlations = self._calculate_component_correlations(
             signal_attribution, risk_attribution, sizing_attribution
         )
-        
+
         interaction_effects = self._calculate_interaction_effects(
             strategy, baseline_results
         )
-        
+
         # Calculate overall attribution metrics
         total_attribution = 0.0
         if signal_attribution:
@@ -216,7 +216,7 @@ class PerformanceAttributionAnalyzer:
             total_attribution += risk_attribution.total_contribution
         if sizing_attribution:
             total_attribution += sizing_attribution.total_contribution
-        
+
         # Use tolerance-based check to avoid floating point precision issues
         EPSILON = 1e-10
         if abs(baseline_results['total_return']) < EPSILON:
@@ -224,7 +224,7 @@ class PerformanceAttributionAnalyzer:
         else:
             explained_performance = min(1.0, abs(total_attribution) / abs(baseline_results['total_return']))
         unexplained_performance = 1.0 - explained_performance
-        
+
         # Determine primary performance driver and weakest component
         component_contributions = {}
         if signal_attribution:
@@ -233,24 +233,24 @@ class PerformanceAttributionAnalyzer:
             component_contributions['risk_manager'] = risk_attribution.total_contribution
         if sizing_attribution:
             component_contributions['position_sizer'] = sizing_attribution.total_contribution
-        
+
         if component_contributions and len(component_contributions) > 0:
             primary_driver = max(component_contributions, key=component_contributions.get)
             weakest_component = min(component_contributions, key=component_contributions.get)
         else:
             primary_driver = ""
             weakest_component = ""
-        
+
         # Generate optimization priorities
         optimization_priority = self._generate_optimization_priorities(
             signal_attribution, risk_attribution, sizing_attribution
         )
-        
+
         # Calculate component replacement impact
         replacement_impact = self._calculate_replacement_impact(strategy, baseline_results)
-        
+
         analysis_duration = time.time() - start_time
-        
+
         return AttributionReport(
             strategy_name=getattr(strategy, 'name', 'Unknown Strategy'),
             analysis_period=f"{self.test_data.index[0]} to {self.test_data.index[-1]}",
@@ -268,7 +268,7 @@ class PerformanceAttributionAnalyzer:
             optimization_priority=optimization_priority,
             component_replacement_impact=replacement_impact
         )
-    
+
     def _simulate_strategy(self, strategy: Strategy, initial_balance: float) -> Dict[str, Any]:
         """Simulate strategy performance and collect detailed metrics"""
         balance = initial_balance
@@ -277,19 +277,19 @@ class PerformanceAttributionAnalyzer:
         signals = []
         position_sizes = []
         risk_decisions = []
-        
+
         for i in range(len(self.test_data) - 1):
             try:
                 current_data = self.test_data.iloc[:i+1]
-                
+
                 # Get regime context if available
                 regime = None
                 if self.regime_data is not None and i < len(self.regime_data):
                     regime = self.regime_data.iloc[i]
-                
+
                 # Process candle with strategy (pass balance, strategy detects regime internally)
                 decision = strategy.process_candle(current_data, i, balance)
-                
+
                 # Track component decisions
                 if hasattr(strategy, 'signal_generator'):
                     try:
@@ -301,22 +301,22 @@ class PerformanceAttributionAnalyzer:
                         })
                     except Exception as e:
                         logger.debug(f"Failed to generate signal at index {i}: {e}")
-                
+
                 # Execute trade if decision made (TradingDecision is a dataclass)
                 if decision and hasattr(decision, 'signal'):
                     # Check if we should trade based on signal direction
                     signal_direction = decision.signal.direction
                     direction_value = signal_direction.value if hasattr(signal_direction, 'value') else signal_direction
-                    
+
                     if direction_value in ['buy', 'sell']:
                         trade_result = self._execute_attribution_trade(
                             decision, self.test_data.iloc[i], self.test_data.iloc[i+1], balance
                         )
-                        
+
                         if trade_result:
                             trades.append(trade_result)
                             balance = trade_result['new_balance']
-                            
+
                             # Track position sizing decisions
                             position_sizes.append({
                                 'index': i,
@@ -324,17 +324,17 @@ class PerformanceAttributionAnalyzer:
                                 'size_fraction': trade_result['position_size'] / balance,
                                 'timestamp': self.test_data.index[i]
                             })
-                
+
                 portfolio_values.append(balance)
-                
+
             except Exception as e:
                 logger.error(f"Error in strategy simulation at index {i}: {e}", exc_info=True)
                 continue
-        
+
         # Calculate performance metrics
         total_return = (balance - initial_balance) / initial_balance
         returns = pd.Series(portfolio_values).pct_change().dropna()
-        
+
         return {
             'initial_balance': initial_balance,
             'final_balance': balance,
@@ -349,14 +349,14 @@ class PerformanceAttributionAnalyzer:
             'volatility': returns.std() * np.sqrt(252) if len(returns) > 1 else 0.0,
             'win_rate': sum(1 for t in trades if t['return'] > 0) / len(trades) if trades else 0.0
         }
-    
+
     def _execute_attribution_trade(self, decision, entry_data: pd.Series,
                                  exit_data: pd.Series, balance: float) -> Optional[Dict[str, Any]]:
         """Execute trade for attribution analysis"""
         try:
             entry_price = entry_data['close']
             exit_price = exit_data['close']
-            
+
             # Handle TradingDecision dataclass
             if hasattr(decision, 'position_size'):
                 # TradingDecision dataclass
@@ -369,15 +369,15 @@ class PerformanceAttributionAnalyzer:
                 position_size = decision.get('size', balance * 0.02)
                 action = decision['action']
                 decision_metadata = decision.get('metadata', {})
-            
+
             if action == 'buy':
                 trade_return = (exit_price - entry_price) / entry_price
             else:  # sell
                 trade_return = (entry_price - exit_price) / entry_price
-            
+
             pnl = position_size * trade_return
             new_balance = balance + pnl
-            
+
             return {
                 'action': action,
                 'entry_price': entry_price,
@@ -390,49 +390,49 @@ class PerformanceAttributionAnalyzer:
                 'exit_time': exit_data.name,
                 'decision_metadata': decision_metadata
             }
-        
+
         except Exception as e:
             logger.error(f"Error executing attribution trade: {e}", exc_info=True)
             return None
-    
+
     def _analyze_signal_generator_attribution(self, signal_generator: SignalGenerator,
                                             baseline_results: Dict[str, Any]) -> ComponentAttribution:
         """Analyze signal generator's contribution to performance"""
         signals = baseline_results['signals']
         trades = baseline_results['trades']
-        
+
         if not signals or not trades:
             return self._create_empty_attribution('signal_generator', 'SignalGenerator')
-        
+
         # Calculate signal quality metrics
         signal_accuracy = self._calculate_signal_accuracy(signals, trades)
         signal_timing = self._calculate_signal_timing_quality(signals, trades)
-        
+
         # Estimate signal contribution to returns
         signal_contribution = self._estimate_signal_contribution(signals, trades)
-        
+
         # Calculate signal-specific metrics
         confidences = [s['signal'].confidence for s in signals]
         strengths = [s['signal'].strength for s in signals]
-        
+
         avg_confidence = np.mean(confidences) if confidences else 0.0
         avg_strength = np.mean(strengths) if strengths else 0.0
-        
+
         # Component effectiveness (based on accuracy and timing)
         effectiveness = (signal_accuracy + signal_timing) / 2
-        
+
         # Component consistency (based on confidence stability)
         consistency = 1 - (np.std(confidences) / (np.mean(confidences) + 0.1)) if confidences else 0.0
         consistency = max(0.0, min(1.0, consistency))
-        
+
         # Component reliability (based on error rate and performance stability)
         reliability = signal_accuracy * (1 - baseline_results.get('error_rate', 0.0))
-        
+
         # Generate recommendations
         recommendations = self._generate_signal_recommendations(
             signal_accuracy, avg_confidence, avg_strength
         )
-        
+
         return ComponentAttribution(
             component_name=signal_generator.name,
             component_type='SignalGenerator',
@@ -455,42 +455,42 @@ class PerformanceAttributionAnalyzer:
             optimization_potential=1.0 - effectiveness,
             recommended_adjustments=recommendations
         )
-    
+
     def _analyze_risk_manager_attribution(self, risk_manager: RiskManager,
                                         baseline_results: Dict[str, Any]) -> ComponentAttribution:
         """Analyze risk manager's contribution to performance"""
         trades = baseline_results['trades']
-        
+
         if not trades:
             return self._create_empty_attribution('risk_manager', 'RiskManager')
-        
+
         # Calculate risk management effectiveness
         drawdown_control = 1.0 - (baseline_results['max_drawdown'] / 0.2)  # Assume 20% target
         drawdown_control = max(0.0, min(1.0, drawdown_control))
-        
+
         # Estimate risk manager contribution (primarily through drawdown control)
         risk_contribution = self._estimate_risk_manager_contribution(trades, baseline_results)
-        
+
         # Calculate risk-specific metrics
         position_sizes = [t['position_size'] for t in trades]
         avg_position_size = np.mean(position_sizes) if position_sizes else 0.0
         position_consistency = 1 - (np.std(position_sizes) / (np.mean(position_sizes) + 0.1)) if position_sizes else 0.0
-        
+
         # Component effectiveness (based on drawdown control and risk-adjusted returns)
         effectiveness = drawdown_control * 0.7 + (baseline_results['sharpe_ratio'] / 2.0) * 0.3
         effectiveness = max(0.0, min(1.0, effectiveness))
-        
+
         # Component consistency (based on position sizing consistency)
         consistency = position_consistency
-        
+
         # Component reliability (based on consistent risk control)
         reliability = effectiveness * 0.9  # High correlation with effectiveness for risk management
-        
+
         # Generate recommendations
         recommendations = self._generate_risk_recommendations(
             drawdown_control, avg_position_size, baseline_results['volatility']
         )
-        
+
         return ComponentAttribution(
             component_name=risk_manager.name,
             component_type='RiskManager',
@@ -513,43 +513,43 @@ class PerformanceAttributionAnalyzer:
             optimization_potential=1.0 - effectiveness,
             recommended_adjustments=recommendations
         )
-    
+
     def _analyze_position_sizer_attribution(self, position_sizer: PositionSizer,
                                           baseline_results: Dict[str, Any]) -> ComponentAttribution:
         """Analyze position sizer's contribution to performance"""
         position_sizes = baseline_results.get('position_sizes', [])
         trades = baseline_results['trades']
-        
+
         if not position_sizes or not trades:
             return self._create_empty_attribution('position_sizer', 'PositionSizer')
-        
+
         # Calculate position sizing effectiveness
         sizing_optimality = self._calculate_sizing_optimality(position_sizes, trades)
-        
+
         # Estimate position sizer contribution
         sizing_contribution = self._estimate_sizing_contribution(position_sizes, trades, baseline_results)
-        
+
         # Calculate sizing-specific metrics
         sizes = [p['size'] for p in position_sizes]
         size_fractions = [p['size_fraction'] for p in position_sizes]
-        
+
         avg_size_fraction = np.mean(size_fractions) if size_fractions else 0.0
         size_consistency = 1 - (np.std(size_fractions) / (np.mean(size_fractions) + 0.01)) if size_fractions else 0.0
-        
+
         # Component effectiveness (based on sizing optimality)
         effectiveness = sizing_optimality
-        
+
         # Component consistency (based on size consistency)
         consistency = size_consistency
-        
+
         # Component reliability (based on consistent sizing performance)
         reliability = effectiveness * consistency
-        
+
         # Generate recommendations
         recommendations = self._generate_sizing_recommendations(
             sizing_optimality, avg_size_fraction, size_consistency
         )
-        
+
         return ComponentAttribution(
             component_name=position_sizer.name,
             component_type='PositionSizer',
@@ -572,7 +572,7 @@ class PerformanceAttributionAnalyzer:
             optimization_potential=1.0 - effectiveness,
             recommended_adjustments=recommendations
         )
-    
+
     def _create_empty_attribution(self, name: str, component_type: str) -> ComponentAttribution:
         """Create empty attribution for components with no data"""
         return ComponentAttribution(
@@ -597,31 +597,31 @@ class PerformanceAttributionAnalyzer:
             optimization_potential=1.0,
             recommended_adjustments=['Insufficient data for analysis']
         )
-    
-    def _calculate_signal_accuracy(self, signals: List[Dict[str, Any]], 
+
+    def _calculate_signal_accuracy(self, signals: List[Dict[str, Any]],
                                  trades: List[Dict[str, Any]]) -> float:
         """Calculate signal accuracy based on trade outcomes"""
         if not signals or not trades:
             return 0.0
-        
+
         # Match signals to trades and calculate accuracy
         accurate_signals = 0
         total_signals = 0
-        
+
         for signal_data in signals:
             signal = signal_data['signal']
             signal_time = signal_data['timestamp']
-            
+
             # Find corresponding trade
             corresponding_trade = None
             for trade in trades:
                 if abs((trade['entry_time'] - signal_time).total_seconds()) < 3600:  # Within 1 hour
                     corresponding_trade = trade
                     break
-            
+
             if corresponding_trade:
                 total_signals += 1
-                
+
                 # Check if signal was accurate
                 if signal.direction == SignalDirection.BUY and corresponding_trade['return'] > 0:
                     accurate_signals += 1
@@ -629,57 +629,57 @@ class PerformanceAttributionAnalyzer:
                     accurate_signals += 1
                 elif signal.direction == SignalDirection.HOLD:
                     accurate_signals += 0.5  # Neutral for hold signals
-        
+
         return accurate_signals / total_signals if total_signals > 0 else 0.0
-    
+
     def _calculate_signal_timing_quality(self, signals: List[Dict[str, Any]],
                                        trades: List[Dict[str, Any]]) -> float:
         """Calculate quality of signal timing"""
         # Placeholder implementation - would need more sophisticated analysis
         return 0.7  # Assume moderate timing quality
-    
+
     def _estimate_signal_contribution(self, signals: List[Dict[str, Any]],
                                     trades: List[Dict[str, Any]]) -> float:
         """Estimate signal generator's contribution to total returns"""
         if not trades:
             return 0.0
-        
+
         # Simple estimation: assume signals contribute to 70% of performance
         total_trade_return = sum(t['return'] for t in trades)
         return total_trade_return * 0.7
-    
+
     def _estimate_risk_manager_contribution(self, trades: List[Dict[str, Any]],
                                           baseline_results: Dict[str, Any]) -> float:
         """Estimate risk manager's contribution to performance"""
         # Risk manager primarily contributes through drawdown control and risk-adjusted returns
         # Positive contribution for good risk control, negative for poor control
-        
+
         max_drawdown = baseline_results['max_drawdown']
         target_drawdown = 0.15  # 15% target
-        
+
         if max_drawdown < target_drawdown:
             # Good risk control - positive contribution
             return (target_drawdown - max_drawdown) * baseline_results['total_return']
         else:
             # Poor risk control - negative contribution
             return -(max_drawdown - target_drawdown) * baseline_results['total_return']
-    
+
     def _estimate_sizing_contribution(self, position_sizes: List[Dict[str, Any]],
                                     trades: List[Dict[str, Any]],
                                     baseline_results: Dict[str, Any]) -> float:
         """Estimate position sizer's contribution to performance"""
         if not position_sizes or not trades:
             return 0.0
-        
+
         # Estimate contribution based on sizing optimality
         # Good sizing amplifies good trades and minimizes bad trades
-        
+
         total_contribution = 0.0
         for i, trade in enumerate(trades):
             if i < len(position_sizes):
                 size_fraction = position_sizes[i]['size_fraction']
                 trade_return = trade['return']
-                
+
                 # Optimal size would be larger for profitable trades, smaller for losses
                 if trade_return > 0:
                     # Reward larger positions on winning trades
@@ -687,33 +687,33 @@ class PerformanceAttributionAnalyzer:
                 else:
                     # Reward smaller positions on losing trades
                     contribution = (0.05 - size_fraction) * abs(trade_return) * 0.1
-                
+
                 total_contribution += contribution
-        
+
         return total_contribution
-    
+
     def _calculate_sizing_optimality(self, position_sizes: List[Dict[str, Any]],
                                    trades: List[Dict[str, Any]]) -> float:
         """Calculate how optimal the position sizing was"""
         if not position_sizes or not trades:
             return 0.0
-        
+
         # Simple optimality measure: correlation between position size and trade outcome
         sizes = []
         outcomes = []
-        
+
         for i, trade in enumerate(trades):
             if i < len(position_sizes):
                 sizes.append(position_sizes[i]['size_fraction'])
                 outcomes.append(trade['return'])
-        
+
         if len(sizes) > 1:
             correlation = np.corrcoef(sizes, outcomes)[0, 1]
             # Convert correlation to optimality score (0 to 1)
             return max(0.0, correlation) if not np.isnan(correlation) else 0.5
-        
+
         return 0.5  # Neutral if insufficient data
-    
+
     def _calculate_regime_attribution(self, signals: List[Dict[str, Any]],
                                     trades: List[Dict[str, Any]]) -> Dict[str, float]:
         """Calculate performance attribution by regime"""
@@ -723,84 +723,84 @@ class PerformanceAttributionAnalyzer:
             'bear_market': -0.2,
             'sideways_market': 0.1
         }
-    
+
     def _generate_signal_recommendations(self, accuracy: float, avg_confidence: float,
                                        avg_strength: float) -> List[str]:
         """Generate recommendations for signal generator improvement"""
         recommendations = []
-        
+
         if accuracy < 0.5:
             recommendations.append("Improve signal accuracy through better feature engineering")
-        
+
         if avg_confidence < 0.6:
             recommendations.append("Increase signal confidence through ensemble methods")
-        
+
         if avg_strength < 0.5:
             recommendations.append("Enhance signal strength calculation methodology")
-        
+
         if not recommendations:
             recommendations.append("Signal generator performing well - consider fine-tuning parameters")
-        
+
         return recommendations
-    
+
     def _generate_risk_recommendations(self, drawdown_control: float, avg_position_size: float,
                                      volatility: float) -> List[str]:
         """Generate recommendations for risk manager improvement"""
         recommendations = []
-        
+
         if drawdown_control < 0.7:
             recommendations.append("Tighten risk controls to reduce maximum drawdown")
-        
+
         if avg_position_size > 0.1:  # More than 10% per trade
             recommendations.append("Reduce average position size to improve risk management")
-        
+
         if volatility > 0.3:  # High volatility
             recommendations.append("Implement volatility-based position sizing")
-        
+
         if not recommendations:
             recommendations.append("Risk management performing well - monitor for regime changes")
-        
+
         return recommendations
-    
+
     def _generate_sizing_recommendations(self, optimality: float, avg_size: float,
                                        consistency: float) -> List[str]:
         """Generate recommendations for position sizer improvement"""
         recommendations = []
-        
+
         if optimality < 0.6:
             recommendations.append("Improve position sizing algorithm to better match trade outcomes")
-        
+
         if avg_size < 0.01:  # Very small positions
             recommendations.append("Consider increasing position sizes to improve returns")
         elif avg_size > 0.05:  # Very large positions
             recommendations.append("Consider reducing position sizes to manage risk")
-        
+
         if consistency < 0.7:
             recommendations.append("Improve position sizing consistency across different market conditions")
-        
+
         if not recommendations:
             recommendations.append("Position sizing performing well - consider regime-adaptive enhancements")
-        
+
         return recommendations
-    
+
     def _calculate_component_correlations(self, signal_attr: Optional[ComponentAttribution],
                                         risk_attr: Optional[ComponentAttribution],
                                         sizing_attr: Optional[ComponentAttribution]) -> Dict[str, Dict[str, float]]:
         """Calculate correlations between component contributions"""
         correlations = {}
-        
+
         # Placeholder implementation - would need more sophisticated analysis
         if signal_attr and risk_attr:
             correlations['signal_risk'] = {'correlation': 0.3, 'significance': 0.05}
-        
+
         if signal_attr and sizing_attr:
             correlations['signal_sizing'] = {'correlation': 0.7, 'significance': 0.01}
-        
+
         if risk_attr and sizing_attr:
             correlations['risk_sizing'] = {'correlation': 0.5, 'significance': 0.02}
-        
+
         return correlations
-    
+
     def _calculate_interaction_effects(self, strategy: Strategy,
                                      baseline_results: Dict[str, Any]) -> Dict[str, float]:
         """Calculate interaction effects between components"""
@@ -811,13 +811,13 @@ class PerformanceAttributionAnalyzer:
             'risk_sizing_interaction': 0.05,
             'three_way_interaction': 0.02
         }
-    
+
     def _generate_optimization_priorities(self, signal_attr: Optional[ComponentAttribution],
                                         risk_attr: Optional[ComponentAttribution],
                                         sizing_attr: Optional[ComponentAttribution]) -> List[str]:
         """Generate optimization priorities based on attribution analysis"""
         priorities = []
-        
+
         # Collect optimization potentials
         potentials = {}
         if signal_attr:
@@ -826,16 +826,16 @@ class PerformanceAttributionAnalyzer:
             potentials['risk_manager'] = risk_attr.optimization_potential
         if sizing_attr:
             potentials['position_sizer'] = sizing_attr.optimization_potential
-        
+
         # Sort by optimization potential (highest first)
         sorted_components = sorted(potentials.items(), key=lambda x: x[1], reverse=True)
-        
+
         for component, potential in sorted_components:
             if potential > 0.3:  # Significant optimization potential
                 priorities.append(component)
-        
+
         return priorities
-    
+
     def _calculate_replacement_impact(self, strategy: Strategy,
                                     baseline_results: Dict[str, Any]) -> Dict[str, float]:
         """Calculate impact of replacing each component"""
@@ -845,16 +845,16 @@ class PerformanceAttributionAnalyzer:
             'risk_manager': -0.25,     # 25% performance drop if replaced with poor risk manager
             'position_sizer': -0.10    # 10% performance drop if replaced with poor position sizer
         }
-    
+
     def _calculate_sharpe_ratio(self, returns: pd.Series, risk_free_rate: float = 0.0) -> float:
         """Calculate Sharpe ratio from returns"""
         if len(returns) == 0 or returns.std() == 0:
             return 0.0
-        
+
         excess_returns = returns - risk_free_rate / 252
         return excess_returns.mean() / returns.std() * np.sqrt(252)
-    
-    def analyze_component_replacement_impact(self, strategy: Strategy, 
+
+    def analyze_component_replacement_impact(self, strategy: Strategy,
                                            component_type: str,
                                            replacement_component: Union[SignalGenerator, RiskManager, PositionSizer],
                                            initial_balance: float = 10000.0) -> Dict[str, Any]:
@@ -872,16 +872,16 @@ class PerformanceAttributionAnalyzer:
         """
         # Create modified strategy with replacement component
         modified_strategy = self._create_modified_strategy(strategy, component_type, replacement_component)
-        
+
         # Run simulations
         original_results = self._simulate_strategy(strategy, initial_balance)
         modified_results = self._simulate_strategy(modified_strategy, initial_balance)
-        
+
         # Calculate impact metrics
         return_impact = modified_results['total_return'] - original_results['total_return']
         sharpe_impact = modified_results['sharpe_ratio'] - original_results['sharpe_ratio']
         drawdown_impact = modified_results['max_drawdown'] - original_results['max_drawdown']
-        
+
         return {
             'component_type': component_type,
             'replacement_component': replacement_component.name,
@@ -901,7 +901,7 @@ class PerformanceAttributionAnalyzer:
                 'drawdown': modified_results['max_drawdown']
             }
         }
-    
+
     def _create_modified_strategy(self, original_strategy: Strategy, component_type: str,
                                 replacement_component: Union[SignalGenerator, RiskManager, PositionSizer]) -> Strategy:
         """Create a modified strategy with replaced component"""
