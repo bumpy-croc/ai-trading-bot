@@ -206,7 +206,7 @@ class StrategyRegistry:
             created_by=metadata.get('created_by', 'system'),
             description=metadata.get('description', ''),
             tags=metadata.get('tags', []),
-            status=StrategyStatus(metadata.get('status', 'experimental')),
+            status=StrategyStatus(metadata.get('status', 'EXPERIMENTAL')),
             signal_generator_config=component_configs['signal_generator'],
             risk_manager_config=component_configs['risk_manager'],
             position_sizer_config=component_configs['position_sizer'],
