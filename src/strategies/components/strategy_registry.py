@@ -23,11 +23,11 @@ from .strategy import Strategy
 
 class StrategyStatus(Enum):
     """Strategy status enumeration"""
-    EXPERIMENTAL = "experimental"
-    TESTING = "testing"
-    PRODUCTION = "production"
-    RETIRED = "retired"
-    DEPRECATED = "deprecated"
+    EXPERIMENTAL = "EXPERIMENTAL"
+    TESTING = "TESTING"
+    PRODUCTION = "PRODUCTION"
+    RETIRED = "RETIRED"
+    DEPRECATED = "DEPRECATED"
 
 
 @dataclass

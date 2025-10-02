@@ -185,7 +185,7 @@ class TestStrategyRegistry:
             'created_by': 'test_user',
             'description': 'Test strategy for unit testing',
             'tags': ['test', 'experimental'],
-            'status': 'experimental'
+            'status': 'EXPERIMENTAL'
         }
         
         strategy_id = registry.register_strategy(test_strategy, metadata)
@@ -214,7 +214,7 @@ class TestStrategyRegistry:
             'created_by': 'test_user',
             'description': 'Parent strategy',
             'tags': ['parent'],
-            'status': 'experimental'
+            'status': 'EXPERIMENTAL'
         }
         parent_id = registry.register_strategy(test_strategy, parent_metadata)
         
@@ -230,7 +230,7 @@ class TestStrategyRegistry:
             'created_by': 'test_user',
             'description': 'Child strategy',
             'tags': ['child'],
-            'status': 'experimental'
+            'status': 'EXPERIMENTAL'
         }
         
         child_id = registry.register_strategy(child_strategy, child_metadata, parent_id=parent_id)
@@ -250,7 +250,7 @@ class TestStrategyRegistry:
         metadata = {
             'created_by': 'test_user',
             'description': 'Initial strategy',
-            'status': 'experimental'
+            'status': 'EXPERIMENTAL'
         }
         strategy_id = registry.register_strategy(test_strategy, metadata)
         
@@ -281,7 +281,7 @@ class TestStrategyRegistry:
     def test_update_strategy_major_version(self, registry, test_strategy):
         """Test major version updates"""
         # Register and update to major version
-        metadata = {'created_by': 'test_user', 'status': 'experimental'}
+        metadata = {'created_by': 'test_user', 'status': 'EXPERIMENTAL'}
         strategy_id = registry.register_strategy(test_strategy, metadata)
         
         new_version = registry.update_strategy(
@@ -292,7 +292,7 @@ class TestStrategyRegistry:
     
     def test_get_strategy_metadata(self, registry, test_strategy):
         """Test retrieving strategy metadata"""
-        metadata = {'created_by': 'test_user', 'status': 'experimental'}
+        metadata = {'created_by': 'test_user', 'status': 'EXPERIMENTAL'}
         strategy_id = registry.register_strategy(test_strategy, metadata)
         
         retrieved_metadata = registry.get_strategy_metadata(strategy_id)
@@ -305,7 +305,7 @@ class TestStrategyRegistry:
     
     def test_get_strategy_versions(self, registry, test_strategy):
         """Test retrieving strategy versions"""
-        metadata = {'created_by': 'test_user', 'status': 'experimental'}
+        metadata = {'created_by': 'test_user', 'status': 'EXPERIMENTAL'}
         strategy_id = registry.register_strategy(test_strategy, metadata)
         
         # Add another version
@@ -322,9 +322,9 @@ class TestStrategyRegistry:
     def test_list_strategies(self, registry, test_strategy):
         """Test listing strategies with filters"""
         # Register multiple strategies
-        metadata1 = {'created_by': 'user1', 'status': 'experimental', 'tags': ['test', 'ml']}
-        metadata2 = {'created_by': 'user2', 'status': 'production', 'tags': ['live', 'ml']}
-        metadata3 = {'created_by': 'user3', 'status': 'experimental', 'tags': ['test']}
+        metadata1 = {'created_by': 'user1', 'status': 'EXPERIMENTAL', 'tags': ['test', 'ml']}
+        metadata2 = {'created_by': 'user2', 'status': 'PRODUCTION', 'tags': ['live', 'ml']}
+        metadata3 = {'created_by': 'user3', 'status': 'EXPERIMENTAL', 'tags': ['test']}
         
         strategy1 = Strategy("Strategy1", test_strategy.signal_generator, 
                            test_strategy.risk_manager, test_strategy.position_sizer)
@@ -363,20 +363,20 @@ class TestStrategyRegistry:
         """Test strategy lineage tracking"""
         # Create a lineage: grandparent -> parent -> child
         grandparent_id = registry.register_strategy(
-            test_strategy, {'created_by': 'user', 'status': 'experimental'}
+            test_strategy, {'created_by': 'user', 'status': 'EXPERIMENTAL'}
         )
         
         parent_strategy = Strategy("Parent", test_strategy.signal_generator, 
                                  test_strategy.risk_manager, test_strategy.position_sizer)
         parent_id = registry.register_strategy(
-            parent_strategy, {'created_by': 'user', 'status': 'experimental'}, 
+            parent_strategy, {'created_by': 'user', 'status': 'EXPERIMENTAL'}, 
             parent_id=grandparent_id
         )
         
         child_strategy = Strategy("Child", test_strategy.signal_generator, 
                                 test_strategy.risk_manager, test_strategy.position_sizer)
         child_id = registry.register_strategy(
-            child_strategy, {'created_by': 'user', 'status': 'experimental'}, 
+            child_strategy, {'created_by': 'user', 'status': 'EXPERIMENTAL'}, 
             parent_id=parent_id
         )
         
@@ -406,7 +406,7 @@ class TestStrategyRegistry:
             'created_by': 'test_user',
             'description': 'Test serialization',
             'tags': ['test'],
-            'status': 'experimental'
+            'status': 'EXPERIMENTAL'
         }
         strategy_id = registry.register_strategy(test_strategy, metadata)
         
@@ -439,7 +439,7 @@ class TestStrategyRegistry:
     def test_validate_strategy_integrity(self, registry, test_strategy):
         """Test strategy integrity validation"""
         # Register valid strategy
-        metadata = {'created_by': 'test_user', 'status': 'experimental'}
+        metadata = {'created_by': 'test_user', 'status': 'EXPERIMENTAL'}
         strategy_id = registry.register_strategy(test_strategy, metadata)
         
         # Test valid strategy
@@ -489,7 +489,7 @@ class TestStrategyRegistry:
     
     def test_version_calculation(self, registry, test_strategy):
         """Test version number calculation"""
-        metadata = {'created_by': 'test_user', 'status': 'experimental'}
+        metadata = {'created_by': 'test_user', 'status': 'EXPERIMENTAL'}
         strategy_id = registry.register_strategy(test_strategy, metadata)
         
         # Test minor updates
@@ -564,7 +564,7 @@ class TestStrategyRegistry:
         test_strategy = Strategy(
             "Test", HoldSignalGenerator(), FixedRiskManager(), FixedFractionSizer()
         )
-        parent_id = registry.register_strategy(test_strategy, {'created_by': 'user', 'status': 'experimental'})
+        parent_id = registry.register_strategy(test_strategy, {'created_by': 'user', 'status': 'EXPERIMENTAL'})
         
         path = registry._build_lineage_path(parent_id)
         assert path == [parent_id]
