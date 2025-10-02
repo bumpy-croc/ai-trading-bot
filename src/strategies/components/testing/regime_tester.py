@@ -322,16 +322,20 @@ class RegimeTester:
                 # Convert to enums
                 trend = self._parse_trend_label(trend_str)
                 volatility = self._parse_vol_label(volatility_str)
-
+                
+                # Validate and bound duration value
+                raw_duration = regime_data.iloc[i]['regime_duration']
+                duration = int(max(1, min(raw_duration, 1_000_000))) if not np.isnan(raw_duration) else 1
+                
                 regime_context = RegimeContext(
                     trend=trend,
                     volatility=volatility,
                     confidence=regime_data.iloc[i]['regime_confidence'],
-                    duration=int(regime_data.iloc[i]['regime_duration']),
+                    duration=duration,
                     strength=regime_data.iloc[i]['regime_strength'],
                     metadata={'regime_type': regime_type}
                 )
-
+                
                 # Process candle with strategy (pass balance, strategy detects regime internally)
                 decision = strategy.process_candle(current_data, i, balance)
 
@@ -683,16 +687,20 @@ class RegimeTester:
                 # Convert to enums
                 trend = self._parse_trend_label(trend_str)
                 volatility = self._parse_vol_label(volatility_str)
-
+                
+                # Validate and bound duration value
+                raw_duration = regime_data.iloc[i]['regime_duration']
+                duration = int(max(1, min(raw_duration, 1_000_000))) if not np.isnan(raw_duration) else 1
+                
                 regime_context = RegimeContext(
                     trend=trend,
                     volatility=volatility,
                     confidence=regime_data.iloc[i]['regime_confidence'],
-                    duration=int(regime_data.iloc[i]['regime_duration']),
+                    duration=duration,
                     strength=regime_data.iloc[i]['regime_strength'],
                     metadata={'regime_type': regime_type}
                 )
-
+                
                 signal = generator.generate_signal(regime_data, i, regime_context)
                 future_return = regime_data.iloc[i + 1]['close'] / regime_data.iloc[i]['close'] - 1
 

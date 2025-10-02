@@ -55,25 +55,57 @@ class TestDatasetGenerator:
     and edge case datasets for thorough component testing.
     """
 
-    def __init__(self, data_dir: Optional[str] = None, cache_dir: Optional[str] = None):
+    def __init__(self, data_dir: Optional[str] = None, cache_dir: Optional[str] = None, 
+                 max_cache_size_mb: int = 500):
         """
         Initialize test dataset generator
         
         Args:
             data_dir: Directory containing historical market data
             cache_dir: Directory for caching generated datasets
+            max_cache_size_mb: Maximum cache size in MB (default 500MB)
         """
         self.data_dir = Path(data_dir) if data_dir else Path("data")
         self.cache_dir = Path(cache_dir) if cache_dir else Path("cache/test_datasets")
-
+        self.max_cache_size_mb = max_cache_size_mb
+        
         # Create cache directory if it doesn't exist
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Evict old cache files if size exceeds limit
+        self._evict_cache_if_needed()
 
         # Initialize scenario definitions
         self.market_scenarios = self._define_market_scenarios()
 
         # Initialize synthetic data generator
         self.synthetic_generator = SyntheticDataGenerator()
+    
+    def _evict_cache_if_needed(self) -> None:
+        """Evict oldest cache files if total size exceeds limit"""
+        try:
+            cache_files = list(self.cache_dir.glob("*.feather"))
+            if not cache_files:
+                return
+            
+            # Calculate total cache size
+            total_size_bytes = sum(f.stat().st_size for f in cache_files)
+            total_size_mb = total_size_bytes / (1024 * 1024)
+            
+            if total_size_mb > self.max_cache_size_mb:
+                # Sort by modification time (oldest first)
+                cache_files.sort(key=lambda f: f.stat().st_mtime)
+                
+                # Remove oldest files until under limit
+                for cache_file in cache_files:
+                    cache_file.unlink()
+                    total_size_mb -= cache_file.stat().st_size / (1024 * 1024)
+                    if total_size_mb <= self.max_cache_size_mb * 0.8:  # 80% threshold
+                        break
+                
+                logger.info(f"Cache evicted to {total_size_mb:.1f}MB")
+        except Exception as e:
+            logger.warning(f"Cache eviction failed: {e}")
 
     def _define_market_scenarios(self) -> List[MarketScenario]:
         """Define standard market scenarios for testing"""
@@ -629,32 +661,31 @@ class TestDatasetGenerator:
             # Combined regime
             regime_data['regime_type'] = regime_data['trend'] + '_' + regime_data['volatility']
 
-            # Add confidence and other metrics
-            regime_data['confidence'] = np.random.uniform(0.6, 0.9, len(regime_data))
+            # Calculate confidence based on trend strength (how far from MA crossover)
+            ma_diff = abs(data['sma_20'] - data['sma_50']) / data['close']
+            regime_data['confidence'] = ma_diff.fillna(0.7).clip(0.5, 0.95)  # Normalize to 0.5-0.95 range
+            
             regime_data['duration'] = self._calculate_regime_duration(regime_data)
-            regime_data['strength'] = np.random.uniform(0.5, 0.8, len(regime_data))
+            
+            # Calculate strength based on price momentum and volatility consistency
+            price_momentum = abs(data['close'].pct_change(20)).fillna(0.05)
+            vol_consistency = 1.0 / (1.0 + data['volatility'].rolling(10).std().fillna(0.1))
+            regime_data['strength'] = (price_momentum * 0.6 + vol_consistency * 0.4).clip(0.3, 0.9)
 
         return regime_data.dropna()
 
     def _calculate_regime_duration(self, regime_data: pd.DataFrame) -> pd.Series:
-        """Calculate regime duration for each period"""
-        duration = pd.Series(index=regime_data.index, dtype=int)
-
-        current_regime = None
-        current_duration = 0
-
-        for i, (_idx, row) in enumerate(regime_data.iterrows()):
-            regime_key = row['regime_type']
-
-            if regime_key == current_regime:
-                current_duration += 1
-            else:
-                current_regime = regime_key
-                current_duration = 1
-
-            duration.iloc[i] = current_duration
-
-        return duration
+        """Calculate regime duration for each period using vectorized operations"""
+        # Identify regime changes
+        regime_changes = (regime_data['regime_type'] != regime_data['regime_type'].shift()).fillna(True)
+        
+        # Create regime group IDs
+        regime_groups = regime_changes.cumsum()
+        
+        # Calculate duration within each group
+        duration = regime_groups.groupby(regime_groups).cumcount() + 1
+        
+        return pd.Series(duration.values, index=regime_data.index, dtype=int)
 
     def get_comprehensive_test_suite(self, seed: Optional[int] = None) -> Dict[str, pd.DataFrame]:
         """
@@ -714,9 +745,9 @@ class SyntheticDataGenerator:
         Returns:
             DataFrame with synthetic OHLCV data
         """
-        # Use isolated random number generator to avoid polluting global state
+        # Set random seed for reproducibility
         if seed is not None:
-            np.random.seed(seed)  # Note: Still needed for consistency with edge case generation
+            np.random.seed(seed)
 
         # Generate timestamps
         timestamps = pd.date_range(

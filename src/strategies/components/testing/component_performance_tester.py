@@ -3,6 +3,11 @@ Component Performance Tester
 
 This module provides comprehensive performance testing for individual strategy components,
 allowing isolated testing of SignalGenerator, RiskManager, and PositionSizer components.
+
+Error Handling Strategy:
+- Validation methods: Raise ValueError for invalid inputs
+- Test execution: Log errors and return error counts in results
+- All errors logged with full context via logger.error()
 """
 
 import logging
@@ -19,6 +24,16 @@ from ..risk_manager import MarketData, Position, RiskManager
 from ..signal_generator import Signal, SignalDirection, SignalGenerator
 
 logger = logging.getLogger(__name__)
+
+# Testing Configuration Constants
+MIN_TEST_DATA_ROWS = 100
+MIN_DATA_AFTER_TRANSFORM = 50
+MIN_TREND_PERIOD_LENGTH = 30
+MIN_VOLATILITY_PERIOD_LENGTH = 20
+VOLATILITY_HIGH_MULTIPLIER = 1.5
+VOLATILITY_LOW_MULTIPLIER = 0.7
+SMALL_RETURN_THRESHOLD = 0.01  # For HOLD signal accuracy
+TRADING_DAYS_PER_YEAR = 252
 
 
 @dataclass
@@ -203,8 +218,8 @@ class ComponentPerformanceTester:
         if missing_columns:
             raise ValueError(f"Test data missing required columns: {missing_columns}")
 
-        if len(self.test_data) < 100:
-            raise ValueError("Test data must have at least 100 rows for meaningful testing")
+        if len(self.test_data) < MIN_TEST_DATA_ROWS:
+            raise ValueError(f"Test data must have at least {MIN_TEST_DATA_ROWS} rows for meaningful testing")
 
         # Check for NaN values
         if self.test_data[required_columns].isnull().any().any():
@@ -229,6 +244,10 @@ class ComponentPerformanceTester:
 
         # Drop initial NaN rows
         self.test_data = self.test_data.dropna()
+        
+        # Validate data after transformations
+        if len(self.test_data) < MIN_DATA_AFTER_TRANSFORM:
+            raise ValueError(f"Insufficient data after transformations: {len(self.test_data)} rows (minimum {MIN_DATA_AFTER_TRANSFORM} required)")
 
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         """Calculate RSI indicator"""
@@ -329,12 +348,12 @@ class ComponentPerformanceTester:
             if is_trend and start_idx is None:
                 start_idx = i
             elif not is_trend and start_idx is not None:
-                if i - start_idx > 30:  # Minimum 30 periods
+                if i - start_idx > MIN_TREND_PERIOD_LENGTH:
                     periods.append((start_idx, i))
                 start_idx = None
 
         # Handle case where trend continues to end
-        if start_idx is not None and len(self.test_data) - start_idx > 30:
+        if start_idx is not None and len(self.test_data) - start_idx > MIN_TREND_PERIOD_LENGTH:
             periods.append((start_idx, len(self.test_data)))
 
         return periods
@@ -346,9 +365,9 @@ class ComponentPerformanceTester:
         vol_threshold = volatility.median()
 
         if vol_type == 'high':
-            vol_condition = volatility > vol_threshold * 1.5
+            vol_condition = volatility > vol_threshold * VOLATILITY_HIGH_MULTIPLIER
         else:  # low
-            vol_condition = volatility < vol_threshold * 0.7
+            vol_condition = volatility < vol_threshold * VOLATILITY_LOW_MULTIPLIER
 
         # Find continuous periods
         periods = []
@@ -361,12 +380,12 @@ class ComponentPerformanceTester:
             if is_vol and start_idx is None:
                 start_idx = i
             elif not is_vol and start_idx is not None:
-                if i - start_idx > 20:  # Minimum 20 periods
+                if i - start_idx > MIN_VOLATILITY_PERIOD_LENGTH:
                     periods.append((start_idx, i))
                 start_idx = None
 
         # Handle case where condition continues to end
-        if start_idx is not None and len(self.test_data) - start_idx > 20:
+        if start_idx is not None and len(self.test_data) - start_idx > MIN_VOLATILITY_PERIOD_LENGTH:
             periods.append((start_idx, len(self.test_data)))
 
         return periods
@@ -432,7 +451,7 @@ class ComponentPerformanceTester:
                         elif signal.direction == SignalDirection.SELL and future_return < 0:
                             accurate = True
                         elif signal.direction == SignalDirection.HOLD:
-                            accurate = abs(future_return) < 0.01  # Small movement is good for hold
+                            accurate = abs(future_return) < SMALL_RETURN_THRESHOLD  # Small movement is good for hold
                         else:
                             accurate = False
 
@@ -445,7 +464,15 @@ class ComponentPerformanceTester:
 
                         # Track regime-specific performance
                         if regime is not None:
-                            regime_key = f"{getattr(regime, 'trend', 'unknown')}_{getattr(regime, 'volatility', 'unknown')}"
+                            # Extract regime attributes safely
+                            if not hasattr(regime, 'trend') or not hasattr(regime, 'volatility'):
+                                logger.warning(f"Malformed regime object at index {i}: missing trend or volatility attributes")
+                                regime_key = 'unknown_unknown'
+                            else:
+                                trend_val = regime.trend.value if hasattr(regime.trend, 'value') else regime.trend
+                                vol_val = regime.volatility.value if hasattr(regime.volatility, 'value') else regime.volatility
+                                regime_key = f"{trend_val}_{vol_val}"
+                            
                             if regime_key not in regime_breakdown:
                                 regime_breakdown[regime_key] = {'signals': [], 'accuracy': 0.0}
                             regime_breakdown[regime_key]['signals'].append(accurate)
@@ -573,8 +600,8 @@ class ComponentPerformanceTester:
         if len(returns) == 0 or returns.std() == 0:
             return 0.0
 
-        excess_returns = returns - risk_free_rate / 252  # Daily risk-free rate
-        return excess_returns.mean() / returns.std() * np.sqrt(252)
+        excess_returns = returns - risk_free_rate / TRADING_DAYS_PER_YEAR  # Daily risk-free rate
+        return excess_returns.mean() / returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
 
     def _calculate_max_drawdown(self, returns: pd.Series) -> float:
         """Calculate maximum drawdown from returns"""
@@ -685,7 +712,7 @@ class ComponentPerformanceTester:
         position_sizes = [p['position_size'] for p in all_positions]
         avg_position_size = np.mean(position_sizes)
         std_pos_size = np.std(position_sizes)
-        position_size_consistency = 1.0 / max(1.0 + std_pos_size, 1e-10)  # Higher is more consistent
+        position_size_consistency = 1.0 / max(1.0 + abs(std_pos_size), 1e-10)  # Higher is more consistent
 
         # Stop loss analysis
         stop_losses = [abs(p['stop_loss'] - p['entry_price']) / p['entry_price'] for p in all_positions]

@@ -277,8 +277,10 @@ class PerformanceAttributionAnalyzer:
         signals = []
         position_sizes = []
         risk_decisions = []
+        error_count = 0
+        total_iterations = len(self.test_data) - 1
 
-        for i in range(len(self.test_data) - 1):
+        for i in range(total_iterations):
             try:
                 current_data = self.test_data.iloc[:i+1]
 
@@ -328,8 +330,15 @@ class PerformanceAttributionAnalyzer:
                 portfolio_values.append(balance)
 
             except Exception as e:
+                error_count += 1
                 logger.error(f"Error in strategy simulation at index {i}: {e}", exc_info=True)
                 continue
+
+        # Check error threshold
+        error_rate = error_count / total_iterations if total_iterations > 0 else 0
+        if error_rate > 0.1:  # Fail if >10% of iterations error
+            logger.error(f"Strategy simulation failed: {error_rate:.1%} error rate ({error_count}/{total_iterations} iterations)")
+            raise ValueError(f"Excessive errors in strategy simulation: {error_rate:.1%} error rate")
 
         # Calculate performance metrics
         total_return = (balance - initial_balance) / initial_balance
@@ -886,7 +895,7 @@ class PerformanceAttributionAnalyzer:
             'component_type': component_type,
             'replacement_component': replacement_component.name,
             'return_impact': return_impact,
-            'return_impact_pct': (return_impact / abs(original_results['total_return'])) * 100 if original_results['total_return'] != 0 else 0,
+            'return_impact_pct': (return_impact / abs(original_results['total_return']) * 100) if original_results['total_return'] != 0 else 0,
             'sharpe_impact': sharpe_impact,
             'drawdown_impact': drawdown_impact,
             'overall_improvement': return_impact > 0 and sharpe_impact > 0 and drawdown_impact < 0,
