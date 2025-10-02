@@ -615,7 +615,7 @@ class RegimeAdaptiveSizer(PositionSizer):
         
         return 0.15  # 15% default max
     
-    def update_regime_multipliers(self, new_multipliers: Dict[str, float]) -> None:
+    def update_regime_multipliers(self, new_multipliers: dict[str, float]) -> None:
         """
         Update regime multipliers (useful for optimization)
         
@@ -629,7 +629,7 @@ class RegimeAdaptiveSizer(PositionSizer):
         
         self.regime_multipliers.update(new_multipliers)
     
-    def get_regime_allocation(self, regime: Optional['RegimeContext']) -> Dict[str, float]:
+    def get_regime_allocation(self, regime: Optional['RegimeContext']) -> dict[str, float]:
         """
         Get detailed allocation breakdown for a regime
         
@@ -670,7 +670,7 @@ class RegimeAdaptiveSizer(PositionSizer):
             'max_fraction': self._get_max_fraction_for_regime(regime)
         }
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive sizer parameters"""
         params = super().get_parameters()
         params.update({

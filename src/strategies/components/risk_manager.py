@@ -226,7 +226,7 @@ class RiskManager(ABC):
         if balance <= 0:
             raise ValueError(f"balance must be positive, got {balance}")
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """
         Get risk manager parameters for logging and serialization
         
@@ -342,7 +342,7 @@ class FixedRiskManager(RiskManager):
         
         return max(0.2, multiplier)  # Minimum 20% of base size
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get fixed risk manager parameters"""
         params = super().get_parameters()
         params.update({
@@ -489,7 +489,7 @@ class VolatilityRiskManager(RiskManager):
         
         return max(0.2, min(2.0, multiplier))  # 20% to 200% of base size
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get volatility risk manager parameters"""
         params = super().get_parameters()
         params.update({
@@ -509,7 +509,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
     with different risk profiles for different market conditions.
     """
     
-    def __init__(self, base_risk: float = 0.02, regime_multipliers: Optional[Dict[str, float]] = None):
+    def __init__(self, base_risk: float = 0.02, regime_multipliers: Optional[dict[str, float]] = None):
         """
         Initialize regime-adaptive risk manager
         
@@ -667,7 +667,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
         
         return False
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive risk manager parameters"""
         params = super().get_parameters()
         params.update({
