@@ -71,8 +71,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('strategy_id'),
         sa.UniqueConstraint('name', 'version', name='uq_strategy_name_version'),
-        sa.ForeignKeyConstraint(['parent_id'], ['strategy_registry.strategy_id'], ),
     )
+    
+    # Add foreign key constraint after table creation
+    op.create_foreign_key('fk_strategy_registry_parent_id', 'strategy_registry', 'strategy_registry', 
+                          ['parent_id'], ['strategy_id'])
     
     # Create indexes for strategy_registry
     op.create_index('idx_strategy_name_version', 'strategy_registry', ['name', 'version'])
@@ -201,6 +204,9 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_strategy_versions_strategy_id'), table_name='strategy_versions')
     op.drop_index('idx_version_strategy_created', table_name='strategy_versions')
     op.drop_table('strategy_versions')
+    
+    # Drop foreign key constraint first
+    op.drop_constraint('fk_strategy_registry_parent_id', 'strategy_registry', type_='foreignkey')
     
     op.drop_index(op.f('ix_strategy_registry_component_hash'), table_name='strategy_registry')
     op.drop_index(op.f('ix_strategy_registry_config_hash'), table_name='strategy_registry')

@@ -13,6 +13,7 @@ from sqlalchemy import (
     Enum,  # Added Float and JSON
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -810,7 +811,7 @@ class StrategyRegistry(Base):
     version = Column(String(20), nullable=False)
     
     # Lineage tracking
-    parent_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), index=True)
+    parent_id = Column(String(100), index=True)
     lineage_path = Column(JSONType, default=lambda: [])  # Path from root ancestor
     branch_name = Column(String(100))
     merge_source = Column(String(100))
@@ -839,7 +840,8 @@ class StrategyRegistry(Base):
     component_hash = Column(String(64), nullable=False, index=True)
     
     # Relationships
-    parent = relationship("StrategyRegistry", remote_side=[strategy_id], backref="children")
+    # Note: parent relationship removed due to foreign key constraint issues
+    # The foreign key constraint is handled in the migration file
     versions = relationship("StrategyVersion", backref="strategy", cascade="all, delete-orphan")
     performance_records = relationship("StrategyPerformance", backref="strategy", cascade="all, delete-orphan")
     
@@ -848,6 +850,7 @@ class StrategyRegistry(Base):
         Index("idx_strategy_status_created", "status", "created_at"),
         Index("idx_strategy_parent_created", "parent_id", "created_at"),
         UniqueConstraint("name", "version", name="uq_strategy_name_version"),
+        UniqueConstraint("strategy_id", name="uq_strategy_id"),
     )
     
     created_at_db = Column(DateTime, default=datetime.utcnow)
