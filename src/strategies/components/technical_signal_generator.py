@@ -568,7 +568,8 @@ class RSISignalGenerator(SignalGenerator):
         """Generate signal based on RSI levels"""
         self.validate_inputs(df, index)
         
-<<<<<<< HEAD
+=======
+>>>>>>> b753b8d1d09596dacffa24594eb13b653524fe56
         # Calculate RSI if not present
         if 'rsi' not in df.columns:
             # Check if we have enough data for RSI calculation
@@ -636,7 +637,8 @@ class RSISignalGenerator(SignalGenerator):
         """Get confidence based on RSI extremity"""
         self.validate_inputs(df, index)
         
-<<<<<<< HEAD
+=======
+>>>>>>> b753b8d1d09596dacffa24594eb13b653524fe56
         if 'rsi' not in df.columns:
             if len(df) < self.period:
                 return 0.0

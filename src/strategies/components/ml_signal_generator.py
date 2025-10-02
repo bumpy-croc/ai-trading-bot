@@ -435,11 +435,7 @@ class MLSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
     
-<<<<<<< HEAD
     def get_parameters(self) -> dict[str, Any]:
-=======
-    def get_parameters(self) -> dict[str, Any]:
->>>>>>> origin/develop
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
         params.update({
@@ -837,11 +833,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
     
-<<<<<<< HEAD
     def get_parameters(self) -> dict[str, Any]:
-=======
-    def get_parameters(self) -> dict[str, Any]:
->>>>>>> origin/develop
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
         params.update({

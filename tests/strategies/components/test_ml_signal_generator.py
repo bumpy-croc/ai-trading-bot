@@ -65,14 +65,17 @@ class TestMLSignalGenerator:
             sequence_length=120,
             use_prediction_engine=True  # This should prevent ONNX session initialization
 >>>>>>> origin/develop
+=======
+>>>>>>> b753b8d1d09596dacffa24594eb13b653524fe56
         )
         
         assert generator.name == "test_ml_generator"
         assert generator.model_path == "test_model.onnx"
         assert generator.sequence_length == 120
-<<<<<<< HEAD
         assert generator.ort_session == mock_session
 =======
+=======
+>>>>>>> b753b8d1d09596dacffa24594eb13b653524fe56
         # ONNX session should be None initially for dual-backend support
         assert generator.ort_session is None
         assert generator.input_name is None
@@ -190,8 +193,9 @@ class TestMLSignalGenerator:
             assert isinstance(threshold, float)
     
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
-<<<<<<< HEAD
 =======
+=======
+>>>>>>> b753b8d1d09596dacffa24594eb13b653524fe56
     def test_confidence_scaling_for_short_threshold(self, mock_ort):
         """Test that confidence scaling works correctly for short thresholds"""
         mock_session = Mock()
@@ -274,6 +278,8 @@ class TestMLSignalGenerator:
     
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
 >>>>>>> origin/develop
+=======
+>>>>>>> b753b8d1d09596dacffa24594eb13b653524fe56
     def test_confidence_calculation(self, mock_ort):
         """Test confidence calculation based on predicted return"""
         mock_session = Mock()
@@ -567,8 +573,9 @@ class TestMLBasicSignalGenerator:
         assert 'engine_enabled' in signal.metadata
         assert 'engine_model_name' in signal.metadata
         assert 'engine_batch' in signal.metadata
-<<<<<<< HEAD
 =======
+=======
+>>>>>>> b753b8d1d09596dacffa24594eb13b653524fe56
     
     @patch('src.strategies.components.ml_signal_generator.PredictionEngine')
     def test_mlbasic_prediction_engine_no_denormalization(self, mock_engine_class):
