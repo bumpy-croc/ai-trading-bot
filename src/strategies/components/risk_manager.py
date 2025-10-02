@@ -534,13 +534,12 @@ class RegimeAdaptiveRiskManager(RiskManager):
             'sideways_high_vol': 0.4, # Very reduced in volatile sideways
             'unknown': 0.6          # Conservative when regime unclear
         }
-        
+
         # Merge custom multipliers with defaults
         if regime_multipliers:
             self.regime_multipliers = {**default_multipliers, **regime_multipliers}
         else:
             self.regime_multipliers = default_multipliers
-        
         # Validate multipliers
         for regime, multiplier in self.regime_multipliers.items():
             if not 0.1 <= multiplier <= 3.0:
