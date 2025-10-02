@@ -334,11 +334,12 @@ class PerformanceAttributionAnalyzer:
                 logger.error(f"Error in strategy simulation at index {i}: {e}", exc_info=True)
                 continue
 
-        # Check error threshold
+        # Check error threshold (fail if >2% errors)
         error_rate = error_count / total_iterations if total_iterations > 0 else 0
-        if error_rate > 0.1:  # Fail if >10% of iterations error
+        ERROR_RATE_THRESHOLD = 0.02  # 2% maximum acceptable error rate
+        if error_rate > ERROR_RATE_THRESHOLD:
             logger.error(f"Strategy simulation failed: {error_rate:.1%} error rate ({error_count}/{total_iterations} iterations)")
-            raise ValueError(f"Excessive errors in strategy simulation: {error_rate:.1%} error rate")
+            raise ValueError(f"Excessive errors in strategy simulation: {error_rate:.1%} error rate (threshold: {ERROR_RATE_THRESHOLD:.1%})")
 
         # Calculate performance metrics
         total_return = (balance - initial_balance) / initial_balance

@@ -98,8 +98,9 @@ class TestDatasetGenerator:
                 
                 # Remove oldest files until under limit
                 for cache_file in cache_files:
+                    file_size_mb = cache_file.stat().st_size / (1024 * 1024)
                     cache_file.unlink()
-                    total_size_mb -= cache_file.stat().st_size / (1024 * 1024)
+                    total_size_mb -= file_size_mb
                     if total_size_mb <= self.max_cache_size_mb * 0.8:  # 80% threshold
                         break
                 
