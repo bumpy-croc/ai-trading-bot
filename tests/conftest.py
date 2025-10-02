@@ -40,6 +40,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         random.seed(REGIME_TEST_SEED)
         np.random.seed(REGIME_TEST_SEED)
 
+
 # Import account sync dependencies
 try:
     from src.data_providers.exchange_interface import (
@@ -70,9 +71,7 @@ def maybe_setup_database(pytestconfig):
     """
     # Decide DB based on whether integration tests are selected this session
     try:
-        has_integration = bool(
-            pytestconfig.stash.get(("integration", "selected"), False)
-        )
+        has_integration = bool(pytestconfig.stash.get(("integration", "selected"), False))
     except Exception:
         has_integration = bool(getattr(pytestconfig, "_has_integration_selected", False))
 
@@ -86,32 +85,31 @@ def maybe_setup_database(pytestconfig):
     is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
     started_container = None
-    if not os.getenv("DATABASE_URL"):
-        # In GitHub Actions, the PostgreSQL service should be available
-        if is_github_actions:
-            # Set the DATABASE_URL for GitHub Actions PostgreSQL service
-            os.environ["DATABASE_URL"] = (
-                "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
-            )
-            print("[Database Setup] Using GitHub Actions PostgreSQL service")
-        else:
-            # Local development - try to start a container, fallback to SQLite if not available
-            try:
-                from testcontainers.postgres import PostgresContainer  # type: ignore
 
-                print(
-                    f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}"
-                )
-                container = PostgresContainer("postgres:15-alpine")
-                container.start()
-                os.environ["DATABASE_URL"] = container.get_connection_url()
-                started_container = container
-                print("[Database Setup] ✅ Postgres container ready")
-            except Exception as exc:  # pragma: no cover
-                print(f"[Database Setup] ⚠️  Could not start Postgres container: {exc}")
-                print("[Database Setup] Falling back to SQLite for local testing")
-                os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-                print("[Database Setup] ✅ Using SQLite in-memory database")
+    # In GitHub Actions, always use the configured PostgreSQL service
+    if is_github_actions:
+        os.environ["DATABASE_URL"] = (
+            "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
+        )
+        print("[Database Setup] Using GitHub Actions PostgreSQL service")
+    elif not os.getenv("DATABASE_URL"):
+        # Local development - try to start a container, fallback to SQLite if not available
+        try:
+            from testcontainers.postgres import PostgresContainer  # type: ignore
+
+            print(
+                f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}"
+            )
+            container = PostgresContainer("postgres:15-alpine")
+            container.start()
+            os.environ["DATABASE_URL"] = container.get_connection_url()
+            started_container = container
+            print("[Database Setup] ✅ Postgres container ready")
+        except Exception as exc:  # pragma: no cover
+            print(f"[Database Setup] ⚠️  Could not start Postgres container: {exc}")
+            print("[Database Setup] Falling back to SQLite for local testing")
+            os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+            print("[Database Setup] ✅ Using SQLite in-memory database")
     else:
         # DATABASE_URL is already set, use it
         print("[Database Setup] Using existing DATABASE_URL")
