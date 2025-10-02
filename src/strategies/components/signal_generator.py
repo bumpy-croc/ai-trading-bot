@@ -34,7 +34,7 @@ class Signal:
     direction: SignalDirection
     strength: float
     confidence: float
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     
     def __post_init__(self):
         """Validate signal parameters after initialization"""
@@ -133,7 +133,7 @@ class SignalGenerator(ABC):
         if missing_columns:
             raise ValueError(f"DataFrame missing required columns: {missing_columns}")
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """
         Get signal generator parameters for logging and serialization
         
@@ -250,7 +250,7 @@ class RandomSignalGenerator(SignalGenerator):
         self.validate_inputs(df, index)
         return np.random.uniform(0.3, 0.9)
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get random signal generator parameters"""
         params = super().get_parameters()
         params.update({

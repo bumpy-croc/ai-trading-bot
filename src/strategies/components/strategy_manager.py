@@ -9,7 +9,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 from uuid import uuid4
 
 import pandas as pd
@@ -39,19 +39,19 @@ class StrategyVersion:
     name: str
     description: str
     created_at: datetime
-    components: Dict[str, Dict[str, Any]]
-    parameters: Dict[str, Any]
+    components: dict[str, dict[str, Any]]
+    parameters: dict[str, Any]
     is_active: bool = False
-    performance_metrics: Optional[Dict[str, float]] = None
+    performance_metrics: Optional[dict[str, float]] = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'StrategyVersion':
+    def from_dict(cls, data: dict[str, Any]) -> 'StrategyVersion':
         """Create from dictionary"""
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         return cls(**data)
@@ -75,7 +75,7 @@ class StrategyExecution:
     signal: Signal
     regime: Optional[RegimeContext]
     position_size: float
-    risk_metrics: Dict[str, float]
+    risk_metrics: dict[str, float]
     execution_time_ms: float
     version_id: str
 
@@ -111,18 +111,18 @@ class StrategyManager:
         self.regime_detector = regime_detector or EnhancedRegimeDetector()
         
         # Version management
-        self.versions: Dict[str, StrategyVersion] = {}
+        self.versions: dict[str, StrategyVersion] = {}
         self.current_version_id: Optional[str] = None
-        self.execution_history: List[StrategyExecution] = []
+        self.execution_history: list[StrategyExecution] = []
         
         # Performance tracking
-        self.performance_metrics: Dict[str, float] = {}
+        self.performance_metrics: dict[str, float] = {}
         
         # Create initial version
         self._create_initial_version()
     
     def execute_strategy(self, df: pd.DataFrame, index: int, balance: float,
-                        current_positions: Optional[List[Position]] = None) -> Tuple[Signal, float, Dict[str, Any]]:
+                        current_positions: Optional[list[Position]] = None) -> tuple[Signal, float, dict[str, Any]]:
         """
         Execute complete strategy pipeline
         
@@ -209,7 +209,7 @@ class StrategyManager:
                       signal_generator: Optional[SignalGenerator] = None,
                       risk_manager: Optional[RiskManager] = None,
                       position_sizer: Optional[PositionSizer] = None,
-                      parameters: Optional[Dict[str, Any]] = None) -> str:
+                      parameters: Optional[dict[str, Any]] = None) -> str:
         """
         Create a new strategy version
         
@@ -320,7 +320,7 @@ class StrategyManager:
         return success
     
     def get_version_performance(self, version_id: str, 
-                              lookback_executions: int = 100) -> Dict[str, float]:
+                              lookback_executions: int = 100) -> dict[str, float]:
         """
         Get performance metrics for a specific version
         
@@ -374,8 +374,8 @@ class StrategyManager:
         
         return metrics
     
-    def compare_versions(self, version_ids: List[str], 
-                        metric: str = 'avg_signal_confidence') -> Dict[str, float]:
+    def compare_versions(self, version_ids: list[str], 
+                        metric: str = 'avg_signal_confidence') -> dict[str, float]:
         """
         Compare performance metrics across versions
         
@@ -395,7 +395,7 @@ class StrategyManager:
         
         return comparison
     
-    def get_execution_statistics(self, lookback_hours: int = 24) -> Dict[str, Any]:
+    def get_execution_statistics(self, lookback_hours: int = 24) -> dict[str, Any]:
         """
         Get execution statistics for recent period
         
@@ -497,18 +497,18 @@ class StrategyManager:
             return self.versions.get(self.current_version_id)
         return None
     
-    def list_versions(self) -> List[StrategyVersion]:
+    def list_versions(self) -> list[StrategyVersion]:
         """Get list of all versions"""
         return list(self.versions.values())
     
-    def export_version(self, version_id: str) -> Optional[Dict[str, Any]]:
+    def export_version(self, version_id: str) -> Optional[dict[str, Any]]:
         """Export version configuration for backup/sharing"""
         if version_id not in self.versions:
             return None
         
         return self.versions[version_id].to_dict()
     
-    def import_version(self, version_data: Dict[str, Any]) -> Optional[str]:
+    def import_version(self, version_data: dict[str, Any]) -> Optional[str]:
         """Import version configuration from backup"""
         try:
             version = StrategyVersion.from_dict(version_data)
