@@ -5,21 +5,22 @@ This module tests the StrategyManager implementation including strategy promotio
 rollback capabilities, validation gates, and comprehensive management features.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
 
-from src.strategies.components.strategy_manager import (
-    StrategyManager, PromotionStatus, ValidationGate, RollbackTrigger,
-    ValidationResult, PromotionRequest, RollbackRecord
-)
-from src.strategies.components.strategy_registry import StrategyStatus
+import pytest
+
 from src.strategies.components.performance_tracker import TradeResult
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import HoldSignalGenerator
-from src.strategies.components.risk_manager import FixedRiskManager
-from src.strategies.components.regime_context import EnhancedRegimeDetector
 from src.strategies.components.position_sizer import FixedFractionSizer
+from src.strategies.components.risk_manager import FixedRiskManager
+from src.strategies.components.signal_generator import HoldSignalGenerator
+from src.strategies.components.strategy import Strategy
+from src.strategies.components.strategy_manager import (
+    PromotionRequest,
+    PromotionStatus,
+    StrategyManager,
+    ValidationGate,
+    ValidationResult,
+)
 
 
 class TestValidationResult:
@@ -36,7 +37,7 @@ class TestValidationResult:
         )
         
         assert result.gate == ValidationGate.PERFORMANCE_THRESHOLD
-        assert result.passed == True
+        assert result.passed
         assert result.value == 0.08
         assert result.threshold == 0.05
         assert "exceeds threshold" in result.message
@@ -53,7 +54,7 @@ class TestValidationResult:
         
         # Test basic attributes
         assert result.gate == ValidationGate.SHARPE_RATIO
-        assert result.passed == False
+        assert not result.passed
         assert result.value == 0.8
         assert result.threshold == 1.0
         assert result.message == "Sharpe ratio below threshold"
@@ -180,7 +181,7 @@ class TestStrategyManager:
     def test_execute_strategy(self, manager, test_strategy, sample_ohlcv_data):
         """Test strategy execution"""
         # Create a version first
-        version_id = manager.create_version(
+        manager.create_version(
             name="Test Version",
             description="Test strategy version",
             signal_generator=test_strategy.signal_generator,
@@ -331,8 +332,8 @@ class TestStrategyManager:
     def test_get_active_strategies(self, manager, test_strategy):
         """Test getting active strategies"""
         # Create multiple versions
-        version1 = manager.create_version("v1", "First version")
-        version2 = manager.create_version("v2", "Second version")
+        manager.create_version("v1", "First version")
+        manager.create_version("v2", "Second version")
         
         # List all versions
         versions = manager.list_versions()
