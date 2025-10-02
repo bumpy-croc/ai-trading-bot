@@ -5,18 +5,24 @@ This module provides factory methods and utilities for creating LegacyStrategyAd
 instances from existing strategies and component configurations.
 """
 
+import copy
 import logging
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Optional
 
 from src.strategies.base import BaseStrategy
-from src.strategies.components.signal_generator import (
-    SignalGenerator, HoldSignalGenerator, RandomSignalGenerator
-)
-from src.strategies.components.risk_manager import RiskManager, FixedRiskManager
 from src.strategies.components.position_sizer import (
-    PositionSizer, FixedFractionSizer, ConfidenceWeightedSizer
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+    PositionSizer,
 )
 from src.strategies.components.regime_context import EnhancedRegimeDetector
+from src.strategies.components.risk_manager import FixedRiskManager, RiskManager
+from src.strategies.components.signal_generator import (
+    HoldSignalGenerator,
+    RandomSignalGenerator,
+    SignalGenerator,
+)
+
 from .legacy_adapter import LegacyStrategyAdapter
 
 
@@ -33,16 +39,16 @@ class AdapterFactory:
         self.logger = logging.getLogger(self.__class__.__name__)
         
         # Registry of available components
-        self._signal_generators: Dict[str, Type[SignalGenerator]] = {
+        self._signal_generators: dict[str, type[SignalGenerator]] = {
             'hold': HoldSignalGenerator,
             'random': RandomSignalGenerator,
         }
         
-        self._risk_managers: Dict[str, Type[RiskManager]] = {
+        self._risk_managers: dict[str, type[RiskManager]] = {
             'fixed': FixedRiskManager,
         }
         
-        self._position_sizers: Dict[str, Type[PositionSizer]] = {
+        self._position_sizers: dict[str, type[PositionSizer]] = {
             'fixed_fraction': FixedFractionSizer,
             'confidence_weighted': ConfidenceWeightedSizer,
         }
@@ -117,7 +123,7 @@ class AdapterFactory:
         self.logger.info(f"Created adapter from template '{template_name}': {adapter}")
         return adapter
     
-    def create_from_config(self, config: Dict[str, Any], name: Optional[str] = None) -> LegacyStrategyAdapter:
+    def create_from_config(self, config: dict[str, Any], name: Optional[str] = None) -> LegacyStrategyAdapter:
         """
         Create adapter from configuration dictionary
         
@@ -200,7 +206,7 @@ class AdapterFactory:
         return adapter
     
     def convert_legacy_strategy(self, legacy_strategy: BaseStrategy, 
-                              conversion_config: Optional[Dict[str, Any]] = None) -> LegacyStrategyAdapter:
+                              conversion_config: Optional[dict[str, Any]] = None) -> LegacyStrategyAdapter:
         """
         Convert existing legacy strategy to component-based adapter
         
@@ -223,8 +229,8 @@ class AdapterFactory:
         
         config = conversion_config or {}
         
-        # Use moderate template as default for legacy conversion
-        template_config = self._templates['moderate'].copy()
+        # Use deep copy to prevent mutation of global template defaults
+        template_config = copy.deepcopy(self._templates['moderate'])
         
         # Override with any provided conversion config
         if 'signal_generator' in config:
@@ -243,22 +249,22 @@ class AdapterFactory:
         self.logger.info(f"Converted legacy strategy '{legacy_strategy.name}' to adapter")
         return adapter
     
-    def register_signal_generator(self, name: str, generator_class: Type[SignalGenerator]) -> None:
+    def register_signal_generator(self, name: str, generator_class: type[SignalGenerator]) -> None:
         """Register a new signal generator type"""
         self._signal_generators[name] = generator_class
         self.logger.info(f"Registered signal generator: {name}")
     
-    def register_risk_manager(self, name: str, manager_class: Type[RiskManager]) -> None:
+    def register_risk_manager(self, name: str, manager_class: type[RiskManager]) -> None:
         """Register a new risk manager type"""
         self._risk_managers[name] = manager_class
         self.logger.info(f"Registered risk manager: {name}")
     
-    def register_position_sizer(self, name: str, sizer_class: Type[PositionSizer]) -> None:
+    def register_position_sizer(self, name: str, sizer_class: type[PositionSizer]) -> None:
         """Register a new position sizer type"""
         self._position_sizers[name] = sizer_class
         self.logger.info(f"Registered position sizer: {name}")
     
-    def get_available_components(self) -> Dict[str, List[str]]:
+    def get_available_components(self) -> dict[str, list[str]]:
         """Get list of available component types"""
         return {
             'signal_generators': list(self._signal_generators.keys()),
@@ -267,7 +273,7 @@ class AdapterFactory:
             'templates': list(self._templates.keys())
         }
     
-    def _create_signal_generator(self, generator_type: str, params: Dict[str, Any]) -> SignalGenerator:
+    def _create_signal_generator(self, generator_type: str, params: dict[str, Any]) -> SignalGenerator:
         """Create signal generator instance"""
         if generator_type not in self._signal_generators:
             available = list(self._signal_generators.keys())
@@ -279,9 +285,9 @@ class AdapterFactory:
             return generator_class(**params)
         except Exception as e:
             self.logger.error(f"Error creating signal generator '{generator_type}': {e}")
-            raise ValueError(f"Failed to create signal generator '{generator_type}': {e}")
+            raise ValueError(f"Failed to create signal generator '{generator_type}': {e}") from e
     
-    def _create_risk_manager(self, manager_type: str, params: Dict[str, Any]) -> RiskManager:
+    def _create_risk_manager(self, manager_type: str, params: dict[str, Any]) -> RiskManager:
         """Create risk manager instance"""
         if manager_type not in self._risk_managers:
             available = list(self._risk_managers.keys())
@@ -293,9 +299,9 @@ class AdapterFactory:
             return manager_class(**params)
         except Exception as e:
             self.logger.error(f"Error creating risk manager '{manager_type}': {e}")
-            raise ValueError(f"Failed to create risk manager '{manager_type}': {e}")
+            raise ValueError(f"Failed to create risk manager '{manager_type}': {e}") from e
     
-    def _create_position_sizer(self, sizer_type: str, params: Dict[str, Any]) -> PositionSizer:
+    def _create_position_sizer(self, sizer_type: str, params: dict[str, Any]) -> PositionSizer:
         """Create position sizer instance"""
         if sizer_type not in self._position_sizers:
             available = list(self._position_sizers.keys())
@@ -307,9 +313,9 @@ class AdapterFactory:
             return sizer_class(**params)
         except Exception as e:
             self.logger.error(f"Error creating position sizer '{sizer_type}': {e}")
-            raise ValueError(f"Failed to create position sizer '{sizer_type}': {e}")
+            raise ValueError(f"Failed to create position sizer '{sizer_type}': {e}") from e
     
-    def _validate_config(self, config: Dict[str, Any]) -> None:
+    def _validate_config(self, config: dict[str, Any]) -> None:
         """Validate configuration dictionary"""
         required_keys = ['signal_generator', 'risk_manager', 'position_sizer']
         
@@ -327,7 +333,7 @@ class AdapterValidationUtils:
     """
     
     @staticmethod
-    def validate_adapter_compatibility(adapter: LegacyStrategyAdapter) -> Dict[str, bool]:
+    def validate_adapter_compatibility(adapter: LegacyStrategyAdapter) -> dict[str, bool]:
         """
         Validate that adapter properly implements BaseStrategy interface
         
@@ -360,7 +366,7 @@ class AdapterValidationUtils:
         return results
     
     @staticmethod
-    def test_adapter_methods(adapter: LegacyStrategyAdapter, test_data: Optional[Any] = None) -> Dict[str, bool]:
+    def test_adapter_methods(adapter: LegacyStrategyAdapter, test_data: Optional[Any] = None) -> dict[str, bool]:
         """
         Test adapter methods with sample data
         
@@ -371,8 +377,8 @@ class AdapterValidationUtils:
         Returns:
             Dictionary with test results
         """
-        import pandas as pd
         import numpy as np
+        import pandas as pd
         
         # Create sample test data if not provided
         if test_data is None:
@@ -456,7 +462,7 @@ class MigrationHelper:
     """
     
     @staticmethod
-    def analyze_legacy_strategy(strategy: BaseStrategy) -> Dict[str, Any]:
+    def analyze_legacy_strategy(strategy: BaseStrategy) -> dict[str, Any]:
         """
         Analyze legacy strategy to suggest component configuration
         
@@ -517,7 +523,7 @@ class MigrationHelper:
         return analysis
     
     @staticmethod
-    def create_migration_plan(strategies: List[BaseStrategy]) -> Dict[str, Any]:
+    def create_migration_plan(strategies: list[BaseStrategy]) -> dict[str, Any]:
         """
         Create migration plan for multiple legacy strategies
         

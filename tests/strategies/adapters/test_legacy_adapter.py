@@ -364,7 +364,126 @@ class TestLegacyStrategyAdapter:
         
         repr_str = repr(adapter)
         assert "LegacyStrategyAdapter" in repr_str
-        assert "test_adapter" in repr_str
+    
+    def test_sell_signal_entry_conditions(self, adapter, sample_data):
+        """Test check_entry_conditions with SELL signal for short positions"""
+        sample_data['regime_label'] = 'trend_down:high_vol'
+        
+        # Mock signal generator to return SELL signal
+        adapter.signal_generator.generate_signal.return_value = Signal(
+            direction=SignalDirection.SELL,
+            strength=0.8,
+            confidence=0.7,
+            metadata={'test': 'short_entry'}
+        )
+        
+        result = adapter.check_entry_conditions(sample_data, 50)
+        
+        assert result is True, "SELL signal should trigger entry"
+        assert adapter.get_current_position_side() == 'short', "Position side should be 'short' after SELL signal"
+    
+    def test_position_side_tracking_and_pnl_calculation(self, adapter, sample_data):
+        """Test position side tracking and correct PnL calculation for long and short positions"""
+        sample_data['regime_label'] = 'trend_up:low_vol'
+        
+        # Test long position
+        buy_signal = Signal(
+            direction=SignalDirection.BUY,
+            strength=0.8,
+            confidence=0.7,
+            metadata={'test': 'long_entry'}
+        )
+        adapter.signal_generator.generate_signal.return_value = buy_signal
+        adapter.check_entry_conditions(sample_data, 50)
+        
+        assert adapter.get_current_position_side() == 'long'
+        
+        # Mock risk manager and test exit conditions with long position
+        adapter.risk_manager.should_exit.return_value = False
+        entry_price = 100.0
+        current_price = 105.0  # Profitable long
+        
+        # Update sample data with known current price
+        sample_data_copy = sample_data.copy()
+        sample_data_copy.loc[sample_data_copy.index[51], 'close'] = current_price
+        
+        adapter.check_exit_conditions(sample_data_copy, 51, entry_price)
+        
+        # Verify Position object was created with correct side and PnL
+        position_call = adapter.risk_manager.should_exit.call_args[0][0]
+        assert position_call.side == 'long'
+        assert position_call.unrealized_pnl == (current_price - entry_price)  # Long PnL: current - entry
+        
+        # Reset and test short position
+        adapter.reset_position_side()
+        sell_signal = Signal(
+            direction=SignalDirection.SELL,
+            strength=0.8,
+            confidence=0.7,
+            metadata={'test': 'short_entry'}
+        )
+        adapter.signal_generator.generate_signal.return_value = sell_signal
+        adapter.check_entry_conditions(sample_data, 50)
+        
+        assert adapter.get_current_position_side() == 'short'
+        
+        # Test exit conditions with short position
+        current_price = 95.0  # Profitable short
+        sample_data_copy.loc[sample_data_copy.index[51], 'close'] = current_price
+        
+        adapter.check_exit_conditions(sample_data_copy, 51, entry_price)
+        
+        # Verify Position object was created with correct side and PnL
+        position_call = adapter.risk_manager.should_exit.call_args[0][0]
+        assert position_call.side == 'short'
+        assert position_call.unrealized_pnl == (entry_price - current_price)  # Short PnL: entry - current
+    
+    def test_position_side_reset_on_exit(self, adapter, sample_data):
+        """Test that position side is reset when exiting a position"""
+        sample_data['regime_label'] = 'trend_up:low_vol'
+        
+        # Set up a long position
+        buy_signal = Signal(
+            direction=SignalDirection.BUY,
+            strength=0.8,
+            confidence=0.7,
+            metadata={'test': 'long_entry'}
+        )
+        adapter.signal_generator.generate_signal.return_value = buy_signal
+        adapter.check_entry_conditions(sample_data, 50)
+        
+        assert adapter.get_current_position_side() == 'long'
+        
+        # Mock exit condition
+        adapter.risk_manager.should_exit.return_value = True
+        sample_data_copy = sample_data.copy()
+        sample_data_copy.loc[sample_data_copy.index[51], 'close'] = 105.0
+        
+        exit_result = adapter.check_exit_conditions(sample_data_copy, 51, 100.0)
+        
+        assert exit_result is True
+        assert adapter.get_current_position_side() is None, "Position side should be reset after exit"
+    
+    def test_manual_position_side_reset(self, adapter, sample_data):
+        """Test manual position side reset functionality"""
+        sample_data['regime_label'] = 'trend_up:low_vol'
+        
+        # Set up a position
+        buy_signal = Signal(
+            direction=SignalDirection.BUY,
+            strength=0.8,
+            confidence=0.7,
+            metadata={'test': 'long_entry'}
+        )
+        adapter.signal_generator.generate_signal.return_value = buy_signal
+        adapter.check_entry_conditions(sample_data, 50)
+        
+        assert adapter.get_current_position_side() == 'long'
+        
+        # Manual reset
+        adapter.reset_position_side()
+        assert adapter.get_current_position_side() is None
+>>>>>>> origin/develop
 
 
 class TestLegacyAdapterWithRealComponents:
