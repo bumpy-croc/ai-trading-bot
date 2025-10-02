@@ -5,6 +5,7 @@ This module provides comprehensive performance testing for individual strategy c
 allowing isolated testing of SignalGenerator, RiskManager, and PositionSizer components.
 """
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +17,8 @@ import pandas as pd
 from ..position_sizer import PositionSizer
 from ..risk_manager import MarketData, Position, RiskManager
 from ..signal_generator import Signal, SignalDirection, SignalGenerator
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -232,8 +235,11 @@ class ComponentPerformanceTester:
         delta = prices.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
+        
+        # Avoid division by zero: when loss is 0, RSI is 100
+        rs = np.where(loss == 0, np.inf, gain / loss)
+        rsi = np.where(np.isinf(rs), 100, 100 - (100 / (1 + rs)))
+        return pd.Series(rsi, index=prices.index)
     
     def _calculate_atr(self, data: pd.DataFrame, period: int = 14) -> pd.Series:
         """Calculate Average True Range"""
@@ -446,7 +452,7 @@ class ComponentPerformanceTester:
                 
                 except Exception as e:
                     error_count += 1
-                    print(f"Error generating signal at index {i}: {e}")
+                    logger.error(f"Error generating signal at index {i}: {e}", exc_info=True)
                     continue
             
             all_signals.extend(scenario_signals)
@@ -662,7 +668,7 @@ class ComponentPerformanceTester:
                 
                 except Exception as e:
                     error_count += 1
-                    print(f"Error testing risk manager at index {i}: {e}")
+                    logger.error(f"Error testing risk manager at index {i}: {e}", exc_info=True)
                     continue
         
         # Calculate metrics
@@ -810,7 +816,7 @@ class ComponentPerformanceTester:
                 
                 except Exception as e:
                     error_count += 1
-                    print(f"Error testing position sizer at index {i}: {e}")
+                    logger.error(f"Error testing position sizer at index {i}: {e}", exc_info=True)
                     continue
         
         # Calculate metrics

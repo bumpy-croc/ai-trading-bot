@@ -5,39 +5,23 @@ This module provides comprehensive testing capabilities for strategies and compo
 in specific market regimes, with regime filtering and regime-specific performance metrics.
 """
 
+import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
 
-from ..signal_generator import SignalGenerator
-from ..risk_manager import RiskManager
+from src.regime.detector import TrendLabel, VolLabel
+
 from ..position_sizer import PositionSizer
+from ..regime_context import RegimeContext
+from ..risk_manager import RiskManager
+from ..signal_generator import SignalGenerator
 from ..strategy import Strategy
 
-
-@dataclass
-class RegimeContext:
-    """
-    Market regime context for testing
-    
-    Attributes:
-        trend: Trend direction ('trend_up', 'trend_down', 'range')
-        volatility: Volatility level ('low_vol', 'high_vol')
-        confidence: Confidence in regime detection (0.0 to 1.0)
-        duration: Duration of current regime in periods
-        strength: Strength of regime characteristics (0.0 to 1.0)
-        metadata: Additional regime information
-    """
-    trend: str
-    volatility: str
-    confidence: float
-    duration: int
-    strength: float
-    metadata: Dict[str, Any]
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -135,6 +119,24 @@ class RegimeTester:
         
         # Create regime-filtered datasets
         self.regime_datasets = self._create_regime_datasets()
+    
+    def _parse_trend_label(self, trend_str: str) -> TrendLabel:
+        """Parse trend string to TrendLabel enum"""
+        trend_map = {
+            'trend_up': TrendLabel.TREND_UP,
+            'trend_down': TrendLabel.TREND_DOWN,
+            'range': TrendLabel.RANGE
+        }
+        return trend_map.get(trend_str, TrendLabel.RANGE)
+    
+    def _parse_vol_label(self, vol_str: str) -> VolLabel:
+        """Parse volatility string to VolLabel enum"""
+        vol_map = {
+            'low_vol': VolLabel.LOW,
+            'high_vol': VolLabel.HIGH,
+            'medium_vol': VolLabel.LOW  # Default to LOW for medium
+        }
+        return vol_map.get(vol_str, VolLabel.LOW)
     
     def _validate_test_data(self) -> None:
         """Validate that test data has required columns and format"""
@@ -306,10 +308,23 @@ class RegimeTester:
             try:
                 current_data = regime_data.iloc[:i+1]
                 
-                # Create regime context
+                # Create regime context with safe parsing and enum conversion
+                regime_parts = regime_type.split('_')
+                if len(regime_parts) >= 3:
+                    trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
+                    volatility_str = regime_parts[2]
+                else:
+                    # Fallback for unexpected format
+                    trend_str = 'range'
+                    volatility_str = 'low_vol'
+                
+                # Convert to enums
+                trend = self._parse_trend_label(trend_str)
+                volatility = self._parse_vol_label(volatility_str)
+                
                 regime_context = RegimeContext(
-                    trend=regime_type.split('_')[0] + '_' + regime_type.split('_')[1],
-                    volatility=regime_type.split('_')[2],
+                    trend=trend,
+                    volatility=volatility,
                     confidence=regime_data.iloc[i]['regime_confidence'],
                     duration=int(regime_data.iloc[i]['regime_duration']),
                     strength=regime_data.iloc[i]['regime_strength'],
@@ -333,7 +348,7 @@ class RegimeTester:
                 
             except Exception as e:
                 error_count += 1
-                print(f"Error testing strategy in regime at index {i}: {e}")
+                logger.error(f"Error testing strategy in regime at index {i}: {e}", exc_info=True)
                 continue
         
         # Calculate performance metrics
@@ -430,7 +445,7 @@ class RegimeTester:
             }
         
         except Exception as e:
-            print(f"Error executing trade: {e}")
+            logger.error(f"Error executing trade: {e}", exc_info=True)
             return None
     
     def _calculate_sharpe_ratio(self, returns: pd.Series, risk_free_rate: float = 0.0) -> float:
@@ -557,7 +572,7 @@ class RegimeTester:
                 result = self.test_strategy_in_regime(strategy, regime_type, initial_balance)
                 regime_results[regime_type] = result
             except Exception as e:
-                print(f"Error testing regime {regime_type}: {e}")
+                logger.error(f"Error testing regime {regime_type}: {e}", exc_info=True)
                 continue
         
         if not regime_results:
@@ -639,10 +654,23 @@ class RegimeTester:
         
         for i in range(len(regime_data) - 1):
             try:
-                # Create regime context
+                # Create regime context with safe parsing and enum conversion
+                regime_parts = regime_type.split('_')
+                if len(regime_parts) >= 3:
+                    trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
+                    volatility_str = regime_parts[2]
+                else:
+                    # Fallback for unexpected format
+                    trend_str = 'range'
+                    volatility_str = 'low_vol'
+                
+                # Convert to enums
+                trend = self._parse_trend_label(trend_str)
+                volatility = self._parse_vol_label(volatility_str)
+                
                 regime_context = RegimeContext(
-                    trend=regime_type.split('_')[0] + '_' + regime_type.split('_')[1],
-                    volatility=regime_type.split('_')[2],
+                    trend=trend,
+                    volatility=volatility,
                     confidence=regime_data.iloc[i]['regime_confidence'],
                     duration=int(regime_data.iloc[i]['regime_duration']),
                     strength=regime_data.iloc[i]['regime_strength'],
@@ -666,7 +694,7 @@ class RegimeTester:
                 accuracies.append(accurate)
                 
             except Exception as e:
-                print(f"Error testing signal generator in regime: {e}")
+                logger.error(f"Error testing signal generator in regime: {e}", exc_info=True)
                 continue
         
         if not signals:

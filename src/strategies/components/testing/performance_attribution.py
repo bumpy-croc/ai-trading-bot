@@ -5,19 +5,20 @@ This module provides comprehensive performance attribution analysis for strategy
 allowing detailed analysis of how each component contributes to overall strategy performance.
 """
 
+import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
-from ..signal_generator import SignalGenerator, Signal, SignalDirection
-from ..risk_manager import RiskManager
 from ..position_sizer import PositionSizer
+from ..risk_manager import RiskManager
+from ..signal_generator import SignalDirection, SignalGenerator
 from ..strategy import Strategy
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -314,7 +315,7 @@ class PerformanceAttributionAnalyzer:
                 portfolio_values.append(balance)
                 
             except Exception as e:
-                print(f"Error in strategy simulation at index {i}: {e}")
+                logger.error(f"Error in strategy simulation at index {i}: {e}", exc_info=True)
                 continue
         
         # Calculate performance metrics
@@ -366,7 +367,7 @@ class PerformanceAttributionAnalyzer:
             }
         
         except Exception as e:
-            print(f"Error executing attribution trade: {e}")
+            logger.error(f"Error executing attribution trade: {e}", exc_info=True)
             return None
     
     def _analyze_signal_generator_attribution(self, signal_generator: SignalGenerator,
