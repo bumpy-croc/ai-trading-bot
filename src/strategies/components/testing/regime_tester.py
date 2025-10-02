@@ -696,12 +696,14 @@ class RegimeTester:
                 signal = generator.generate_signal(regime_data, i, regime_context)
                 future_return = regime_data.iloc[i + 1]['close'] / regime_data.iloc[i]['close'] - 1
                 
-                # Calculate accuracy
-                if signal.direction.value == 'buy' and future_return > 0:
+                # Calculate accuracy (handle both enum and string signal directions)
+                direction_value = signal.direction.value if hasattr(signal.direction, 'value') else signal.direction
+                
+                if direction_value == 'buy' and future_return > 0:
                     accurate = True
-                elif signal.direction.value == 'sell' and future_return < 0:
+                elif direction_value == 'sell' and future_return < 0:
                     accurate = True
-                elif signal.direction.value == 'hold' and abs(future_return) < 0.01:
+                elif direction_value == 'hold' and abs(future_return) < 0.01:
                     accurate = True
                 else:
                     accurate = False

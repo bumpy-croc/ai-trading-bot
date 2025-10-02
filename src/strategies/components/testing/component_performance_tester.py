@@ -489,7 +489,8 @@ class ComponentPerformanceTester:
         
         # Performance metrics (simulate trading based on signals)
         portfolio_returns = self._simulate_signal_trading(all_signals)
-        total_return = (1 + portfolio_returns).prod() - 1
+        # Use log returns for numerical stability to avoid overflow/underflow
+        total_return = np.exp(np.log1p(portfolio_returns).sum()) - 1
         sharpe_ratio = self._calculate_sharpe_ratio(portfolio_returns)
         max_drawdown = self._calculate_max_drawdown(portfolio_returns)
         

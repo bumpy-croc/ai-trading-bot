@@ -299,8 +299,8 @@ class PerformanceAttributionAnalyzer:
                             'signal': signal,
                             'timestamp': self.test_data.index[i]
                         })
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Failed to generate signal at index {i}: {e}")
                 
                 # Execute trade if decision made (TradingDecision is a dataclass)
                 if decision and hasattr(decision, 'signal'):

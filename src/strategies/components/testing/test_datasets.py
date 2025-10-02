@@ -891,17 +891,18 @@ class SyntheticDataGenerator:
         bubble_start = len(data) // 4
         bubble_peak = 3 * len(data) // 4
         
-        # Accelerating growth phase
-        for i in range(bubble_start, bubble_peak):
-            acceleration = (i - bubble_start) / (bubble_peak - bubble_start)
-            extra_return = 0.002 * acceleration ** 2  # Accelerating returns
-            data.iloc[i, data.columns.get_loc('close')] *= (1 + extra_return)
+        # Vectorized accelerating growth phase
+        growth_indices = np.arange(bubble_start, bubble_peak)
+        acceleration = (growth_indices - bubble_start) / (bubble_peak - bubble_start)
+        extra_returns = 0.002 * acceleration ** 2
+        data.loc[data.index[bubble_start:bubble_peak], 'close'] *= (1 + extra_returns)
         
-        # Bubble burst
+        # Vectorized bubble burst
         burst_magnitude = 0.4  # 40% crash from peak
-        for i in range(bubble_peak, min(bubble_peak + 20, len(data))):
-            crash_factor = 1 - (burst_magnitude * (i - bubble_peak) / 20)
-            data.iloc[i, data.columns.get_loc('close')] *= crash_factor
+        burst_end = min(bubble_peak + 20, len(data))
+        burst_indices = np.arange(bubble_peak, burst_end)
+        crash_factors = 1 - (burst_magnitude * (burst_indices - bubble_peak) / 20)
+        data.loc[data.index[bubble_peak:burst_end], 'close'] *= crash_factors
         
         return data
     
@@ -918,15 +919,16 @@ class SyntheticDataGenerator:
             # Reduce price movement during consolidation
             consolidation_center = data.iloc[start_idx]['close']
             
-            for i in range(start_idx, min(end_idx, len(data))):
-                # Pull prices toward consolidation center
-                current_price = data.iloc[i]['close']
-                pull_factor = 0.1  # 10% pull toward center
-                
-                new_price = current_price * (1 - pull_factor) + consolidation_center * pull_factor
-                data.iloc[i, data.columns.get_loc('close')] = new_price
-                
-                # Reduce volume during consolidation
-                data.iloc[i, data.columns.get_loc('volume')] *= 0.7
+            # Vectorized consolidation price adjustment
+            actual_end = min(end_idx, len(data))
+            consolidation_slice = slice(start_idx, actual_end)
+            pull_factor = 0.1  # 10% pull toward center
+            
+            current_prices = data.iloc[consolidation_slice]['close'].values
+            new_prices = current_prices * (1 - pull_factor) + consolidation_center * pull_factor
+            data.loc[data.index[consolidation_slice], 'close'] = new_prices
+            
+            # Reduce volume during consolidation
+            data.loc[data.index[consolidation_slice], 'volume'] *= 0.7
         
         return data
