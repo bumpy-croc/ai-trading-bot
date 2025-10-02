@@ -5,20 +5,23 @@ This module tests the StrategyRegistry implementation including version manageme
 strategy metadata tracking, serialization/deserialization, and validation.
 """
 
-import json
-import pytest
 from datetime import datetime
 from unittest.mock import Mock, patch
 
-from src.strategies.components.strategy_registry import (
-    StrategyRegistry, StrategyMetadata, StrategyVersion, ComponentConfig,
-    StrategyStatus, StrategyValidationError
-)
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import HoldSignalGenerator, RandomSignalGenerator
-from src.strategies.components.risk_manager import FixedRiskManager
+import pytest
+
 from src.strategies.components.position_sizer import FixedFractionSizer
-from src.strategies.components.regime_context import EnhancedRegimeDetector
+from src.strategies.components.risk_manager import FixedRiskManager
+from src.strategies.components.signal_generator import HoldSignalGenerator, RandomSignalGenerator
+from src.strategies.components.strategy import Strategy
+from src.strategies.components.strategy_registry import (
+    ComponentConfig,
+    StrategyMetadata,
+    StrategyRegistry,
+    StrategyStatus,
+    StrategyValidationError,
+    StrategyVersion,
+)
 
 
 class TestComponentConfig:
@@ -140,7 +143,7 @@ class TestStrategyMetadata:
         # Test serialization
         metadata_dict = metadata.to_dict()
         assert metadata_dict['id'] == "test_strategy_123"
-        assert metadata_dict['status'] == "experimental"
+        assert metadata_dict['status'] == "EXPERIMENTAL"
         assert metadata_dict['created_at'] == created_at.isoformat()
         
         # Test deserialization
@@ -205,7 +208,7 @@ class TestStrategyRegistry:
         versions = registry._versions[strategy_id]
         assert len(versions) == 1
         assert versions[0].version == "1.0.0"
-        assert versions[0].is_major == True
+        assert versions[0].is_major
     
     def test_register_strategy_with_parent(self, registry, test_strategy):
         """Test strategy registration with parent lineage"""
@@ -276,7 +279,7 @@ class TestStrategyRegistry:
         assert len(versions) == 2
         assert versions[1].version == "1.0.1"
         assert versions[1].changes == changes
-        assert versions[1].is_major == False
+        assert not versions[1].is_major
     
     def test_update_strategy_major_version(self, registry, test_strategy):
         """Test major version updates"""
@@ -444,12 +447,12 @@ class TestStrategyRegistry:
         
         # Test valid strategy
         validation_result = registry.validate_strategy_integrity(strategy_id)
-        assert validation_result['valid'] == True
+        assert validation_result['valid']
         assert len(validation_result['errors']) == 0
         
         # Test non-existent strategy
         invalid_result = registry.validate_strategy_integrity("non_existent")
-        assert invalid_result['valid'] == False
+        assert not invalid_result['valid']
         assert 'Strategy not found' in invalid_result['errors']
     
     def test_strategy_validation_errors(self, registry):
@@ -598,7 +601,7 @@ class TestStrategyVersion:
         assert version.version == "1.0.1"
         assert version.strategy_id == "test_strategy_123"
         assert len(version.changes) == 2
-        assert version.is_major == False
+        assert not version.is_major
         assert version.performance_delta["sharpe_ratio"] == 0.1
     
     def test_strategy_version_serialization(self):
@@ -617,7 +620,7 @@ class TestStrategyVersion:
         version_dict = version.to_dict()
         assert version_dict['version'] == "2.0.0"
         assert version_dict['created_at'] == created_at.isoformat()
-        assert version_dict['is_major'] == True
+        assert version_dict['is_major']
         
         # Test deserialization
         restored_version = StrategyVersion.from_dict(version_dict)
