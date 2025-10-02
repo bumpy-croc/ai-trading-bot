@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-import pandas as pd
-
 
 @dataclass
 class Position:
@@ -527,7 +525,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
         self.base_risk = base_risk
         
         # Default regime multipliers
-        self.regime_multipliers = regime_multipliers or {
+        default_multipliers = {
             'bull_low_vol': 1.5,    # Aggressive in favorable conditions
             'bull_high_vol': 1.0,   # Normal in volatile bull market
             'bear_low_vol': 0.5,    # Conservative in bear market
@@ -536,6 +534,12 @@ class RegimeAdaptiveRiskManager(RiskManager):
             'sideways_high_vol': 0.4, # Very reduced in volatile sideways
             'unknown': 0.6          # Conservative when regime unclear
         }
+        
+        # Merge custom multipliers with defaults
+        if regime_multipliers:
+            self.regime_multipliers = {**default_multipliers, **regime_multipliers}
+        else:
+            self.regime_multipliers = default_multipliers
         
         # Validate multipliers
         for regime, multiplier in self.regime_multipliers.items():

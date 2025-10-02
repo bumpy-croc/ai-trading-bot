@@ -2,14 +2,17 @@
 Unit tests for RiskManager components
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime
 
+import pytest
+
 from src.strategies.components.risk_manager import (
-    RiskManager, Position, MarketData, FixedRiskManager,
-    VolatilityRiskManager, RegimeAdaptiveRiskManager
+    FixedRiskManager,
+    MarketData,
+    Position,
+    RegimeAdaptiveRiskManager,
+    RiskManager,
+    VolatilityRiskManager,
 )
 from src.strategies.components.signal_generator import Signal, SignalDirection
 
@@ -741,6 +744,32 @@ class TestRegimeAdaptiveRiskManager:
         with pytest.raises(ValueError, match="regime multiplier.*must be between 0.1 and 3.0"):
             RegimeAdaptiveRiskManager(regime_multipliers={'test': 5.0})
     
+    def test_partial_custom_multipliers_no_keyerror(self):
+        """Test that partial custom multipliers don't cause KeyError"""
+        # This test ensures that when only some multipliers are provided,
+        # the missing ones are filled in with defaults (addresses PR review comment)
+        manager = RegimeAdaptiveRiskManager(
+            base_risk=0.02,
+            regime_multipliers={'bull_low_vol': 2.0}  # Only one multiplier
+        )
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        balance = 10000.0
+        
+        # Test with no regime (should use 'unknown' multiplier)
+        position_size = manager.calculate_position_size(signal, balance, regime=None)
+        assert position_size > 0  # Should not raise KeyError
+        
+        # Test with various regime types to ensure all defaults are preserved
+        regime_bear = self.create_test_regime('trend_down', 'high_vol', 0.8, 10)
+        position_size_bear = manager.calculate_position_size(signal, balance, regime=regime_bear)
+        assert position_size_bear > 0  # Should use default for bear_high_vol
+        
+        # Verify custom multiplier is used
+        regime_bull = self.create_test_regime('trend_up', 'low_vol', 0.8, 10)
+        position_size_bull = manager.calculate_position_size(signal, balance, regime=regime_bull)
+        # Bull position should be larger due to custom 2.0 multiplier vs default 1.5
+        assert position_size_bull > position_size_bear
+    
     def test_calculate_position_size_bull_low_vol(self):
         """Test position size calculation in bull low volatility regime"""
         manager = RegimeAdaptiveRiskManager(base_risk=0.02)
@@ -863,4 +892,7 @@ class TestRegimeAdaptiveRiskManager:
         assert params['name'] == "regime_adaptive_risk_manager"
         assert params['type'] == "RegimeAdaptiveRiskManager"
         assert params['base_risk'] == 0.03
-        assert params['regime_multipliers'] == custom_multipliers
+        # Custom multipliers are merged with defaults
+        assert params['regime_multipliers']['bull_low_vol'] == 2.0
+        assert 'unknown' in params['regime_multipliers']  # Default preserved
+        assert params['regime_multipliers']['unknown'] == 0.6  # Default value

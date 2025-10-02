@@ -6,7 +6,6 @@ for calculating position sizes based on various factors in the component-based
 strategy architecture.
 """
 
-import math
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
@@ -488,7 +487,7 @@ class RegimeAdaptiveSizer(PositionSizer):
         self.volatility_adjustment = volatility_adjustment
         
         # Default regime multipliers
-        self.regime_multipliers = regime_multipliers or {
+        default_multipliers = {
             'bull_low_vol': 1.8,     # Aggressive in favorable conditions
             'bull_high_vol': 1.2,    # Moderate in volatile bull market
             'bear_low_vol': 0.4,     # Conservative in bear market
@@ -497,6 +496,12 @@ class RegimeAdaptiveSizer(PositionSizer):
             'range_high_vol': 0.3,   # Very reduced in volatile sideways
             'unknown': 0.5           # Conservative when regime unclear
         }
+        
+        # Merge custom multipliers with defaults
+        if regime_multipliers:
+            self.regime_multipliers = {**default_multipliers, **regime_multipliers}
+        else:
+            self.regime_multipliers = default_multipliers
         
         # Validate multipliers
         for regime, multiplier in self.regime_multipliers.items():

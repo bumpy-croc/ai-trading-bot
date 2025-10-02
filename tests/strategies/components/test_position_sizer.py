@@ -3,12 +3,16 @@ Unit tests for PositionSizer components
 """
 
 import pytest
-import numpy as np
 
 from src.strategies.components.position_sizer import (
-    PositionSizer, FixedFractionSizer, ConfidenceWeightedSizer, KellySizer,
-    RegimeAdaptiveSizer, calculate_position_from_risk, calculate_risk_from_position, 
-    validate_position_size
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+    KellySizer,
+    PositionSizer,
+    RegimeAdaptiveSizer,
+    calculate_position_from_risk,
+    calculate_risk_from_position,
+    validate_position_size,
 )
 from src.strategies.components.signal_generator import Signal, SignalDirection
 
@@ -571,6 +575,32 @@ class TestRegimeAdaptiveSizer:
         with pytest.raises(ValueError, match="regime multiplier.*must be between 0.1 and 3.0"):
             RegimeAdaptiveSizer(regime_multipliers={'test': 5.0})
     
+    def test_partial_custom_multipliers_no_keyerror(self):
+        """Test that partial custom multipliers don't cause KeyError"""
+        # This test ensures that when only some multipliers are provided,
+        # the missing ones are filled in with defaults (addresses PR review comment)
+        sizer = RegimeAdaptiveSizer(
+            base_fraction=0.03,
+            regime_multipliers={'bull_low_vol': 2.0}  # Only one multiplier
+        )
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        balance = 10000.0
+        
+        # Test with no regime (should use 'unknown' multiplier)
+        position_size = sizer.calculate_size(signal, balance, 0.0, regime=None)
+        assert position_size > 0  # Should not raise KeyError
+        
+        # Test with various regime types to ensure all defaults are preserved
+        regime_bear = self.create_test_regime('trend_down', 'high_vol', 0.8, 10, 0.8)
+        position_size_bear = sizer.calculate_size(signal, balance, 0.0, regime=regime_bear)
+        assert position_size_bear > 0  # Should use default for bear_high_vol
+        
+        # Verify custom multiplier is used
+        regime_bull = self.create_test_regime('trend_up', 'low_vol', 0.8, 10, 0.8)
+        position_size_bull = sizer.calculate_size(signal, balance, 0.0, regime=regime_bull)
+        # Bull position should be larger due to custom 2.0 multiplier vs default 1.8
+        assert position_size_bull > position_size_bear
+    
     def test_calculate_size_bull_low_vol(self):
         """Test position size calculation in bull low volatility regime"""
         sizer = RegimeAdaptiveSizer(base_fraction=0.03)
@@ -725,7 +755,10 @@ class TestRegimeAdaptiveSizer:
         assert params['type'] == "RegimeAdaptiveSizer"
         assert params['base_fraction'] == 0.05
         assert params['volatility_adjustment'] is False
+        # Custom multipliers are merged with defaults
         assert params['regime_multipliers']['bull_low_vol'] == 2.0
+        assert 'unknown' in params['regime_multipliers']  # Default preserved
+        assert params['regime_multipliers']['unknown'] == 0.5  # Default value
 
 
 class TestUtilityFunctions:
