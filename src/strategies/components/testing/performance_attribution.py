@@ -914,6 +914,33 @@ class PerformanceAttributionAnalyzer:
     def _create_modified_strategy(self, original_strategy: Strategy, component_type: str,
                                 replacement_component: Union[SignalGenerator, RiskManager, PositionSizer]) -> Strategy:
         """Create a modified strategy with replaced component"""
-        # This would need to be implemented based on the actual Strategy class structure
-        # For now, return the original strategy (placeholder)
-        return original_strategy
+        # Create a new strategy with the replacement component
+        if component_type == 'signal_generator':
+            return Strategy(
+                name=f"{original_strategy.name}_modified_signal",
+                signal_generator=replacement_component,
+                risk_manager=original_strategy.risk_manager,
+                position_sizer=original_strategy.position_sizer,
+                regime_detector=original_strategy.regime_detector,
+                enable_logging=False  # Disable logging for test strategy
+            )
+        elif component_type == 'risk_manager':
+            return Strategy(
+                name=f"{original_strategy.name}_modified_risk",
+                signal_generator=original_strategy.signal_generator,
+                risk_manager=replacement_component,
+                position_sizer=original_strategy.position_sizer,
+                regime_detector=original_strategy.regime_detector,
+                enable_logging=False
+            )
+        elif component_type == 'position_sizer':
+            return Strategy(
+                name=f"{original_strategy.name}_modified_sizer",
+                signal_generator=original_strategy.signal_generator,
+                risk_manager=original_strategy.risk_manager,
+                position_sizer=replacement_component,
+                regime_detector=original_strategy.regime_detector,
+                enable_logging=False
+            )
+        else:
+            raise ValueError(f"Unknown component type: {component_type}")
