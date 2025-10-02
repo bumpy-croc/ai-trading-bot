@@ -197,29 +197,26 @@ jobs:
           echo "Branch: $HEAD_REF"
           echo "Mode: $REVIEW_MODE"
           echo "Verbose: ${{ steps.parse-command.outputs.verbose }}"
-          
-          # Call Cursor API
-          # Create JSON payload
-          cat > /tmp/cursor_payload.json << 'EOF'
-          {
-            "prompt": {
-              "text": "FULL_PROMPT_PLACEHOLDER"
-            },
-            "source": {
-              "repository": "REPO_PLACEHOLDER",
-              "ref": "REF_PLACEHOLDER"
-            }
-          }
-          EOF
 
-          # Replace placeholders
-          sed -i "s|FULL_PROMPT_PLACEHOLDER|$(echo "$FULL_PROMPT" | jq -Rs .)|" /tmp/cursor_payload.json
-          sed -i "s|REPO_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}|" /tmp/cursor_payload.json
-          sed -i "s|REF_PLACEHOLDER|$HEAD_REF|" /tmp/cursor_payload.json
+          # Ensure Cursor API key is present
+          if [[ -z "$CURSOR_API_KEY" ]]; then
+            echo "Missing CURSOR_API_KEY secret; cannot contact Cursor API"
+            exit 1
+          fi
+          
+          # Build JSON payload safely with jq (avoid double-encoding)
+          jq -n \
+            --arg prompt "$FULL_PROMPT" \
+            --arg repo "${{ github.server_url }}/${{ github.repository }}" \
+            --arg ref "$HEAD_REF" \
+            '{prompt:{text:$prompt}, source:{repository:$repo, ref:$ref}}' > /tmp/cursor_payload.json
+
+          echo "Payload prepared:"
+          cat /tmp/cursor_payload.json
 
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.cursor.com/v0/agents" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${{ secrets.CURSOR_API_KEY }}" \
+            -H "Authorization: Bearer $CURSOR_API_KEY" \
             -d @/tmp/cursor_payload.json)
           
           # Extract HTTP status code and response body
@@ -240,22 +237,41 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      
+      - name: React with eyes on triggering comment
+        if: steps.launch-agent.outcome == 'success' && steps.pr-info.outputs.is_pr == 'true'
+        run: |
+          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -f content='eyes'
+          elif [[ "${{ github.event_name }}" == "pull_request_review_comment" ]]; then
+            gh api repos/${{ github.repository }}/pulls/comments/${{ github.event.comment.id }}/reactions \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -f content='eyes'
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Post confirmation comment
         if: steps.launch-agent.outcome == 'success' && steps.pr-info.outputs.is_pr == 'true'
         run: |
           PR_NUMBER="${{ steps.pr-info.outputs.pr_number }}"
           REVIEW_MODE="${{ steps.parse-command.outputs.review_mode }}"
-          
-          # Post a quick confirmation comment
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Post a quick confirmation comment with link to this run
           gh pr comment "$PR_NUMBER" --body "🤖 **CodeBot Review Launched**
 
           Review mode: \`$REVIEW_MODE\`
-          Status: Agent is analyzing the code...
+          Status: Agent launched and analyzing the code... [View workflow run]($RUN_URL)
 
           The review will be posted as a comment shortly."
-                  env:
-                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
                 
       - name: Summary
         if: always()
