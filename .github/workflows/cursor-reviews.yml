@@ -18,6 +18,7 @@ on:
           - security
           - performance
           - review
+          - autofix
       verbose:
         description: 'Verbose output'
         required: false
@@ -87,7 +88,13 @@ jobs:
             VERBOSE="${{ github.event.inputs.verbose }}"
           else
             # Parse from comment body
-            COMMENT_BODY="${{ github.event.comment.body || github.event.review.body }}"
+            if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+              COMMENT_BODY="${{ github.event.comment.body }}"
+            elif [[ "${{ github.event_name }}" == "pull_request_review_comment" ]]; then
+              COMMENT_BODY="${{ github.event.comment.body }}"
+            else
+              COMMENT_BODY=""
+            fi
             
             # Detect review mode
             if [[ "$COMMENT_BODY" =~ codebot[[:space:]]+hunt ]]; then
@@ -100,6 +107,8 @@ jobs:
               REVIEW_MODE="performance"
             elif [[ "$COMMENT_BODY" =~ codebot[[:space:]]+review ]]; then
               REVIEW_MODE="review"
+            elif [[ "$COMMENT_BODY" =~ codebot[[:space:]]+autofix ]]; then
+              REVIEW_MODE="autofix"
             fi
             
             # Check for verbose flag
@@ -140,6 +149,10 @@ jobs:
               PROMPT="You are performing a comprehensive code review for a GitHub Pull Request. Provide a thorough, balanced review covering all aspects: - Correctness and logic - Security considerations - Performance implications - Code quality and maintainability - Testing and documentation - Best practices and patterns - Edge cases and error handling Be constructive and thorough. Balance critique with recognition of good practices. Post your review as a PR review (not a comment) using the GitHub API or MCP server. Structure your feedback with clear sections: 1. Summary 2. Critical Issues (🔴) 3. Important Considerations (🟡) 4. Suggestions (🔵) 5. Positive Observations (✅) Use markdown formatting with code blocks and clear explanations."
               ;;
             
+            autofix)
+              PROMPT="You are performing an automated code review and fix session for a GitHub Pull Request. Your task is to: 1. ANALYZE the code for critical bugs, security vulnerabilities, and performance issues 2. AUTOMATICALLY FIX all critical issues that can be safely resolved 3. POST a comprehensive review comment that includes: - Summary of issues found (🔴 Critical, 🟡 Warning, 🔵 Info) - Detailed list of what was automatically fixed with code examples - List of issues that could not be automatically fixed (with explanations why) - Recommendations for manual fixes needed - Link to this agent for follow-up work Focus on critical bugs, security vulnerabilities, and performance issues. Be conservative with fixes - only make changes you're confident about. For each fix, show the before/after code. Structure your final comment with: 1. Executive Summary 2. Issues Found and Fixed (🔧) 3. Issues Requiring Manual Attention (⚠️) 4. Recommendations (💡) 5. Follow-up Agent Link (🔗) Post your comprehensive review as a comment using the GitHub API or MCP server."
+              ;;
+            
             *)
               echo "Unknown review mode: $REVIEW_MODE"
               exit 1
@@ -171,7 +184,7 @@ jobs:
           PROMPT_TEXT=$(cat /tmp/review_prompt.txt)
           
           # Build full prompt with PR context
-          FULL_PROMPT="Pull Request Review Request PR #$PR_NUMBER: $PR_URL Review Mode: $REVIEW_MODE $PROMPT_TEXT --- IMPORTANT: After completing your review, post your findings as a comment on this pull request using the GitHub MCP server or GitHub API. Make sure to format your review with clear markdown, severity indicators, and actionable feedback. At the end of your review comment, include a section with a link to launch the same background agent to fix all the issues you identified. This will allow the reviewer to easily trigger the same agent to implement fixes. After posting your review comment, remove the eyes reaction from the original triggering comment (the comment that started this review process) using the GitHub MCP server or GitHub API."
+          FULL_PROMPT="Pull Request Review Request PR #$PR_NUMBER: $PR_URL Review Mode: $REVIEW_MODE $PROMPT_TEXT --- IMPORTANT: After completing your review, post your findings as a comment on this pull request using the GitHub MCP server or GitHub API. Make sure to format your review with clear markdown, severity indicators, and actionable feedback. At the end of your review comment, include a section with a link to launch the same background agent for follow-up work. This will allow the reviewer to easily trigger the same agent to implement fixes or perform additional analysis. After posting your review comment, remove the eyes reaction from the original triggering comment (the comment that started this review process) using the GitHub MCP server or GitHub API."
           
           # Get PR head ref
           if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
