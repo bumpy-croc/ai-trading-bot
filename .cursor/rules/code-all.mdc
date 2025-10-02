@@ -10,6 +10,7 @@ alwaysApply: true
 
 - Use descriptive variable names
 - Use early returns and guard clauses
+- Avoid magic numbers. Define constants at module level
 - Avoid overly large files.
 - Avoid obvious within-file duplication
 - Avoid deep nesting levels

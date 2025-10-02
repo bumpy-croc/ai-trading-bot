@@ -12,6 +12,7 @@ alwaysApply: false
 - Adhere to the Google Python Style Guide.
 - Use Google Style Docstrings.
 - Use `tqdm` whenever I ask to add a progress bar.
+- Use vectorized operations where possible or `itertubles()` over `iterrows()` when loopiung through data frames.
 
 ## Linting
 - Run linting checks with `ruff` on the files changed before finishing any job`
