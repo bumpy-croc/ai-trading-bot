@@ -228,7 +228,7 @@ class TestTradeLogging(TestDatabaseManager):
 
             trade_id = mock_postgresql_db.log_trade(
                 symbol="BTCUSDT",
-                side="LONG",
+                side="long",
                 entry_price=45000.0,
                 exit_price=46000.0,
                 size=0.1,
@@ -251,18 +251,18 @@ class TestTradeLogging(TestDatabaseManager):
         with patch("database.manager.Position") as mock_position_class:
             mock_position_class.return_value = mock_position_obj
 
-            position_id = mock_postgresql_db.log_position(
-                symbol="BTCUSDT",
-                side="LONG",
-                entry_price=45000.0,
-                size=0.1,
-                strategy_name="TestStrategy",
-                entry_order_id="test_order_123",
-            )
+        position_id = mock_postgresql_db.log_position(
+            symbol="BTCUSDT",
+            side="long",
+            entry_price=45000.0,
+            size=0.1,
+            strategy_name="TestStrategy",
+            entry_order_id="test_order_123",
+        )
 
-            assert position_id == 789
-            mock_postgresql_db._mock_session.add.assert_called()
-            mock_postgresql_db._mock_session.commit.assert_called()
+        assert position_id == 789
+        mock_postgresql_db._mock_session.add.assert_called()
+        mock_postgresql_db._mock_session.commit.assert_called()
 
     def test_update_position(self, mock_postgresql_db):
         """Test updating a position"""
@@ -352,7 +352,7 @@ class TestDataRetrieval(TestDatabaseManager):
         mock_position = Mock()
         mock_position.id = 1
         mock_position.symbol = "BTCUSDT"
-        mock_position.side.value = "LONG"
+        mock_position.side.value = "long"
         mock_position.entry_price = 45000.0
         mock_position.current_price = 46000.0
         mock_position.size = 0.1
@@ -363,9 +363,37 @@ class TestDataRetrieval(TestDatabaseManager):
         mock_position.entry_time = datetime.utcnow()
         mock_position.strategy_name = "TestStrategy"
 
-        mock_query = Mock()
-        mock_query.filter.return_value.all.return_value = [mock_position]
-        mock_postgresql_db._mock_session.query.return_value = mock_query
+        # * Mock order for the position
+        mock_order = Mock()
+        mock_order.id = 1
+        mock_order.order_type.value = "ENTRY"
+        mock_order.status.value = "FILLED"
+        mock_order.exchange_order_id = "exchange_123"
+        mock_order.internal_order_id = "internal_123"
+        mock_order.side.value = "long"
+        mock_order.quantity = 0.1
+        mock_order.price = 45000.0
+        mock_order.filled_quantity = 0.1
+        mock_order.filled_price = 45000.0
+        mock_order.commission = 0.01
+        mock_order.created_at = datetime.utcnow()
+        mock_order.filled_at = datetime.utcnow()
+        mock_order.cancelled_at = None
+        mock_order.target_level = None
+        mock_order.size_fraction = None
+
+        # * Setup mock query chain for positions and orders
+        def mock_query_side_effect(model):
+            mock_q = Mock()
+            if model.__name__ == "Position":
+                mock_q.filter.return_value.all.return_value = [mock_position]
+                return mock_q
+            elif model.__name__ == "Order":
+                mock_q.filter.return_value.order_by.return_value.all.return_value = [mock_order]
+                return mock_q
+            return mock_q
+
+        mock_postgresql_db._mock_session.query.side_effect = mock_query_side_effect
 
         positions = mock_postgresql_db.get_active_positions()
 
@@ -378,7 +406,7 @@ class TestDataRetrieval(TestDatabaseManager):
         mock_trade = Mock()
         mock_trade.id = 1
         mock_trade.symbol = "BTCUSDT"
-        mock_trade.side.value = "LONG"
+        mock_trade.side.value = "long"
         mock_trade.entry_price = 45000.0
         mock_trade.exit_price = 46000.0
         mock_trade.size = 0.1

@@ -49,8 +49,8 @@ Base = declarative_base()
 class PositionSide(enum.Enum):
     """Position side enumeration"""
 
-    LONG = "LONG"
-    SHORT = "SHORT"
+    LONG = "long"
+    SHORT = "short"
 
 
 class OrderStatus(enum.Enum):
