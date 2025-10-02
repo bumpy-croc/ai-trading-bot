@@ -171,7 +171,7 @@ jobs:
           PROMPT_TEXT=$(cat /tmp/review_prompt.txt)
           
           # Build full prompt with PR context
-          FULL_PROMPT="Pull Request Review Request PR #$PR_NUMBER: $PR_URL Review Mode: $REVIEW_MODE $PROMPT_TEXT --- IMPORTANT: After completing your review, post your findings as a comment on this pull request using the GitHub MCP server or GitHub API. Make sure to format your review with clear markdown, severity indicators, and actionable feedback. At the end of your review comment, include a section with a link to launch the same background agent to fix all the issues you identified. The link should use the format: [🤖 Fix All Issues](https://api.cursor.com/v0/agents?prompt=fix%20all%20issues%20identified%20in%20this%20review%20for%20PR%20#$PR_NUMBER&repo=${{ github.server_url }}/${{ github.repository }}&ref=$HEAD_REF) - this will allow the reviewer to easily trigger the same agent to implement fixes. After posting your review comment, remove the eyes reaction from the original triggering comment (the comment that started this review process) using the GitHub MCP server or GitHub API."
+          FULL_PROMPT="Pull Request Review Request PR #$PR_NUMBER: $PR_URL Review Mode: $REVIEW_MODE $PROMPT_TEXT --- IMPORTANT: After completing your review, post your findings as a comment on this pull request using the GitHub MCP server or GitHub API. Make sure to format your review with clear markdown, severity indicators, and actionable feedback. At the end of your review comment, include a section with a link to launch the same background agent to fix all the issues you identified. This will allow the reviewer to easily trigger the same agent to implement fixes. After posting your review comment, remove the eyes reaction from the original triggering comment (the comment that started this review process) using the GitHub MCP server or GitHub API."
           
           # Get PR head ref
           if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
@@ -227,7 +227,14 @@ jobs:
           echo "Response: $BODY"
           
           if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then
-            echo "✅ Cursor Background Agent launched successfully"
+            # Extract agent ID from response
+            AGENT_ID=$(echo "$BODY" | jq -r '.id // empty' 2>/dev/null || echo "")
+            if [[ -n "$AGENT_ID" ]]; then
+              echo "agent_id=$AGENT_ID" >> $GITHUB_OUTPUT
+              echo "✅ Cursor Background Agent launched successfully (ID: $AGENT_ID)"
+            else
+              echo "✅ Cursor Background Agent launched successfully"
+            fi
             echo "The agent will analyze the PR and post a review comment shortly."
           else
             echo "❌ Failed to launch Cursor Background Agent"
@@ -261,15 +268,48 @@ jobs:
         run: |
           PR_NUMBER="${{ steps.pr-info.outputs.pr_number }}"
           REVIEW_MODE="${{ steps.parse-command.outputs.review_mode }}"
+          AGENT_ID="${{ steps.launch-agent.outputs.agent_id }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          # Post a quick confirmation comment with link to this run
-          gh pr comment "$PR_NUMBER" --body "🤖 **CodeBot Review Launched**
+          # Build comment body with appropriate link
+          if [[ -n "$AGENT_ID" ]]; then
+            CURSOR_LINK="https://cursor.com/agents?selectedBcId=$AGENT_ID"
+            COMMENT_BODY="🤖 **CodeBot Review Launched**
 
           Review mode: \`$REVIEW_MODE\`
-          Status: Agent launched and analyzing the code... [View workflow run]($RUN_URL)
+          Status: Agent launched and analyzing the code... [View agent progress]($CURSOR_LINK)
 
           The review will be posted as a comment shortly."
+          else
+            COMMENT_BODY="🤖 **CodeBot Review Launched**
+
+          Review mode: \`$REVIEW_MODE\`
+          Status: Agent launched but ID not available. [View workflow run]($RUN_URL) for details.
+
+          The review will be posted as a comment shortly."
+          fi
+
+          # Post the confirmation comment
+          gh pr comment "$PR_NUMBER" --body "$COMMENT_BODY"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Post error comment
+        if: steps.launch-agent.outcome == 'failure' && steps.pr-info.outputs.is_pr == 'true'
+        run: |
+          PR_NUMBER="${{ steps.pr-info.outputs.pr_number }}"
+          REVIEW_MODE="${{ steps.parse-command.outputs.review_mode }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          COMMENT_BODY="❌ **CodeBot Review Failed**
+
+          Review mode: \`$REVIEW_MODE\`
+          Status: Failed to launch background agent. [View workflow run]($RUN_URL) for error details.
+
+          Please check the workflow logs for more information."
+
+          # Post the error comment
+          gh pr comment "$PR_NUMBER" --body "$COMMENT_BODY"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
                 
