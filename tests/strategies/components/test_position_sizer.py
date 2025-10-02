@@ -3,11 +3,15 @@ Unit tests for PositionSizer components
 """
 
 import pytest
-import numpy as np
 
 from src.strategies.components.position_sizer import (
-    PositionSizer, FixedFractionSizer, ConfidenceWeightedSizer, KellySizer,
-    calculate_position_from_risk, calculate_risk_from_position, validate_position_size
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+    KellySizer,
+    PositionSizer,
+    calculate_position_from_risk,
+    calculate_risk_from_position,
+    validate_position_size,
 )
 from src.strategies.components.signal_generator import Signal, SignalDirection
 
@@ -213,6 +217,18 @@ class TestFixedFractionSizer:
         # Calculated would be 1000, but limited by risk_amount
         assert position_size == 500.0
     
+    def test_calculate_size_zero_risk_amount(self):
+        """Test position size calculation with zero risk amount (risk manager veto)"""
+        sizer = FixedFractionSizer(fraction=0.02)
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        balance = 10000.0
+        risk_amount = 0.0  # Risk manager vetoed the trade
+        
+        position_size = sizer.calculate_size(signal, balance, risk_amount)
+        
+        # Should return 0.0 immediately, respecting risk manager decision
+        assert position_size == 0.0
+    
     def test_calculate_size_with_regime(self):
         """Test position size calculation with regime context"""
         from src.regime.detector import TrendLabel, VolLabel
@@ -331,6 +347,18 @@ class TestConfidenceWeightedSizer:
         
         assert position_size == 0.0
     
+    def test_calculate_size_zero_risk_amount(self):
+        """Test position size calculation with zero risk amount (risk manager veto)"""
+        sizer = ConfidenceWeightedSizer()
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        balance = 10000.0
+        risk_amount = 0.0  # Risk manager vetoed the trade
+        
+        position_size = sizer.calculate_size(signal, balance, risk_amount)
+        
+        # Should return 0.0 immediately, respecting risk manager decision
+        assert position_size == 0.0
+    
     def test_get_parameters(self):
         """Test get_parameters method"""
         sizer = ConfidenceWeightedSizer(base_fraction=0.08, min_confidence=0.4)
@@ -447,6 +475,18 @@ class TestKellySizer:
         
         position_size = sizer.calculate_size(signal, balance, risk_amount)
         
+        assert position_size == 0.0
+    
+    def test_calculate_size_zero_risk_amount(self):
+        """Test position size calculation with zero risk amount (risk manager veto)"""
+        sizer = KellySizer()
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        balance = 10000.0
+        risk_amount = 0.0  # Risk manager vetoed the trade
+        
+        position_size = sizer.calculate_size(signal, balance, risk_amount)
+        
+        # Should return 0.0 immediately, respecting risk manager decision
         assert position_size == 0.0
     
     def test_update_trade_result_win(self):
