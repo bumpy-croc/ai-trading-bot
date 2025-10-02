@@ -115,12 +115,7 @@ class TestStrategyManager:
     @pytest.fixture
     def manager(self):
         """Create a test strategy manager"""
-        return StrategyManager(
-            name="Test Manager",
-            signal_generator=HoldSignalGenerator(),
-            risk_manager=FixedRiskManager(risk_per_trade=0.02),
-            position_sizer=FixedFractionSizer(fraction=0.05)
-        )
+        return StrategyManager(storage_backend=None)
     
     @pytest.fixture
     def test_strategy(self):
@@ -232,7 +227,7 @@ class TestStrategyManager:
     
     def test_request_promotion_invalid_path(self, manager, test_strategy):
         """Test requesting invalid promotion path"""
-        metadata = {'created_by': 'test', 'status': 'experimental'}
+        metadata = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         # Try to promote directly to production (invalid path)
@@ -246,7 +241,7 @@ class TestStrategyManager:
     
     def test_request_promotion_insufficient_performance(self, manager, test_strategy):
         """Test promotion request with insufficient performance"""
-        metadata = {'created_by': 'test', 'status': 'experimental'}
+        metadata = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         # Add minimal performance data (won't meet thresholds)
@@ -285,7 +280,7 @@ class TestStrategyManager:
     def test_approve_promotion(self, manager, test_strategy, sample_trade_results):
         """Test approving promotion request"""
         # Setup strategy with good performance
-        metadata = {'created_by': 'test', 'status': 'experimental'}
+        metadata = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         for trade in sample_trade_results:
@@ -322,7 +317,7 @@ class TestStrategyManager:
     def test_deploy_strategy(self, manager, test_strategy, sample_trade_results):
         """Test deploying approved strategy"""
         # Setup and approve promotion
-        metadata = {'created_by': 'test', 'status': 'experimental'}
+        metadata = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         for trade in sample_trade_results:
@@ -357,7 +352,7 @@ class TestStrategyManager:
     def test_rollback_strategy(self, manager, test_strategy):
         """Test strategy rollback"""
         # Register strategy and create versions
-        metadata = {'created_by': 'test', 'status': 'production'}
+        metadata = {'created_by': 'test', 'status': 'PRODUCTION'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         # Create a second version
@@ -393,7 +388,7 @@ class TestStrategyManager:
     
     def test_rollback_strategy_no_previous_version(self, manager, test_strategy):
         """Test rollback with no previous version"""
-        metadata = {'created_by': 'test', 'status': 'production'}
+        metadata = {'created_by': 'test', 'status': 'PRODUCTION'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         # Try to rollback (only has one version)
@@ -407,7 +402,7 @@ class TestStrategyManager:
     def test_get_strategy_status(self, manager, test_strategy, sample_trade_results):
         """Test getting comprehensive strategy status"""
         # Setup strategy with data
-        metadata = {'created_by': 'test', 'status': 'experimental'}
+        metadata = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         # Add performance data
@@ -440,12 +435,12 @@ class TestStrategyManager:
     def test_get_active_strategies(self, manager, test_strategy):
         """Test getting active strategies"""
         # Register strategies in different statuses
-        metadata1 = {'created_by': 'test', 'status': 'experimental'}
+        metadata1 = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         strategy1 = manager.register_strategy(test_strategy, metadata1)
         
         strategy2 = Strategy("Strategy2", test_strategy.signal_generator,
                            test_strategy.risk_manager, test_strategy.position_sizer)
-        metadata2 = {'created_by': 'test', 'status': 'testing'}
+        metadata2 = {'created_by': 'test', 'status': 'TESTING'}
         strategy2_id = manager.register_strategy(strategy2, metadata2)
         
         # Get all active strategies
@@ -469,7 +464,7 @@ class TestStrategyManager:
         strategy2 = Strategy("Strategy2", HoldSignalGenerator(), 
                            FixedRiskManager(), FixedFractionSizer())
         
-        metadata = {'created_by': 'test', 'status': 'experimental'}
+        metadata = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         sid1 = manager.register_strategy(strategy1, metadata)
         sid2 = manager.register_strategy(strategy2, metadata)
         
@@ -529,7 +524,7 @@ class TestStrategyManager:
     
     def test_validation_gates(self, manager, test_strategy):
         """Test validation gate logic"""
-        metadata = {'created_by': 'test', 'status': 'experimental'}
+        metadata = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         # Test with no performance data
@@ -545,7 +540,7 @@ class TestStrategyManager:
     def test_automatic_rollback_monitoring(self, manager, test_strategy):
         """Test automatic rollback triggers"""
         # Setup production strategy
-        metadata = {'created_by': 'test', 'status': 'production'}
+        metadata = {'created_by': 'test', 'status': 'PRODUCTION'}
         strategy_id = manager.register_strategy(test_strategy, metadata)
         
         # Create second version for rollback
@@ -608,7 +603,7 @@ class TestStrategyManager:
         
         # Register strategy
         strategy = Strategy("Test", HoldSignalGenerator(), FixedRiskManager(), FixedFractionSizer())
-        metadata = {'created_by': 'test', 'status': 'experimental'}
+        metadata = {'created_by': 'test', 'status': 'EXPERIMENTAL'}
         
         strategy_id = manager.register_strategy(strategy, metadata)
         
