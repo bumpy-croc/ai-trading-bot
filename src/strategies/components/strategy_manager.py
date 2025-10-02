@@ -11,13 +11,13 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from .strategy_registry import StrategyRegistry, StrategyStatus, StrategyMetadata
-from .performance_tracker import PerformanceTracker, PerformanceMetrics, TradeResult
-from .strategy_lineage import StrategyLineageTracker, ChangeType, ImpactLevel
+from .performance_tracker import PerformanceTracker, TradeResult
 from .strategy import Strategy
+from .strategy_lineage import ChangeType, ImpactLevel, StrategyLineageTracker
+from .strategy_registry import StrategyRegistry, StrategyStatus
 
 
 class PromotionStatus(Enum):
@@ -325,10 +325,13 @@ class StrategyManager:
         if request.status != PromotionStatus.APPROVED:
             raise ValueError(f"Request {request_id} is not approved (status: {request.status})")
         
-        # Update strategy status in registry
+        # Get strategy metadata before update
         strategy_metadata = self.registry.get_strategy_metadata(request.strategy_id)
         if not strategy_metadata:
             raise ValueError(f"Strategy {request.strategy_id} not found")
+        
+        # Update strategy status in registry
+        self.registry.update_strategy_status(request.strategy_id, request.to_status)
         
         # Move strategy between active lists
         self.active_strategies[strategy_metadata.status].remove(request.strategy_id)
@@ -371,7 +374,7 @@ class StrategyManager:
         # Find previous version
         versions = self.registry.get_strategy_versions(strategy_id)
         if len(versions) < 2:
-            raise ValueError(f"No previous version available for rollback")
+            raise ValueError("No previous version available for rollback")
         
         current_version = versions[-1].version
         previous_version = versions[-2].version
@@ -387,6 +390,9 @@ class StrategyManager:
                 'max_drawdown': metrics.max_drawdown,
                 'win_rate': metrics.win_rate
             }
+        
+        # Revert to previous version in registry
+        self.registry.revert_to_version(strategy_id, previous_version)
         
         # Create rollback record
         rollback_id = f"rollback_{uuid4().hex[:8]}"
@@ -408,6 +414,10 @@ class StrategyManager:
         
         # Update strategy status if it was in production
         if strategy_metadata.status == StrategyStatus.PRODUCTION:
+            # Update status in registry to testing
+            self.registry.update_strategy_status(strategy_id, StrategyStatus.TESTING)
+            
+            # Update active strategies lists
             if strategy_id in self.active_strategies[StrategyStatus.PRODUCTION]:
                 self.active_strategies[StrategyStatus.PRODUCTION].remove(strategy_id)
             if strategy_id not in self.active_strategies[StrategyStatus.TESTING]:

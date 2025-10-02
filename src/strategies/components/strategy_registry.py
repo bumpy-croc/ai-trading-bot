@@ -11,14 +11,14 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from .strategy import Strategy
-from .signal_generator import SignalGenerator
-from .risk_manager import RiskManager
 from .position_sizer import PositionSizer
 from .regime_context import EnhancedRegimeDetector
+from .risk_manager import RiskManager
+from .signal_generator import SignalGenerator
+from .strategy import Strategy
 
 
 class StrategyStatus(Enum):
@@ -354,6 +354,117 @@ class StrategyRegistry:
             List of strategy versions
         """
         return self._versions.get(strategy_id, [])
+    
+    def update_strategy_status(self, strategy_id: str, new_status: StrategyStatus) -> None:
+        """
+        Update strategy status
+        
+        Args:
+            strategy_id: Strategy ID
+            new_status: New status to set
+            
+        Raises:
+            ValueError: If strategy ID not found
+        """
+        if strategy_id not in self._strategies:
+            raise ValueError(f"Strategy ID {strategy_id} not found")
+        
+        metadata = self._strategies[strategy_id]
+        
+        # Create updated metadata with new status
+        updated_metadata = StrategyMetadata(
+            id=metadata.id,
+            name=metadata.name,
+            version=metadata.version,
+            parent_id=metadata.parent_id,
+            created_at=metadata.created_at,
+            created_by=metadata.created_by,
+            description=metadata.description,
+            tags=metadata.tags,
+            status=new_status,
+            signal_generator_config=metadata.signal_generator_config,
+            risk_manager_config=metadata.risk_manager_config,
+            position_sizer_config=metadata.position_sizer_config,
+            regime_detector_config=metadata.regime_detector_config,
+            parameters=metadata.parameters,
+            performance_summary=metadata.performance_summary,
+            validation_results=metadata.validation_results,
+            lineage_path=metadata.lineage_path,
+            branch_name=metadata.branch_name,
+            merge_source=metadata.merge_source,
+            config_hash=metadata.config_hash,
+            component_hash=metadata.component_hash
+        )
+        
+        # Update in-memory storage
+        self._strategies[strategy_id] = updated_metadata
+        
+        # Persist if backend available
+        if self.storage_backend:
+            self._persist_strategy(updated_metadata)
+        
+        self.logger.info(f"Updated strategy {strategy_id} status to {new_status.value}")
+    
+    def revert_to_version(self, strategy_id: str, target_version: str) -> None:
+        """
+        Revert strategy to a previous version
+        
+        Args:
+            strategy_id: Strategy ID
+            target_version: Version to revert to
+            
+        Raises:
+            ValueError: If strategy ID or version not found
+        """
+        if strategy_id not in self._strategies:
+            raise ValueError(f"Strategy ID {strategy_id} not found")
+        
+        versions = self._versions.get(strategy_id, [])
+        target_version_record = None
+        
+        for version_record in versions:
+            if version_record.version == target_version:
+                target_version_record = version_record
+                break
+        
+        if not target_version_record:
+            raise ValueError(f"Version {target_version} not found for strategy {strategy_id}")
+        
+        metadata = self._strategies[strategy_id]
+        
+        # Create updated metadata with reverted version
+        updated_metadata = StrategyMetadata(
+            id=metadata.id,
+            name=metadata.name,
+            version=target_version,
+            parent_id=metadata.parent_id,
+            created_at=metadata.created_at,
+            created_by=metadata.created_by,
+            description=metadata.description,
+            tags=metadata.tags,
+            status=metadata.status,
+            signal_generator_config=metadata.signal_generator_config,
+            risk_manager_config=metadata.risk_manager_config,
+            position_sizer_config=metadata.position_sizer_config,
+            regime_detector_config=metadata.regime_detector_config,
+            parameters=metadata.parameters,
+            performance_summary=metadata.performance_summary,
+            validation_results=metadata.validation_results,
+            lineage_path=metadata.lineage_path,
+            branch_name=metadata.branch_name,
+            merge_source=metadata.merge_source,
+            config_hash=metadata.config_hash,
+            component_hash=metadata.component_hash
+        )
+        
+        # Update in-memory storage
+        self._strategies[strategy_id] = updated_metadata
+        
+        # Persist if backend available
+        if self.storage_backend:
+            self._persist_strategy(updated_metadata)
+        
+        self.logger.info(f"Reverted strategy {strategy_id} to version {target_version}")
     
     def list_strategies(self, status: Optional[StrategyStatus] = None,
                        tags: Optional[List[str]] = None) -> List[StrategyMetadata]:

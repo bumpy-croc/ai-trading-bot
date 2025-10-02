@@ -644,9 +644,3 @@ class TestStrategyManager:
 
 if __name__ == "__main__":
     pytest.main([__file__])
-=======
-        # Verify metadata includes risk manager information
-        assert 'risk_position_size' in metadata
-        assert metadata['risk_position_size'] == 500.0
-        assert metadata['components']['risk_manager'] == 'mock_risk_manager'
->>>>>>> origin/develop

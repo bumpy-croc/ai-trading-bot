@@ -359,7 +359,6 @@ class MLSignalGenerator(SignalGenerator):
                     pred_denormalized = df["close"].iloc[index - 1]
                 
                 return pred_denormalized
->>>>>>> origin/develop
             
         except Exception as e:
             print(f"[MLSignalGenerator] Prediction error at index {index}: {e}")

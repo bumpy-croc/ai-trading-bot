@@ -64,7 +64,6 @@ class TestMLSignalGenerator:
             model_path="test_model.onnx",
             sequence_length=120,
             use_prediction_engine=True  # This should prevent ONNX session initialization
->>>>>>> origin/develop
         )
         
         assert generator.name == "test_ml_generator"
@@ -105,7 +104,6 @@ class TestMLSignalGenerator:
         assert generator.ort_session is not None
         assert generator.input_name is not None
         mock_ort.assert_called_once_with("test_model.onnx")
->>>>>>> origin/develop
     
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
     def test_generate_signal_insufficient_history(self, mock_ort):
@@ -269,7 +267,6 @@ class TestMLSignalGenerator:
             f"Prediction engine result should not be denormalized: expected {real_price}, got {prediction}"
     
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
->>>>>>> origin/develop
     def test_confidence_calculation(self, mock_ort):
         """Test confidence calculation based on predicted return"""
         mock_session = Mock()
@@ -592,7 +589,6 @@ class TestMLBasicSignalGenerator:
         # Should return the real price directly (no denormalization)
         assert prediction == real_price, \
             f"MLBasic prediction engine result should not be denormalized: expected {real_price}, got {prediction}"
->>>>>>> origin/develop
 
 
 class TestMLSignalGeneratorEdgeCases:

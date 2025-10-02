@@ -483,7 +483,6 @@ class TestLegacyStrategyAdapter:
         # Manual reset
         adapter.reset_position_side()
         assert adapter.get_current_position_side() is None
->>>>>>> origin/develop
 
 
 class TestLegacyAdapterWithRealComponents:

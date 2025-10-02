@@ -594,7 +594,6 @@ class RSISignalGenerator(SignalGenerator):
                         'index': index
                     }
                 )
->>>>>>> origin/develop
             df = df.copy()
             df['rsi'] = calculate_rsi(df, self.period)
         
