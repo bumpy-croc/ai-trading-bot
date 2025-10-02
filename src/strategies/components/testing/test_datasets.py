@@ -298,10 +298,6 @@ class TestDatasetGenerator:
         
         return data.dropna()
     
-<<<<<<< HEAD
-    def _prepare_historical_data_with_nans(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Prepare historical data with technical indicators, preserving NaN values for edge cases"""
-=======
     def _prepare_edge_case_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Prepare edge case data with technical indicators, preserving intentional NaNs
@@ -309,18 +305,13 @@ class TestDatasetGenerator:
         This method is used for edge case datasets where NaNs and missing data
         are intentional test conditions and should not be dropped.
         """
->>>>>>> b74f416 (Refactor: Improve component testing and edge case data handling)
         # Ensure required columns exist
         required_columns = ['open', 'high', 'low', 'close', 'volume']
         for col in required_columns:
             if col not in data.columns:
                 raise ValueError(f"Historical data missing required column: {col}")
         
-<<<<<<< HEAD
-        # Add technical indicators (these will create NaN values where input data is NaN)
-=======
         # Add technical indicators (NaNs will naturally occur but won't be dropped)
->>>>>>> b74f416 (Refactor: Improve component testing and edge case data handling)
         data['sma_20'] = data['close'].rolling(20).mean()
         data['sma_50'] = data['close'].rolling(50).mean()
         data['ema_12'] = data['close'].ewm(span=12).mean()
@@ -352,13 +343,9 @@ class TestDatasetGenerator:
         # Volatility
         data['volatility'] = data['returns'].rolling(20).std()
         
-<<<<<<< HEAD
-        # Don't drop NaN values for edge cases - return as is
-=======
         # Drop only rows where ALL required OHLCV columns are NaN to preserve edge cases
         data = data.dropna(subset=required_columns, how='all')
         
->>>>>>> b74f416 (Refactor: Improve component testing and edge case data handling)
         return data
     
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
@@ -484,15 +471,7 @@ class TestDatasetGenerator:
         else:
             raise ValueError(f"Unknown edge case type: {case_type}")
         
-<<<<<<< HEAD
-        # For edge cases, don't drop NaN values as they are intentional
-        if case_type in ["missing_data", "extreme_volatility", "zero_volume", "price_gaps", "flat_prices", "negative_prices", "extreme_outliers"]:
-            return self._prepare_historical_data_with_nans(data)
-        else:
-            return self._prepare_historical_data(data)
-=======
         return self._prepare_edge_case_data(data)
->>>>>>> b74f416 (Refactor: Improve component testing and edge case data handling)
     
     def _create_missing_data_case(self, data: pd.DataFrame) -> pd.DataFrame:
         """Create dataset with missing data points"""
