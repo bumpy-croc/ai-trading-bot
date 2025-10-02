@@ -14,7 +14,6 @@ __pycache__/
 # IDE and editor files
 .vscode/
 .claude/
-.cursor/commands/
 .cursor/mcp.json
 
 # OS generated files
