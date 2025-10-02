@@ -147,10 +147,10 @@ class LegacyStrategyAdapter(BaseStrategy):
             )
             
             self.performance_metrics['signals_generated'] += 1
-            
+
             # Entry condition is met if signal is BUY or SELL
             entry_condition = signal.direction in [SignalDirection.BUY, SignalDirection.SELL]
-            
+
             # Track position side based on signal direction
             if entry_condition:
                 if signal.direction == SignalDirection.BUY:
@@ -195,16 +195,16 @@ class LegacyStrategyAdapter(BaseStrategy):
             
             # Create position object for risk manager
             current_price = float(df.iloc[index]['close'])
-            
+
             # Determine position side (default to 'long' if not tracked)
             position_side = self._current_position_side or 'long'
-            
+
             # Calculate unrealized PnL based on position side
             if position_side == 'long':
                 unrealized_pnl = current_price - entry_price
             else:  # short position
                 unrealized_pnl = entry_price - current_price
-            
+
             position = Position(
                 symbol=self.trading_pair,
                 side=position_side,
@@ -240,11 +240,10 @@ class LegacyStrategyAdapter(BaseStrategy):
                     'regime_volatility': regime_context.volatility.value if regime_context else 'unknown'
                 }
             )
-            
+
             # Reset position side if exiting
             if should_exit:
                 self._current_position_side = None
-            
             # Record execution time
             execution_time = time.time() - start_time
             self.performance_metrics['execution_times']['risk_management'].append(execution_time)
@@ -362,7 +361,7 @@ class LegacyStrategyAdapter(BaseStrategy):
                 return price * 0.95  # 5% stop loss for long
             else:
                 return price * 1.05  # 5% stop loss for short
-    
+
     def get_parameters(self) -> dict[str, Any]:
         """
         Return strategy parameters for logging
@@ -424,26 +423,26 @@ class LegacyStrategyAdapter(BaseStrategy):
             
             # Return last known regime or None
             return self._last_regime_context
-    
+
     def reset_position_side(self) -> None:
         """
         Reset the current position side tracking
-        
+
         This method can be called when a position is manually closed
         or when starting fresh position tracking.
         """
         self._current_position_side = None
         self.adapter_logger.debug("Position side tracking reset")
-    
+
     def get_current_position_side(self) -> Optional[str]:
         """
         Get the current tracked position side
-        
+
         Returns:
             Current position side ('long', 'short', or None if no position)
         """
         return self._current_position_side
-    
+
     def get_performance_metrics(self) -> dict[str, Any]:
         """
         Get adapter performance metrics
@@ -495,7 +494,7 @@ class LegacyStrategyAdapter(BaseStrategy):
         }
         
         self.adapter_logger.info("Performance metrics reset")
-    
+
     def get_component_status(self) -> dict[str, str]:
         """
         Get status information for all components

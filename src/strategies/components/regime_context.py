@@ -8,7 +8,7 @@ for providing market regime information to strategy components.
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -37,7 +37,7 @@ class RegimeContext:
     duration: int
     strength: float
     timestamp: Optional[datetime] = None
-    metadata: Optional[Dict[str, float]] = None
+    metadata: Optional[dict[str, float]] = None
     
     def __post_init__(self):
         """Validate regime context parameters after initialization"""
@@ -157,8 +157,8 @@ class EnhancedRegimeDetector:
         self.max_history = max_history
         
         # Regime history tracking
-        self.regime_history: List[RegimeContext] = []
-        self.transition_history: List[RegimeTransition] = []
+        self.regime_history: list[RegimeContext] = []
+        self.transition_history: list[RegimeTransition] = []
         
         # Current regime state
         self.current_regime: Optional[RegimeContext] = None
@@ -218,7 +218,7 @@ class EnhancedRegimeDetector:
         
         return regime_context
     
-    def get_regime_history(self, df: pd.DataFrame, lookback_periods: int = 100) -> List[RegimeContext]:
+    def get_regime_history(self, df: pd.DataFrame, lookback_periods: int = 100) -> list[RegimeContext]:
         """
         Get historical regime contexts
         
@@ -269,7 +269,7 @@ class EnhancedRegimeDetector:
             return False
     
     def detect_regime_transitions(self, df: pd.DataFrame, 
-                                lookback_periods: int = 50) -> List[RegimeTransition]:
+                                lookback_periods: int = 50) -> list[RegimeTransition]:
         """
         Detect recent regime transitions
         
@@ -312,7 +312,7 @@ class EnhancedRegimeDetector:
         return transitions
     
     def get_regime_statistics(self, df: pd.DataFrame, 
-                            lookback_periods: int = 252) -> Dict[str, float]:
+                            lookback_periods: int = 252) -> dict[str, float]:
         """
         Get statistical information about regime behavior
         
@@ -471,7 +471,7 @@ class EnhancedRegimeDetector:
         """Get the current regime context"""
         return self.current_regime
     
-    def get_recent_transitions(self, count: int = 5) -> List[RegimeTransition]:
+    def get_recent_transitions(self, count: int = 5) -> list[RegimeTransition]:
         """Get most recent regime transitions"""
         return self.transition_history[-count:] if self.transition_history else []
     

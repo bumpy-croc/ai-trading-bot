@@ -364,6 +364,7 @@ class TestLegacyStrategyAdapter:
         
         repr_str = repr(adapter)
         assert "LegacyStrategyAdapter" in repr_str
+        assert "test_adapter" in repr_str
     
     def test_sell_signal_entry_conditions(self, adapter, sample_data):
         """Test check_entry_conditions with SELL signal for short positions"""
