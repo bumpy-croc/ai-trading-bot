@@ -201,16 +201,16 @@ jobs:
           # Call Cursor API
           # Create JSON payload
           cat > /tmp/cursor_payload.json << 'EOF'
-{
-  "prompt": {
-    "text": "FULL_PROMPT_PLACEHOLDER"
-  },
-  "source": {
-    "repository": "REPO_PLACEHOLDER",
-    "ref": "REF_PLACEHOLDER"
-  }
-}
-EOF
+          {
+            "prompt": {
+              "text": "FULL_PROMPT_PLACEHOLDER"
+            },
+            "source": {
+              "repository": "REPO_PLACEHOLDER",
+              "ref": "REF_PLACEHOLDER"
+            }
+          }
+          EOF
 
           # Replace placeholders
           sed -i "s|FULL_PROMPT_PLACEHOLDER|$(echo "$FULL_PROMPT" | jq -Rs .)|" /tmp/cursor_payload.json
@@ -250,13 +250,13 @@ EOF
           # Post a quick confirmation comment
           gh pr comment "$PR_NUMBER" --body "🤖 **CodeBot Review Launched**
 
-Review mode: \`$REVIEW_MODE\`
-Status: Agent is analyzing the code...
+          Review mode: \`$REVIEW_MODE\`
+          Status: Agent is analyzing the code...
 
-The review will be posted as a comment shortly."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
+          The review will be posted as a comment shortly."
+                  env:
+                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                
       - name: Summary
         if: always()
         run: |
