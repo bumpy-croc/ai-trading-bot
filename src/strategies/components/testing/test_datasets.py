@@ -459,19 +459,19 @@ class TestDatasetGenerator:
         
         data = self.synthetic_generator.generate_scenario_data(base_scenario, seed)
         
-        # Apply edge case modifications
+        # Apply edge case modifications with isolated rng
         if case_type == "missing_data":
-            data = self._create_missing_data_case(data)
+            data = self._create_missing_data_case(data, rng)
         elif case_type == "extreme_volatility":
-            data = self._create_extreme_volatility_case(data)
+            data = self._create_extreme_volatility_case(data, rng)
         elif case_type == "zero_volume":
-            data = self._create_zero_volume_case(data)
+            data = self._create_zero_volume_case(data, rng)
         elif case_type == "price_gaps":
-            data = self._create_price_gaps_case(data)
+            data = self._create_price_gaps_case(data, rng)
         elif case_type == "flat_prices":
-            data = self._create_flat_prices_case(data)
+            data = self._create_flat_prices_case(data, rng)
         elif case_type == "extreme_outliers":
-            data = self._create_extreme_outliers_case(data)
+            data = self._create_extreme_outliers_case(data, rng)
         else:
             raise ValueError(f"Unknown edge case type: {case_type}")
         
@@ -491,24 +491,24 @@ class TestDatasetGenerator:
         data['low'] = data[['open', 'high', 'low', 'close']].min(axis=1)
         return data
     
-    def _create_missing_data_case(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _create_missing_data_case(self, data: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
         """Create dataset with missing data points"""
         # Randomly remove 10% of data points
-        missing_indices = np.random.choice(data.index, size=int(len(data) * 0.1), replace=False)
+        missing_indices = rng.choice(data.index, size=int(len(data) * 0.1), replace=False)
         data.loc[missing_indices, ['open', 'high', 'low', 'close']] = np.nan
         
         # Create some consecutive missing periods
         if len(data) >= 10:
-            start_idx = np.random.randint(0, len(data) - 10)
+            start_idx = rng.integers(0, len(data) - 10)
             data.iloc[start_idx:start_idx+5, :4] = np.nan
         
         return data
     
-    def _create_extreme_volatility_case(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _create_extreme_volatility_case(self, data: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
         """Create dataset with extreme volatility spikes"""
         # Add random extreme moves
-        extreme_moves = np.random.normal(0, 0.1, len(data))
-        extreme_mask = np.random.random(len(data)) < 0.05  # 5% of days have extreme moves
+        extreme_moves = rng.normal(0, 0.1, len(data))
+        extreme_mask = rng.random(len(data)) < 0.05  # 5% of days have extreme moves
         
         data['close'] *= (1 + extreme_moves * extreme_mask)
         
@@ -517,27 +517,27 @@ class TestDatasetGenerator:
         
         return data
     
-    def _create_zero_volume_case(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _create_zero_volume_case(self, data: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
         """Create dataset with zero volume periods"""
         # Set random periods to zero volume
-        zero_volume_mask = np.random.random(len(data)) < 0.15  # 15% of days
+        zero_volume_mask = rng.random(len(data)) < 0.15  # 15% of days
         data.loc[zero_volume_mask, 'volume'] = 0
         
         # Create consecutive zero volume periods
         if len(data) >= 20:
-            start_idx = np.random.randint(0, len(data) - 20)
+            start_idx = rng.integers(0, len(data) - 20)
             data.iloc[start_idx:start_idx+10, data.columns.get_loc('volume')] = 0
         
         return data
     
-    def _create_price_gaps_case(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _create_price_gaps_case(self, data: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
         """Create dataset with price gaps"""
         # Add random gaps
-        gap_indices = np.random.choice(data.index[1:], size=int(len(data) * 0.05), replace=False)
+        gap_indices = rng.choice(data.index[1:], size=int(len(data) * 0.05), replace=False)
         
         for idx in gap_indices:
-            gap_size = np.random.uniform(0.02, 0.08)  # 2-8% gaps
-            gap_direction = np.random.choice([-1, 1])
+            gap_size = rng.uniform(0.02, 0.08)  # 2-8% gaps
+            gap_direction = rng.choice([-1, 1])
             
             prev_close = data.loc[data.index[data.index.get_loc(idx)-1], 'close']
             gap_open = prev_close * (1 + gap_size * gap_direction)
@@ -548,13 +548,13 @@ class TestDatasetGenerator:
         
         return data
     
-    def _create_flat_prices_case(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _create_flat_prices_case(self, data: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
         """Create dataset with flat price periods"""
         # Create periods where all OHLC are the same
         flat_periods = 3
         for _ in range(flat_periods):
             if len(data) >= 15:
-                start_idx = np.random.randint(0, len(data) - 15)
+                start_idx = rng.integers(0, len(data) - 15)
                 flat_price = data.iloc[start_idx]['close']
                 
                 data.iloc[start_idx:start_idx+10, :4] = flat_price
@@ -562,18 +562,18 @@ class TestDatasetGenerator:
         return data
     
     
-    def _create_extreme_outliers_case(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _create_extreme_outliers_case(self, data: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
         """Create dataset with extreme price outliers"""
         # Add extreme outliers to high/low prices
-        outlier_indices = np.random.choice(data.index, size=int(len(data) * 0.02), replace=False)
+        outlier_indices = rng.choice(data.index, size=int(len(data) * 0.02), replace=False)
         
         for idx in outlier_indices:
-            if np.random.random() > 0.5:
+            if rng.random() > 0.5:
                 # Extreme high
-                data.loc[idx, 'high'] *= np.random.uniform(2.0, 5.0)
+                data.loc[idx, 'high'] *= rng.uniform(2.0, 5.0)
             else:
                 # Extreme low
-                data.loc[idx, 'low'] *= np.random.uniform(0.1, 0.5)
+                data.loc[idx, 'low'] *= rng.uniform(0.1, 0.5)
         
         # Ensure OHLC consistency
         data = self._ensure_ohlc_consistency(data)

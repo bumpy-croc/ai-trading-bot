@@ -279,8 +279,8 @@ class PerformanceAttributionAnalyzer:
                 if self.regime_data is not None and i < len(self.regime_data):
                     regime = self.regime_data.iloc[i]
                 
-                # Process candle with strategy
-                decision = strategy.process_candle(current_data, i, regime)
+                # Process candle with strategy (pass balance, strategy detects regime internally)
+                decision = strategy.process_candle(current_data, i, balance)
                 
                 # Track component decisions
                 if hasattr(strategy, 'signal_generator'):

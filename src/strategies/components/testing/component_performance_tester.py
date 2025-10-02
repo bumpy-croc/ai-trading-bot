@@ -713,7 +713,10 @@ class ComponentPerformanceTester:
         # Drawdown control
         max_drawdown_achieved = self._calculate_max_drawdown(portfolio_returns)
         target_max_drawdown = 0.1  # Assume 10% target
-        drawdown_control_score = max(0.0, 1.0 - max_drawdown_achieved / target_max_drawdown)
+        drawdown_control_score = (
+            max(0.0, 1.0 - max_drawdown_achieved / target_max_drawdown) 
+            if target_max_drawdown > 0 else 0.0
+        )
         
         # Timing metrics
         test_duration = time.time() - start_time

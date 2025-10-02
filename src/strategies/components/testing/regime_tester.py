@@ -314,7 +314,8 @@ class RegimeTester:
                     trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
                     volatility_str = regime_parts[2]
                 else:
-                    # Fallback for unexpected format
+                    # Log warning for unexpected format
+                    logger.warning(f"Unexpected regime_type format: '{regime_type}'. Using fallback values.")
                     trend_str = 'range'
                     volatility_str = 'low_vol'
                 
@@ -331,8 +332,8 @@ class RegimeTester:
                     metadata={'regime_type': regime_type}
                 )
                 
-                # Process candle with strategy
-                decision = strategy.process_candle(current_data, i, regime_context)
+                # Process candle with strategy (pass balance, strategy detects regime internally)
+                decision = strategy.process_candle(current_data, i, balance)
                 
                 # Execute trades based on decision
                 if decision and decision.get('action') in ['buy', 'sell']:
@@ -660,7 +661,8 @@ class RegimeTester:
                     trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
                     volatility_str = regime_parts[2]
                 else:
-                    # Fallback for unexpected format
+                    # Log warning for unexpected format
+                    logger.warning(f"Unexpected regime_type format: '{regime_type}'. Using fallback values.")
                     trend_str = 'range'
                     volatility_str = 'low_vol'
                 
