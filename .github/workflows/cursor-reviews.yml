@@ -171,7 +171,7 @@ jobs:
           PROMPT_TEXT=$(cat /tmp/review_prompt.txt)
           
           # Build full prompt with PR context
-          FULL_PROMPT="Pull Request Review Request PR #$PR_NUMBER: $PR_URL Review Mode: $REVIEW_MODE $PROMPT_TEXT --- IMPORTANT: After completing your review, post your findings as a comment on this pull request using the GitHub MCP server or GitHub API. Make sure to format your review with clear markdown, severity indicators, and actionable feedback."
+          FULL_PROMPT="Pull Request Review Request PR #$PR_NUMBER: $PR_URL Review Mode: $REVIEW_MODE $PROMPT_TEXT --- IMPORTANT: After completing your review, post your findings as a comment on this pull request using the GitHub MCP server or GitHub API. Make sure to format your review with clear markdown, severity indicators, and actionable feedback. At the end of your review comment, include a section with a link to launch the same background agent to fix all the issues you identified. The link should use the format: [🤖 Fix All Issues](https://api.cursor.com/v0/agents?prompt=fix%20all%20issues%20identified%20in%20this%20review%20for%20PR%20#$PR_NUMBER&repo=${{ github.server_url }}/${{ github.repository }}&ref=$HEAD_REF) - this will allow the reviewer to easily trigger the same agent to implement fixes. After posting your review comment, remove the eyes reaction from the original triggering comment (the comment that started this review process) using the GitHub MCP server or GitHub API."
           
           # Get PR head ref
           if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
