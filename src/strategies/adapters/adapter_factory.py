@@ -22,7 +22,6 @@ from src.strategies.components.signal_generator import (
     RandomSignalGenerator,
     SignalGenerator,
 )
-
 from .legacy_adapter import LegacyStrategyAdapter
 
 

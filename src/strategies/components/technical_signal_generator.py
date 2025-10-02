@@ -5,7 +5,7 @@ This module contains technical indicator-based signal generators that use
 traditional technical analysis methods to generate trading signals.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -516,7 +516,7 @@ class TechnicalSignalGenerator(SignalGenerator):
         else:
             return 0.5  # Default confidence
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
         params.update({
@@ -654,7 +654,7 @@ class RSISignalGenerator(SignalGenerator):
         else:
             return 0.3
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get RSI signal generator parameters"""
         params = super().get_parameters()
         params.update({
@@ -800,7 +800,7 @@ class MACDSignalGenerator(SignalGenerator):
         else:
             return 0.3
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get MACD signal generator parameters"""
         params = super().get_parameters()
         params.update({

@@ -9,6 +9,7 @@ from src.strategies.components.position_sizer import (
     FixedFractionSizer,
     KellySizer,
     PositionSizer,
+    RegimeAdaptiveSizer,
     calculate_position_from_risk,
     calculate_risk_from_position,
     validate_position_size,
@@ -533,6 +534,267 @@ class TestKellySizer:
         assert params['avg_win'] == 0.03
         assert params['kelly_fraction'] == 0.3
         assert params['trade_count'] == 0
+
+
+class TestRegimeAdaptiveSizer:
+    """Test RegimeAdaptiveSizer implementation"""
+    
+    def create_test_signal(self, direction=SignalDirection.BUY, strength=0.8, confidence=0.9):
+        """Create test signal"""
+        return Signal(
+            direction=direction,
+            strength=strength,
+            confidence=confidence,
+            metadata={}
+        )
+    
+    def create_test_regime(self, trend='trend_up', volatility='low_vol', confidence=0.8, 
+                          duration=10, strength=0.7):
+        """Create test regime context"""
+        from src.regime.detector import TrendLabel, VolLabel
+        from src.strategies.components.regime_context import RegimeContext
+        
+        trend_map = {
+            'trend_up': TrendLabel.TREND_UP,
+            'trend_down': TrendLabel.TREND_DOWN,
+            'range': TrendLabel.RANGE
+        }
+        
+        vol_map = {
+            'low_vol': VolLabel.LOW,
+            'high_vol': VolLabel.HIGH
+        }
+        
+        return RegimeContext(
+            trend=trend_map.get(trend, TrendLabel.RANGE),
+            volatility=vol_map.get(volatility, VolLabel.LOW),
+            confidence=confidence,
+            duration=duration,
+            strength=strength
+        )
+    
+    def test_regime_adaptive_sizer_initialization_default(self):
+        """Test RegimeAdaptiveSizer initialization with defaults"""
+        sizer = RegimeAdaptiveSizer()
+        assert sizer.name == "regime_adaptive_sizer"
+        assert sizer.base_fraction == 0.03
+        assert sizer.volatility_adjustment is True
+        assert 'bull_low_vol' in sizer.regime_multipliers
+        assert sizer.regime_multipliers['bull_low_vol'] == 1.8
+    
+    def test_regime_adaptive_sizer_initialization_custom(self):
+        """Test RegimeAdaptiveSizer initialization with custom parameters"""
+        custom_multipliers = {
+            'bull_low_vol': 2.0,
+            'bear_high_vol': 0.1
+        }
+        sizer = RegimeAdaptiveSizer(
+            base_fraction=0.05,
+            regime_multipliers=custom_multipliers,
+            volatility_adjustment=False
+        )
+        assert sizer.base_fraction == 0.05
+        assert sizer.volatility_adjustment is False
+        assert sizer.regime_multipliers['bull_low_vol'] == 2.0
+        assert sizer.regime_multipliers['bear_high_vol'] == 0.1
+    
+    def test_regime_adaptive_sizer_validation_base_fraction(self):
+        """Test base_fraction validation"""
+        with pytest.raises(ValueError, match="base_fraction must be between 0.001 and 0.2"):
+            RegimeAdaptiveSizer(base_fraction=0.0005)
+        
+        with pytest.raises(ValueError, match="base_fraction must be between 0.001 and 0.2"):
+            RegimeAdaptiveSizer(base_fraction=0.25)
+    
+    def test_regime_adaptive_sizer_validation_multipliers(self):
+        """Test regime multiplier validation"""
+        with pytest.raises(ValueError, match="regime multiplier.*must be between 0.1 and 3.0"):
+            RegimeAdaptiveSizer(regime_multipliers={'test': 5.0})
+    
+    def test_partial_custom_multipliers_no_keyerror(self):
+        """Test that partial custom multipliers don't cause KeyError"""
+        # This test ensures that when only some multipliers are provided,
+        # the missing ones are filled in with defaults (addresses PR review comment)
+        sizer = RegimeAdaptiveSizer(
+            base_fraction=0.03,
+            regime_multipliers={'bull_low_vol': 2.0}  # Only one multiplier
+        )
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        balance = 10000.0
+        
+        # Test with no regime (should use 'unknown' multiplier)
+        position_size = sizer.calculate_size(signal, balance, 0.0, regime=None)
+        assert position_size > 0  # Should not raise KeyError
+        
+        # Test with various regime types to ensure all defaults are preserved
+        regime_bear = self.create_test_regime('trend_down', 'high_vol', 0.8, 10, 0.8)
+        position_size_bear = sizer.calculate_size(signal, balance, 0.0, regime=regime_bear)
+        assert position_size_bear > 0  # Should use default for bear_high_vol
+        
+        # Verify custom multiplier is used
+        regime_bull = self.create_test_regime('trend_up', 'low_vol', 0.8, 10, 0.8)
+        position_size_bull = sizer.calculate_size(signal, balance, 0.0, regime=regime_bull)
+        # Bull position should be larger due to custom 2.0 multiplier vs default 1.8
+        assert position_size_bull > position_size_bear
+    
+    def test_calculate_size_bull_low_vol(self):
+        """Test position size calculation in bull low volatility regime"""
+        sizer = RegimeAdaptiveSizer(base_fraction=0.03)
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        regime = self.create_test_regime('trend_up', 'low_vol', 0.8, 10, 0.8)
+        balance = 10000.0
+        risk_amount = 2000.0
+        
+        position_size = sizer.calculate_size(signal, balance, risk_amount, regime)
+        
+        # Base: 10000 * 0.03 = 300
+        # Regime multiplier: 300 * 1.8 = 540
+        # Confidence adj: 540 * 0.9 = 486
+        # Strength adj: 486 * 0.8 = 388.8
+        # Regime confidence: 388.8 * 0.8 = 311.04
+        # Volatility adj: 311.04 * 1.1 = 342.144 (strength >= 0.8)
+        assert abs(position_size - 342.144) < 1.0
+    
+    def test_calculate_size_bear_high_vol(self):
+        """Test position size calculation in bear high volatility regime"""
+        sizer = RegimeAdaptiveSizer(base_fraction=0.03)
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        regime = self.create_test_regime('trend_down', 'high_vol', 0.8, 10, 0.3)
+        balance = 10000.0
+        risk_amount = 2000.0
+        
+        position_size = sizer.calculate_size(signal, balance, risk_amount, regime)
+        
+        # Base: 10000 * 0.03 = 300
+        # Regime multiplier: 300 * 0.2 = 60
+        # Confidence adj: 60 * 0.9 = 54
+        # Strength adj: 54 * 0.8 = 43.2
+        # Regime confidence: 43.2 * 0.8 = 34.56
+        # Volatility adj: 34.56 * 0.7 = 24.192 (strength < 0.4)
+        # But minimum bounds checking applies
+        min_size = balance * 0.001  # 10
+        assert position_size >= min_size
+    
+    def test_calculate_size_no_regime(self):
+        """Test position size calculation without regime context"""
+        sizer = RegimeAdaptiveSizer(base_fraction=0.03)
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        balance = 10000.0
+        risk_amount = 2000.0
+        
+        position_size = sizer.calculate_size(signal, balance, risk_amount)
+        
+        # Base: 10000 * 0.03 = 300
+        # Regime multiplier: 300 * 0.5 = 150 (unknown regime)
+        # Confidence adj: 150 * 0.9 = 135
+        # Strength adj: 135 * 0.8 = 108
+        assert position_size == 108.0
+    
+    def test_calculate_size_hold_signal(self):
+        """Test position size calculation for HOLD signal"""
+        sizer = RegimeAdaptiveSizer()
+        signal = self.create_test_signal(SignalDirection.HOLD, 0.0, 1.0)
+        regime = self.create_test_regime('trend_up', 'low_vol', 0.8, 10, 0.8)
+        balance = 10000.0
+        risk_amount = 2000.0
+        
+        position_size = sizer.calculate_size(signal, balance, risk_amount, regime)
+        
+        assert position_size == 0.0
+    
+    def test_get_regime_allocation_bull_low_vol(self):
+        """Test regime allocation breakdown for bull low vol"""
+        sizer = RegimeAdaptiveSizer()
+        regime = self.create_test_regime('trend_up', 'low_vol', 0.8, 10, 0.8)
+        
+        allocation = sizer.get_regime_allocation(regime)
+        
+        assert allocation['regime_key'] == 'bull_low_vol'
+        assert allocation['regime_multiplier'] == 1.8
+        assert allocation['volatility_adjustment'] == 1.1  # strength >= 0.8
+        assert allocation['max_fraction'] == 0.25
+    
+    def test_get_regime_allocation_bear_high_vol(self):
+        """Test regime allocation breakdown for bear high vol"""
+        sizer = RegimeAdaptiveSizer()
+        regime = self.create_test_regime('trend_down', 'high_vol', 0.6, 5, 0.3)
+        
+        allocation = sizer.get_regime_allocation(regime)
+        
+        assert allocation['regime_key'] == 'bear_high_vol'
+        assert allocation['regime_multiplier'] == 0.2
+        assert allocation['volatility_adjustment'] == 0.7  # strength < 0.4
+        assert allocation['max_fraction'] == 0.08
+    
+    def test_get_regime_allocation_no_regime(self):
+        """Test regime allocation breakdown without regime"""
+        sizer = RegimeAdaptiveSizer()
+        
+        allocation = sizer.get_regime_allocation(None)
+        
+        assert allocation['regime_key'] == 'unknown'
+        assert allocation['regime_multiplier'] == 0.5
+        assert allocation['volatility_adjustment'] == 1.0
+        assert allocation['max_fraction'] == 0.1
+    
+    def test_update_regime_multipliers(self):
+        """Test updating regime multipliers"""
+        sizer = RegimeAdaptiveSizer()
+        
+        new_multipliers = {
+            'bull_low_vol': 2.5,
+            'bear_high_vol': 0.15
+        }
+        
+        sizer.update_regime_multipliers(new_multipliers)
+        
+        assert sizer.regime_multipliers['bull_low_vol'] == 2.5
+        assert sizer.regime_multipliers['bear_high_vol'] == 0.15
+    
+    def test_update_regime_multipliers_validation(self):
+        """Test regime multiplier update validation"""
+        sizer = RegimeAdaptiveSizer()
+        
+        with pytest.raises(ValueError, match="regime multiplier.*must be between 0.1 and 3.0"):
+            sizer.update_regime_multipliers({'test': 5.0})
+    
+    def test_volatility_adjustment_disabled(self):
+        """Test position sizing with volatility adjustment disabled"""
+        sizer = RegimeAdaptiveSizer(base_fraction=0.03, volatility_adjustment=False)
+        signal = self.create_test_signal(SignalDirection.BUY, 0.8, 0.9)
+        regime = self.create_test_regime('trend_up', 'low_vol', 0.8, 10, 0.3)  # Low strength
+        balance = 10000.0
+        risk_amount = 2000.0
+        
+        position_size = sizer.calculate_size(signal, balance, risk_amount, regime)
+        
+        # Should not apply volatility adjustment (strength-based)
+        # Base: 10000 * 0.03 = 300
+        # Regime multiplier: 300 * 1.8 = 540
+        # Confidence adj: 540 * 0.9 = 486
+        # Strength adj: 486 * 0.8 = 388.8
+        # Regime confidence: 388.8 * 0.8 = 311.04
+        # No volatility adjustment
+        assert abs(position_size - 311.04) < 1.0
+    
+    def test_get_parameters(self):
+        """Test get_parameters method"""
+        custom_multipliers = {'bull_low_vol': 2.0}
+        sizer = RegimeAdaptiveSizer(
+            base_fraction=0.05,
+            regime_multipliers=custom_multipliers,
+            volatility_adjustment=False
+        )
+        params = sizer.get_parameters()
+        
+        assert params['name'] == "regime_adaptive_sizer"
+        assert params['type'] == "RegimeAdaptiveSizer"
+        assert params['base_fraction'] == 0.05
+        assert params['volatility_adjustment'] is False
+        # Custom multipliers are merged with defaults
+        assert params['regime_multipliers']['bull_low_vol'] == 2.0
+        assert 'unknown' in params['regime_multipliers']  # Default preserved
+        assert params['regime_multipliers']['unknown'] == 0.5  # Default value
 
 
 class TestUtilityFunctions:

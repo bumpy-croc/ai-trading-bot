@@ -471,6 +471,216 @@ class KellySizer(PositionSizer):
         return params
 
 
+class RegimeAdaptiveSizer(PositionSizer):
+    """
+    Regime-adaptive position sizer
+    
+    Adjusts position sizing based on detected market regimes,
+    with different sizing strategies for different market conditions.
+    """
+    
+    def __init__(self, base_fraction: float = 0.03, 
+                 regime_multipliers: Optional[dict[str, float]] = None,
+                 volatility_adjustment: bool = True):
+        """
+        Initialize regime-adaptive sizer
+        
+        Args:
+            base_fraction: Base fraction of balance to allocate (0.03 = 3%)
+            regime_multipliers: Custom multipliers for different regimes
+            volatility_adjustment: Whether to adjust for volatility within regimes
+        """
+        super().__init__("regime_adaptive_sizer")
+        
+        if not 0.001 <= base_fraction <= 0.2:
+            raise ValueError(f"base_fraction must be between 0.001 and 0.2, got {base_fraction}")
+        
+        self.base_fraction = base_fraction
+        self.volatility_adjustment = volatility_adjustment
+        
+        # Default regime multipliers
+        default_multipliers = {
+            'bull_low_vol': 1.8,     # Aggressive in favorable conditions
+            'bull_high_vol': 1.2,    # Moderate in volatile bull market
+            'bear_low_vol': 0.4,     # Conservative in bear market
+            'bear_high_vol': 0.2,    # Very conservative in volatile bear
+            'range_low_vol': 0.8,    # Reduced in sideways markets
+            'range_high_vol': 0.3,   # Very reduced in volatile sideways
+            'unknown': 0.5           # Conservative when regime unclear
+        }
+        
+        # Merge custom multipliers with defaults
+        if regime_multipliers:
+            self.regime_multipliers = {**default_multipliers, **regime_multipliers}
+        else:
+            self.regime_multipliers = default_multipliers
+        
+        # Validate multipliers
+        for regime, multiplier in self.regime_multipliers.items():
+            if not 0.1 <= multiplier <= 3.0:
+                raise ValueError(f"regime multiplier for {regime} must be between 0.1 and 3.0, got {multiplier}")
+    
+    def calculate_size(self, signal: 'Signal', balance: float, risk_amount: float,
+                      regime: Optional['RegimeContext'] = None) -> float:
+        """Calculate position size based on regime-specific parameters"""
+        self.validate_inputs(balance, risk_amount)
+        
+        if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Get regime-specific multiplier
+        regime_multiplier = self._get_regime_multiplier(regime)
+        
+        # Base position size
+        base_size = balance * self.base_fraction * regime_multiplier
+        
+        # Apply signal-based adjustments
+        confidence_adj = max(0.2, signal.confidence)
+        strength_adj = max(0.2, signal.strength)
+        
+        adjusted_size = base_size * confidence_adj * strength_adj
+        
+        # Apply regime confidence scaling
+        if regime is not None and hasattr(regime, 'confidence'):
+            regime_confidence_adj = max(0.3, regime.confidence)
+            adjusted_size *= regime_confidence_adj
+        
+        # Apply volatility adjustment within regime
+        if self.volatility_adjustment and regime is not None:
+            volatility_adj = self._get_volatility_adjustment(regime)
+            adjusted_size *= volatility_adj
+        
+        # Respect risk amount limit
+        if risk_amount > 0:
+            adjusted_size = min(adjusted_size, risk_amount)
+        
+        # Apply bounds checking with regime-specific limits
+        max_fraction = self._get_max_fraction_for_regime(regime)
+        return self.apply_bounds_checking(adjusted_size, balance, max_fraction=max_fraction)
+    
+    def _get_regime_multiplier(self, regime: Optional['RegimeContext']) -> float:
+        """Get position size multiplier based on current regime"""
+        if regime is None:
+            return self.regime_multipliers['unknown']
+        
+        # Determine regime key based on trend and volatility
+        trend_key = 'unknown'
+        if hasattr(regime, 'trend'):
+            if regime.trend.value == 'trend_up':
+                trend_key = 'bull'
+            elif regime.trend.value == 'trend_down':
+                trend_key = 'bear'
+            else:
+                trend_key = 'range'
+        
+        vol_key = 'high_vol'
+        if hasattr(regime, 'volatility'):
+            vol_key = 'low_vol' if regime.volatility.value == 'low_vol' else 'high_vol'
+        
+        regime_key = f"{trend_key}_{vol_key}"
+        
+        return self.regime_multipliers.get(regime_key, self.regime_multipliers['unknown'])
+    
+    def _get_volatility_adjustment(self, regime: 'RegimeContext') -> float:
+        """Get additional volatility adjustment within regime"""
+        if not hasattr(regime, 'strength'):
+            return 1.0
+        
+        # Use regime strength as proxy for volatility stability
+        # Higher strength = more stable regime = larger positions
+        strength = regime.strength
+        
+        if strength >= 0.8:
+            return 1.1  # Increase size in very stable regimes
+        elif strength >= 0.6:
+            return 1.0  # Normal size in stable regimes
+        elif strength >= 0.4:
+            return 0.9  # Slight reduction in moderately stable regimes
+        else:
+            return 0.7  # Significant reduction in unstable regimes
+    
+    def _get_max_fraction_for_regime(self, regime: Optional['RegimeContext']) -> float:
+        """Get maximum position fraction based on regime"""
+        if regime is None:
+            return 0.1  # 10% max for unknown regime
+        
+        # More aggressive limits in favorable regimes
+        if hasattr(regime, 'trend') and hasattr(regime, 'volatility'):
+            if regime.trend.value == 'trend_up' and regime.volatility.value == 'low_vol':
+                return 0.25  # 25% max in bull low vol
+            elif regime.trend.value == 'trend_down':
+                return 0.08  # 8% max in bear market
+            elif regime.volatility.value == 'high_vol':
+                return 0.12  # 12% max in high volatility
+        
+        return 0.15  # 15% default max
+    
+    def update_regime_multipliers(self, new_multipliers: dict[str, float]) -> None:
+        """
+        Update regime multipliers (useful for optimization)
+        
+        Args:
+            new_multipliers: New multiplier values
+        """
+        # Validate new multipliers
+        for regime, multiplier in new_multipliers.items():
+            if not 0.1 <= multiplier <= 3.0:
+                raise ValueError(f"regime multiplier for {regime} must be between 0.1 and 3.0, got {multiplier}")
+        
+        self.regime_multipliers.update(new_multipliers)
+    
+    def get_regime_allocation(self, regime: Optional['RegimeContext']) -> dict[str, float]:
+        """
+        Get detailed allocation breakdown for a regime
+        
+        Args:
+            regime: Regime context
+            
+        Returns:
+            Dictionary with allocation details
+        """
+        if regime is None:
+            return {
+                'regime_key': 'unknown',
+                'regime_multiplier': self.regime_multipliers['unknown'],
+                'volatility_adjustment': 1.0,
+                'max_fraction': 0.1
+            }
+        
+        # Get regime key
+        trend_key = 'unknown'
+        if hasattr(regime, 'trend'):
+            if regime.trend.value == 'trend_up':
+                trend_key = 'bull'
+            elif regime.trend.value == 'trend_down':
+                trend_key = 'bear'
+            else:
+                trend_key = 'range'
+        
+        vol_key = 'high_vol'
+        if hasattr(regime, 'volatility'):
+            vol_key = 'low_vol' if regime.volatility.value == 'low_vol' else 'high_vol'
+        
+        regime_key = f"{trend_key}_{vol_key}"
+        
+        return {
+            'regime_key': regime_key,
+            'regime_multiplier': self._get_regime_multiplier(regime),
+            'volatility_adjustment': self._get_volatility_adjustment(regime),
+            'max_fraction': self._get_max_fraction_for_regime(regime)
+        }
+    
+    def get_parameters(self) -> dict[str, Any]:
+        """Get regime-adaptive sizer parameters"""
+        params = super().get_parameters()
+        params.update({
+            'base_fraction': self.base_fraction,
+            'volatility_adjustment': self.volatility_adjustment,
+            'regime_multipliers': self.regime_multipliers
+        })
+        return params
+
+
 # Utility functions for position sizing
 def calculate_position_from_risk(risk_amount: float, entry_price: float, 
                                stop_loss_price: float) -> float:

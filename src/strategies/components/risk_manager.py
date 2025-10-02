@@ -9,9 +9,7 @@ strategy architecture.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
-
-import pandas as pd
+from typing import Any, Optional
 
 
 @dataclass
@@ -228,7 +226,7 @@ class RiskManager(ABC):
         if balance <= 0:
             raise ValueError(f"balance must be positive, got {balance}")
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """
         Get risk manager parameters for logging and serialization
         
@@ -344,7 +342,7 @@ class FixedRiskManager(RiskManager):
         
         return max(0.2, multiplier)  # Minimum 20% of base size
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get fixed risk manager parameters"""
         params = super().get_parameters()
         params.update({
@@ -491,7 +489,7 @@ class VolatilityRiskManager(RiskManager):
         
         return max(0.2, min(2.0, multiplier))  # 20% to 200% of base size
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get volatility risk manager parameters"""
         params = super().get_parameters()
         params.update({
@@ -511,7 +509,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
     with different risk profiles for different market conditions.
     """
     
-    def __init__(self, base_risk: float = 0.02, regime_multipliers: Optional[Dict[str, float]] = None):
+    def __init__(self, base_risk: float = 0.02, regime_multipliers: Optional[dict[str, float]] = None):
         """
         Initialize regime-adaptive risk manager
         
@@ -527,7 +525,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
         self.base_risk = base_risk
         
         # Default regime multipliers
-        self.regime_multipliers = regime_multipliers or {
+        default_multipliers = {
             'bull_low_vol': 1.5,    # Aggressive in favorable conditions
             'bull_high_vol': 1.0,   # Normal in volatile bull market
             'bear_low_vol': 0.5,    # Conservative in bear market
@@ -536,6 +534,12 @@ class RegimeAdaptiveRiskManager(RiskManager):
             'sideways_high_vol': 0.4, # Very reduced in volatile sideways
             'unknown': 0.6          # Conservative when regime unclear
         }
+        
+        # Merge custom multipliers with defaults
+        if regime_multipliers:
+            self.regime_multipliers = {**default_multipliers, **regime_multipliers}
+        else:
+            self.regime_multipliers = default_multipliers
         
         # Validate multipliers
         for regime, multiplier in self.regime_multipliers.items():
@@ -663,7 +667,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
         
         return False
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive risk manager parameters"""
         params = super().get_parameters()
         params.update({
