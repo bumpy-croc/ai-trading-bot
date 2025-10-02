@@ -505,10 +505,14 @@ class ComponentPerformanceTester:
         avg_strength = np.mean(strengths)
         
         # Correlation between confidence and accuracy
-        confidence_accuracy_correlation = np.corrcoef(
-            confidences, 
-            [1 if s['accurate'] else 0 for s in all_signals]
-        )[0, 1] if len(confidences) > 1 else 0.0
+        if len(confidences) > 1:
+            correlation = np.corrcoef(
+                confidences, 
+                [1 if s['accurate'] else 0 for s in all_signals]
+            )[0, 1]
+            confidence_accuracy_correlation = 0.0 if np.isnan(correlation) else correlation
+        else:
+            confidence_accuracy_correlation = 0.0
         
         # Timing metrics
         test_duration = time.time() - start_time
@@ -679,7 +683,8 @@ class ComponentPerformanceTester:
         # Position sizing analysis
         position_sizes = [p['position_size'] for p in all_positions]
         avg_position_size = np.mean(position_sizes)
-        position_size_consistency = 1.0 / (1.0 + np.std(position_sizes))  # Higher is more consistent
+        std_pos_size = np.std(position_sizes)
+        position_size_consistency = 1.0 / max(1.0 + std_pos_size, 1e-10)  # Higher is more consistent
         
         # Stop loss analysis
         stop_losses = [abs(p['stop_loss'] - p['entry_price']) / p['entry_price'] for p in all_positions]
@@ -843,8 +848,18 @@ class ComponentPerformanceTester:
         confidences = [c['confidence'] for c in all_calculations]
         strengths = [c['strength'] for c in all_calculations]
         
-        confidence_responsiveness = abs(np.corrcoef(confidences, size_fractions)[0, 1]) if len(confidences) > 1 else 0.0
-        strength_responsiveness = abs(np.corrcoef(strengths, size_fractions)[0, 1]) if len(strengths) > 1 else 0.0
+        # Calculate correlations with NaN handling
+        if len(confidences) > 1:
+            conf_corr = np.corrcoef(confidences, size_fractions)[0, 1]
+            confidence_responsiveness = 0.0 if np.isnan(conf_corr) else abs(conf_corr)
+        else:
+            confidence_responsiveness = 0.0
+        
+        if len(strengths) > 1:
+            str_corr = np.corrcoef(strengths, size_fractions)[0, 1]
+            strength_responsiveness = 0.0 if np.isnan(str_corr) else abs(str_corr)
+        else:
+            strength_responsiveness = 0.0
         
         # Bounds adherence
         bounds_adherence_rate = 1.0 - (bounds_violations / total_calculations)

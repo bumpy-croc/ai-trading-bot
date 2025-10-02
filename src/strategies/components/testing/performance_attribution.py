@@ -217,8 +217,12 @@ class PerformanceAttributionAnalyzer:
         if sizing_attribution:
             total_attribution += sizing_attribution.total_contribution
         
-        explained_performance = min(1.0, abs(total_attribution) / abs(baseline_results['total_return']) 
-                                  if baseline_results['total_return'] != 0 else 0.0)
+        # Use tolerance-based check to avoid floating point precision issues
+        EPSILON = 1e-10
+        if abs(baseline_results['total_return']) < EPSILON:
+            explained_performance = 0.0
+        else:
+            explained_performance = min(1.0, abs(total_attribution) / abs(baseline_results['total_return']))
         unexplained_performance = 1.0 - explained_performance
         
         # Determine primary performance driver and weakest component
@@ -230,8 +234,12 @@ class PerformanceAttributionAnalyzer:
         if sizing_attribution:
             component_contributions['position_sizer'] = sizing_attribution.total_contribution
         
-        primary_driver = max(component_contributions, key=component_contributions.get) if component_contributions else ""
-        weakest_component = min(component_contributions, key=component_contributions.get) if component_contributions else ""
+        if component_contributions and len(component_contributions) > 0:
+            primary_driver = max(component_contributions, key=component_contributions.get)
+            weakest_component = min(component_contributions, key=component_contributions.get)
+        else:
+            primary_driver = ""
+            weakest_component = ""
         
         # Generate optimization priorities
         optimization_priority = self._generate_optimization_priorities(
@@ -294,23 +302,28 @@ class PerformanceAttributionAnalyzer:
                     except:
                         pass
                 
-                # Execute trade if decision made
-                if decision and decision.get('action') in ['buy', 'sell']:
-                    trade_result = self._execute_attribution_trade(
-                        decision, self.test_data.iloc[i], self.test_data.iloc[i+1], balance
-                    )
+                # Execute trade if decision made (TradingDecision is a dataclass)
+                if decision and hasattr(decision, 'signal'):
+                    # Check if we should trade based on signal direction
+                    signal_direction = decision.signal.direction
+                    direction_value = signal_direction.value if hasattr(signal_direction, 'value') else signal_direction
                     
-                    if trade_result:
-                        trades.append(trade_result)
-                        balance = trade_result['new_balance']
+                    if direction_value in ['buy', 'sell']:
+                        trade_result = self._execute_attribution_trade(
+                            decision, self.test_data.iloc[i], self.test_data.iloc[i+1], balance
+                        )
                         
-                        # Track position sizing decisions
-                        position_sizes.append({
-                            'index': i,
-                            'size': trade_result['position_size'],
-                            'size_fraction': trade_result['position_size'] / balance,
-                            'timestamp': self.test_data.index[i]
-                        })
+                        if trade_result:
+                            trades.append(trade_result)
+                            balance = trade_result['new_balance']
+                            
+                            # Track position sizing decisions
+                            position_sizes.append({
+                                'index': i,
+                                'size': trade_result['position_size'],
+                                'size_fraction': trade_result['position_size'] / balance,
+                                'timestamp': self.test_data.index[i]
+                            })
                 
                 portfolio_values.append(balance)
                 
@@ -337,15 +350,27 @@ class PerformanceAttributionAnalyzer:
             'win_rate': sum(1 for t in trades if t['return'] > 0) / len(trades) if trades else 0.0
         }
     
-    def _execute_attribution_trade(self, decision: Dict[str, Any], entry_data: pd.Series,
+    def _execute_attribution_trade(self, decision, entry_data: pd.Series,
                                  exit_data: pd.Series, balance: float) -> Optional[Dict[str, Any]]:
         """Execute trade for attribution analysis"""
         try:
             entry_price = entry_data['close']
             exit_price = exit_data['close']
-            position_size = decision.get('size', balance * 0.02)
             
-            if decision['action'] == 'buy':
+            # Handle TradingDecision dataclass
+            if hasattr(decision, 'position_size'):
+                # TradingDecision dataclass
+                position_size = decision.position_size
+                signal_direction = decision.signal.direction
+                action = signal_direction.value if hasattr(signal_direction, 'value') else signal_direction
+                decision_metadata = decision.metadata
+            else:
+                # Legacy dict format
+                position_size = decision.get('size', balance * 0.02)
+                action = decision['action']
+                decision_metadata = decision.get('metadata', {})
+            
+            if action == 'buy':
                 trade_return = (exit_price - entry_price) / entry_price
             else:  # sell
                 trade_return = (entry_price - exit_price) / entry_price
@@ -354,7 +379,7 @@ class PerformanceAttributionAnalyzer:
             new_balance = balance + pnl
             
             return {
-                'action': decision['action'],
+                'action': action,
                 'entry_price': entry_price,
                 'exit_price': exit_price,
                 'position_size': position_size,
@@ -363,7 +388,7 @@ class PerformanceAttributionAnalyzer:
                 'new_balance': new_balance,
                 'entry_time': entry_data.name,
                 'exit_time': exit_data.name,
-                'decision_metadata': decision.get('metadata', {})
+                'decision_metadata': decision_metadata
             }
         
         except Exception as e:

@@ -335,15 +335,19 @@ class RegimeTester:
                 # Process candle with strategy (pass balance, strategy detects regime internally)
                 decision = strategy.process_candle(current_data, i, balance)
                 
-                # Execute trades based on decision
-                if decision and decision.get('action') in ['buy', 'sell']:
-                    trade_result = self._execute_trade(
-                        decision, regime_data.iloc[i], regime_data.iloc[i+1], balance
-                    )
+                # Execute trades based on decision (TradingDecision is a dataclass)
+                if decision and hasattr(decision, 'signal'):
+                    signal_direction = decision.signal.direction
+                    direction_value = signal_direction.value if hasattr(signal_direction, 'value') else signal_direction
                     
-                    if trade_result:
-                        trades.append(trade_result)
-                        balance = trade_result['new_balance']
+                    if direction_value in ['buy', 'sell']:
+                        trade_result = self._execute_trade(
+                            decision, regime_data.iloc[i], regime_data.iloc[i+1], balance
+                        )
+                        
+                        if trade_result:
+                            trades.append(trade_result)
+                            balance = trade_result['new_balance']
                 
                 portfolio_values.append(balance)
                 
@@ -416,15 +420,25 @@ class RegimeTester:
             error_rate=error_count / len(regime_data) if len(regime_data) > 0 else 0.0
         )
     
-    def _execute_trade(self, decision: Dict[str, Any], entry_data: pd.Series, 
+    def _execute_trade(self, decision, entry_data: pd.Series, 
                       exit_data: pd.Series, balance: float) -> Optional[Dict[str, Any]]:
         """Execute a trade based on strategy decision"""
         try:
             entry_price = entry_data['close']
             exit_price = exit_data['close']
-            position_size = decision.get('size', balance * 0.02)  # Default 2% position
             
-            if decision['action'] == 'buy':
+            # Handle TradingDecision dataclass
+            if hasattr(decision, 'position_size'):
+                # TradingDecision dataclass
+                position_size = decision.position_size
+                signal_direction = decision.signal.direction
+                action = signal_direction.value if hasattr(signal_direction, 'value') else signal_direction
+            else:
+                # Legacy dict format
+                position_size = decision.get('size', balance * 0.02)  # Default 2% position
+                action = decision['action']
+            
+            if action == 'buy':
                 trade_return = (exit_price - entry_price) / entry_price
             else:  # sell
                 trade_return = (entry_price - exit_price) / entry_price
@@ -433,7 +447,7 @@ class RegimeTester:
             new_balance = balance + pnl
             
             return {
-                'action': decision['action'],
+                'action': action,
                 'entry_price': entry_price,
                 'exit_price': exit_price,
                 'position_size': position_size,
