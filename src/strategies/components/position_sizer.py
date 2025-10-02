@@ -480,7 +480,7 @@ class RegimeAdaptiveSizer(PositionSizer):
     """
     
     def __init__(self, base_fraction: float = 0.03, 
-                 regime_multipliers: Optional[Dict[str, float]] = None,
+                 regime_multipliers: Optional[dict[str, float]] = None,
                  volatility_adjustment: bool = True):
         """
         Initialize regime-adaptive sizer
