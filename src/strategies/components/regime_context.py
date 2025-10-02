@@ -8,7 +8,7 @@ for providing market regime information to strategy components.
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -37,7 +37,7 @@ class RegimeContext:
     duration: int
     strength: float
     timestamp: Optional[datetime] = None
-    metadata: Optional[Dict[str, float]] = None
+    metadata: Optional[dict[str, float]] = None
     
     def __post_init__(self):
         """Validate regime context parameters after initialization"""
@@ -312,7 +312,7 @@ class EnhancedRegimeDetector:
         return transitions
     
     def get_regime_statistics(self, df: pd.DataFrame, 
-                            lookback_periods: int = 252) -> Dict[str, float]:
+                            lookback_periods: int = 252) -> dict[str, float]:
         """
         Get statistical information about regime behavior
         

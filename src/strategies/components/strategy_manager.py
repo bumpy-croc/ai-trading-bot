@@ -9,7 +9,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 from uuid import uuid4
 
 import pandas as pd
@@ -39,8 +39,8 @@ class StrategyVersion:
     name: str
     description: str
     created_at: datetime
-    components: Dict[str, Dict[str, Any]]
-    parameters: Dict[str, Any]
+    components: dict[str, Dict[str, Any]]
+    parameters: dict[str, Any]
     is_active: bool = False
     performance_metrics: Optional[Dict[str, float]] = None
     
@@ -51,7 +51,7 @@ class StrategyVersion:
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'StrategyVersion':
+    def from_dict(cls, data: dict[str, Any]) -> 'StrategyVersion':
         """Create from dictionary"""
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         return cls(**data)
@@ -75,7 +75,7 @@ class StrategyExecution:
     signal: Signal
     regime: Optional[RegimeContext]
     position_size: float
-    risk_metrics: Dict[str, float]
+    risk_metrics: dict[str, float]
     execution_time_ms: float
     version_id: str
 
@@ -111,12 +111,12 @@ class StrategyManager:
         self.regime_detector = regime_detector or EnhancedRegimeDetector()
         
         # Version management
-        self.versions: Dict[str, StrategyVersion] = {}
+        self.versions: dict[str, StrategyVersion] = {}
         self.current_version_id: Optional[str] = None
-        self.execution_history: List[StrategyExecution] = []
+        self.execution_history: list[StrategyExecution] = []
         
         # Performance tracking
-        self.performance_metrics: Dict[str, float] = {}
+        self.performance_metrics: dict[str, float] = {}
         
         # Create initial version
         self._create_initial_version()
@@ -374,7 +374,7 @@ class StrategyManager:
         
         return metrics
     
-    def compare_versions(self, version_ids: List[str], 
+    def compare_versions(self, version_ids: list[str], 
                         metric: str = 'avg_signal_confidence') -> Dict[str, float]:
         """
         Compare performance metrics across versions
@@ -508,7 +508,7 @@ class StrategyManager:
         
         return self.versions[version_id].to_dict()
     
-    def import_version(self, version_data: Dict[str, Any]) -> Optional[str]:
+    def import_version(self, version_data: dict[str, Any]) -> Optional[str]:
         """Import version configuration from backup"""
         try:
             version = StrategyVersion.from_dict(version_data)
