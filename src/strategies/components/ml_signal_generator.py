@@ -325,7 +325,6 @@ class MLSignalGenerator(SignalGenerator):
             
             # Get prediction
             if self.use_prediction_engine and self.prediction_engine is not None and self.model_name:
-                # Use prediction engine - returns real price, no denormalization needed
                 window_df = df[["open", "high", "low", "close", "volume"]].iloc[
                     index - self.sequence_length : index
                 ]

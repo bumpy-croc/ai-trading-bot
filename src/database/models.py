@@ -13,6 +13,7 @@ from sqlalchemy import (
     Enum,  # Added Float and JSON
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -788,3 +789,190 @@ class PredictionCache(Base):
         Index("idx_pred_cache_model_config", "model_name", "config_hash"),
         Index("idx_pred_cache_access", "last_accessed"),
     )
+
+
+class StrategyStatus(enum.Enum):
+    """Strategy status enumeration"""
+    EXPERIMENTAL = "EXPERIMENTAL"
+    TESTING = "TESTING"
+    PRODUCTION = "PRODUCTION"
+    RETIRED = "RETIRED"
+    DEPRECATED = "DEPRECATED"
+
+
+class StrategyRegistry(Base):
+    """Strategy registry with version control and metadata"""
+    
+    __tablename__ = "strategy_registry"
+    
+    id = Column(Integer, primary_key=True)
+    strategy_id = Column(String(100), nullable=False, unique=True, index=True)
+    name = Column(String(200), nullable=False, index=True)
+    version = Column(String(20), nullable=False)
+    
+    # Lineage tracking
+    parent_id = Column(String(100), index=True)
+    lineage_path = Column(JSONType, default=lambda: [])  # Path from root ancestor
+    branch_name = Column(String(100))
+    merge_source = Column(String(100))
+    
+    # Metadata
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_by = Column(String(100), nullable=False)
+    description = Column(Text)
+    tags = Column(JSONType, default=lambda: [])
+    status = Column(Enum(StrategyStatus, native_enum=False, create_type=False), 
+                   nullable=False, default=StrategyStatus.EXPERIMENTAL)
+    
+    # Component configurations
+    signal_generator_config = Column(JSONType, nullable=False)
+    risk_manager_config = Column(JSONType, nullable=False)
+    position_sizer_config = Column(JSONType, nullable=False)
+    regime_detector_config = Column(JSONType, nullable=False)
+    
+    # Additional parameters and metadata
+    parameters = Column(JSONType, default=lambda: {})
+    performance_summary = Column(JSONType)
+    validation_results = Column(JSONType)
+    
+    # Integrity checksums
+    config_hash = Column(String(64), nullable=False, index=True)
+    component_hash = Column(String(64), nullable=False, index=True)
+    
+    # Relationships
+    # Note: parent relationship removed due to foreign key constraint issues
+    # The foreign key constraint is handled in the migration file
+    versions = relationship("StrategyVersion", backref="strategy", cascade="all, delete-orphan")
+    performance_records = relationship("StrategyPerformance", backref="strategy", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index("idx_strategy_name_version", "name", "version"),
+        Index("idx_strategy_status_created", "status", "created_at"),
+        Index("idx_strategy_parent_created", "parent_id", "created_at"),
+        UniqueConstraint("name", "version", name="uq_strategy_name_version"),
+        UniqueConstraint("strategy_id", name="uq_strategy_id"),
+    )
+    
+    created_at_db = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class StrategyVersion(Base):
+    """Strategy version tracking"""
+    
+    __tablename__ = "strategy_versions"
+    
+    id = Column(Integer, primary_key=True)
+    strategy_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), 
+                        nullable=False, index=True)
+    version = Column(String(20), nullable=False)
+    
+    # Version metadata
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    changes = Column(JSONType, nullable=False)  # List of changes
+    performance_delta = Column(JSONType)  # Performance comparison with previous version
+    is_major = Column(Boolean, default=False)
+    
+    # Version-specific data
+    component_changes = Column(JSONType)  # Which components changed
+    parameter_changes = Column(JSONType)  # Parameter differences
+    
+    __table_args__ = (
+        Index("idx_version_strategy_created", "strategy_id", "created_at"),
+        UniqueConstraint("strategy_id", "version", name="uq_strategy_version"),
+    )
+    
+    created_at_db = Column(DateTime, default=datetime.utcnow)
+
+
+class StrategyPerformance(Base):
+    """Strategy performance tracking and comparison"""
+    
+    __tablename__ = "strategy_performance"
+    
+    id = Column(Integer, primary_key=True)
+    strategy_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), 
+                        nullable=False, index=True)
+    version = Column(String(20), nullable=False)
+    
+    # Performance period
+    period_start = Column(DateTime, nullable=False, index=True)
+    period_end = Column(DateTime, nullable=False, index=True)
+    period_type = Column(String(20), nullable=False)  # 'backtest', 'paper', 'live'
+    
+    # Core performance metrics
+    total_return = Column(Numeric(18, 8), nullable=False)
+    total_return_pct = Column(Numeric(18, 8), nullable=False)
+    sharpe_ratio = Column(Numeric(18, 8))
+    max_drawdown = Column(Numeric(18, 8))
+    win_rate = Column(Numeric(18, 8))
+    
+    # Trade statistics
+    total_trades = Column(Integer, default=0)
+    winning_trades = Column(Integer, default=0)
+    losing_trades = Column(Integer, default=0)
+    avg_trade_duration_hours = Column(Numeric(18, 8))
+    
+    # Risk metrics
+    volatility = Column(Numeric(18, 8))
+    sortino_ratio = Column(Numeric(18, 8))
+    calmar_ratio = Column(Numeric(18, 8))
+    var_95 = Column(Numeric(18, 8))  # Value at Risk 95%
+    
+    # Component attribution
+    signal_generator_contribution = Column(Numeric(18, 8))
+    risk_manager_contribution = Column(Numeric(18, 8))
+    position_sizer_contribution = Column(Numeric(18, 8))
+    
+    # Regime-specific performance
+    regime_performance = Column(JSONType)  # Performance by regime type
+    
+    # Additional metrics
+    additional_metrics = Column(JSONType, default=lambda: {})
+    
+    # Test configuration
+    test_symbol = Column(String(20))
+    test_timeframe = Column(String(10))
+    test_parameters = Column(JSONType)
+    
+    __table_args__ = (
+        Index("idx_perf_strategy_period", "strategy_id", "period_start", "period_end"),
+        Index("idx_perf_return_sharpe", "total_return_pct", "sharpe_ratio"),
+        Index("idx_perf_period_type", "period_type", "period_start"),
+    )
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class StrategyLineage(Base):
+    """Strategy lineage and evolutionary tracking"""
+    
+    __tablename__ = "strategy_lineage"
+    
+    id = Column(Integer, primary_key=True)
+    ancestor_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), 
+                        nullable=False, index=True)
+    descendant_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), 
+                          nullable=False, index=True)
+    
+    # Relationship metadata
+    relationship_type = Column(String(20), nullable=False)  # 'parent', 'branch', 'merge'
+    generation_distance = Column(Integer, nullable=False)  # How many generations apart
+    
+    # Evolution tracking
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    evolution_reason = Column(String(200))  # Why this evolution was made
+    change_impact = Column(JSONType)  # Impact analysis of changes
+    
+    # Performance comparison
+    performance_improvement = Column(Numeric(18, 8))  # Performance delta
+    risk_change = Column(Numeric(18, 8))  # Risk profile change
+    
+    __table_args__ = (
+        Index("idx_lineage_ancestor", "ancestor_id", "generation_distance"),
+        Index("idx_lineage_descendant", "descendant_id", "generation_distance"),
+        UniqueConstraint("ancestor_id", "descendant_id", name="uq_lineage_pair"),
+    )
+    
+    created_at_db = Column(DateTime, default=datetime.utcnow)

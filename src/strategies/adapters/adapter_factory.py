@@ -229,7 +229,6 @@ class AdapterFactory:
         
         config = conversion_config or {}
         
-        # Use moderate template as default for legacy conversion
         # Use deep copy to prevent mutation of global template defaults
         template_config = copy.deepcopy(self._templates['moderate'])
         

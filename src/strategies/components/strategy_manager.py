@@ -9,6 +9,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -18,6 +19,92 @@ from .signal_generator import Signal, SignalGenerator
 from .risk_manager import RiskManager, Position, MarketData
 from .position_sizer import PositionSizer
 from .regime_context import RegimeContext, EnhancedRegimeDetector
+
+
+class ValidationGate(Enum):
+    """Validation gates for strategy promotion"""
+    PERFORMANCE_THRESHOLD = "performance_threshold"
+    MINIMUM_TRADES = "minimum_trades"
+    DRAWDOWN_LIMIT = "drawdown_limit"
+    SHARPE_RATIO = "sharpe_ratio"
+    WIN_RATE = "win_rate"
+    MAX_DRAWDOWN = "max_drawdown"
+
+
+class PromotionStatus(Enum):
+    """Status of strategy promotion requests"""
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    DEPLOYED = "deployed"
+    FAILED = "failed"
+
+
+class RollbackTrigger(Enum):
+    """Triggers for automatic strategy rollback"""
+    PERFORMANCE_DEGRADATION = "performance_degradation"
+    EXCESSIVE_DRAWDOWN = "excessive_drawdown"
+    ERROR_RATE = "error_rate"
+    MANUAL = "manual"
+    EMERGENCY = "emergency"
+
+
+@dataclass
+class ValidationResult:
+    """Result of strategy validation"""
+    gate: ValidationGate
+    passed: bool
+    value: float
+    threshold: float
+    message: str
+
+
+@dataclass
+class PromotionRequest:
+    """Strategy promotion request"""
+    request_id: str
+    strategy_id: str
+    version_id: str
+    requested_by: str
+    requested_at: datetime
+    from_status: str
+    to_status: str
+    reason: str
+    status: PromotionStatus = PromotionStatus.PENDING
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    deployed_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization"""
+        data = asdict(self)
+        data['from_status'] = self.from_status
+        data['to_status'] = self.to_status
+        data['requested_at'] = self.requested_at.isoformat()
+        data['status'] = self.status.value
+        data['approved_at'] = self.approved_at.isoformat() if self.approved_at else None
+        data['deployed_at'] = self.deployed_at.isoformat() if self.deployed_at else None
+        return data
+
+
+@dataclass
+class RollbackRecord:
+    """Record of strategy rollback"""
+    rollback_id: str
+    strategy_id: str
+    from_version: str
+    to_version: str
+    trigger: RollbackTrigger
+    triggered_at: datetime
+    triggered_by: str
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization"""
+        data = asdict(self)
+        data['trigger'] = self.trigger.value
+        data['triggered_at'] = self.triggered_at.isoformat()
+        return data
 
 
 @dataclass

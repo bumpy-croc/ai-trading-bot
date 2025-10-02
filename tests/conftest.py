@@ -69,13 +69,17 @@ def maybe_setup_database(pytestconfig):
       otherwise start a Postgres testcontainer, export its URL, and stop it at teardown.
       Also run schema reset before tests.
     """
+    # Check TEST_TYPE environment variable first
+    test_type = os.getenv("TEST_TYPE", "").lower()
+    
     # Decide DB based on whether integration tests are selected this session
     try:
         has_integration = bool(pytestconfig.stash.get(("integration", "selected"), False))
     except Exception:
         has_integration = bool(getattr(pytestconfig, "_has_integration_selected", False))
 
-    if not has_integration:
+    # If TEST_TYPE is explicitly set to unit, or no integration tests are selected
+    if test_type == "unit" or not has_integration:
         # * Unit/default path: fast, in-memory SQLite and no heavy setup
         os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
         yield
