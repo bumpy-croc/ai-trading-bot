@@ -57,23 +57,57 @@ class TestMLSignalGenerator:
             strength=0.7
         )
     
-    @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
-    def test_ml_signal_generator_initialization(self, mock_ort):
-        """Test MLSignalGenerator initialization"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name='input')]
-        mock_ort.return_value = mock_session
-        
+    def test_ml_signal_generator_initialization(self):
+        """Test MLSignalGenerator initialization with lazy ONNX session loading"""
         generator = MLSignalGenerator(
             name="test_ml_generator",
             model_path="test_model.onnx",
-            sequence_length=120
+            sequence_length=120,
+            use_prediction_engine=True  # This should prevent ONNX session initialization
+>>>>>>> origin/develop
         )
         
         assert generator.name == "test_ml_generator"
         assert generator.model_path == "test_model.onnx"
         assert generator.sequence_length == 120
+<<<<<<< HEAD
         assert generator.ort_session == mock_session
+=======
+        # ONNX session should be None initially for dual-backend support
+        assert generator.ort_session is None
+        assert generator.input_name is None
+        assert generator.use_prediction_engine is True
+    
+    @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
+    def test_lazy_onnx_session_initialization(self, mock_ort):
+        """Test that ONNX session is initialized lazily when needed"""
+        mock_session = Mock()
+        mock_session.get_inputs.return_value = [Mock(name='input')]
+        mock_session.run.return_value = [[[[0.5]]]]
+        mock_ort.return_value = mock_session
+        
+        # Create generator without prediction engine
+        generator = MLSignalGenerator(
+            name="test_ml_generator",
+            model_path="test_model.onnx",
+            sequence_length=120,
+            use_prediction_engine=False
+        )
+        
+        # Initially, session should be None
+        assert generator.ort_session is None
+        assert generator.input_name is None
+        
+        # Create test data
+        df = self.create_test_dataframe(200)
+        
+        # Generate signal - this should trigger lazy initialization
+        signal = generator.generate_signal(df, 150)
+        
+        # Now session should be initialized
+        assert generator.ort_session is not None
+        assert generator.input_name is not None
+        mock_ort.assert_called_once_with("test_model.onnx")
     
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
     def test_generate_signal_insufficient_history(self, mock_ort):
@@ -156,6 +190,90 @@ class TestMLSignalGenerator:
             assert isinstance(threshold, float)
     
     @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
+<<<<<<< HEAD
+=======
+    def test_confidence_scaling_for_short_threshold(self, mock_ort):
+        """Test that confidence scaling works correctly for short thresholds"""
+        mock_session = Mock()
+        mock_session.get_inputs.return_value = [Mock(name='input')]
+        mock_ort.return_value = mock_session
+        
+        generator = MLSignalGenerator()
+        
+        # Test with same trend/volatility but different confidence levels
+        base_regime_params = {
+            'trend': TrendLabel.RANGE,
+            'volatility': VolLabel.LOW,
+            'duration': 10,
+            'strength': 0.7
+        }
+        
+        # High confidence regime
+        high_confidence_regime = RegimeContext(
+            confidence=0.9,
+            **base_regime_params
+        )
+        
+        # Low confidence regime
+        low_confidence_regime = RegimeContext(
+            confidence=0.3,
+            **base_regime_params
+        )
+        
+        high_conf_threshold = generator._calculate_dynamic_short_threshold(high_confidence_regime)
+        low_conf_threshold = generator._calculate_dynamic_short_threshold(low_confidence_regime)
+        
+        # High confidence should result in more aggressive threshold (closer to 0)
+        assert high_conf_threshold > low_conf_threshold, \
+            f"High confidence threshold ({high_conf_threshold}) should be more aggressive (closer to 0) than low confidence ({low_conf_threshold})"
+        
+        # Both should be negative and within bounds
+        assert high_conf_threshold < 0 and low_conf_threshold < 0
+        assert -0.01 <= high_conf_threshold <= -0.0001
+        assert -0.01 <= low_conf_threshold <= -0.0001
+        
+        # Test extreme cases
+        perfect_confidence_regime = RegimeContext(confidence=1.0, **base_regime_params)
+        no_confidence_regime = RegimeContext(confidence=0.0, **base_regime_params)
+        
+        perfect_threshold = generator._calculate_dynamic_short_threshold(perfect_confidence_regime)
+        no_conf_threshold = generator._calculate_dynamic_short_threshold(no_confidence_regime)
+        
+        # Perfect confidence should be most aggressive
+        assert perfect_threshold > high_conf_threshold > low_conf_threshold > no_conf_threshold, \
+            "Thresholds should be ordered by confidence level (higher confidence = more aggressive)"
+    
+    @patch('src.strategies.components.ml_signal_generator.PredictionEngine')
+    def test_prediction_engine_no_denormalization(self, mock_engine_class):
+        """Test that prediction engine results are not denormalized"""
+        # Mock prediction engine
+        mock_engine = Mock()
+        mock_result = Mock()
+        real_price = 50000.0  # Real price from prediction engine
+        mock_result.price = real_price
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+        
+        generator = MLSignalGenerator(
+            model_path="dummy.onnx",
+            use_prediction_engine=True,
+            model_name="test_model"
+        )
+        generator.prediction_engine = mock_engine
+        
+        # Create test data
+        df = self.create_test_dataframe(200)
+        
+        # Get prediction
+        prediction = generator._get_ml_prediction(df, 150)
+        
+        # Should return the real price directly (no denormalization)
+        assert prediction == real_price, \
+            f"Prediction engine result should not be denormalized: expected {real_price}, got {prediction}"
+    
+    @patch('src.strategies.components.ml_signal_generator.ort.InferenceSession')
+>>>>>>> origin/develop
     def test_confidence_calculation(self, mock_ort):
         """Test confidence calculation based on predicted return"""
         mock_session = Mock()
@@ -449,6 +567,37 @@ class TestMLBasicSignalGenerator:
         assert 'engine_enabled' in signal.metadata
         assert 'engine_model_name' in signal.metadata
         assert 'engine_batch' in signal.metadata
+<<<<<<< HEAD
+=======
+    
+    @patch('src.strategies.components.ml_signal_generator.PredictionEngine')
+    def test_mlbasic_prediction_engine_no_denormalization(self, mock_engine_class):
+        """Test that MLBasicSignalGenerator prediction engine results are not denormalized"""
+        # Mock prediction engine
+        mock_engine = Mock()
+        mock_result = Mock()
+        real_price = 45000.0  # Real price from prediction engine
+        mock_result.price = real_price
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+        
+        generator = MLBasicSignalGenerator(
+            model_path="dummy.onnx",
+            use_prediction_engine=True,
+            model_name="test_model"
+        )
+        generator.prediction_engine = mock_engine
+        
+        # Create test data
+        df = self.create_test_dataframe(200)
+        
+        # Get prediction
+        prediction = generator._get_ml_prediction(df, 150)
+        
+        # Should return the real price directly (no denormalization)
+        assert prediction == real_price, \
+            f"MLBasic prediction engine result should not be denormalized: expected {real_price}, got {prediction}"
 
 
 class TestMLSignalGeneratorEdgeCases:

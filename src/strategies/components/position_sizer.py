@@ -6,9 +6,8 @@ for calculating position sizes based on various factors in the component-based
 strategy architecture.
 """
 
-import math
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -90,7 +89,7 @@ class PositionSizer(ABC):
         
         return max(min_size, min(max_size, size))
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """
         Get position sizer parameters for logging and serialization
         
@@ -136,6 +135,10 @@ class FixedFractionSizer(PositionSizer):
         self.validate_inputs(balance, risk_amount)
         
         if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Respect zero risk limit from RiskManager (veto)
+        if risk_amount <= 0:
             return 0.0
         
         # Base position size
@@ -191,7 +194,7 @@ class FixedFractionSizer(PositionSizer):
         
         return max(0.1, multiplier)  # Minimum 10% of base size
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get fixed fraction sizer parameters"""
         params = super().get_parameters()
         params.update({
@@ -235,6 +238,10 @@ class ConfidenceWeightedSizer(PositionSizer):
         self.validate_inputs(balance, risk_amount)
         
         if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Respect zero risk limit from RiskManager (veto)
+        if risk_amount <= 0:
             return 0.0
         
         # Check minimum confidence threshold
@@ -285,7 +292,7 @@ class ConfidenceWeightedSizer(PositionSizer):
         
         return max(0.1, multiplier)
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get confidence-weighted sizer parameters"""
         params = super().get_parameters()
         params.update({
@@ -344,6 +351,10 @@ class KellySizer(PositionSizer):
         self.validate_inputs(balance, risk_amount)
         
         if signal.direction.value == 'hold':
+            return 0.0
+        
+        # Respect zero risk limit from RiskManager (veto)
+        if risk_amount <= 0:
             return 0.0
         
         # Calculate Kelly percentage
@@ -446,7 +457,7 @@ class KellySizer(PositionSizer):
         
         return max(0.2, multiplier)
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get Kelly sizer parameters"""
         params = super().get_parameters()
         params.update({

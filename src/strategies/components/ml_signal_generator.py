@@ -7,7 +7,7 @@ regime-aware threshold adjustments and confidence calculations.
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
 import onnxruntime as ort
@@ -72,8 +72,10 @@ class MLSignalGenerator(SignalGenerator):
         
         self.model_path = model_path
         self.sequence_length = sequence_length
-        self.ort_session = ort.InferenceSession(self.model_path)
-        self.input_name = self.ort_session.get_inputs()[0].name
+        
+        # Defer ONNX session initialization to enable dual-backend support
+        self.ort_session = None
+        self.input_name = None
         
         # Prediction engine configuration
         cfg = get_config()
@@ -323,28 +325,41 @@ class MLSignalGenerator(SignalGenerator):
             
             # Get prediction
             if self.use_prediction_engine and self.prediction_engine is not None and self.model_name:
-                # Use prediction engine
+                # Use prediction engine - returns real price, no denormalization needed
                 window_df = df[["open", "high", "low", "close", "volume"]].iloc[
                     index - self.sequence_length : index
                 ]
                 result = self.prediction_engine.predict(window_df, model_name=self.model_name)
                 pred = float(result.price)
+                
+                # Prediction engine returns real prices, return directly
+                return pred
             else:
-                # Use local ONNX session
+                # Use local ONNX session; initialize lazily
+                if self.ort_session is None:
+                    self.ort_session = ort.InferenceSession(self.model_path)
+                    self.input_name = self.ort_session.get_inputs()[0].name
+                
                 output = self.ort_session.run(None, {self.input_name: input_data})
                 pred = output[0][0][0]
-            
-            # Denormalize prediction
-            recent_close = df["close"].iloc[index - self.sequence_length : index].values
-            min_close = np.min(recent_close)
-            max_close = np.max(recent_close)
-            
-            if max_close != min_close:
-                pred_denormalized = pred * (max_close - min_close) + min_close
-            else:
-                pred_denormalized = df["close"].iloc[index - 1]
-            
-            return pred_denormalized
+                
+                # Ensure pred is a scalar value
+                if isinstance(pred, (list, tuple, np.ndarray)):
+                    pred = float(np.array(pred).flatten()[0])
+                else:
+                    pred = float(pred)
+                
+                # Denormalize prediction (only for ONNX model outputs)
+                recent_close = df["close"].iloc[index - self.sequence_length : index].values
+                min_close = np.min(recent_close)
+                max_close = np.max(recent_close)
+                
+                if max_close != min_close:
+                    pred_denormalized = pred * (max_close - min_close) + min_close
+                else:
+                    pred_denormalized = df["close"].iloc[index - 1]
+                
+                return pred_denormalized
             
         except Exception as e:
             print(f"[MLSignalGenerator] Prediction error at index {index}: {e}")
@@ -398,8 +413,9 @@ class MLSignalGenerator(SignalGenerator):
         # Adjust based on regime confidence
         # Higher confidence = more aggressive threshold (closer to 0)
         # Lower confidence = more conservative threshold (further from 0)
-        confidence_adjustment = (1 - regime.confidence) * self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
-        threshold = threshold * (1 - confidence_adjustment)
+        # Since threshold is negative, we scale it: high confidence reduces magnitude, low confidence increases magnitude
+        confidence_factor = 1 + regime.confidence * self.SHORT_THRESHOLD_CONFIDENCE_MULTIPLIER
+        threshold = threshold / confidence_factor
         
         # Ensure threshold is within reasonable bounds
         threshold = max(-0.01, min(-0.0001, threshold))  # Between -1% and -0.01%
@@ -419,7 +435,11 @@ class MLSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
     
-    def get_parameters(self) -> Dict[str, Any]:
+<<<<<<< HEAD
+    def get_parameters(self) -> dict[str, Any]:
+=======
+    def get_parameters(self) -> dict[str, Any]:
+>>>>>>> origin/develop
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
         params.update({
@@ -751,7 +771,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             
             # Get prediction
             if self.use_prediction_engine and self.prediction_engine is not None:
-                # Use prediction engine
+                # Use prediction engine - returns real price, no denormalization needed
                 window_df = df[["open", "high", "low", "close", "volume"]].iloc[
                     index - self.sequence_length : index
                 ]
@@ -770,6 +790,9 @@ class MLBasicSignalGenerator(SignalGenerator):
                     result = self.prediction_engine.predict(window_df)
                 
                 pred = float(result.price)
+                
+                # Prediction engine returns real prices, return directly
+                return pred
             else:
                 # Use local ONNX session; initialize lazily
                 if self.ort_session is None:
@@ -778,18 +801,24 @@ class MLBasicSignalGenerator(SignalGenerator):
                 
                 output = self.ort_session.run(None, {self.input_name: input_data})
                 pred = output[0][0][0]
-            
-            # Denormalize prediction
-            recent_close = df["close"].iloc[index - self.sequence_length : index].values
-            min_close = np.min(recent_close)
-            max_close = np.max(recent_close)
-            
-            if max_close != min_close:
-                pred_denormalized = pred * (max_close - min_close) + min_close
-            else:
-                pred_denormalized = df["close"].iloc[index - 1]
-            
-            return pred_denormalized
+                
+                # Ensure pred is a scalar value
+                if isinstance(pred, (list, tuple, np.ndarray)):
+                    pred = float(np.array(pred).flatten()[0])
+                else:
+                    pred = float(pred)
+                
+                # Denormalize prediction (only for ONNX model outputs)
+                recent_close = df["close"].iloc[index - self.sequence_length : index].values
+                min_close = np.min(recent_close)
+                max_close = np.max(recent_close)
+                
+                if max_close != min_close:
+                    pred_denormalized = pred * (max_close - min_close) + min_close
+                else:
+                    pred_denormalized = df["close"].iloc[index - 1]
+                
+                return pred_denormalized
             
         except Exception as e:
             print(f"[MLBasicSignalGenerator] Prediction error at index {index}: {e}")
@@ -808,7 +837,11 @@ class MLBasicSignalGenerator(SignalGenerator):
         confidence = min(1.0, abs(predicted_return) * self.CONFIDENCE_MULTIPLIER)
         return max(0.0, confidence)
     
-    def get_parameters(self) -> Dict[str, Any]:
+<<<<<<< HEAD
+    def get_parameters(self) -> dict[str, Any]:
+=======
+    def get_parameters(self) -> dict[str, Any]:
+>>>>>>> origin/develop
         """Get signal generator parameters for logging and serialization"""
         params = super().get_parameters()
         params.update({
