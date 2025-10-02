@@ -475,6 +475,11 @@ class StrategyRegistry:
         # Use parameters from target version if available, otherwise use current
         reverted_parameters = target_version_record.parameters if target_version_record.parameters is not None else metadata.parameters
         
+        # Use hashes from target version, but fall back to current if target version has None
+        # (for older version records created before hashes were persisted)
+        reverted_config_hash = target_version_record.config_hash or metadata.config_hash
+        reverted_component_hash = target_version_record.component_hash or metadata.component_hash
+        
         # Create updated metadata with configuration from target version
         updated_metadata = StrategyMetadata(
             id=metadata.id,
@@ -496,8 +501,8 @@ class StrategyRegistry:
             lineage_path=metadata.lineage_path,
             branch_name=metadata.branch_name,
             merge_source=metadata.merge_source,
-            config_hash=target_version_record.config_hash,
-            component_hash=target_version_record.component_hash
+            config_hash=reverted_config_hash,
+            component_hash=reverted_component_hash
         )
         
         # Update in-memory storage
