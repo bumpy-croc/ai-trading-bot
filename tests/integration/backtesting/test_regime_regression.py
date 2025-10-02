@@ -7,9 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
 import pandas as pd
 import pytest
-import numpy as np
 
 from src.backtesting.engine import Backtester
 from src.data_providers.data_provider import DataProvider

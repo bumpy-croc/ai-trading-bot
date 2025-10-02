@@ -13,7 +13,6 @@ from sqlalchemy import (
     Enum,  # Added Float and JSON
     Float,
     ForeignKey,
-    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,

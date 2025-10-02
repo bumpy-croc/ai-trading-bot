@@ -2,15 +2,18 @@
 Unit tests for RegimeContext and EnhancedRegimeDetector components
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.regime.detector import RegimeDetector, TrendLabel, VolLabel
 from src.strategies.components.regime_context import (
-    RegimeContext, RegimeTransition, EnhancedRegimeDetector
+    EnhancedRegimeDetector,
+    RegimeContext,
+    RegimeTransition,
 )
-from src.regime.detector import TrendLabel, VolLabel, RegimeDetector
 
 
 class TestRegimeContext:

@@ -487,7 +487,7 @@ class PerformanceMonitor:
         """Check if underperformance is statistically significant"""
         significant_timeframes = [
             r for r in timeframe_results
-            if r.statistical_significance >= (1.0 - self.config.confidence_level)
+            if r.statistical_significance >= self.config.confidence_level
         ]
         
         # Require at least 2 out of 3 timeframes to be statistically significant

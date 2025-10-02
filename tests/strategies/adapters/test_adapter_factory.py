@@ -5,20 +5,26 @@ This module tests the AdapterFactory class and utility functions for creating
 and managing LegacyStrategyAdapter instances.
 """
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
-from src.strategies.base import BaseStrategy
+import pytest
+
 from src.strategies.adapters.adapter_factory import (
-    AdapterFactory, AdapterValidationUtils, MigrationHelper, adapter_factory
+    AdapterFactory,
+    AdapterValidationUtils,
+    MigrationHelper,
+    adapter_factory,
 )
 from src.strategies.adapters.legacy_adapter import LegacyStrategyAdapter
-from src.strategies.components.signal_generator import (
-    SignalGenerator, HoldSignalGenerator, RandomSignalGenerator
-)
-from src.strategies.components.risk_manager import RiskManager, FixedRiskManager
+from src.strategies.base import BaseStrategy
 from src.strategies.components.position_sizer import (
-    PositionSizer, FixedFractionSizer, ConfidenceWeightedSizer
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+)
+from src.strategies.components.risk_manager import FixedRiskManager
+from src.strategies.components.signal_generator import (
+    HoldSignalGenerator,
+    RandomSignalGenerator,
 )
 
 
@@ -272,7 +278,6 @@ class TestAdapterValidationUtils:
     def test_test_adapter_methods_with_custom_data(self, valid_adapter):
         """Test adapter methods testing with custom test data"""
         import pandas as pd
-        import numpy as np
         
         custom_data = pd.DataFrame({
             'open': [100, 101, 102],
