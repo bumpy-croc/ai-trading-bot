@@ -239,7 +239,6 @@ class StrategyRegistry:
                 created_at=datetime.now(),
                 changes=["Initial version"],
                 performance_delta=None,
-                is_major=True
                 is_major=True,
                 signal_generator_config=component_configs['signal_generator'].to_dict(),
                 risk_manager_config=component_configs['risk_manager'].to_dict(),
@@ -338,7 +337,6 @@ class StrategyRegistry:
             created_at=datetime.now(),
             changes=changes,
             performance_delta=None,
-            is_major=is_major
             is_major=is_major,
             signal_generator_config=component_configs['signal_generator'].to_dict(),
             risk_manager_config=component_configs['risk_manager'].to_dict(),
@@ -497,18 +495,6 @@ class StrategyRegistry:
             merge_source=metadata.merge_source,
             config_hash=metadata.config_hash,
             component_hash=metadata.component_hash
-            signal_generator_config=signal_gen_config,
-            risk_manager_config=risk_mgr_config,
-            position_sizer_config=pos_sizer_config,
-            regime_detector_config=regime_det_config,
-            parameters=target_version_record.parameters or {},
-            performance_summary=None,  # Reset performance summary on revert
-            validation_results=None,  # Reset validation on revert
-            lineage_path=metadata.lineage_path,
-            branch_name=metadata.branch_name,
-            merge_source=metadata.merge_source,
-            config_hash=target_version_record.config_hash or metadata.config_hash,
-            component_hash=target_version_record.component_hash or metadata.component_hash
         )
         
         # Update in-memory storage

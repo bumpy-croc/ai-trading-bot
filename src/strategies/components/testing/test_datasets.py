@@ -299,6 +299,49 @@ class TestDatasetGenerator:
         
         return data.dropna()
     
+    def _prepare_historical_data_with_nans(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Prepare historical data with technical indicators, preserving NaN values for edge cases"""
+        # Ensure required columns exist
+        required_columns = ['open', 'high', 'low', 'close', 'volume']
+        for col in required_columns:
+            if col not in data.columns:
+                raise ValueError(f"Historical data missing required column: {col}")
+        
+        # Add technical indicators (these will create NaN values where input data is NaN)
+        data['sma_20'] = data['close'].rolling(20).mean()
+        data['sma_50'] = data['close'].rolling(50).mean()
+        data['ema_12'] = data['close'].ewm(span=12).mean()
+        data['ema_26'] = data['close'].ewm(span=26).mean()
+        
+        # RSI
+        data['rsi'] = self._calculate_rsi(data['close'])
+        
+        # ATR
+        data['atr'] = self._calculate_atr(data)
+        
+        # MACD
+        data['macd'] = data['ema_12'] - data['ema_26']
+        data['macd_signal'] = data['macd'].ewm(span=9).mean()
+        data['macd_histogram'] = data['macd'] - data['macd_signal']
+        
+        # Bollinger Bands
+        bb_period = 20
+        bb_std = 2
+        data['bb_middle'] = data['close'].rolling(bb_period).mean()
+        data['bb_std'] = data['close'].rolling(bb_period).std()
+        data['bb_upper'] = data['bb_middle'] + (data['bb_std'] * bb_std)
+        data['bb_lower'] = data['bb_middle'] - (data['bb_std'] * bb_std)
+        
+        # Returns
+        data['returns'] = data['close'].pct_change()
+        data['log_returns'] = np.log(data['close'] / data['close'].shift(1))
+        
+        # Volatility
+        data['volatility'] = data['returns'].rolling(20).std()
+        
+        # Don't drop NaN values for edge cases - return as is
+        return data
+    
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         """Calculate RSI indicator"""
         delta = prices.diff()
@@ -422,7 +465,11 @@ class TestDatasetGenerator:
         else:
             raise ValueError(f"Unknown edge case type: {case_type}")
         
-        return self._prepare_historical_data(data)
+        # For edge cases, don't drop NaN values as they are intentional
+        if case_type in ["missing_data", "extreme_volatility", "zero_volume", "price_gaps", "flat_prices", "negative_prices", "extreme_outliers"]:
+            return self._prepare_historical_data_with_nans(data)
+        else:
+            return self._prepare_historical_data(data)
     
     def _create_missing_data_case(self, data: pd.DataFrame) -> pd.DataFrame:
         """Create dataset with missing data points"""

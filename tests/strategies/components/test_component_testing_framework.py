@@ -137,7 +137,7 @@ class TestComponentPerformanceTester:
         
         assert results.component_name == "fixed_fraction_sizer"
         assert results.total_calculations > 0
-        assert results.average_position_size > 0
+        assert results.avg_position_size > 0
         assert 0 <= results.bounds_adherence_rate <= 1
         assert results.error_count >= 0
     
