@@ -460,11 +460,17 @@ class StrategySelector:
                                       correlation_matrix: dict[tuple[str, str], float]) -> float:
         """Calculate penalty for high correlation with other strategies"""
         correlations = []
+        processed_pairs = set()  # Track which pairs we've already processed
         
         for (sid1, sid2), correlation in correlation_matrix.items():
             if sid1 == strategy_id or sid2 == strategy_id:
                 if sid1 != sid2:  # Don't include self-correlation
-                    correlations.append(abs(correlation))
+                    # Create a canonical pair representation to avoid double-counting
+                    # Use lexicographic ordering to ensure consistent pair representation
+                    pair = tuple(sorted([sid1, sid2]))
+                    if pair not in processed_pairs:
+                        correlations.append(abs(correlation))
+                        processed_pairs.add(pair)
         
         if not correlations:
             return 0.0
