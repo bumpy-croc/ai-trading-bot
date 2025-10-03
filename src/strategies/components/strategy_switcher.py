@@ -887,7 +887,7 @@ class StrategySwitcher:
                     'max_drawdown': metrics.max_drawdown,
                     'win_rate': metrics.win_rate,
                     'total_trades': metrics.total_trades,
-                    'avg_trade_return': metrics.avg_trade_return,
+                    'expectancy': metrics.expectancy,  # Average expected profit/loss per trade
                     'volatility': metrics.volatility
                 })
             except Exception as e:
@@ -959,7 +959,7 @@ class StrategySwitcher:
         
         # Calculate changes in key metrics
         metrics_to_compare = ['sharpe_ratio', 'total_return_pct', 'max_drawdown', 
-                            'win_rate', 'avg_trade_return', 'volatility']
+                            'win_rate', 'expectancy', 'volatility']
         
         for metric in metrics_to_compare:
             if metric in pre_performance and metric in post_performance:
