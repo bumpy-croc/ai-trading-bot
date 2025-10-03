@@ -5,13 +5,17 @@ This module tests the PerformanceTracker implementation including real-time metr
 historical data storage, comparison utilities, and performance calculations.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
+
+import pytest
 
 from src.strategies.components.performance_tracker import (
-    PerformanceTracker, TradeResult, PerformanceMetrics, RegimePerformance,
-    PerformancePeriod, MetricType
+    PerformanceMetrics,
+    PerformancePeriod,
+    PerformanceTracker,
+    RegimePerformance,
+    TradeResult,
 )
 
 

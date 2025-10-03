@@ -2,17 +2,19 @@
 Unit tests for Technical Signal Generator components
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from datetime import datetime
 
-from src.strategies.components.technical_signal_generator import (
-    TechnicalSignalGenerator, RSISignalGenerator, MACDSignalGenerator
-)
-from src.strategies.components.signal_generator import Signal, SignalDirection
-from src.strategies.components.regime_context import RegimeContext
+import numpy as np
+import pandas as pd
+import pytest
+
 from src.regime.detector import TrendLabel, VolLabel
+from src.strategies.components.regime_context import RegimeContext
+from src.strategies.components.signal_generator import Signal, SignalDirection
+from src.strategies.components.technical_signal_generator import (
+    MACDSignalGenerator,
+    RSISignalGenerator,
+    TechnicalSignalGenerator,
+)
 
 
 class TestTechnicalSignalGenerator:

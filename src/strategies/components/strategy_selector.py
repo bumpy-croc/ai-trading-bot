@@ -8,6 +8,7 @@ correlation analysis to avoid selecting similar strategies.
 
 import logging
 import statistics
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -15,7 +16,6 @@ from enum import Enum
 from typing import Any, Optional
 
 import numpy as np
-from scipy.stats import pearsonr
 
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
@@ -118,6 +118,11 @@ class StrategySelector:
         # Correlation matrix cache
         self.correlation_matrix: dict[tuple[str, str], float] = {}
         self.correlation_cache_expiry = datetime.min
+        self.correlation_strategy_set: Optional[frozenset[str]] = None  # Track which strategies are cached
+        
+        # Thread safety locks
+        self._cache_lock = threading.RLock()
+        self._correlation_lock = threading.RLock()
         
         self.logger.info("StrategySelector initialized")
     
@@ -515,33 +520,87 @@ class StrategySelector:
         return max(0.0, min(1.0, total_score))
     
     def _calculate_correlation_matrix(self, strategies: dict[str, PerformanceTracker]) -> dict[tuple[str, str], float]:
-        """Calculate correlation matrix between strategies"""
-        # Check if cache is still valid
-        if datetime.now() < self.correlation_cache_expiry:
-            return self.correlation_matrix
-        
-        correlation_matrix = {}
+        """Calculate correlation matrix between strategies (thread-safe with double-checked locking)"""
         strategy_ids = list(strategies.keys())
+        current_strategy_set = frozenset(strategy_ids)
+        
+        # First check without holding lock during computation (double-checked locking)
+        with self._correlation_lock:
+            # Check if cache is still valid AND strategy set hasn't changed
+            if (datetime.now() < self.correlation_cache_expiry and 
+                self.correlation_strategy_set == current_strategy_set):
+                return self.correlation_matrix
+            
+            # Mark that we're computing to prevent other threads from computing
+            # Set a temporary flag to indicate computation is in progress
+            computing_strategy_set = self.correlation_strategy_set
+        
+        # Calculate correlation matrix outside lock to avoid holding it during computation
+        # Pre-compute all daily returns for vectorized correlation calculation
+        cutoff_date = datetime.now() - timedelta(days=90)
+        strategy_returns: dict[str, dict] = {}
+        
+        for sid in strategy_ids:
+            trades = [t for t in strategies[sid].trades if t.timestamp >= cutoff_date]
+            returns_by_date = defaultdict(list)
+            for trade in trades:
+                date_key = trade.timestamp.date()
+                returns_by_date[date_key].append(trade.pnl_percent)
+            
+            # Convert to daily returns
+            daily_returns = {date: sum(returns) for date, returns in returns_by_date.items()}
+            strategy_returns[sid] = daily_returns
+        
+        # Calculate correlations using vectorized operations where possible
+        correlation_matrix = {}
         
         for i, sid1 in enumerate(strategy_ids):
             for j, sid2 in enumerate(strategy_ids):
-                if i <= j:  # Only calculate upper triangle + diagonal
-                    if sid1 == sid2:
-                        correlation = 1.0
-                    else:
-                        correlation = self._calculate_pairwise_correlation(
-                            strategies[sid1], strategies[sid2]
-                        )
-                    
+                if i < j:  # Only calculate upper triangle
+                    correlation = self._calculate_pairwise_correlation_from_daily_returns(
+                        strategy_returns[sid1], strategy_returns[sid2]
+                    )
                     correlation_matrix[(sid1, sid2)] = correlation
-                    if sid1 != sid2:
-                        correlation_matrix[(sid2, sid1)] = correlation
+                    correlation_matrix[(sid2, sid1)] = correlation
+                elif i == j:
+                    correlation_matrix[(sid1, sid2)] = 1.0
         
-        # Update cache
-        self.correlation_matrix = correlation_matrix
-        self.correlation_cache_expiry = datetime.now() + timedelta(hours=1)
+        with self._correlation_lock:
+            # Double-check: another thread might have computed while we were calculating
+            if (datetime.now() < self.correlation_cache_expiry and 
+                self.correlation_strategy_set == current_strategy_set and
+                self.correlation_strategy_set != computing_strategy_set):
+                # Another thread already updated the cache, use that
+                return self.correlation_matrix
+            
+            # Update cache with strategy set tracking
+            self.correlation_matrix = correlation_matrix
+            self.correlation_cache_expiry = datetime.now() + timedelta(hours=1)
+            self.correlation_strategy_set = current_strategy_set
         
         return correlation_matrix
+    
+    def _calculate_pairwise_correlation_from_daily_returns(self, 
+                                                         daily_returns1: dict,
+                                                         daily_returns2: dict) -> float:
+        """Calculate correlation from pre-computed daily returns (optimized)"""
+        # Find common dates
+        common_dates = set(daily_returns1.keys()) & set(daily_returns2.keys())
+        
+        if len(common_dates) < 10:
+            return 0.0  # Insufficient overlapping data
+        
+        # Extract returns for common dates (vectorized)
+        returns1 = np.array([daily_returns1[date] for date in sorted(common_dates)])
+        returns2 = np.array([daily_returns2[date] for date in sorted(common_dates)])
+        
+        # Calculate Pearson correlation using numpy (faster)
+        try:
+            correlation = np.corrcoef(returns1, returns2)[0, 1]
+            return correlation if not np.isnan(correlation) else 0.0
+        except Exception as e:
+            self.logger.warning(f"Correlation calculation failed: {e}")
+            return 0.0
     
     def _calculate_pairwise_correlation(self, tracker1: PerformanceTracker,
                                       tracker2: PerformanceTracker) -> float:
@@ -567,26 +626,11 @@ class StrategySelector:
             date_key = trade.timestamp.date()
             returns2_by_date[date_key].append(trade.pnl_percent)
         
-        # Calculate daily returns
-        common_dates = set(returns1_by_date.keys()) & set(returns2_by_date.keys())
+        # Convert to daily returns
+        daily_returns1 = {date: sum(returns) for date, returns in returns1_by_date.items()}
+        daily_returns2 = {date: sum(returns) for date, returns in returns2_by_date.items()}
         
-        if len(common_dates) < 10:
-            return 0.0  # Insufficient overlapping data
-        
-        daily_returns1 = []
-        daily_returns2 = []
-        
-        for date in sorted(common_dates):
-            daily_returns1.append(sum(returns1_by_date[date]))
-            daily_returns2.append(sum(returns2_by_date[date]))
-        
-        # Calculate Pearson correlation
-        try:
-            correlation, _ = pearsonr(daily_returns1, daily_returns2)
-            return correlation if not np.isnan(correlation) else 0.0
-        except Exception as e:
-            self.logger.warning(f"Correlation calculation failed: {e}")
-            return 0.0
+        return self._calculate_pairwise_correlation_from_daily_returns(daily_returns1, daily_returns2)
     
     def _normalize_score(self, value: float, all_values: list[float],
                          higher_is_better: bool = True) -> float:
@@ -628,19 +672,22 @@ class StrategySelector:
     
     def _get_cached_performance_metrics(self, strategy_id: str,
                                       tracker: PerformanceTracker) -> PerformanceMetrics:
-        """Get performance metrics with caching"""
-        # Check cache
-        if (strategy_id in self.performance_cache and 
-            strategy_id in self.cache_expiry and
-            datetime.now() < self.cache_expiry[strategy_id]):
-            return self.performance_cache[strategy_id]
+        """Get performance metrics with caching (thread-safe)"""
+        with self._cache_lock:
+            # Check cache
+            if (strategy_id in self.performance_cache and 
+                strategy_id in self.cache_expiry and
+                datetime.now() < self.cache_expiry[strategy_id]):
+                return self.performance_cache[strategy_id]
+            
+            # Calculate fresh metrics (outside lock to avoid holding it during computation)
         
-        # Calculate fresh metrics
         metrics = tracker.get_performance_metrics()
         
-        # Update cache
-        self.performance_cache[strategy_id] = metrics
-        self.cache_expiry[strategy_id] = datetime.now() + self.cache_duration
+        with self._cache_lock:
+            # Update cache
+            self.performance_cache[strategy_id] = metrics
+            self.cache_expiry[strategy_id] = datetime.now() + self.cache_duration
         
         return metrics
     

@@ -7,7 +7,9 @@ and alerting for strategy performance.
 """
 
 import logging
+import signal
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -16,6 +18,27 @@ from typing import Any, Callable, Optional
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
 from .strategy_switcher import StrategySwitcher, SwitchRequest, SwitchTrigger
+
+
+class CallbackTimeoutError(Exception):
+    """Exception raised when a callback execution times out"""
+    pass
+
+
+@contextmanager
+def callback_timeout(seconds: int):
+    """Context manager for executing callbacks with a timeout"""
+    def timeout_handler(signum, frame):
+        raise CallbackTimeoutError(f"Callback timed out after {seconds} seconds")
+    
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 class EmergencyLevel(Enum):
@@ -217,6 +240,8 @@ class EmergencyControls:
         
         # Performance tracking for emergency detection
         self.performance_snapshots: dict[str, list[dict[str, float]]] = {}
+        self.active_strategies: set[str] = set()  # Track active strategies
+        self.last_cleanup_time: datetime = datetime.now()
         
         self.logger.info("EmergencyControls initialized")
     
@@ -638,11 +663,14 @@ class EmergencyControls:
         self.alert_cooldowns[cooldown_key] = datetime.now()
         
         # Notify callbacks
-        for callback in self.alert_callbacks:
+        for i, callback in enumerate(self.alert_callbacks):
             try:
-                callback(alert)
+                with callback_timeout(10):  # 10 second timeout for alert callbacks
+                    callback(alert)
+            except CallbackTimeoutError as e:
+                self.logger.error(f"Alert callback #{i} timed out: {e}")
             except Exception as e:
-                self.logger.error(f"Alert callback error: {e}")
+                self.logger.error(f"Alert callback #{i} error: {e}")
         
         self.logger.warning(f"Alert triggered: {alert.alert_type.value} - {message}")
         
@@ -651,6 +679,9 @@ class EmergencyControls:
     def _detect_performance_degradation(self, strategy_id: str,
                                       current_metrics: PerformanceMetrics) -> bool:
         """Detect significant performance degradation"""
+        # Track active strategy
+        self.active_strategies.add(strategy_id)
+        
         # Store performance snapshot
         if strategy_id not in self.performance_snapshots:
             self.performance_snapshots[strategy_id] = []
@@ -672,6 +703,11 @@ class EmergencyControls:
             if s['timestamp'] > cutoff_time
         ]
         
+        # Periodic cleanup of inactive strategies (every hour)
+        if (datetime.now() - self.last_cleanup_time).total_seconds() > 3600:
+            self._cleanup_inactive_strategies()
+            self.last_cleanup_time = datetime.now()
+        
         # Need at least 2 snapshots to detect degradation
         if len(self.performance_snapshots[strategy_id]) < 2:
             return False
@@ -686,12 +722,58 @@ class EmergencyControls:
         avg_sharpe = sum(s['sharpe_ratio'] for s in recent_snapshots) / len(recent_snapshots)
         avg_win_rate = sum(s['win_rate'] for s in recent_snapshots) / len(recent_snapshots)
         
-        # Check for significant degradation
-        sharpe_degradation = (avg_sharpe - current_metrics.sharpe_ratio) / max(0.1, abs(avg_sharpe))
-        win_rate_degradation = (avg_win_rate - current_metrics.win_rate) / max(0.1, avg_win_rate)
+        # Check for significant degradation with proper zero handling
+        # Use consistent logic to avoid mixing ratios and absolute differences
+        
+        # Sharpe ratio degradation calculation
+        if abs(avg_sharpe) > 0.1:
+            # Meaningful baseline - use relative degradation
+            sharpe_degradation = (avg_sharpe - current_metrics.sharpe_ratio) / abs(avg_sharpe)
+        elif avg_sharpe != 0:
+            # Small but non-zero baseline - use normalized absolute difference
+            sharpe_degradation = min(1.0, abs(avg_sharpe - current_metrics.sharpe_ratio) / 0.1)
+        else:
+            # Zero baseline - flag as degraded only if current is significantly negative
+            sharpe_degradation = 1.0 if current_metrics.sharpe_ratio < -0.1 else 0.0
+        
+        # Win rate degradation calculation
+        if avg_win_rate > 0.1:
+            # Meaningful baseline - use relative degradation
+            win_rate_degradation = (avg_win_rate - current_metrics.win_rate) / avg_win_rate
+        elif avg_win_rate != 0:
+            # Small but non-zero baseline - use normalized absolute difference
+            win_rate_degradation = min(1.0, abs(avg_win_rate - current_metrics.win_rate) / 0.1)
+        else:
+            # Zero baseline - flag as degraded only if current is significantly negative
+            win_rate_degradation = 1.0 if current_metrics.win_rate < -0.05 else 0.0
         
         # Trigger if either metric has degraded significantly
         return sharpe_degradation > 0.3 or win_rate_degradation > 0.2
+    
+    def _cleanup_inactive_strategies(self) -> None:
+        """Clean up performance snapshots for inactive strategies"""
+        # Find strategies with snapshots but not seen recently
+        inactive_strategies = []
+        cutoff_time = datetime.now().timestamp() - (48 * 3600)  # 48 hours
+        
+        for strategy_id in list(self.performance_snapshots.keys()):
+            if strategy_id not in self.active_strategies:
+                # Check if strategy has any recent snapshots
+                recent_snapshots = [
+                    s for s in self.performance_snapshots[strategy_id]
+                    if s['timestamp'] > cutoff_time
+                ]
+                
+                if not recent_snapshots:
+                    inactive_strategies.append(strategy_id)
+        
+        # Remove inactive strategy snapshots
+        for strategy_id in inactive_strategies:
+            del self.performance_snapshots[strategy_id]
+            self.logger.debug(f"Cleaned up snapshots for inactive strategy: {strategy_id}")
+        
+        # Clear active strategies set for next tracking period
+        self.active_strategies.clear()
     
     def cleanup_expired_requests(self) -> None:
         """Clean up expired approval requests"""

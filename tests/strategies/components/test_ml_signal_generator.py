@@ -2,16 +2,16 @@
 Unit tests for ML Signal Generator components
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime
+from unittest.mock import Mock, patch
 
-from src.strategies.components.ml_signal_generator import MLSignalGenerator, MLBasicSignalGenerator
-from src.strategies.components.signal_generator import Signal, SignalDirection
-from src.strategies.components.regime_context import RegimeContext
+import numpy as np
+import pandas as pd
+import pytest
+
 from src.regime.detector import TrendLabel, VolLabel
+from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
+from src.strategies.components.regime_context import RegimeContext
+from src.strategies.components.signal_generator import Signal, SignalDirection
 
 
 class TestMLSignalGenerator:
