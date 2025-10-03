@@ -8,7 +8,8 @@ cooling-off periods, audit trails, and performance impact analysis.
 import logging
 import threading
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -47,12 +48,17 @@ def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
     Raises:
         TimeoutError: If execution exceeds the specified timeout
     """
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(func, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except FutureTimeoutError:
-            raise TimeoutError(f"Execution timed out after {timeout_seconds} seconds")
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="strategy_switcher_timeout")
+    future = executor.submit(func, *args, **kwargs)
+
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeoutError as exc:
+        # Attempt to cancel the running future and shut down the executor without waiting
+        future.cancel()
+        raise TimeoutError(f"Execution timed out after {timeout_seconds} seconds") from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 @contextmanager
