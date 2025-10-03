@@ -6,7 +6,9 @@ cooling-off periods, audit trails, and performance impact analysis.
 """
 
 import logging
+import signal
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -18,6 +20,37 @@ from .performance_monitor import DegradationSeverity, PerformanceMonitor, Switch
 from .performance_tracker import PerformanceTracker
 from .regime_context import RegimeContext
 from .strategy_selector import StrategyScore, StrategySelector
+
+
+class TimeoutError(Exception):
+    """Exception raised when a callback execution times out"""
+    pass
+
+
+@contextmanager
+def timeout_context(seconds: int):
+    """
+    Context manager for executing code with a timeout
+    
+    Args:
+        seconds: Maximum execution time in seconds
+        
+    Raises:
+        TimeoutError: If execution exceeds the specified timeout
+    """
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Execution timed out after {seconds} seconds")
+    
+    # Set the signal handler
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    
+    try:
+        yield
+    finally:
+        # Restore the old signal handler and cancel the alarm
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 class SwitchTrigger(Enum):
@@ -180,6 +213,12 @@ class StrategySwitcher:
         self.manual_override_until: Optional[datetime] = None
         self.manual_override_reason: Optional[str] = None
         
+        # Circuit breaker for critical failures
+        self.circuit_breaker_active = False
+        self.circuit_breaker_activated_at: Optional[datetime] = None
+        self.circuit_breaker_reason: Optional[str] = None
+        self.last_active_strategy: Optional[str] = None
+        
         # Switch callbacks
         self.pre_switch_callbacks: list[Callable[[str, str], bool]] = []
         self.post_switch_callbacks: list[Callable[[str, str, bool], None]] = []
@@ -207,6 +246,11 @@ class StrategySwitcher:
         Returns:
             SwitchRequest if switch is recommended, None otherwise
         """
+        # Check if circuit breaker is active
+        if self.circuit_breaker_active:
+            self.logger.error("Circuit breaker is active - automatic switching disabled. Manual intervention required.")
+            return None
+        
         # Check if manual override is active
         if self._is_manual_override_active():
             self.logger.debug("Manual override active, skipping automatic evaluation")
@@ -288,13 +332,15 @@ class StrategySwitcher:
         return request.request_id
     
     def execute_switch(self, request: SwitchRequest,
-                      strategy_activation_callback: Callable[[str], bool]) -> SwitchRecord:
+                      strategy_activation_callback: Callable[[str], bool],
+                      performance_trackers: Optional[dict[str, PerformanceTracker]] = None) -> SwitchRecord:
         """
         Execute a strategy switch request
         
         Args:
             request: Switch request to execute
             strategy_activation_callback: Callback to activate the new strategy
+            performance_trackers: Optional dict of performance trackers for detailed snapshot capture
             
         Returns:
             Switch record with execution results
@@ -319,20 +365,30 @@ class StrategySwitcher:
             switch_record.status = SwitchStatus.EXECUTING
             switch_record.executed_at = datetime.now()
             
-            # Capture pre-switch performance
-            switch_record.pre_switch_performance = self._capture_performance_snapshot(request.from_strategy)
+            # Capture pre-switch performance with detailed metrics if tracker available
+            from_tracker = performance_trackers.get(request.from_strategy) if performance_trackers else None
+            switch_record.pre_switch_performance = self._capture_performance_snapshot(
+                request.from_strategy, from_tracker
+            )
             
-            # Execute pre-switch callbacks
-            for callback in self.pre_switch_callbacks:
+            # Execute pre-switch callbacks with timeout protection
+            for i, callback in enumerate(self.pre_switch_callbacks):
                 try:
-                    if not callback(request.from_strategy, request.to_strategy):
-                        switch_record.status = SwitchStatus.FAILED
-                        switch_record.error_message = "Pre-switch callback failed"
-                        return switch_record
-                except Exception as e:
-                    self.logger.error(f"Pre-switch callback error: {e}")
+                    with timeout_context(30):  # 30 second timeout for callbacks
+                        result = callback(request.from_strategy, request.to_strategy)
+                        if not result:
+                            switch_record.status = SwitchStatus.FAILED
+                            switch_record.error_message = f"Pre-switch callback #{i} returned False"
+                            return switch_record
+                except TimeoutError as e:
+                    self.logger.error(f"Pre-switch callback #{i} timed out: {e}")
                     switch_record.status = SwitchStatus.FAILED
-                    switch_record.error_message = f"Pre-switch callback error: {e}"
+                    switch_record.error_message = f"Pre-switch callback #{i} timed out after 30 seconds"
+                    return switch_record
+                except Exception as e:
+                    self.logger.error(f"Pre-switch callback #{i} error: {e}")
+                    switch_record.status = SwitchStatus.FAILED
+                    switch_record.error_message = f"Pre-switch callback #{i} error: {e}"
                     return switch_record
             
             # Activate new strategy
@@ -347,14 +403,25 @@ class StrategySwitcher:
                         switch_record.status = SwitchStatus.FAILED
                         switch_record.error_message = "Strategy activation failed, successfully rolled back to previous strategy"
                         self.logger.info(f"Successfully rolled back to {request.from_strategy}")
+                        self.last_active_strategy = request.from_strategy
                     else:
+                        # CRITICAL: Both activation and rollback failed - activate circuit breaker
                         switch_record.status = SwitchStatus.FAILED
-                        switch_record.error_message = "Strategy activation failed, rollback also failed - manual intervention required"
-                        self.logger.error("Rollback failed - manual intervention required")
+                        switch_record.error_message = "CRITICAL: Strategy activation failed, rollback also failed - circuit breaker activated"
+                        self.logger.critical("CIRCUIT BREAKER ACTIVATED: Rollback failed - manual intervention required")
+                        self._activate_circuit_breaker(
+                            "Rollback failure - system in inconsistent state",
+                            request.from_strategy
+                        )
                 except Exception as rollback_error:
+                    # CRITICAL: Exception during rollback - activate circuit breaker
                     switch_record.status = SwitchStatus.FAILED
-                    switch_record.error_message = f"Strategy activation failed, rollback error: {rollback_error}"
-                    self.logger.error(f"Rollback error: {rollback_error}")
+                    switch_record.error_message = f"CRITICAL: Strategy activation failed, rollback error: {rollback_error} - circuit breaker activated"
+                    self.logger.critical(f"CIRCUIT BREAKER ACTIVATED: Rollback error: {rollback_error}")
+                    self._activate_circuit_breaker(
+                        f"Rollback exception: {rollback_error}",
+                        request.from_strategy
+                    )
                 
                 return switch_record
             
@@ -363,12 +430,15 @@ class StrategySwitcher:
             switch_record.status = SwitchStatus.COMPLETED
             switch_record.completed_at = datetime.now()
             
-            # Execute post-switch callbacks
-            for callback in self.post_switch_callbacks:
+            # Execute post-switch callbacks with timeout protection (non-blocking)
+            for i, callback in enumerate(self.post_switch_callbacks):
                 try:
-                    callback(request.from_strategy, request.to_strategy, True)
+                    with timeout_context(30):  # 30 second timeout for callbacks
+                        callback(request.from_strategy, request.to_strategy, True)
+                except TimeoutError as e:
+                    self.logger.error(f"Post-switch callback #{i} timed out: {e}")
                 except Exception as e:
-                    self.logger.error(f"Post-switch callback error: {e}")
+                    self.logger.error(f"Post-switch callback #{i} error: {e}")
             
             # Start performance tracking
             if self.config.track_switch_performance:
@@ -381,12 +451,15 @@ class StrategySwitcher:
             switch_record.error_message = str(e)
             self.logger.error(f"Strategy switch failed: {e}")
             
-            # Execute post-switch callbacks with failure flag
-            for callback in self.post_switch_callbacks:
+            # Execute post-switch callbacks with failure flag and timeout protection
+            for i, callback in enumerate(self.post_switch_callbacks):
                 try:
-                    callback(request.from_strategy, request.to_strategy, False)
+                    with timeout_context(30):  # 30 second timeout for callbacks
+                        callback(request.from_strategy, request.to_strategy, False)
+                except TimeoutError as te:
+                    self.logger.error(f"Post-switch callback #{i} timed out: {te}")
                 except Exception as callback_error:
-                    self.logger.error(f"Post-switch callback error: {callback_error}")
+                    self.logger.error(f"Post-switch callback #{i} error: {callback_error}")
         
         finally:
             # Add to history
@@ -710,8 +783,10 @@ class StrategySwitcher:
                 to_strategy = tracking_info['to_strategy']
                 
                 if to_strategy in performance_trackers:
-                    # Capture post-switch performance
-                    post_switch_performance = self._capture_performance_snapshot(to_strategy)
+                    # Capture post-switch performance with detailed metrics
+                    post_switch_performance = self._capture_performance_snapshot(
+                        to_strategy, performance_trackers[to_strategy]
+                    )
                     
                     # Calculate performance impact
                     performance_impact = self._calculate_performance_impact(
@@ -783,3 +858,57 @@ class StrategySwitcher:
             impact['overall_performance_change'] = 0.0
         
         return impact
+    
+    def _activate_circuit_breaker(self, reason: str, last_known_strategy: Optional[str] = None) -> None:
+        """
+        Activate circuit breaker to prevent further automatic switches
+        
+        Args:
+            reason: Reason for circuit breaker activation
+            last_known_strategy: Last strategy that was known to be active
+        """
+        self.circuit_breaker_active = True
+        self.circuit_breaker_activated_at = datetime.now()
+        self.circuit_breaker_reason = reason
+        self.last_active_strategy = last_known_strategy
+        
+        self.logger.critical(
+            f"CIRCUIT BREAKER ACTIVATED: {reason}. "
+            f"Last known strategy: {last_known_strategy}. "
+            "Automatic switching disabled. Manual intervention required."
+        )
+    
+    def reset_circuit_breaker(self, reason: str) -> bool:
+        """
+        Reset circuit breaker after manual intervention
+        
+        Args:
+            reason: Reason for resetting the circuit breaker
+            
+        Returns:
+            True if reset was successful
+        """
+        if not self.circuit_breaker_active:
+            self.logger.warning("Attempted to reset circuit breaker, but it's not active")
+            return False
+        
+        self.circuit_breaker_active = False
+        self.logger.warning(
+            f"Circuit breaker reset by manual intervention: {reason}. "
+            f"Was activated at {self.circuit_breaker_activated_at} due to: {self.circuit_breaker_reason}"
+        )
+        
+        # Clear circuit breaker state
+        self.circuit_breaker_activated_at = None
+        self.circuit_breaker_reason = None
+        
+        return True
+    
+    def get_circuit_breaker_status(self) -> dict[str, Any]:
+        """Get circuit breaker status and details"""
+        return {
+            'active': self.circuit_breaker_active,
+            'activated_at': self.circuit_breaker_activated_at.isoformat() if self.circuit_breaker_activated_at else None,
+            'reason': self.circuit_breaker_reason,
+            'last_active_strategy': self.last_active_strategy
+        }

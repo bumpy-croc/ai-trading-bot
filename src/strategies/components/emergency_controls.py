@@ -7,7 +7,9 @@ and alerting for strategy performance.
 """
 
 import logging
+import signal
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -16,6 +18,27 @@ from typing import Any, Callable, Optional
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
 from .strategy_switcher import StrategySwitcher, SwitchRequest, SwitchTrigger
+
+
+class CallbackTimeoutError(Exception):
+    """Exception raised when a callback execution times out"""
+    pass
+
+
+@contextmanager
+def callback_timeout(seconds: int):
+    """Context manager for executing callbacks with a timeout"""
+    def timeout_handler(signum, frame):
+        raise CallbackTimeoutError(f"Callback timed out after {seconds} seconds")
+    
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 class EmergencyLevel(Enum):
@@ -640,11 +663,14 @@ class EmergencyControls:
         self.alert_cooldowns[cooldown_key] = datetime.now()
         
         # Notify callbacks
-        for callback in self.alert_callbacks:
+        for i, callback in enumerate(self.alert_callbacks):
             try:
-                callback(alert)
+                with callback_timeout(10):  # 10 second timeout for alert callbacks
+                    callback(alert)
+            except CallbackTimeoutError as e:
+                self.logger.error(f"Alert callback #{i} timed out: {e}")
             except Exception as e:
-                self.logger.error(f"Alert callback error: {e}")
+                self.logger.error(f"Alert callback #{i} error: {e}")
         
         self.logger.warning(f"Alert triggered: {alert.alert_type.value} - {message}")
         
@@ -696,19 +722,30 @@ class EmergencyControls:
         avg_sharpe = sum(s['sharpe_ratio'] for s in recent_snapshots) / len(recent_snapshots)
         avg_win_rate = sum(s['win_rate'] for s in recent_snapshots) / len(recent_snapshots)
         
-        # Check for significant degradation using absolute differences
-        # Avoid division by zero by using absolute differences instead of ratios
-        if abs(avg_sharpe) > 0.01:
-            sharpe_degradation = (avg_sharpe - current_metrics.sharpe_ratio) / abs(avg_sharpe)
-        else:
-            # Use absolute difference when baseline is near zero
-            sharpe_degradation = avg_sharpe - current_metrics.sharpe_ratio
+        # Check for significant degradation with proper zero handling
+        # Use consistent logic to avoid mixing ratios and absolute differences
         
-        if avg_win_rate > 0.01:
-            win_rate_degradation = (avg_win_rate - current_metrics.win_rate) / avg_win_rate
+        # Sharpe ratio degradation calculation
+        if abs(avg_sharpe) > 0.1:
+            # Meaningful baseline - use relative degradation
+            sharpe_degradation = (avg_sharpe - current_metrics.sharpe_ratio) / abs(avg_sharpe)
+        elif avg_sharpe != 0:
+            # Small but non-zero baseline - use normalized absolute difference
+            sharpe_degradation = min(1.0, abs(avg_sharpe - current_metrics.sharpe_ratio) / 0.1)
         else:
-            # Use absolute difference when baseline is near zero
-            win_rate_degradation = avg_win_rate - current_metrics.win_rate
+            # Zero baseline - flag as degraded only if current is significantly negative
+            sharpe_degradation = 1.0 if current_metrics.sharpe_ratio < -0.1 else 0.0
+        
+        # Win rate degradation calculation
+        if avg_win_rate > 0.1:
+            # Meaningful baseline - use relative degradation
+            win_rate_degradation = (avg_win_rate - current_metrics.win_rate) / avg_win_rate
+        elif avg_win_rate != 0:
+            # Small but non-zero baseline - use normalized absolute difference
+            win_rate_degradation = min(1.0, abs(avg_win_rate - current_metrics.win_rate) / 0.1)
+        else:
+            # Zero baseline - flag as degraded only if current is significantly negative
+            win_rate_degradation = 1.0 if current_metrics.win_rate < -0.05 else 0.0
         
         # Trigger if either metric has degraded significantly
         return sharpe_degradation > 0.3 or win_rate_degradation > 0.2

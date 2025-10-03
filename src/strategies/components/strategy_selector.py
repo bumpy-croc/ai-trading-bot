@@ -520,15 +520,20 @@ class StrategySelector:
         return max(0.0, min(1.0, total_score))
     
     def _calculate_correlation_matrix(self, strategies: dict[str, PerformanceTracker]) -> dict[tuple[str, str], float]:
-        """Calculate correlation matrix between strategies (thread-safe with strategy set tracking)"""
+        """Calculate correlation matrix between strategies (thread-safe with double-checked locking)"""
         strategy_ids = list(strategies.keys())
         current_strategy_set = frozenset(strategy_ids)
         
+        # First check without holding lock during computation (double-checked locking)
         with self._correlation_lock:
             # Check if cache is still valid AND strategy set hasn't changed
             if (datetime.now() < self.correlation_cache_expiry and 
                 self.correlation_strategy_set == current_strategy_set):
                 return self.correlation_matrix
+            
+            # Mark that we're computing to prevent other threads from computing
+            # Set a temporary flag to indicate computation is in progress
+            computing_strategy_set = self.correlation_strategy_set
         
         # Calculate correlation matrix outside lock to avoid holding it during computation
         # Pre-compute all daily returns for vectorized correlation calculation
@@ -561,6 +566,13 @@ class StrategySelector:
                     correlation_matrix[(sid1, sid2)] = 1.0
         
         with self._correlation_lock:
+            # Double-check: another thread might have computed while we were calculating
+            if (datetime.now() < self.correlation_cache_expiry and 
+                self.correlation_strategy_set == current_strategy_set and
+                self.correlation_strategy_set != computing_strategy_set):
+                # Another thread already updated the cache, use that
+                return self.correlation_matrix
+            
             # Update cache with strategy set tracking
             self.correlation_matrix = correlation_matrix
             self.correlation_cache_expiry = datetime.now() + timedelta(hours=1)
