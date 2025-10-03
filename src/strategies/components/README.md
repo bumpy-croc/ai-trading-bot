@@ -484,7 +484,7 @@ print(f"Sharpe ratio: {metrics['sharpe_ratio']:.2f}")
 print(f"Max drawdown: {metrics['max_drawdown']:.2%}")
 ```
 
-### 4. StrategyLineage (`strategy_lineage.py`)
+### 4. StrategyLineageTracker (`strategy_lineage.py`)
 
 Strategy evolution and lineage tracking system.
 
@@ -498,10 +498,10 @@ Strategy evolution and lineage tracking system.
 
 **Usage**:
 ```python
-from src.strategies.components import StrategyLineage
+from src.strategies.components import StrategyLineageTracker
 
 # Create lineage tracker
-lineage = StrategyLineage()
+lineage = StrategyLineageTracker()
 
 # Register strategy relationship
 lineage.add_relationship(
@@ -870,7 +870,7 @@ strategy = Strategy(
 - **MLSignalGenerator**: ML-based signal generation
 - **TechnicalSignalGenerator**: Technical indicator-based signals
 - **PerformanceTracker**: Performance tracking and analysis
-- **StrategyLineage**: Strategy evolution tracking
+- **StrategyLineageTracker**: Strategy evolution tracking
 
 ### Testing Classes
 
