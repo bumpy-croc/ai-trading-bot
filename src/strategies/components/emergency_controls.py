@@ -7,9 +7,7 @@ and alerting for strategy performance.
 """
 
 import logging
-import signal
 from collections import deque
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -17,28 +15,13 @@ from typing import Any, Callable, Optional
 
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
-from .strategy_switcher import StrategySwitcher, SwitchRequest, SwitchTrigger
-
-
-class CallbackTimeoutError(Exception):
-    """Exception raised when a callback execution times out"""
-    pass
-
-
-@contextmanager
-def callback_timeout(seconds: int):
-    """Context manager for executing callbacks with a timeout"""
-    def timeout_handler(signum, frame):
-        raise CallbackTimeoutError(f"Callback timed out after {seconds} seconds")
-    
-    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(seconds)
-    
-    try:
-        yield
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
+from .strategy_switcher import (
+    StrategySwitcher,
+    SwitchRequest,
+    SwitchTrigger,
+    TimeoutError,
+    execute_with_timeout,
+)
 
 
 class EmergencyLevel(Enum):
@@ -665,12 +648,11 @@ class EmergencyControls:
         # Notify callbacks
         for i, callback in enumerate(self.alert_callbacks):
             try:
-                with callback_timeout(10):  # 10 second timeout for alert callbacks
-                    callback(alert)
-            except CallbackTimeoutError as e:
-                self.logger.error(f"Alert callback #{i} timed out: {e}")
-            except Exception as e:
-                self.logger.error(f"Alert callback #{i} error: {e}")
+                execute_with_timeout(callback, 10, alert)  # 10 second timeout for alert callbacks
+            except TimeoutError as error:
+                self.logger.error(f"Alert callback #{i} timed out: {error}")
+            except Exception as error:
+                self.logger.error(f"Alert callback #{i} error: {error}")
         
         self.logger.warning(f"Alert triggered: {alert.alert_type.value} - {message}")
         
