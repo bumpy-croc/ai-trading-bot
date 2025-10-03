@@ -222,7 +222,7 @@ jobs:
             --arg prompt "$FULL_PROMPT" \
             --arg repo "${{ github.server_url }}/${{ github.repository }}" \
             --arg ref "$HEAD_REF" \
-            '{prompt:{text:$prompt}, source:{repository:$repo, ref:$ref}}' > /tmp/cursor_payload.json
+            '{prompt:{text:$prompt}, source:{repository:$repo, ref:$ref}, model:"gpt-5-codex"}' > /tmp/cursor_payload.json
 
           echo "Payload prepared:"
           cat /tmp/cursor_payload.json
