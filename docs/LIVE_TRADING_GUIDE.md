@@ -98,8 +98,8 @@ atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
 ### **Basic Parameters:**
 ```bash
---symbol BTC-USD              # Trading pair
---timeframe 1h                # Candle timeframe (1m, 5m, 15m, 1h, 4h, 1d)
+--symbol BTCUSDT             # Trading pair (also accepts BTC-USD format)
+--timeframe 1h               # Candle timeframe (1m, 5m, 15m, 1h, 4h, 1d)
 --balance 10000              # Initial balance
 --max-position 0.1           # Max 10% of balance per position
 --check-interval 60          # Check every 60 seconds
