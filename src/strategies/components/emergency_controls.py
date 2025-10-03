@@ -567,8 +567,7 @@ class EmergencyControls:
         alert.resolved = True
         alert.resolved_at = datetime.now()
         
-        # Move to history
-        self.alert_history.append(alert)
+        # Remove from active alerts (already in history from when it was triggered)
         del self.active_alerts[alert_id]
         
         self.logger.info(f"Alert resolved: {alert_id}")
@@ -641,6 +640,9 @@ class EmergencyControls:
         
         # Add to active alerts
         self.active_alerts[alert.alert_id] = alert
+        
+        # Add to alert history for rate limiting (immediately, not just on resolution)
+        self.alert_history.append(alert)
         
         # Update cooldown
         self.alert_cooldowns[cooldown_key] = datetime.now()
