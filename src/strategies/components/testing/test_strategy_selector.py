@@ -448,18 +448,21 @@ class TestStrategySelector(unittest.TestCase):
         metrics2 = self.selector._get_cached_performance_metrics(strategy_id, tracker)
         self.assertEqual(metrics1, metrics2)
     
-    @patch('src.strategies.components.strategy_selector.pearsonr')
-    def test_calculate_pairwise_correlation(self, mock_pearsonr):
+    def test_calculate_pairwise_correlation(self):
         """Test pairwise correlation calculation"""
-        mock_pearsonr.return_value = (0.75, 0.01)  # correlation, p-value
-        
         tracker1 = self.strategies["high_sharpe_strategy"]
         tracker2 = self.strategies["high_return_strategy"]
         
-        correlation = self.selector._calculate_pairwise_correlation(tracker1, tracker2)
-        
-        self.assertEqual(correlation, 0.75)
-        mock_pearsonr.assert_called_once()
+        with patch('src.strategies.components.strategy_selector.pearsonr') as mock_pearsonr:
+            mock_pearsonr.return_value = (0.75, 0.01)  # correlation, p-value
+            
+            # Clear cache to ensure fresh calculation
+            self.selector.clear_cache()
+            
+            correlation = self.selector._calculate_pairwise_correlation(tracker1, tracker2)
+            
+            self.assertEqual(correlation, 0.75)
+            mock_pearsonr.assert_called_once()
     
     def test_calculate_correlation_penalty(self):
         """Test correlation penalty calculation"""
