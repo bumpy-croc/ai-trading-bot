@@ -16,11 +16,14 @@ The optimizer module provides tools for systematically finding optimal strategy 
 ## Usage
 
 ```bash
-# Run parameter optimization
-atb optimizer --strategy ml_basic --days 365
+# Run parameter optimization with defaults (ml_basic strategy, BTCUSDT, 30 days)
+atb optimizer
 
-# Custom parameter ranges
-atb optimizer --strategy ml_basic --param-file custom_ranges.json
+# Customize optimization parameters
+atb optimizer --strategy ml_basic --symbol BTCUSDT --days 365
+
+# Different data provider
+atb optimizer --provider binance --no-cache
 ```
 
 ## Programmatic Usage
