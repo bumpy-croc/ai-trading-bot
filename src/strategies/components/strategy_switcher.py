@@ -446,7 +446,14 @@ class StrategySwitcher:
                     return switch_record
             
             # Activate new strategy
-            success = strategy_activation_callback(request.to_strategy)
+            try:
+                success = strategy_activation_callback(request.to_strategy)
+            except Exception as activation_error:
+                # Handle activation callback exceptions the same way as False returns
+                self.logger.error(f"Strategy activation callback raised exception: {activation_error}")
+                success = False
+                # Store the exception for potential rollback error message
+                activation_exception = activation_error
             
             if not success:
                 # Rollback: try to reactivate the old strategy
@@ -456,16 +463,30 @@ class StrategySwitcher:
 
                     if rollback_success:
                         switch_record.status = SwitchStatus.FAILED
-                        switch_record.error_message = (
-                            "Strategy activation failed, successfully rolled back to previous strategy"
-                        )
+                        # Include activation exception info if available
+                        if 'activation_exception' in locals():
+                            switch_record.error_message = (
+                                f"Strategy activation failed with exception: {activation_exception}, "
+                                "successfully rolled back to previous strategy"
+                            )
+                        else:
+                            switch_record.error_message = (
+                                "Strategy activation failed, successfully rolled back to previous strategy"
+                            )
                         self.logger.info(f"Successfully rolled back to {request.from_strategy}")
                         self.last_active_strategy = request.from_strategy
                     else:
                         switch_record.status = SwitchStatus.FAILED
-                        switch_record.error_message = (
-                            "Strategy activation failed, rollback callback returned False. Manual verification recommended."
-                        )
+                        # Include activation exception info if available
+                        if 'activation_exception' in locals():
+                            switch_record.error_message = (
+                                f"Strategy activation failed with exception: {activation_exception}, "
+                                "rollback callback returned False. Manual verification recommended."
+                            )
+                        else:
+                            switch_record.error_message = (
+                                "Strategy activation failed, rollback callback returned False. Manual verification recommended."
+                            )
                         self.logger.warning(
                             "Rollback callback returned False; previous strategy may already be active or activation callback is non-idempotent"
                         )
@@ -473,10 +494,22 @@ class StrategySwitcher:
                 except Exception as rollback_error:
                     # CRITICAL: Exception during rollback - activate circuit breaker
                     switch_record.status = SwitchStatus.FAILED
-                    switch_record.error_message = (
-                        f"CRITICAL: Strategy activation failed, rollback error: {rollback_error} - circuit breaker activated"
-                    )
-                    self.logger.critical(f"CIRCUIT BREAKER ACTIVATED: Rollback error: {rollback_error}")
+                    # Include both activation and rollback exception info if available
+                    if 'activation_exception' in locals():
+                        switch_record.error_message = (
+                            f"CRITICAL: Strategy activation failed with exception: {activation_exception}, "
+                            f"rollback error: {rollback_error} - circuit breaker activated"
+                        )
+                        self.logger.critical(
+                            f"CIRCUIT BREAKER ACTIVATED: Activation exception: {activation_exception}, "
+                            f"Rollback error: {rollback_error}"
+                        )
+                    else:
+                        switch_record.error_message = (
+                            f"CRITICAL: Strategy activation failed, rollback error: {rollback_error} - circuit breaker activated"
+                        )
+                        self.logger.critical(f"CIRCUIT BREAKER ACTIVATED: Rollback error: {rollback_error}")
+                    
                     self._activate_circuit_breaker(
                         f"Rollback exception: {rollback_error}",
                         request.from_strategy
