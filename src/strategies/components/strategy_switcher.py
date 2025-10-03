@@ -743,9 +743,54 @@ class StrategySwitcher:
         if not target_score:
             return False
         
-        # For now, use a simple threshold check
-        # In a full implementation, you'd compare against current strategy performance
-        return target_score.total_score >= self.config.min_improvement_threshold
+        # To properly compare, we need to calculate the current strategy's score
+        # using the same methodology as the alternatives. However, since the current
+        # strategy was excluded from the alternative_scores, we need to estimate it.
+        
+        # Use the degradation severity as a proxy for current performance
+        # This is a reasonable heuristic since degradation severity is based on
+        # actual performance analysis
+        if hasattr(request.switch_decision, 'degradation_severity'):
+            severity = request.switch_decision.degradation_severity
+            
+            # Map degradation severity to estimated normalized score
+            # These values represent the current strategy's performance level
+            if severity.value == 'critical':
+                estimated_current_score = 0.15  # Very poor performance
+            elif severity.value == 'severe':
+                estimated_current_score = 0.35  # Poor performance  
+            elif severity.value == 'moderate':
+                estimated_current_score = 0.55  # Below average
+            else:
+                estimated_current_score = 0.65  # Slightly below average
+        else:
+            # If no degradation severity info, assume moderate underperformance
+            estimated_current_score = 0.55
+        
+        # Calculate the actual improvement
+        improvement = target_score.total_score - estimated_current_score
+        
+        # Calculate relative improvement as percentage
+        if estimated_current_score > 0:
+            relative_improvement = improvement / estimated_current_score
+        else:
+            # If current score is 0 or negative, any positive improvement is significant
+            relative_improvement = improvement if improvement > 0 else 0
+        
+        # Check if improvement meets the threshold
+        meets_threshold = relative_improvement >= self.config.min_improvement_threshold
+        
+        self.logger.debug(
+            f"Improvement threshold check: "
+            f"current_estimated={estimated_current_score:.3f}, "
+            f"target_score={target_score.total_score:.3f}, "
+            f"absolute_improvement={improvement:.3f}, "
+            f"relative_improvement={relative_improvement:.3f}, "
+            f"threshold={self.config.min_improvement_threshold:.3f}, "
+            f"meets_threshold={meets_threshold}"
+        )
+        
+        return meets_threshold
     
     def _exceeds_risk_threshold(self, request: SwitchRequest) -> bool:
         """Check if the proposed switch exceeds risk thresholds"""
