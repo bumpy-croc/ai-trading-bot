@@ -189,8 +189,6 @@ Priority order:
 2. Environment variables (Docker/CI/local)
 3. .env file (local development)
 
-For MCP tooling, use `mcp.example.json` as a template and create your own `mcp.json` locally with `RAILWAY_API_KEY` set in your environment. Do not commit secrets.
-
 Minimal variables:
 
 ```env
@@ -230,7 +228,6 @@ Sentiment data and ML training are supported. Pretrained models live in `src/ml`
 
 ## Security
 - Do not commit secrets. Use `.env` (see `.env.example`) and environment variables.
-- MCP: use `mcp.example.json` and keep your local `mcp.json` untracked.
 
 ## Logging
 - Centralized logging via `src.utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
