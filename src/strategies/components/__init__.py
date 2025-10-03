@@ -13,22 +13,42 @@ Components:
 - Technical Signal Generators: Technical indicator-based signal generation components
 """
 
+from .strategy import Strategy
+from .signal_generator import (
+    SignalGenerator, Signal, SignalDirection,
+    HoldSignalGenerator, RandomSignalGenerator,
+    WeightedVotingSignalGenerator, HierarchicalSignalGenerator,
+    RegimeAdaptiveSignalGenerator
+)
+from .risk_manager import (
+    RiskManager, Position, MarketData,
+    FixedRiskManager, VolatilityRiskManager, RegimeAdaptiveRiskManager
+)
+from .position_sizer import (
+    PositionSizer, FixedFractionSizer, ConfidenceWeightedSizer,
+    KellySizer, RegimeAdaptiveSizer
+)
+from .regime_context import RegimeContext, TrendLabel, VolLabel, EnhancedRegimeDetector
+from .strategy_manager import StrategyManager
+from .strategy_factory import StrategyFactory, StrategyBuilder
+from .strategy_registry import StrategyRegistry, StrategyVersion
+from .performance_tracker import PerformanceTracker
+from .strategy_lineage import StrategyLineageTracker
+from .ml_signal_generator import MLSignalGenerator, MLBasicSignalGenerator
+from .technical_signal_generator import (
+    TechnicalSignalGenerator, 
+    RSISignalGenerator, 
+    MACDSignalGenerator
+)
+from .testing.test_datasets import TestDatasetGenerator
+from .testing.component_performance_tester import ComponentPerformanceTester
+from .testing.regime_tester import RegimeTester
+from .testing.performance_attribution import PerformanceAttributionAnalyzer
 from src.database.models import StrategyExecution
 
-from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
-from .position_sizer import PositionSizer
-from .regime_context import EnhancedRegimeDetector, RegimeContext, TrendLabel, VolLabel
-from .risk_manager import MarketData, Position, RiskManager
-from .signal_generator import Signal, SignalDirection, SignalGenerator
-from .strategy_manager import StrategyManager
-from .strategy_registry import StrategyVersion
-from .technical_signal_generator import (
-    MACDSignalGenerator,
-    RSISignalGenerator,
-    TechnicalSignalGenerator,
-)
-
 __all__ = [
+    # Core classes
+    "Strategy",
     "SignalGenerator",
     "Signal", 
     "SignalDirection",
@@ -40,12 +60,43 @@ __all__ = [
     "TrendLabel",
     "VolLabel",
     "EnhancedRegimeDetector",
+    
+    # Management classes
     "StrategyManager",
+    "StrategyFactory",
+    "StrategyBuilder",
+    "StrategyRegistry",
     "StrategyVersion",
     "StrategyExecution",
+    "PerformanceTracker",
+    "StrategyLineageTracker",
+    
+    # Signal generators
     "MLSignalGenerator",
     "MLBasicSignalGenerator",
     "TechnicalSignalGenerator",
     "RSISignalGenerator",
     "MACDSignalGenerator",
+    "HoldSignalGenerator",
+    "RandomSignalGenerator",
+    "WeightedVotingSignalGenerator",
+    "HierarchicalSignalGenerator",
+    "RegimeAdaptiveSignalGenerator",
+    
+    # Risk managers
+    "FixedRiskManager",
+    "VolatilityRiskManager",
+    "RegimeAdaptiveRiskManager",
+    
+    # Position sizers
+    "FixedFractionSizer",
+    "ConfidenceWeightedSizer",
+    "KellySizer",
+    "RegimeAdaptiveSizer",
+    
+    # Testing framework
+    "TestDatasetGenerator",
+    "ComponentPerformanceTester",
+    "RegimeTester",
+    "PerformanceAttributionAnalyzer",
 ]
