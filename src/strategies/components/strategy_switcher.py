@@ -730,11 +730,21 @@ class StrategySwitcher:
         return True
     
     def _can_switch_now(self, trigger: SwitchTrigger) -> bool:
-        """Check if enough time has passed since last switch"""
+        """
+        Check if enough time has passed since last switch
+        
+        Emergency stops bypass the cooling-off period entirely to allow
+        immediate intervention in critical situations.
+        """
         if not self.last_switch_time:
             return True
         
+        # Emergency stops bypass cooling-off period
         if trigger == SwitchTrigger.EMERGENCY_STOP:
+            return True
+        
+        # Use emergency interval for manual requests (shorter than regular)
+        if trigger == SwitchTrigger.MANUAL_REQUEST:
             min_interval = timedelta(hours=self.config.emergency_switch_interval_hours)
         else:
             min_interval = timedelta(hours=self.config.min_switch_interval_hours)
