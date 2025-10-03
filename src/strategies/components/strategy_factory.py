@@ -5,6 +5,7 @@ This module provides factory methods and builder patterns for creating
 pre-configured strategies and custom strategy compositions.
 """
 
+from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from .strategy import Strategy
@@ -378,13 +379,27 @@ def create_strategy_template(template_name: str, **kwargs) -> Dict[str, Any]:
     if template_name not in templates:
         raise ValueError(f"Unknown template: {template_name}. Available: {list(templates.keys())}")
     
-    template = templates[template_name].copy()
-    
+    # Work on a deep copy so modifications don't leak between calls
+    template = deepcopy(templates[template_name])
+
     # Apply any parameter overrides
     for component_type in ['signal_generator', 'risk_manager', 'position_sizer']:
-        if component_type in kwargs:
-            template[component_type].update(kwargs[component_type])
-    
+        if component_type not in kwargs:
+            continue
+
+        overrides = kwargs[component_type]
+        component_config = template[component_type].copy()
+
+        # If the caller changes the component type we need to drop template-specific
+        # parameters so we don't pass invalid kwargs to the new component class.
+        override_type = overrides.get('type')
+        if override_type and override_type != component_config.get('type'):
+            component_config = {'type': override_type}
+            overrides = {k: v for k, v in overrides.items() if k != 'type'}
+
+        component_config.update(overrides)
+        template[component_type] = component_config
+
     return template
 
 
