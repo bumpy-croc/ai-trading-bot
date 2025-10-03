@@ -1,55 +1,45 @@
 """
-Strategy Testing Framework
+Component Testing Framework
 
-This module provides comprehensive testing and validation tools for strategy
-performance comparison, migration validation, and statistical analysis.
+This module provides comprehensive testing capabilities for strategy components,
+including performance testing, regime-specific testing, and attribution analysis.
 """
 
-from .performance_comparison_engine import (
-    ComparisonConfig,
-    PerformanceComparisonEngine,
-    StrategyComparisonResult,
-    quick_strategy_comparison,
-    validate_migration_readiness,
+from .component_performance_tester import (
+    ComponentPerformanceTester,
+    ComponentTestResults,
+    RiskTestResults,
+    SignalTestResults,
+    SizingTestResults,
 )
-from .performance_parity_validator import (
-    MetricComparison,
-    MetricType,
-    PerformanceComparisonReport,
-    PerformanceParityReporter,
-    PerformanceParityValidator,
-    ToleranceConfig,
-    ValidationResult,
+from .performance_attribution import (
+    AttributionReport,
+    ComponentAttribution,
+    PerformanceAttributionAnalyzer,
 )
-from .statistical_tests import (
-    EquivalenceTests,
-    FinancialStatisticalTests,
-    StatisticalTestResult,
-    format_test_results,
-)
+from .regime_tester import RegimeComparisonResults, RegimeTester, RegimeTestResults
+from .test_datasets import MarketScenario, SyntheticDataGenerator, TestDatasetGenerator
 
 __all__ = [
-    # Main engine
-    "PerformanceComparisonEngine",
-    "ComparisonConfig",
-    "StrategyComparisonResult",
-    
-    # Performance parity validation
-    "PerformanceParityValidator",
-    "PerformanceComparisonReport",
-    "PerformanceParityReporter",
-    "ToleranceConfig",
-    "MetricComparison",
-    "MetricType",
-    "ValidationResult",
-    
-    # Statistical testing
-    "FinancialStatisticalTests",
-    "EquivalenceTests",
-    "StatisticalTestResult",
-    "format_test_results",
-    
-    # Convenience functions
-    "quick_strategy_comparison",
-    "validate_migration_readiness",
+    # Component Performance Testing
+    'ComponentPerformanceTester',
+    'SignalTestResults',
+    'RiskTestResults',
+    'SizingTestResults',
+    'ComponentTestResults',
+
+    # Regime Testing
+    'RegimeTester',
+    'RegimeTestResults',
+    'RegimeComparisonResults',
+
+    # Performance Attribution
+    'PerformanceAttributionAnalyzer',
+    'ComponentAttribution',
+    'AttributionReport',
+
+    # Test Datasets
+    'TestDatasetGenerator',
+    'MarketScenario',
+    'SyntheticDataGenerator'
 ]
