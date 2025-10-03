@@ -257,11 +257,23 @@ class TestStrategyTemplates:
             risk_manager={'risk_per_trade': 0.005},
             position_sizer={'fraction': 0.01}
         )
-        
+
         assert template['risk_manager']['risk_per_trade'] == 0.005
         assert template['position_sizer']['fraction'] == 0.01
         # Other parameters should remain unchanged
         assert template['risk_manager']['stop_loss_pct'] == 0.03
+
+    def test_template_type_override_resets_default_parameters(self):
+        """Overriding the component type should discard template-specific params."""
+        template = create_strategy_template(
+            "balanced",
+            signal_generator={'type': 'HoldSignalGenerator'}
+        )
+
+        assert template['signal_generator']['type'] == 'HoldSignalGenerator'
+        # Parameters that only make sense for the original template should be removed
+        assert 'buy_prob' not in template['signal_generator']
+        assert 'sell_prob' not in template['signal_generator']
 
 
 class TestStrategyValidation:
