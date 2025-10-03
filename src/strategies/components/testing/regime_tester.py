@@ -310,7 +310,11 @@ class RegimeTester:
 
                 # Create regime context with safe parsing and enum conversion
                 regime_parts = regime_type.split('_')
-                if len(regime_parts) >= 3:
+                if len(regime_parts) >= 4:
+                    trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
+                    volatility_str = f"{regime_parts[2]}_{regime_parts[3]}"
+                elif len(regime_parts) >= 3:
+                    # Handle legacy format without _vol suffix
                     trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
                     volatility_str = regime_parts[2]
                 else:
@@ -675,7 +679,11 @@ class RegimeTester:
             try:
                 # Create regime context with safe parsing and enum conversion
                 regime_parts = regime_type.split('_')
-                if len(regime_parts) >= 3:
+                if len(regime_parts) >= 4:
+                    trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
+                    volatility_str = f"{regime_parts[2]}_{regime_parts[3]}"
+                elif len(regime_parts) >= 3:
+                    # Handle legacy format without _vol suffix
                     trend_str = f"{regime_parts[0]}_{regime_parts[1]}"
                     volatility_str = regime_parts[2]
                 else:
