@@ -6,8 +6,9 @@ cooling-off periods, audit trails, and performance impact analysis.
 """
 
 import logging
-import signal
+import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -27,10 +28,40 @@ class TimeoutError(Exception):
     pass
 
 
+def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):
+    """
+    Execute a function with timeout using thread-safe mechanism
+    
+    This implementation uses concurrent.futures.ThreadPoolExecutor with timeout
+    to ensure compatibility with worker threads and Windows systems.
+    
+    Args:
+        func: Function to execute
+        timeout_seconds: Maximum execution time in seconds
+        *args: Positional arguments for the function
+        **kwargs: Keyword arguments for the function
+        
+    Returns:
+        Result of the function execution
+        
+    Raises:
+        TimeoutError: If execution exceeds the specified timeout
+    """
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FutureTimeoutError:
+            raise TimeoutError(f"Execution timed out after {timeout_seconds} seconds")
+
+
 @contextmanager
 def timeout_context(seconds: int):
     """
-    Context manager for executing code with a timeout
+    Context manager for executing code with a timeout using thread-safe mechanism
+    
+    This implementation uses threading.Timer with proper thread safety
+    to ensure compatibility with worker threads and Windows systems.
     
     Args:
         seconds: Maximum execution time in seconds
@@ -38,19 +69,34 @@ def timeout_context(seconds: int):
     Raises:
         TimeoutError: If execution exceeds the specified timeout
     """
-    def timeout_handler(signum, frame):
-        raise TimeoutError(f"Execution timed out after {seconds} seconds")
+    timeout_occurred = threading.Event()
+    original_exception = None
     
-    # Set the signal handler
-    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(seconds)
+    def timeout_handler():
+        """Handler that sets the timeout event"""
+        timeout_occurred.set()
+    
+    # Start the timeout timer
+    timer = threading.Timer(seconds, timeout_handler)
+    timer.start()
     
     try:
         yield
+    except Exception as e:
+        # Store the original exception
+        original_exception = e
+        raise
     finally:
-        # Restore the old signal handler and cancel the alarm
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
+        # Cancel the timer
+        timer.cancel()
+        
+        # Check if timeout occurred
+        if timeout_occurred.is_set():
+            # If we had an original exception, preserve it
+            if original_exception:
+                raise original_exception
+            else:
+                raise TimeoutError(f"Execution timed out after {seconds} seconds")
 
 
 class SwitchTrigger(Enum):
@@ -374,12 +420,14 @@ class StrategySwitcher:
             # Execute pre-switch callbacks with timeout protection
             for i, callback in enumerate(self.pre_switch_callbacks):
                 try:
-                    with timeout_context(30):  # 30 second timeout for callbacks
-                        result = callback(request.from_strategy, request.to_strategy)
-                        if not result:
-                            switch_record.status = SwitchStatus.FAILED
-                            switch_record.error_message = f"Pre-switch callback #{i} returned False"
-                            return switch_record
+                    result = execute_with_timeout(
+                        callback, 30,  # 30 second timeout for callbacks
+                        request.from_strategy, request.to_strategy
+                    )
+                    if not result:
+                        switch_record.status = SwitchStatus.FAILED
+                        switch_record.error_message = f"Pre-switch callback #{i} returned False"
+                        return switch_record
                 except TimeoutError as e:
                     self.logger.error(f"Pre-switch callback #{i} timed out: {e}")
                     switch_record.status = SwitchStatus.FAILED
@@ -433,8 +481,10 @@ class StrategySwitcher:
             # Execute post-switch callbacks with timeout protection (non-blocking)
             for i, callback in enumerate(self.post_switch_callbacks):
                 try:
-                    with timeout_context(30):  # 30 second timeout for callbacks
-                        callback(request.from_strategy, request.to_strategy, True)
+                    execute_with_timeout(
+                        callback, 30,  # 30 second timeout for callbacks
+                        request.from_strategy, request.to_strategy, True
+                    )
                 except TimeoutError as e:
                     self.logger.error(f"Post-switch callback #{i} timed out: {e}")
                 except Exception as e:
@@ -454,8 +504,10 @@ class StrategySwitcher:
             # Execute post-switch callbacks with failure flag and timeout protection
             for i, callback in enumerate(self.post_switch_callbacks):
                 try:
-                    with timeout_context(30):  # 30 second timeout for callbacks
-                        callback(request.from_strategy, request.to_strategy, False)
+                    execute_with_timeout(
+                        callback, 30,  # 30 second timeout for callbacks
+                        request.from_strategy, request.to_strategy, False
+                    )
                 except TimeoutError as te:
                     self.logger.error(f"Post-switch callback #{i} timed out: {te}")
                 except Exception as callback_error:
