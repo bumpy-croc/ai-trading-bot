@@ -28,7 +28,15 @@ config = DynamicRiskConfig(
     risk_reduction_factors=[0.8, 0.6, 0.4]
 )
 risk_mgr = DynamicRiskManager(config, database_manager)
-adjustment = risk_mgr.calculate_risk_adjustment(current_balance, peak_balance)
+adjustments = risk_mgr.calculate_dynamic_risk_adjustments(
+    current_balance=10000,
+    peak_balance=12000,
+    trades_history=[]
+)
+
+# Access adjustment factors
+print(f"Position size factor: {adjustments.position_size_factor}")
+print(f"Adjustment reason: {adjustments.primary_reason}")
 ```
 
 ### Correlation Control
