@@ -25,7 +25,7 @@ from src.strategies.components.risk_manager import (
     RiskManager,
     VolatilityRiskManager,
 )
-from src.strategies.components.signal_generator import (
+from src.strategies.components import (
     MLBasicSignalGenerator,
     MLSignalGenerator,
     SignalGenerator,

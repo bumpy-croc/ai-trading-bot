@@ -17,9 +17,9 @@ from src.strategies.migration.strategy_converter import (
     ConversionReport,
     ComponentMapping
 )
-from src.strategies.components.signal_generator import MLBasicSignalGenerator, SignalGenerator
-from src.strategies.components.risk_manager import FixedRiskManager, RiskManager
-from src.strategies.components.position_sizer import ConfidenceWeightedSizer, PositionSizer
+from src.strategies.components import MLBasicSignalGenerator, SignalGenerator
+from src.strategies.components import FixedRiskManager, RiskManager
+from src.strategies.components import ConfidenceWeightedSizer, PositionSizer
 
 
 class MockStrategy(BaseStrategy):
