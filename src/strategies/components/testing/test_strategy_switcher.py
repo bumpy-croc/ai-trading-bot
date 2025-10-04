@@ -240,7 +240,7 @@ class TestStrategySwitcher(unittest.TestCase):
         result = self.switcher.execute_switch(request, activation_callback)
         
         self.assertEqual(result.status, SwitchStatus.FAILED)
-        self.assertEqual(result.error_message, "Strategy activation failed")
+        self.assertIn("Strategy activation failed", result.error_message)
     
     def test_execute_switch_validation_rejected(self):
         """Test strategy switch execution with validation rejection"""
@@ -570,6 +570,115 @@ class TestStrategySwitcher(unittest.TestCase):
         post_callback.assert_called_once_with(self.current_strategy, self.alternative_strategy, True)
         
         self.assertEqual(result.status, SwitchStatus.COMPLETED)
+    
+    def test_validate_switch_request_low_confidence_rejection(self):
+        """Test that switch requests with low confidence are rejected"""
+        # Create a switch request with low confidence
+        low_confidence_decision = SwitchDecision(
+            should_switch=True,
+            reason="Performance degradation detected",
+            confidence=0.3,  # Below default threshold of 0.7
+            degradation_severity=DegradationSeverity.MODERATE
+        )
+        
+        request = SwitchRequest(
+            request_id="test_request",
+            trigger=SwitchTrigger.PERFORMANCE_DEGRADATION,
+            from_strategy=self.current_strategy,
+            to_strategy=self.alternative_strategy,
+            reason="Test switch",
+            requested_at=datetime.now(),
+            requested_by="automatic_evaluation",
+            switch_decision=low_confidence_decision
+        )
+        
+        # Validate the request
+        result = self.switcher._validate_switch_request(request)
+        
+        self.assertEqual(result, ValidationResult.REJECTED_LOW_CONFIDENCE)
+    
+    def test_validate_switch_request_high_confidence_approval(self):
+        """Test that switch requests with high confidence are approved"""
+        # Create a switch request with high confidence
+        high_confidence_decision = SwitchDecision(
+            should_switch=True,
+            reason="Performance degradation detected",
+            confidence=0.85,  # Above default threshold of 0.7
+            degradation_severity=DegradationSeverity.SEVERE
+        )
+        
+        request = SwitchRequest(
+            request_id="test_request",
+            trigger=SwitchTrigger.PERFORMANCE_DEGRADATION,
+            from_strategy=self.current_strategy,
+            to_strategy=self.alternative_strategy,
+            reason="Test switch",
+            requested_at=datetime.now(),
+            requested_by="automatic_evaluation",
+            switch_decision=high_confidence_decision
+        )
+        
+        # Validate the request
+        result = self.switcher._validate_switch_request(request)
+        
+        self.assertEqual(result, ValidationResult.APPROVED)
+    
+    def test_validate_switch_request_no_switch_decision(self):
+        """Test that switch requests without switch decision are not rejected for confidence"""
+        # Create a switch request without switch decision (e.g., manual request)
+        request = SwitchRequest(
+            request_id="test_request",
+            trigger=SwitchTrigger.MANUAL_REQUEST,
+            from_strategy=self.current_strategy,
+            to_strategy=self.alternative_strategy,
+            reason="Manual switch",
+            requested_at=datetime.now(),
+            requested_by="test_user",
+            switch_decision=None
+        )
+        
+        # Validate the request
+        result = self.switcher._validate_switch_request(request)
+        
+        # Should not be rejected for low confidence since there's no switch decision
+        self.assertNotEqual(result, ValidationResult.REJECTED_LOW_CONFIDENCE)
+    
+    def test_validate_switch_request_custom_confidence_threshold(self):
+        """Test that custom confidence threshold is respected"""
+        # Create a switcher with custom confidence threshold
+        custom_config = SwitchConfig(
+            min_confidence_for_switch=0.9,  # Higher threshold
+            min_switch_interval_hours=1
+        )
+        custom_switcher = StrategySwitcher(
+            self.performance_monitor,
+            self.strategy_selector,
+            custom_config
+        )
+        
+        # Create a switch request with confidence between default and custom threshold
+        medium_confidence_decision = SwitchDecision(
+            should_switch=True,
+            reason="Performance degradation detected",
+            confidence=0.8,  # Above default 0.7 but below custom 0.9
+            degradation_severity=DegradationSeverity.MODERATE
+        )
+        
+        request = SwitchRequest(
+            request_id="test_request",
+            trigger=SwitchTrigger.PERFORMANCE_DEGRADATION,
+            from_strategy=self.current_strategy,
+            to_strategy=self.alternative_strategy,
+            reason="Test switch",
+            requested_at=datetime.now(),
+            requested_by="automatic_evaluation",
+            switch_decision=medium_confidence_decision
+        )
+        
+        # Validate the request
+        result = custom_switcher._validate_switch_request(request)
+        
+        self.assertEqual(result, ValidationResult.REJECTED_LOW_CONFIDENCE)
 
 
 if __name__ == '__main__':

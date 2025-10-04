@@ -134,6 +134,7 @@ class ValidationResult(Enum):
     REJECTED_NO_BETTER_ALTERNATIVE = "rejected_no_better_alternative"
     REJECTED_HIGH_RISK = "rejected_high_risk"
     REJECTED_MANUAL_OVERRIDE = "rejected_manual_override"
+    REJECTED_LOW_CONFIDENCE = "rejected_low_confidence"
 
 
 @dataclass
@@ -695,6 +696,10 @@ class StrategySwitcher:
         # Check daily/weekly limits
         if not self._within_switch_limits():
             return ValidationResult.REJECTED_COOLING_OFF
+        
+        # Check confidence threshold
+        if request.switch_decision and request.switch_decision.confidence < self.config.min_confidence_for_switch:
+            return ValidationResult.REJECTED_LOW_CONFIDENCE
         
         # Check if we have sufficient data for the target strategy
         if request.alternative_scores:
