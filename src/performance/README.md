@@ -41,80 +41,69 @@ This module provides a complete suite of performance analysis tools for evaluati
 
 ### Basic Metrics
 ```python
-from src.performance.metrics import (
-    perf_sharpe, 
-    perf_max_drawdown,
-    perf_sortino,
-    perf_calmar
-)
+from src.performance.metrics import sharpe, max_drawdown
 
 # Calculate metrics from daily balance series
-sharpe = perf_sharpe(daily_balance_series)
-max_dd = perf_max_drawdown(daily_balance_series)
-sortino = perf_sortino(daily_balance_series)
-calmar = perf_calmar(daily_balance_series)
+sharpe_ratio = sharpe(daily_balance_series)
+max_dd = max_drawdown(daily_balance_series)
 
-print(f"Sharpe: {sharpe:.2f}, Max DD: {max_dd:.2%}")
+print(f"Sharpe: {sharpe_ratio:.2f}, Max DD: {max_dd:.2%}")
 ```
 
 ### Trade-Based Metrics
 ```python
-from src.performance.metrics import (
-    calculate_win_rate,
-    calculate_profit_factor,
-    calculate_expectancy
-)
+import pandas as pd
+import numpy as np
 
-trades = [
+# Calculate win rate from trades
+trades_df = pd.DataFrame([
     {'pnl': 100, 'exit_time': '2024-01-01'},
     {'pnl': -50, 'exit_time': '2024-01-02'},
     {'pnl': 150, 'exit_time': '2024-01-03'}
-]
+])
 
-win_rate = calculate_win_rate(trades)
-profit_factor = calculate_profit_factor(trades)
-expectancy = calculate_expectancy(trades)
+winning_trades = len(trades_df[trades_df['pnl'] > 0])
+total_trades = len(trades_df)
+win_rate = winning_trades / total_trades if total_trades > 0 else 0
 
 print(f"Win Rate: {win_rate:.1%}")
-print(f"Profit Factor: {profit_factor:.2f}")
-print(f"Expectancy: ${expectancy:.2f}")
-```
-
-### Comprehensive Performance Report
-```python
-from src.performance.metrics import generate_performance_report
-
-report = generate_performance_report(
-    balance_series=daily_balances,
-    trades=trade_history,
-    benchmark_returns=sp500_returns  # Optional benchmark
-)
-
-print(report)
+print(f"Total Trades: {total_trades}")
+print(f"Average PnL: ${trades_df['pnl'].mean():.2f}")
 ```
 
 ### Rolling Metrics
 ```python
-from src.performance.metrics import calculate_rolling_sharpe
+from src.performance.metrics import sharpe
+import pandas as pd
 
-# Calculate 30-day rolling Sharpe ratio
-rolling_sharpe = calculate_rolling_sharpe(
-    daily_returns,
-    window=30
+# Calculate rolling Sharpe ratio
+window = 30
+rolling_returns = daily_balance_series.pct_change()
+rolling_sharpe = rolling_returns.rolling(window=window).apply(
+    lambda x: sharpe(pd.Series(x)) if len(x) == window else np.nan
 )
+
+print(f"Current Rolling Sharpe (30d): {rolling_sharpe.iloc[-1]:.2f}")
 ```
 
-## Performance Visualization
+## Performance Analysis
 
 ```python
-from src.performance.metrics import plot_performance
+import matplotlib.pyplot as plt
 
-# Generate comprehensive performance plots
-plot_performance(
-    balance_series=daily_balances,
-    trades=trade_history,
-    output_path='performance_report.png'
-)
+# Plot balance curve
+plt.figure(figsize=(12, 6))
+plt.plot(daily_balance_series.index, daily_balance_series.values)
+plt.title('Balance Over Time')
+plt.xlabel('Date')
+plt.ylabel('Balance ($)')
+plt.grid(True)
+plt.savefig('balance_curve.png')
+plt.close()
+
+# Calculate cumulative returns
+cumulative_returns = (daily_balance_series / daily_balance_series.iloc[0] - 1) * 100
+print(f"Total Return: {cumulative_returns.iloc[-1]:.2f}%")
 ```
 
 ## Integration

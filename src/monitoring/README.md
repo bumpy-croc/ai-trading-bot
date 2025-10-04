@@ -89,7 +89,7 @@ atb dashboards run monitoring --port $PORT
 
 ### Adding Custom Metrics
 
-Edit `src/dashboards/monitoring/app.py` to add new metrics:
+Edit `src/dashboards/monitoring/dashboard.py` to add new metrics:
 
 ```python
 def get_dashboard_metrics():
@@ -102,11 +102,11 @@ def get_dashboard_metrics():
     return metrics
 ```
 
-Update template in `src/dashboards/monitoring/templates/index.html` to display it.
+Update template in `src/dashboards/monitoring/templates/dashboard.html` to display it.
 
 ### Styling
 
-CSS is located in `src/dashboards/monitoring/static/style.css`. Customize colors, layout, and responsive breakpoints.
+CSS is located in `src/dashboards/monitoring/static/css/dashboard.css`. Customize colors, layout, and responsive breakpoints.
 
 ### Update Frequency
 
@@ -119,13 +119,15 @@ atb dashboards run monitoring --update-interval 30  # 30 seconds
 
 ```
 src/dashboards/monitoring/
-├── app.py              # Main Flask application
+├── dashboard.py        # Main Flask application
 ├── static/
-│   ├── style.css       # Dashboard styling
-│   └── script.js       # Client-side JavaScript
+│   ├── css/
+│   │   └── dashboard.css    # Dashboard styling
+│   └── js/
+│       └── dashboard.js     # Client-side JavaScript
 ├── templates/
-│   └── index.html      # Main dashboard template
-└── README.md           # This file
+│   └── dashboard.html       # Main dashboard template
+└── README.md                # This file
 ```
 
 ## Dependencies

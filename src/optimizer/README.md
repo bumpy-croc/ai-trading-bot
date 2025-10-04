@@ -26,72 +26,88 @@ The optimizer module provides tools for systematically finding optimal strategy 
 
 ```bash
 # Run parameter optimization with defaults (ml_basic strategy, BTCUSDT, 30 days)
-atb optimizer run --strategy ml_basic
+atb optimizer --strategy ml_basic
 
 # Customize optimization parameters
-atb optimizer run --strategy ml_basic --symbol BTCUSDT --days 365
+atb optimizer --strategy ml_basic --symbol BTCUSDT --days 365
 
-# Specify parameter ranges
-atb optimizer run --strategy ml_basic --param-ranges params.json
+# Specify provider and caching
+atb optimizer --provider binance --no-cache
 
-# Different data provider
-atb optimizer run --provider binance --no-cache
+# Persist results to database
+atb optimizer --strategy ml_basic --persist
 
-# Analyze optimization results
-atb optimizer analyze --results-file optimizer_results.json
+# Disable validation step
+atb optimizer --strategy ml_basic --no-validate
 ```
 
 ## Programmatic Usage
 
 ```python
-from src.optimizer.runner import OptimizerRunner
-from src.optimizer.schemas import ParameterRange
+from datetime import datetime, timedelta
+from src.optimizer.runner import ExperimentRunner
+from src.optimizer.schemas import ExperimentConfig, ParameterSet
+from src.optimizer.analyzer import PerformanceAnalyzer
 
-# Define parameter ranges to test
-param_ranges = {
-    'risk_per_trade': ParameterRange(min=0.01, max=0.03, step=0.005),
-    'stop_loss_pct': ParameterRange(min=0.02, max=0.05, step=0.01)
-}
+# Configure experiment
+end = datetime.now()
+start = end - timedelta(days=365)
 
-# Run optimization
-optimizer = OptimizerRunner(
+config = ExperimentConfig(
     strategy_name='ml_basic',
     symbol='BTCUSDT',
     timeframe='1h',
-    days=365
+    start=start,
+    end=end,
+    initial_balance=10000,
+    risk_parameters={},
+    feature_flags={},
+    use_cache=True,
+    provider='binance'
 )
-results = optimizer.optimize(param_ranges)
 
-# Analyze results
-from src.optimizer.analyzer import OptimizerAnalyzer
-analyzer = OptimizerAnalyzer(results)
-best_params = analyzer.get_best_parameters(metric='sharpe_ratio')
-print(f"Best parameters: {best_params}")
+# Run experiment
+runner = ExperimentRunner()
+result = runner.run(config)
+
+print(f"Total Return: {result.total_return:.2f}%")
+print(f"Sharpe Ratio: {result.sharpe_ratio:.2f}")
+print(f"Max Drawdown: {result.max_drawdown:.2f}%")
+
+# Analyze results and get suggestions
+analyzer = PerformanceAnalyzer()
+suggestions = analyzer.analyze([result])
+
+for suggestion in suggestions:
+    print(f"Suggestion: {suggestion.rationale}")
+    print(f"Changes: {suggestion.change}")
+    print(f"Confidence: {suggestion.confidence:.2f}")
 ```
 
-## Parameter Definition Format
+## Parameter Optimization
 
-Define parameter ranges in JSON:
+The optimizer analyzes strategy performance and suggests parameter adjustments:
 
-```json
-{
-  "risk_per_trade": {
-    "min": 0.01,
-    "max": 0.03,
-    "step": 0.005,
-    "type": "float"
-  },
-  "stop_loss_pct": {
-    "min": 0.02,
-    "max": 0.05,
-    "step": 0.01,
-    "type": "float"
-  },
-  "position_size": {
-    "values": [0.1, 0.15, 0.2, 0.25],
-    "type": "discrete"
-  }
-}
+```python
+# Test with custom parameters
+config_with_params = ExperimentConfig(
+    strategy_name='ml_basic',
+    symbol='BTCUSDT',
+    timeframe='1h',
+    start=start,
+    end=end,
+    initial_balance=10000,
+    parameters=ParameterSet(
+        name='custom',
+        values={
+            'MlBasic.stop_loss_pct': 0.03,
+            'MlBasic.take_profit_pct': 0.06
+        }
+    ),
+    use_cache=True
+)
+
+result_custom = runner.run(config_with_params)
 ```
 
 ## Documentation

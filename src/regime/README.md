@@ -26,10 +26,15 @@ This module provides market regime detection capabilities to help strategies ada
 from src.regime.detector import RegimeConfig
 
 config = RegimeConfig(
-    volatility_threshold=0.03,     # 3% volatility threshold
-    trend_threshold=0.02,          # 2% trend strength threshold
-    lookback_periods=50,           # 50 periods for analysis
-    use_ml_enhancements=False      # Use ML-based regime detection
+    slope_window=50,               # Window for trend slope calculation
+    band_window=20,                # Window for Bollinger bands
+    atr_window=14,                 # Window for ATR calculation
+    atr_percentile_lookback=252,   # Lookback for ATR percentile
+    trend_threshold=0.0,           # Threshold for trend detection
+    r2_min=0.2,                    # Minimum R² for trend confidence
+    atr_high_percentile=0.7,       # Percentile threshold for high volatility
+    hysteresis_k=3,                # Confirmations required to switch regime
+    min_dwell=12                   # Minimum bars to stay in regime
 )
 ```
 
@@ -38,23 +43,42 @@ config = RegimeConfig(
 ### Basic Regime Detection
 ```python
 from src.regime.detector import RegimeDetector
+import pandas as pd
 
+# Load your OHLCV data
+df = pd.DataFrame({
+    'open': [...],
+    'high': [...],
+    'low': [...],
+    'close': [...],
+    'volume': [...]
+})
+
+# Detect regimes
 detector = RegimeDetector()
-regime, confidence = detector.detect_current_regime(price_data)
-print(f"Current regime: {regime} (confidence: {confidence:.2%})")
+df_with_regimes = detector.annotate(df)
+
+# Access regime information
+print(df_with_regimes[['trend_label', 'vol_label', 'regime_label', 'regime_confidence']].tail())
 ```
 
-### Enhanced Detection with ML
+### Enhanced Detection
 ```python
-from src.regime.enhanced_detector import EnhancedRegimeDetector
+from src.regime.enhanced_detector import EnhancedRegimeDetector, EnhancedRegimeConfig
 
-detector = EnhancedRegimeDetector()
-result = detector.detect_regime_with_features(
-    price_data,
-    volume_data,
-    include_features=['volatility', 'trend', 'momentum']
+# Configure enhanced detector
+config = EnhancedRegimeConfig(
+    slope_window=40,
+    atr_window=14,
+    rsi_window=14,
+    volume_sma_window=20
 )
-print(f"Regime: {result.regime}, Features: {result.features}")
+
+detector = EnhancedRegimeDetector(config)
+df_enhanced = detector.annotate(df)
+
+# Enhanced detector adds additional columns for momentum and volume analysis
+print(df_enhanced.columns)
 ```
 
 ### Regime-Aware Backtesting

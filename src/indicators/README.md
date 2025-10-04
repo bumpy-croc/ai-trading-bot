@@ -48,62 +48,43 @@ This module provides efficient, vectorized implementations of technical indicato
 ### Basic Usage
 ```python
 from src.indicators.technical import (
-    calc_sma, 
-    calc_ema,
-    calc_rsi, 
-    calc_atr,
-    calc_macd,
-    calc_bollinger_bands
+    calculate_moving_averages,
+    calculate_rsi,
+    calculate_atr,
+    calculate_bollinger_bands
 )
 
-# Simple moving average
-sma_20 = calc_sma(df['close'], window=20)
-sma_50 = calc_sma(df['close'], window=50)
+# Simple moving averages (adds ma_20, ma_50 columns)
+df = calculate_moving_averages(df, periods=[20, 50])
 
-# Exponential moving average
-ema_12 = calc_ema(df['close'], window=12)
-ema_26 = calc_ema(df['close'], window=26)
+# RSI (pass DataFrame or Series)
+rsi = calculate_rsi(df, period=14)
+df['rsi'] = rsi
 
-# RSI
-rsi = calc_rsi(df['close'], window=14)
+# ATR for volatility (adds 'atr' column)
+df = calculate_atr(df, period=14)
 
-# ATR for volatility
-atr = calc_atr(df, window=14)
+# Bollinger Bands (adds bb_middle, bb_upper, bb_lower columns)
+df = calculate_bollinger_bands(df, period=20, std_dev=2.0)
 
-# MACD
-macd, signal, histogram = calc_macd(
-    df['close'], 
-    fast=12, 
-    slow=26, 
-    signal=9
-)
-
-# Bollinger Bands
-upper, middle, lower = calc_bollinger_bands(
-    df['close'],
-    window=20,
-    num_std=2
-)
+print(df[['close', 'ma_20', 'ma_50', 'rsi', 'atr', 'bb_upper', 'bb_lower']].tail())
 ```
 
 ### Strategy Integration
 ```python
 from src.strategies.base import BaseStrategy
-from src.indicators.technical import calc_sma, calc_rsi, calc_atr
+from src.indicators.technical import (
+    calculate_moving_averages,
+    calculate_rsi,
+    calculate_atr
+)
 
 class MyStrategy(BaseStrategy):
     def calculate_indicators(self, df):
         # Calculate multiple indicators
-        df['sma_20'] = calc_sma(df['close'], window=20)
-        df['sma_50'] = calc_sma(df['close'], window=50)
-        df['rsi'] = calc_rsi(df['close'], window=14)
-        df['atr'] = calc_atr(df, window=14)
-        
-        # Calculate MACD
-        macd, signal, histogram = calc_macd(df['close'])
-        df['macd'] = macd
-        df['macd_signal'] = signal
-        df['macd_histogram'] = histogram
+        df = calculate_moving_averages(df, periods=[20, 50])
+        df['rsi'] = calculate_rsi(df, period=14)
+        df = calculate_atr(df, period=14)
         
         return df
 ```
@@ -113,14 +94,14 @@ All indicators are optimized for pandas DataFrames and use vectorized operations
 
 ```python
 import pandas as pd
-from src.indicators.technical import calc_rsi, calc_atr
+from src.indicators.technical import calculate_rsi, calculate_atr
 
 # Load large dataset
 df = pd.read_csv('BTCUSDT_1h.csv', parse_dates=['timestamp'], index_col='timestamp')
 
 # Calculate indicators efficiently on entire dataset
-df['rsi'] = calc_rsi(df['close'], window=14)
-df['atr'] = calc_atr(df, window=14)
+df['rsi'] = calculate_rsi(df, period=14)
+df = calculate_atr(df, period=14)
 
 # No loops needed - fully vectorized
 ```
