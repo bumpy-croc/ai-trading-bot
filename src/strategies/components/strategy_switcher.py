@@ -732,7 +732,8 @@ class StrategySwitcher:
     def _can_switch_now(self, trigger: SwitchTrigger) -> bool:
         """Check if enough time has passed since last switch
         
-        Emergency stops bypass cooling-off entirely for immediate action.
+        Emergency stops bypass the cooling-off period entirely to allow
+        immediate intervention in critical situations.
         Manual requests use the emergency interval for faster response.
         """
         if not self.last_switch_time:
