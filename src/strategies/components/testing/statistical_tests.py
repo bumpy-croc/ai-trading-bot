@@ -507,7 +507,7 @@ class EquivalenceTests:
         
         if len(returns1_clean) < 10 or len(returns2_clean) < 10:
             return StatisticalTestResult(
-                test_name="Two One-Sided Test (TOST)",
+                test_name="Two One-Sided Test (TOST) for Equivalence",
                 statistic=0.0,
                 p_value=1.0,
                 interpretation="Insufficient data for equivalence test"
@@ -539,7 +539,7 @@ class EquivalenceTests:
             tost_p = max(p1, p2)
             
             return StatisticalTestResult(
-                test_name="Two One-Sided Test (TOST)",
+                test_name="Two One-Sided Test (TOST) for Equivalence",
                 statistic=max(abs(t1), abs(t2)),
                 p_value=tost_p,
                 reject_null=bool(tost_p < 0.05),  # Reject null of non-equivalence
@@ -554,7 +554,7 @@ class EquivalenceTests:
         except Exception as e:
             self.logger.warning(f"TOST failed: {e}")
             return StatisticalTestResult(
-                test_name="Two One-Sided Test (TOST)",
+                test_name="Two One-Sided Test (TOST) for Equivalence",
                 statistic=0.0,
                 p_value=1.0,
                 interpretation=f"Test failed: {str(e)}"

@@ -376,8 +376,8 @@ class StrategyConverter:
             },
             component_configs={
                 "signal_generator": {"name": "technical_signals"},
-                "risk_manager": {"name": "volatility_risk"},
-                "position_sizer": {"name": "fixed_fraction"}
+                "risk_manager": {},  # VolatilityRiskManager doesn't accept name parameter
+                "position_sizer": {}  # FixedFractionSizer doesn't accept name parameter
             }
         )
 
