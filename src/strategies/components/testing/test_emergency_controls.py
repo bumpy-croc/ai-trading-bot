@@ -34,6 +34,7 @@ class TestEmergencyControls(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.strategy_switcher = Mock(spec=StrategySwitcher)
+        self.strategy_switcher.manual_override_active = False  # Add missing mock attribute
         self.config = EmergencyConfig(
             critical_drawdown_threshold=0.25,
             high_drawdown_threshold=0.15,
@@ -475,6 +476,76 @@ class TestEmergencyControls(unittest.TestCase):
         
         # Should still have same number of alerts
         self.assertEqual(len(self.emergency_controls.active_alerts), initial_alert_count)
+    
+    def test_alert_rate_limiting(self):
+        """Test hourly alert rate limiting"""
+        # Configure with low rate limit for testing
+        self.emergency_controls.config.max_alerts_per_hour = 3
+        self.emergency_controls.config.alert_cooldown_minutes = 0  # No cooldown for this test
+        
+        # Track successful alerts
+        successful_alerts = []
+        
+        # Try to trigger 5 alerts with different types/strategies to avoid cooldown
+        alert_types = [
+            AlertType.PERFORMANCE_DEGRADATION,
+            AlertType.HIGH_DRAWDOWN,
+            AlertType.CONSECUTIVE_LOSSES,
+            AlertType.STRATEGY_ERROR,
+            AlertType.MANUAL_INTERVENTION_REQUIRED
+        ]
+        
+        for i in range(5):
+            alert_type = alert_types[i % len(alert_types)]
+            alert_id = self.emergency_controls._trigger_alert(
+                alert_type,
+                EmergencyLevel.MEDIUM,
+                f"test_strategy_{i}",  # Different strategy to avoid cooldown
+                f"Test alert {i+1}"
+            )
+            
+            if alert_id:
+                successful_alerts.append(alert_id)
+        
+        # Should only have 3 successful alerts (rate limited)
+        self.assertEqual(len(successful_alerts), 3)
+        self.assertEqual(len(self.emergency_controls.active_alerts), 3)
+        self.assertEqual(len(self.emergency_controls.alert_history), 3)
+        
+        # Verify alerts are immediately in history (not just when resolved)
+        for alert_id in successful_alerts:
+            alert = self.emergency_controls.active_alerts[alert_id]
+            self.assertIn(alert, self.emergency_controls.alert_history)
+    
+    def test_alert_history_immediate_add(self):
+        """Test that alerts are added to history immediately upon creation"""
+        # Create a new emergency controls instance to ensure clean state
+        fresh_controls = EmergencyControls(self.strategy_switcher, self.config)
+        
+        # Trigger an alert
+        alert_id = fresh_controls._trigger_alert(
+            AlertType.PERFORMANCE_DEGRADATION,
+            EmergencyLevel.MEDIUM,
+            "test_strategy",
+            "Test alert"
+        )
+        
+        self.assertIsNotNone(alert_id)
+        self.assertEqual(len(fresh_controls.active_alerts), 1)
+        self.assertEqual(len(fresh_controls.alert_history), 1)
+        
+        # Verify the same alert object is in both active_alerts and alert_history
+        alert = fresh_controls.active_alerts[alert_id]
+        self.assertIn(alert, fresh_controls.alert_history)
+        
+        # Resolve the alert
+        result = fresh_controls.resolve_alert(alert_id)
+        self.assertTrue(result)
+        
+        # Alert should be removed from active_alerts but remain in history
+        self.assertEqual(len(fresh_controls.active_alerts), 0)
+        self.assertEqual(len(fresh_controls.alert_history), 1)
+        self.assertIn(alert, fresh_controls.alert_history)
     
     def test_cleanup_expired_requests(self):
         """Test cleanup of expired approval requests"""

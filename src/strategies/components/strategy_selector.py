@@ -9,6 +9,7 @@ correlation analysis to avoid selecting similar strategies.
 import logging
 import statistics
 import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -530,16 +531,35 @@ class StrategySelector:
         strategy_ids = list(strategies.keys())
         current_strategy_set = frozenset(strategy_ids)
         
+        # Calculate cache version based on strategy data freshness
+        cache_version = self._calculate_strategy_cache_version(strategies)
+        
         # First check without holding lock during computation (double-checked locking)
         with self._correlation_lock:
-            # Check if cache is still valid AND strategy set hasn't changed
+            # Check if cache is still valid AND strategy set hasn't changed AND cache version matches
             if (datetime.now() < self.correlation_cache_expiry and 
-                self.correlation_strategy_set == current_strategy_set):
+                self.correlation_strategy_set == current_strategy_set and
+                hasattr(self, 'correlation_cache_version') and
+                self.correlation_cache_version == cache_version):
                 return self.correlation_matrix
             
+            # Check if another thread is already computing for this strategy set
+            if (hasattr(self, '_computing_strategy_set') and 
+                self._computing_strategy_set == current_strategy_set):
+                # Another thread is computing, wait for it to complete
+                while (hasattr(self, '_computing_strategy_set') and 
+                       self._computing_strategy_set == current_strategy_set):
+                    self._correlation_lock.release()
+                    time.sleep(0.01)  # Small delay to prevent busy waiting
+                    self._correlation_lock.acquire()
+                
+                # Re-check cache after waiting
+                if (datetime.now() < self.correlation_cache_expiry and 
+                    self.correlation_strategy_set == current_strategy_set):
+                    return self.correlation_matrix
+            
             # Mark that we're computing to prevent other threads from computing
-            # Set a temporary flag to indicate computation is in progress
-            computing_strategy_set = self.correlation_strategy_set
+            self._computing_strategy_set = current_strategy_set
         
         # Calculate correlation matrix outside lock to avoid holding it during computation
         # Pre-compute all daily returns for vectorized correlation calculation
@@ -574,17 +594,40 @@ class StrategySelector:
         with self._correlation_lock:
             # Double-check: another thread might have computed while we were calculating
             if (datetime.now() < self.correlation_cache_expiry and 
-                self.correlation_strategy_set == current_strategy_set and
-                self.correlation_strategy_set != computing_strategy_set):
+                self.correlation_strategy_set == current_strategy_set):
                 # Another thread already updated the cache, use that
+                delattr(self, '_computing_strategy_set')  # Clear computing flag
                 return self.correlation_matrix
             
-            # Update cache with strategy set tracking
+            # Update cache with strategy set tracking and version
             self.correlation_matrix = correlation_matrix
             self.correlation_cache_expiry = datetime.now() + timedelta(hours=1)
             self.correlation_strategy_set = current_strategy_set
+            self.correlation_cache_version = cache_version
+            
+            # Clear computing flag
+            if hasattr(self, '_computing_strategy_set'):
+                delattr(self, '_computing_strategy_set')
         
         return correlation_matrix
+    
+    def _calculate_strategy_cache_version(self, strategies: dict[str, PerformanceTracker]) -> str:
+        """Calculate cache version based on strategy data freshness"""
+        version_parts = []
+        for strategy_id in sorted(strategies.keys()):
+            tracker = strategies[strategy_id]
+            # Use the timestamp of the most recent trade as version component
+            if tracker.trades:
+                latest_trade_time = max(trade.timestamp for trade in tracker.trades)
+                version_parts.append(f"{strategy_id}:{latest_trade_time.timestamp()}")
+            else:
+                version_parts.append(f"{strategy_id}:0")
+        
+        # Also include the number of trades to detect when strategies change significantly
+        total_trades = sum(len(tracker.trades) for tracker in strategies.values())
+        version_parts.append(f"total_trades:{total_trades}")
+        
+        return "|".join(version_parts)
     
     def _calculate_pairwise_correlation_from_daily_returns(self, 
                                                          daily_returns1: dict,
@@ -607,36 +650,6 @@ class StrategySelector:
         except Exception as e:
             self.logger.warning(f"Correlation calculation failed: {e}")
             return 0.0
-    
-    def _calculate_pairwise_correlation(self, tracker1: PerformanceTracker,
-                                      tracker2: PerformanceTracker) -> float:
-        """Calculate correlation between two strategies' returns"""
-        # Get recent trades (last 90 days)
-        cutoff_date = datetime.now() - timedelta(days=90)
-        
-        trades1 = [t for t in tracker1.trades if t.timestamp >= cutoff_date]
-        trades2 = [t for t in tracker2.trades if t.timestamp >= cutoff_date]
-        
-        if len(trades1) < 10 or len(trades2) < 10:
-            return 0.0  # Insufficient data
-        
-        # Align trades by date (daily returns)
-        returns1_by_date = defaultdict(list)
-        returns2_by_date = defaultdict(list)
-        
-        for trade in trades1:
-            date_key = trade.timestamp.date()
-            returns1_by_date[date_key].append(trade.pnl_percent)
-        
-        for trade in trades2:
-            date_key = trade.timestamp.date()
-            returns2_by_date[date_key].append(trade.pnl_percent)
-        
-        # Convert to daily returns
-        daily_returns1 = {date: sum(returns) for date, returns in returns1_by_date.items()}
-        daily_returns2 = {date: sum(returns) for date, returns in returns2_by_date.items()}
-        
-        return self._calculate_pairwise_correlation_from_daily_returns(daily_returns1, daily_returns2)
     
     def _normalize_score(self, value: float, all_values: list[float],
                          higher_is_better: bool = True) -> float:

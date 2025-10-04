@@ -730,11 +730,20 @@ class StrategySwitcher:
         return True
     
     def _can_switch_now(self, trigger: SwitchTrigger) -> bool:
-        """Check if enough time has passed since last switch"""
+        """Check if enough time has passed since last switch
+        
+        Emergency stops bypass cooling-off entirely for immediate action.
+        Manual requests use the emergency interval for faster response.
+        """
         if not self.last_switch_time:
             return True
         
+        # Emergency stops bypass cooling-off period entirely
         if trigger == SwitchTrigger.EMERGENCY_STOP:
+            return True
+        
+        # Manual requests use emergency interval for faster response
+        if trigger == SwitchTrigger.MANUAL_REQUEST:
             min_interval = timedelta(hours=self.config.emergency_switch_interval_hours)
         else:
             min_interval = timedelta(hours=self.config.min_switch_interval_hours)
@@ -887,7 +896,7 @@ class StrategySwitcher:
                     'max_drawdown': metrics.max_drawdown,
                     'win_rate': metrics.win_rate,
                     'total_trades': metrics.total_trades,
-                    'avg_trade_return': metrics.avg_trade_return,
+                    'expectancy': metrics.expectancy,  # More robust measure of average expected profit/loss per trade
                     'volatility': metrics.volatility
                 })
             except Exception as e:
@@ -959,7 +968,7 @@ class StrategySwitcher:
         
         # Calculate changes in key metrics
         metrics_to_compare = ['sharpe_ratio', 'total_return_pct', 'max_drawdown', 
-                            'win_rate', 'avg_trade_return', 'volatility']
+                            'win_rate', 'expectancy', 'volatility']
         
         for metric in metrics_to_compare:
             if metric in pre_performance and metric in post_performance:
@@ -969,11 +978,14 @@ class StrategySwitcher:
                 # Calculate absolute and relative changes
                 absolute_change = post_value - pre_value
                 
-                # Avoid division by zero
+                # Calculate relative change with robust zero handling
                 if abs(pre_value) > 0.0001:
+                    # Meaningful baseline - use standard relative change
                     relative_change = (post_value - pre_value) / abs(pre_value)
                 else:
-                    relative_change = 0.0 if abs(post_value) < 0.0001 else (1.0 if post_value > 0 else -1.0)
+                    # Near-zero baseline - skip relative change calculation to avoid misleading metrics
+                    # Only report absolute change when baseline is near zero
+                    relative_change = None  # Will be excluded from analysis
                 
                 impact[f'{metric}_change'] = absolute_change
                 impact[f'{metric}_change_pct'] = relative_change

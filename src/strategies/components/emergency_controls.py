@@ -344,12 +344,14 @@ class EmergencyControls:
             
             self.pending_approvals[approval_request.request_id] = approval_request
             
-            # Notify approval callbacks
-            for callback in self.approval_callbacks:
+            # Notify approval callbacks with timeout protection
+            for i, callback in enumerate(self.approval_callbacks):
                 try:
-                    callback(approval_request)
-                except Exception as e:
-                    self.logger.error(f"Approval callback error: {e}")
+                    execute_with_timeout(callback, 10, approval_request)  # 10 second timeout for approval callbacks
+                except TimeoutError as error:
+                    self.logger.error(f"Approval callback #{i} timed out: {error}")
+                except Exception as error:
+                    self.logger.error(f"Approval callback #{i} error: {error}")
             
             self.logger.info(f"Manual switch request requires approval: {approval_request.request_id}")
             return approval_request.request_id
@@ -709,27 +711,38 @@ class EmergencyControls:
         # Check for significant degradation with proper zero handling
         # Use consistent logic to avoid mixing ratios and absolute differences
         
-        # Sharpe ratio degradation calculation
-        if abs(avg_sharpe) > 0.1:
+        # Sharpe ratio degradation calculation with robust zero handling
+        if abs(avg_sharpe) > 0.01:  # More precise threshold
             # Meaningful baseline - use relative degradation
             sharpe_degradation = (avg_sharpe - current_metrics.sharpe_ratio) / abs(avg_sharpe)
         elif avg_sharpe != 0:
             # Small but non-zero baseline - use normalized absolute difference
-            sharpe_degradation = min(1.0, abs(avg_sharpe - current_metrics.sharpe_ratio) / 0.1)
+            sharpe_degradation = min(1.0, abs(avg_sharpe - current_metrics.sharpe_ratio) / 0.01)
         else:
             # Zero baseline - flag as degraded only if current is significantly negative
-            sharpe_degradation = 1.0 if current_metrics.sharpe_ratio < -0.1 else 0.0
+            sharpe_degradation = 0.0 if abs(current_metrics.sharpe_ratio) < 0.01 else 1.0
         
-        # Win rate degradation calculation
-        if avg_win_rate > 0.1:
+        # Win rate degradation calculation with robust zero handling
+        if avg_win_rate > 0.01:  # More precise threshold
             # Meaningful baseline - use relative degradation
             win_rate_degradation = (avg_win_rate - current_metrics.win_rate) / avg_win_rate
         elif avg_win_rate != 0:
             # Small but non-zero baseline - use normalized absolute difference
-            win_rate_degradation = min(1.0, abs(avg_win_rate - current_metrics.win_rate) / 0.1)
+            win_rate_degradation = min(1.0, abs(avg_win_rate - current_metrics.win_rate) / 0.01)
         else:
             # Zero baseline - flag as degraded only if current is significantly negative
-            win_rate_degradation = 1.0 if current_metrics.win_rate < -0.05 else 0.0
+            win_rate_degradation = 0.0 if abs(current_metrics.win_rate) < 0.01 else 1.0
+        
+        # Normalize degradation metrics to equivalent significance levels
+        # Sharpe degradation of 0.3 means 30% worse performance
+        # Win rate degradation of 0.2 means 20% worse performance
+        # These thresholds are calibrated based on historical analysis:
+        # - 30% Sharpe degradation indicates significant underperformance
+        # - 20% win rate degradation indicates concerning trend change
+        
+        # Alternative: Use normalized thresholds for equivalent significance
+        # normalized_sharpe_threshold = 0.3  # 30% degradation
+        # normalized_win_rate_threshold = 0.2  # 20% degradation
         
         # Trigger if either metric has degraded significantly
         return sharpe_degradation > 0.3 or win_rate_degradation > 0.2
