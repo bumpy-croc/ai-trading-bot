@@ -335,7 +335,7 @@ class TestEquivalenceTests:
         
         result = equiv_engine.two_one_sided_test(returns1, returns2)
         
-        assert result.test_name == "Two One-Sided Test (TOST)"
+        assert result.test_name == "Two One-Sided Test (TOST) for Equivalence"
         assert result.statistic >= 0
         assert 0 <= result.p_value <= 1
         assert isinstance(result.reject_null, bool)
@@ -348,7 +348,7 @@ class TestEquivalenceTests:
         
         result = equiv_engine.two_one_sided_test(returns1, returns2)
         
-        assert result.test_name == "Two One-Sided Test (TOST)"
+        assert result.test_name == "Two One-Sided Test (TOST) for Equivalence"
         assert result.statistic >= 0
         assert 0 <= result.p_value <= 1
         # With very different means, should not conclude equivalence
@@ -369,7 +369,7 @@ class TestEquivalenceTests:
         
         result = equiv_engine.two_one_sided_test(small_returns1, small_returns2)
         
-        assert result.test_name == "Two One-Sided Test (TOST)"
+        assert result.test_name == "Two One-Sided Test (TOST) for Equivalence"
         assert result.p_value == 1.0
         assert "Insufficient data" in result.interpretation
 
