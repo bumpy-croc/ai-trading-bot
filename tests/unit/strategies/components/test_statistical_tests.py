@@ -195,7 +195,7 @@ class TestFinancialStatisticalTests:
         # Should return empty list due to insufficient data
         assert len(results) == 0
     
-    @patch('src.strategies.components.testing.statistical_tests.acorr_ljungbox')
+    @patch('statsmodels.stats.diagnostic.acorr_ljungbox')
     def test_autocorrelation_test_with_statsmodels(self, mock_ljungbox, test_engine, sample_returns):
         """Test autocorrelation test when statsmodels is available."""
         returns1, _ = sample_returns
@@ -225,9 +225,9 @@ class TestFinancialStatisticalTests:
         assert result.p_value == 1.0
         assert "Insufficient data" in result.interpretation
     
-    @patch('src.strategies.components.testing.statistical_tests.adfuller')
-    @patch('src.strategies.components.testing.statistical_tests.kpss')
-    def test_stationarity_tests_with_statsmodels(self, mock_kpss, mock_adfuller, test_engine, sample_returns):
+    @patch('statsmodels.tsa.stattools.kpss')
+    @patch('statsmodels.tsa.stattools.adfuller')
+    def test_stationarity_tests_with_statsmodels(self, mock_adfuller, mock_kpss, test_engine, sample_returns):
         """Test stationarity tests when statsmodels is available."""
         returns1, _ = sample_returns
         

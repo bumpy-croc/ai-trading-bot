@@ -112,9 +112,9 @@ class TestStrategyConverter:
         # Should fall back to BaseStrategy mapping
         assert 'BaseStrategy' in self.converter._conversion_mappings
     
-    @patch('src.strategies.migration.strategy_converter.MLBasicSignalGenerator')
-    @patch('src.strategies.migration.strategy_converter.FixedRiskManager')
-    @patch('src.strategies.migration.strategy_converter.ConfidenceWeightedSizer')
+    @patch('src.strategies.components.MLBasicSignalGenerator')
+    @patch('src.strategies.components.risk_manager.FixedRiskManager')
+    @patch('src.strategies.components.position_sizer.ConfidenceWeightedSizer')
     def test_create_components(self, mock_sizer, mock_risk, mock_signal):
         """Test component creation"""
         # Set up mocks
@@ -128,8 +128,8 @@ class TestStrategyConverter:
         # Create test parameters
         component_params = {
             'signal_generator': {'model_path': 'test.onnx', 'name': 'test_signal'},
-            'risk_manager': {'stop_loss_percentage': 0.02, 'name': 'test_risk'},
-            'position_sizer': {'base_fraction': 0.2, 'name': 'test_sizer'}
+            'risk_manager': {'risk_per_trade': 0.02},  # FixedRiskManager parameters
+            'position_sizer': {'base_fraction': 0.2}  # ConfidenceWeightedSizer parameters
         }
         
         # Create mock report
@@ -228,20 +228,20 @@ class TestStrategyConverter:
             position_sizer_type=ConfidenceWeightedSizer,
             parameter_mappings={
                 'signal_generator': {'model_path': 'model_path'},
-                'risk_manager': {'stop_loss_pct': 'stop_loss_percentage'},
+                'risk_manager': {'stop_loss_pct': 'stop_loss_pct'},  # Identity mapping for stop_loss_pct
                 'position_sizer': {}
             },
             component_configs={
                 'signal_generator': {'name': 'custom_signal'},
-                'risk_manager': {'name': 'custom_risk'},
-                'position_sizer': {'name': 'custom_sizer'}
+                'risk_manager': {},  # FixedRiskManager doesn't accept name
+                'position_sizer': {}  # ConfidenceWeightedSizer doesn't accept name
             }
         )
         
-        with patch('src.strategies.migration.strategy_converter.MLBasicSignalGenerator') as mock_signal, \
-             patch('src.strategies.migration.strategy_converter.FixedRiskManager') as mock_risk, \
-             patch('src.strategies.migration.strategy_converter.ConfidenceWeightedSizer') as mock_sizer, \
-             patch('src.strategies.migration.strategy_converter.LegacyStrategyAdapter') as mock_adapter:
+        with patch('src.strategies.components.MLBasicSignalGenerator') as mock_signal, \
+             patch('src.strategies.components.risk_manager.FixedRiskManager') as mock_risk, \
+             patch('src.strategies.components.position_sizer.ConfidenceWeightedSizer') as mock_sizer, \
+             patch('src.strategies.adapters.legacy_adapter.LegacyStrategyAdapter') as mock_adapter:
             
             # Set up mocks
             mock_signal.return_value = Mock(spec=SignalGenerator)
