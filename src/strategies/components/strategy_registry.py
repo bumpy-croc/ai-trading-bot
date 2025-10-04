@@ -35,7 +35,7 @@ class ComponentConfig:
     """Configuration for a strategy component"""
     type: str
     class_name: str
-    parameters: Dict[str, Any]
+    parameters: dict[str, Any]
     version: str
 
     def to_dict(self) -> Dict[str, Any]:
@@ -43,7 +43,7 @@ class ComponentConfig:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ComponentConfig':
+    def from_dict(cls, data: dict[str, Any]) -> 'ComponentConfig':
         """Create from dictionary"""
         return cls(**data)
 
@@ -58,7 +58,7 @@ class StrategyMetadata:
     created_at: datetime
     created_by: str
     description: str
-    tags: List[str]
+    tags: list[str]
     status: StrategyStatus
 
     # Component configurations
@@ -71,9 +71,8 @@ class StrategyMetadata:
     parameters: Dict[str, Any]
     performance_summary: Optional[Dict[str, Any]]
     validation_results: Optional[Dict[str, Any]]
-
     # Lineage tracking
-    lineage_path: List[str]  # Path from root ancestor to this strategy
+    lineage_path: list[str]  # Path from root ancestor to this strategy
     branch_name: Optional[str]
     merge_source: Optional[str]
 
@@ -89,7 +88,7 @@ class StrategyMetadata:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'StrategyMetadata':
+    def from_dict(cls, data: dict[str, Any]) -> 'StrategyMetadata':
         """Create from dictionary"""
         data = data.copy()
         data['created_at'] = datetime.fromisoformat(data['created_at'])
@@ -107,16 +106,16 @@ class StrategyVersion:
     version: str
     strategy_id: str
     created_at: datetime
-    changes: List[str]
-    performance_delta: Optional[Dict[str, float]]
+    changes: list[str]
+    performance_delta: Optional[dict[str, float]]
     is_major: bool
 
     # Configuration snapshot for this version
-    signal_generator_config: Optional[Dict[str, Any]] = None
-    risk_manager_config: Optional[Dict[str, Any]] = None
-    position_sizer_config: Optional[Dict[str, Any]] = None
-    regime_detector_config: Optional[Dict[str, Any]] = None
-    parameters: Optional[Dict[str, Any]] = None
+    signal_generator_config: Optional[dict[str, Any]] = None
+    risk_manager_config: Optional[dict[str, Any]] = None
+    position_sizer_config: Optional[dict[str, Any]] = None
+    regime_detector_config: Optional[dict[str, Any]] = None
+    parameters: Optional[dict[str, Any]] = None
     config_hash: Optional[str] = None
     component_hash: Optional[str] = None
 
@@ -127,7 +126,7 @@ class StrategyVersion:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'StrategyVersion':
+    def from_dict(cls, data: dict[str, Any]) -> 'StrategyVersion':
         """Create from dictionary"""
         data = data.copy()
         data['created_at'] = datetime.fromisoformat(data['created_at'])
@@ -162,7 +161,6 @@ class StrategyRegistry:
         self._strategies: Dict[str, StrategyMetadata] = {}
         self._versions: Dict[str, List[StrategyVersion]] = {}
         self._lineage: Dict[str, List[str]] = {}  # parent_id -> [child_ids]
-
         # Component type registry for validation
         self._component_types = {
             'signal_generator': SignalGenerator,
@@ -264,7 +262,7 @@ class StrategyRegistry:
         return strategy_id
 
     def update_strategy(self, strategy_id: str, strategy: Strategy,
-                       changes: List[str], is_major: bool = False) -> str:
+                       changes: list[str], is_major: bool = False) -> str:
         """
         Update an existing strategy with a new version
         
@@ -515,7 +513,7 @@ class StrategyRegistry:
         self.logger.info(f"Reverted strategy {strategy_id} to version {target_version}")
 
     def list_strategies(self, status: Optional[StrategyStatus] = None,
-                       tags: Optional[List[str]] = None) -> List[StrategyMetadata]:
+                       tags: Optional[list[str]] = None) -> list[StrategyMetadata]:
         """
         List strategies with optional filtering
         

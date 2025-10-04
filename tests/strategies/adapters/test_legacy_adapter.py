@@ -5,25 +5,38 @@ This module tests the LegacyStrategyAdapter class to ensure it properly
 implements the BaseStrategy interface and correctly integrates components.
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
-from src.strategies.base import BaseStrategy
+import numpy as np
+import pandas as pd
+import pytest
+
 from src.strategies.adapters.legacy_adapter import LegacyStrategyAdapter
-from src.strategies.components.signal_generator import (
-    SignalGenerator, Signal, SignalDirection, HoldSignalGenerator, RandomSignalGenerator
-)
-from src.strategies.components.risk_manager import (
-    RiskManager, Position, MarketData, FixedRiskManager
-)
+from src.strategies.base import BaseStrategy
 from src.strategies.components.position_sizer import (
-    PositionSizer, FixedFractionSizer, ConfidenceWeightedSizer
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+    PositionSizer,
 )
 from src.strategies.components.regime_context import (
-    EnhancedRegimeDetector, RegimeContext, TrendLabel, VolLabel
+    EnhancedRegimeDetector,
+    RegimeContext,
+    TrendLabel,
+    VolLabel,
+)
+from src.strategies.components.risk_manager import (
+    FixedRiskManager,
+    MarketData,
+    Position,
+    RiskManager,
+)
+from src.strategies.components.signal_generator import (
+    HoldSignalGenerator,
+    RandomSignalGenerator,
+    Signal,
+    SignalDirection,
+    SignalGenerator,
 )
 
 

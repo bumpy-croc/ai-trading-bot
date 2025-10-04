@@ -8,9 +8,12 @@ for generating trading signals in the component-based strategy architecture.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .regime_context import RegimeContext
 
 
 class SignalDirection(Enum):
@@ -269,7 +272,7 @@ class WeightedVotingSignalGenerator(SignalGenerator):
     a consensus signal with aggregated confidence scores.
     """
     
-    def __init__(self, generators: Dict[SignalGenerator, float], 
+    def __init__(self, generators: dict[SignalGenerator, float], 
                  min_confidence: float = 0.3, consensus_threshold: float = 0.6):
         """
         Initialize weighted voting signal generator
@@ -415,7 +418,7 @@ class WeightedVotingSignalGenerator(SignalGenerator):
         
         return sum(confidences) / total_weight
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get weighted voting parameters"""
         params = super().get_parameters()
         params.update({
@@ -602,7 +605,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
         except Exception:
             return 0.0
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get hierarchical signal generator parameters"""
         params = super().get_parameters()
         params.update({
@@ -622,7 +625,7 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
     adapting strategy to current market conditions.
     """
     
-    def __init__(self, regime_generators: Dict[str, SignalGenerator], 
+    def __init__(self, regime_generators: dict[str, SignalGenerator], 
                  default_generator: SignalGenerator, confidence_adjustment: bool = True):
         """
         Initialize regime-adaptive signal generator
@@ -752,7 +755,7 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
         else:
             return 0.7  # Significant reduction in low-confidence regimes
     
-    def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive signal generator parameters"""
         params = super().get_parameters()
         params.update({

@@ -2,16 +2,20 @@
 Unit tests for SignalGenerator components
 """
 
-import pytest
-import pandas as pd
+
 import numpy as np
-from datetime import datetime
+import pandas as pd
+import pytest
 
 from src.strategies.components.signal_generator import (
-    SignalGenerator, Signal, SignalDirection, 
-    HoldSignalGenerator, RandomSignalGenerator,
-    WeightedVotingSignalGenerator, HierarchicalSignalGenerator,
-    RegimeAdaptiveSignalGenerator
+    HierarchicalSignalGenerator,
+    HoldSignalGenerator,
+    RandomSignalGenerator,
+    RegimeAdaptiveSignalGenerator,
+    Signal,
+    SignalDirection,
+    SignalGenerator,
+    WeightedVotingSignalGenerator,
 )
 
 

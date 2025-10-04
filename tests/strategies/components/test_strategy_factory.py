@@ -4,19 +4,30 @@ Unit tests for StrategyFactory and StrategyBuilder
 
 import pytest
 
-from src.strategies.components.strategy_factory import (
-    StrategyFactory, StrategyBuilder, create_strategy_template, validate_strategy_configuration
-)
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import (
-    HoldSignalGenerator, RandomSignalGenerator, WeightedVotingSignalGenerator,
-    HierarchicalSignalGenerator, RegimeAdaptiveSignalGenerator
+from src.strategies.components.position_sizer import (
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+    KellySizer,
+    RegimeAdaptiveSizer,
 )
 from src.strategies.components.risk_manager import (
-    FixedRiskManager, VolatilityRiskManager, RegimeAdaptiveRiskManager
+    FixedRiskManager,
+    RegimeAdaptiveRiskManager,
+    VolatilityRiskManager,
 )
-from src.strategies.components.position_sizer import (
-    FixedFractionSizer, ConfidenceWeightedSizer, KellySizer, RegimeAdaptiveSizer
+from src.strategies.components.signal_generator import (
+    HierarchicalSignalGenerator,
+    HoldSignalGenerator,
+    RandomSignalGenerator,
+    RegimeAdaptiveSignalGenerator,
+    WeightedVotingSignalGenerator,
+)
+from src.strategies.components.strategy import Strategy
+from src.strategies.components.strategy_factory import (
+    StrategyBuilder,
+    StrategyFactory,
+    create_strategy_template,
+    validate_strategy_configuration,
 )
 
 

@@ -9,7 +9,11 @@ strategy architecture.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .regime_context import RegimeContext
+    from .signal_generator import Signal
 
 
 @dataclass

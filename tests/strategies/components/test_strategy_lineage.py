@@ -6,13 +6,18 @@ parent-child relationships, branching/merging, evolution visualization,
 and change impact analysis.
 """
 
+from datetime import datetime
+from unittest.mock import Mock
+
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
 
 from src.strategies.components.strategy_lineage import (
-    StrategyLineageTracker, ChangeRecord, EvolutionBranch, MergeRecord,
-    ChangeType, ImpactLevel, RelationshipType
+    ChangeRecord,
+    ChangeType,
+    EvolutionBranch,
+    ImpactLevel,
+    RelationshipType,
+    StrategyLineageTracker,
 )
 
 

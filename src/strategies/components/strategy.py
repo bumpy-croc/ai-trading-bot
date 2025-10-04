@@ -10,14 +10,14 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import pandas as pd
 
-from .signal_generator import Signal, SignalGenerator, SignalDirection
-from .risk_manager import RiskManager, Position, MarketData
 from .position_sizer import PositionSizer
-from .regime_context import RegimeContext, EnhancedRegimeDetector
+from .regime_context import EnhancedRegimeDetector, RegimeContext
+from .risk_manager import MarketData, Position, RiskManager
+from .signal_generator import Signal, SignalDirection, SignalGenerator
 
 
 @dataclass
@@ -38,11 +38,11 @@ class TradingDecision:
     signal: Signal
     position_size: float
     regime: Optional[RegimeContext]
-    risk_metrics: Dict[str, float]
+    risk_metrics: dict[str, float]
     execution_time_ms: float
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging/serialization"""
         return {
             'timestamp': self.timestamp.isoformat(),
@@ -103,7 +103,7 @@ class Strategy:
             self.logger.setLevel(logging.INFO)
         
         # Decision history
-        self.decision_history: List[TradingDecision] = []
+        self.decision_history: list[TradingDecision] = []
         self.max_history = max_history
         
         # Performance metrics
@@ -124,7 +124,7 @@ class Strategy:
                         f"PosSizer={position_sizer.name}")
     
     def process_candle(self, df: pd.DataFrame, index: int, balance: float,
-                      current_positions: Optional[List[Position]] = None) -> TradingDecision:
+                      current_positions: Optional[list[Position]] = None) -> TradingDecision:
         """
         Process a single candle and make trading decision
         
@@ -274,7 +274,7 @@ class Strategy:
             else:
                 return entry_price
     
-    def get_performance_metrics(self, lookback_decisions: int = 100) -> Dict[str, Any]:
+    def get_performance_metrics(self, lookback_decisions: int = 100) -> dict[str, Any]:
         """
         Get strategy performance metrics
         
@@ -327,7 +327,7 @@ class Strategy:
             'last_updated': datetime.now().isoformat()
         }
     
-    def get_recent_decisions(self, count: int = 10) -> List[Dict[str, Any]]:
+    def get_recent_decisions(self, count: int = 10) -> list[dict[str, Any]]:
         """
         Get recent trading decisions
         
@@ -355,7 +355,7 @@ class Strategy:
         }
         self.logger.info("Strategy history and metrics cleared")
     
-    def get_component_info(self) -> Dict[str, Dict[str, Any]]:
+    def get_component_info(self) -> dict[str, dict[str, Any]]:
         """Get information about all components"""
         return {
             'signal_generator': self.signal_generator.get_parameters(),
@@ -440,7 +440,7 @@ class Strategy:
     
     def _calculate_risk_metrics(self, signal: Signal, balance: float,
                               risk_position_size: float, final_position_size: float,
-                              regime: Optional[RegimeContext]) -> Dict[str, float]:
+                              regime: Optional[RegimeContext]) -> dict[str, float]:
         """Calculate risk-related metrics"""
         return {
             'risk_position_size': risk_position_size,
@@ -453,9 +453,9 @@ class Strategy:
         }
     
     def _create_decision_metadata(self, df: pd.DataFrame, index: int, balance: float,
-                                current_positions: Optional[List[Position]],
+                                current_positions: Optional[list[Position]],
                                 regime: Optional[RegimeContext], signal: Signal,
-                                risk_position_size: float, final_position_size: float) -> Dict[str, Any]:
+                                risk_position_size: float, final_position_size: float) -> dict[str, Any]:
         """Create comprehensive decision metadata"""
         metadata = {
             'strategy_name': self.name,
