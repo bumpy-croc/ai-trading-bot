@@ -46,9 +46,6 @@ from .testing.regime_tester import RegimeTester
 from .testing.performance_attribution import PerformanceAttributionAnalyzer
 from src.database.models import StrategyExecution
 
-# Re-export TrendLabel and VolLabel from existing regime module for compatibility
-from src.regime.detector import TrendLabel, VolLabel
-
 __all__ = [
     # Core classes
     "Strategy",

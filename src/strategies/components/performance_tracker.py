@@ -11,10 +11,9 @@ import statistics
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, Union
 from enum import Enum
+from typing import Any, Optional
 
-import pandas as pd
 import numpy as np
 
 
@@ -56,14 +55,14 @@ class TradeResult:
     regime: Optional[str] = None
     exit_reason: Optional[str] = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['timestamp'] = self.timestamp.isoformat()
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'TradeResult':
+    def from_dict(cls, data: dict[str, Any]) -> 'TradeResult':
         """Create from dictionary"""
         data = data.copy()
         data['timestamp'] = datetime.fromisoformat(data['timestamp'])
@@ -117,7 +116,7 @@ class PerformanceMetrics:
     period_end: datetime
     period_type: PerformancePeriod
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['period_start'] = self.period_start.isoformat()
@@ -126,7 +125,7 @@ class PerformanceMetrics:
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'PerformanceMetrics':
+    def from_dict(cls, data: dict[str, Any]) -> 'PerformanceMetrics':
         """Create from dictionary"""
         data = data.copy()
         data['period_start'] = datetime.fromisoformat(data['period_start'])
@@ -146,7 +145,7 @@ class RegimePerformance:
     sharpe_ratio: float
     max_drawdown: float
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         return asdict(self)
 
@@ -186,12 +185,12 @@ class PerformanceTracker:
         self.max_drawdown = 0.0
         
         # Performance cache
-        self._metrics_cache: Dict[str, PerformanceMetrics] = {}
-        self._cache_expiry: Dict[str, datetime] = {}
+        self._metrics_cache: dict[str, PerformanceMetrics] = {}
+        self._cache_expiry: dict[str, datetime] = {}
         self._cache_duration = timedelta(minutes=5)  # Cache for 5 minutes
         
         # Regime-specific tracking
-        self.regime_performance: Dict[str, List[TradeResult]] = defaultdict(list)
+        self.regime_performance: dict[str, list[TradeResult]] = defaultdict(list)
         
         # Running statistics
         self.running_stats = {
@@ -303,7 +302,7 @@ class PerformanceTracker:
         
         return metrics
     
-    def get_regime_performance(self, regime: Optional[str] = None) -> Dict[str, RegimePerformance]:
+    def get_regime_performance(self, regime: Optional[str] = None) -> dict[str, RegimePerformance]:
         """
         Get performance metrics by market regime
         
@@ -342,7 +341,7 @@ class PerformanceTracker:
         return regime_metrics
     
     def compare_performance(self, other_tracker: 'PerformanceTracker',
-                          period: PerformancePeriod = PerformancePeriod.ALL_TIME) -> Dict[str, Any]:
+                          period: PerformancePeriod = PerformancePeriod.ALL_TIME) -> dict[str, Any]:
         """
         Compare performance with another tracker
         
@@ -379,7 +378,7 @@ class PerformanceTracker:
         
         return comparison
     
-    def get_performance_summary(self) -> Dict[str, Any]:
+    def get_performance_summary(self) -> dict[str, Any]:
         """
         Get comprehensive performance summary
         
@@ -409,7 +408,7 @@ class PerformanceTracker:
     
     def get_trade_history(self, limit: Optional[int] = None,
                          start_date: Optional[datetime] = None,
-                         end_date: Optional[datetime] = None) -> List[TradeResult]:
+                         end_date: Optional[datetime] = None) -> list[TradeResult]:
         """
         Get trade history with optional filtering
         
@@ -512,7 +511,7 @@ class PerformanceTracker:
     
     def _filter_trades_by_period(self, period: PerformancePeriod,
                                 start_date: Optional[datetime] = None,
-                                end_date: Optional[datetime] = None) -> List[TradeResult]:
+                                end_date: Optional[datetime] = None) -> list[TradeResult]:
         """Filter trades by time period"""
         trades = list(self.trades)
         
@@ -545,7 +544,7 @@ class PerformanceTracker:
         
         return [t for t in trades if t.timestamp >= start]
     
-    def _calculate_metrics(self, trades: List[TradeResult], period: PerformancePeriod) -> PerformanceMetrics:
+    def _calculate_metrics(self, trades: list[TradeResult], period: PerformancePeriod) -> PerformanceMetrics:
         """Calculate comprehensive performance metrics"""
         if not trades:
             now = datetime.now()
@@ -637,7 +636,7 @@ class PerformanceTracker:
             period_type=period
         )
     
-    def _calculate_sharpe_ratio(self, returns: List[float], risk_free_rate: float = 0.02) -> float:
+    def _calculate_sharpe_ratio(self, returns: list[float], risk_free_rate: float = 0.02) -> float:
         """Calculate Sharpe ratio"""
         if not returns or len(returns) < 2:
             return 0.0
@@ -651,7 +650,7 @@ class PerformanceTracker:
         # Annualize the Sharpe ratio
         return (mean_return - risk_free_rate / 365) / std_return * np.sqrt(365)
     
-    def _calculate_sortino_ratio(self, returns: List[float], risk_free_rate: float = 0.02) -> float:
+    def _calculate_sortino_ratio(self, returns: list[float], risk_free_rate: float = 0.02) -> float:
         """Calculate Sortino ratio (downside deviation)"""
         if not returns:
             return 0.0
@@ -672,7 +671,7 @@ class PerformanceTracker:
         
         return (mean_return - risk_free_rate / 365) / downside_deviation * np.sqrt(365)
     
-    def _calculate_max_drawdown(self, pnl_values: List[float]) -> float:
+    def _calculate_max_drawdown(self, pnl_values: list[float]) -> float:
         """Calculate maximum drawdown"""
         if not pnl_values:
             return 0.0
@@ -683,7 +682,7 @@ class PerformanceTracker:
         
         return float(np.max(drawdown))
     
-    def _calculate_streaks(self, trades: List[TradeResult]) -> Tuple[int, int]:
+    def _calculate_streaks(self, trades: list[TradeResult]) -> tuple[int, int]:
         """Calculate maximum consecutive wins and losses"""
         if not trades:
             return 0, 0

@@ -7,7 +7,7 @@ Create Date: 2025-10-02 00:00:00.000000
 """
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy import JSON, text
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers, used by Alembic.

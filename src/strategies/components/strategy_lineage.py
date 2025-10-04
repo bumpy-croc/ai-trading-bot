@@ -11,7 +11,7 @@ from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Optional, Union
 from uuid import uuid4
 
 # Removed networkx dependency - using simple graph implementation
@@ -53,13 +53,13 @@ class ChangeRecord:
     change_type: ChangeType
     description: str
     impact_level: ImpactLevel
-    changed_components: List[str]
-    parameter_changes: Dict[str, Any]
-    performance_impact: Optional[Dict[str, float]]
+    changed_components: list[str]
+    parameter_changes: dict[str, Any]
+    performance_impact: Optional[dict[str, float]]
     created_at: datetime
     created_by: str
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['change_type'] = self.change_type.value
@@ -68,7 +68,7 @@ class ChangeRecord:
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ChangeRecord':
+    def from_dict(cls, data: dict[str, Any]) -> 'ChangeRecord':
         """Create from dictionary"""
         data = data.copy()
         data['change_type'] = ChangeType(data['change_type'])
@@ -87,16 +87,16 @@ class EvolutionBranch:
     created_by: str
     description: str
     active: bool
-    strategies: List[str]  # Strategy IDs in this branch
+    strategies: list[str]  # Strategy IDs in this branch
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'EvolutionBranch':
+    def from_dict(cls, data: dict[str, Any]) -> 'EvolutionBranch':
         """Create from dictionary"""
         data = data.copy()
         data['created_at'] = datetime.fromisoformat(data['created_at'])
@@ -108,21 +108,21 @@ class MergeRecord:
     """Record of a strategy merge operation"""
     merge_id: str
     target_strategy_id: str
-    source_strategy_ids: List[str]
+    source_strategy_ids: list[str]
     merged_strategy_id: str
     merge_strategy: str  # 'best_performance', 'weighted_average', 'manual'
-    conflict_resolution: Dict[str, Any]
+    conflict_resolution: dict[str, Any]
     created_at: datetime
     created_by: str
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
         return data
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'MergeRecord':
+    def from_dict(cls, data: dict[str, Any]) -> 'MergeRecord':
         """Create from dictionary"""
         data = data.copy()
         data['created_at'] = datetime.fromisoformat(data['created_at'])
@@ -137,11 +137,11 @@ class EvolutionMetrics:
     total_merges: int
     avg_generation_distance: float
     max_generation_distance: int
-    most_evolved_lineage: List[str]
+    most_evolved_lineage: list[str]
     performance_improvement_rate: float
-    change_frequency: Dict[ChangeType, int]
+    change_frequency: dict[ChangeType, int]
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         data = asdict(self)
         data['change_frequency'] = {k.value: v for k, v in self.change_frequency.items()}
@@ -170,20 +170,20 @@ class StrategyLineageTracker:
         # Core data structures - simple graph implementation
         self.lineage_graph = defaultdict(list)  # Simple adjacency list for lineage relationships
         self.graph_edges = {}  # Store edge metadata
-        self.strategies: Dict[str, Dict[str, Any]] = {}  # Strategy metadata
-        self.changes: Dict[str, List[ChangeRecord]] = defaultdict(list)  # Changes per strategy
-        self.branches: Dict[str, EvolutionBranch] = {}  # Evolution branches
-        self.merges: Dict[str, MergeRecord] = {}  # Merge records
+        self.strategies: dict[str, dict[str, Any]] = {}  # Strategy metadata
+        self.changes: dict[str, list[ChangeRecord]] = defaultdict(list)  # Changes per strategy
+        self.branches: dict[str, EvolutionBranch] = {}  # Evolution branches
+        self.merges: dict[str, MergeRecord] = {}  # Merge records
         
         # Caching for performance
-        self._lineage_cache: Dict[str, Dict[str, Any]] = {}
-        self._evolution_cache: Dict[str, Any] = {}
+        self._lineage_cache: dict[str, dict[str, Any]] = {}
+        self._evolution_cache: dict[str, Any] = {}
         self._cache_dirty = True
         
         self.logger.info("StrategyLineageTracker initialized")
     
     def register_strategy(self, strategy_id: str, parent_id: Optional[str] = None,
-                         metadata: Optional[Dict[str, Any]] = None) -> None:
+                         metadata: Optional[dict[str, Any]] = None) -> None:
         """
         Register a strategy in the lineage system
         
@@ -232,9 +232,9 @@ class StrategyLineageTracker:
     
     def record_change(self, strategy_id: str, change_type: ChangeType,
                      description: str, impact_level: ImpactLevel = ImpactLevel.MEDIUM,
-                     changed_components: Optional[List[str]] = None,
-                     parameter_changes: Optional[Dict[str, Any]] = None,
-                     performance_impact: Optional[Dict[str, float]] = None,
+                     changed_components: Optional[list[str]] = None,
+                     parameter_changes: Optional[dict[str, Any]] = None,
+                     performance_impact: Optional[dict[str, float]] = None,
                      created_by: str = "system") -> str:
         """
         Record a change made to a strategy
@@ -361,9 +361,9 @@ class StrategyLineageTracker:
         self._invalidate_caches()
         self.logger.info(f"Added strategy {strategy_id} to branch {branch_id}")
     
-    def merge_strategies(self, target_strategy_id: str, source_strategy_ids: List[str],
+    def merge_strategies(self, target_strategy_id: str, source_strategy_ids: list[str],
                         merge_strategy: str = "best_performance",
-                        conflict_resolution: Optional[Dict[str, Any]] = None,
+                        conflict_resolution: Optional[dict[str, Any]] = None,
                         created_by: str = "system") -> str:
         """
         Merge multiple strategies into a new strategy
@@ -434,7 +434,7 @@ class StrategyLineageTracker:
         self.logger.info(f"Merged strategies {all_strategies} into {merged_strategy_id}")
         return merge_id
     
-    def get_lineage(self, strategy_id: str) -> Dict[str, Any]:
+    def get_lineage(self, strategy_id: str) -> dict[str, Any]:
         """
         Get complete lineage information for a strategy
         
@@ -514,7 +514,7 @@ class StrategyLineageTracker:
         
         return lineage_info
     
-    def get_evolution_path(self, from_strategy_id: str, to_strategy_id: str) -> List[Dict[str, Any]]:
+    def get_evolution_path(self, from_strategy_id: str, to_strategy_id: str) -> list[dict[str, Any]]:
         """
         Get evolution path between two strategies
         
@@ -556,7 +556,7 @@ class StrategyLineageTracker:
         
         return evolution_path
     
-    def analyze_change_impact(self, strategy_id: str, change_id: str) -> Dict[str, Any]:
+    def analyze_change_impact(self, strategy_id: str, change_id: str) -> dict[str, Any]:
         """
         Analyze the impact of a specific change
         
@@ -684,7 +684,7 @@ class StrategyLineageTracker:
         
         return metrics
     
-    def visualize_lineage(self, strategy_id: str, format: str = "dict") -> Union[Dict[str, Any], str]:
+    def visualize_lineage(self, strategy_id: str, format: str = "dict") -> Union[dict[str, Any], str]:
         """
         Create visualization data for strategy lineage
         
@@ -710,7 +710,7 @@ class StrategyLineageTracker:
         else:
             raise ValueError(f"Unsupported format: {format}")
     
-    def _get_descendants(self, strategy_id: str) -> List[Dict[str, Any]]:
+    def _get_descendants(self, strategy_id: str) -> list[dict[str, Any]]:
         """Get all descendants of a strategy"""
         descendants = []
         
@@ -735,7 +735,7 @@ class StrategyLineageTracker:
         
         return descendants
     
-    def _get_lineage_nodes(self, strategy_id: str) -> List[Dict[str, Any]]:
+    def _get_lineage_nodes(self, strategy_id: str) -> list[dict[str, Any]]:
         """Get nodes for lineage visualization"""
         lineage = self.get_lineage(strategy_id)
         nodes = []
@@ -768,7 +768,7 @@ class StrategyLineageTracker:
         
         return nodes
     
-    def _get_lineage_edges(self, strategy_id: str) -> List[Dict[str, Any]]:
+    def _get_lineage_edges(self, strategy_id: str) -> list[dict[str, Any]]:
         """Get edges for lineage visualization"""
         edges = []
         
@@ -781,7 +781,7 @@ class StrategyLineageTracker:
         )
         
         # Get edges from graph
-        for edge_key, edge_data in self.graph_edges.items():
+        for _edge_key, edge_data in self.graph_edges.items():
             source = edge_data['source']
             target = edge_data['target']
             if source in all_strategies and target in all_strategies:
@@ -834,7 +834,7 @@ class StrategyLineageTracker:
         dot.append("}")
         return "\n".join(dot)
     
-    def _find_path(self, start: str, end: str) -> List[str]:
+    def _find_path(self, start: str, end: str) -> list[str]:
         """Find path between two strategies using BFS"""
         if start == end:
             return [start]
