@@ -16,8 +16,9 @@ from src.strategies.ml_basic import MlBasic
 from src.strategies.ml_adaptive import MlAdaptive
 from src.strategies.components.strategy import Strategy
 from src.strategies.components.signal_generator import (
-    SignalGenerator, Signal, SignalDirection, MLBasicSignalGenerator
+    SignalGenerator, Signal, SignalDirection
 )
+from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
 from src.strategies.components.risk_manager import FixedRiskManager
 from src.strategies.components.position_sizer import ConfidenceWeightedSizer
 from src.strategies.components.regime_context import EnhancedRegimeDetector
@@ -124,7 +125,7 @@ class TestComponentMigrationCompatibility:
         """Test that component parameters can be extracted for configuration"""
         signal_generator = MLBasicSignalGenerator()
         risk_manager = FixedRiskManager(risk_per_trade=0.03)
-        position_sizer = ConfidenceWeightedSizer(base_size_pct=0.05)
+        position_sizer = ConfidenceWeightedSizer(base_fraction=0.05)
         
         strategy = Strategy(
             name="param_test",
@@ -142,7 +143,7 @@ class TestComponentMigrationCompatibility:
         
         # Verify parameters are accessible
         assert component_info['risk_manager']['risk_per_trade'] == 0.03
-        assert component_info['position_sizer']['base_size_pct'] == 0.05
+        assert component_info['position_sizer']['base_fraction'] == 0.05
     
     def test_error_handling_compatibility(self):
         """Test that component strategies handle errors gracefully like legacy strategies"""
@@ -176,7 +177,7 @@ class TestComponentMigrationCompatibility:
         assert decision is not None
         assert decision.signal.direction == SignalDirection.HOLD
         assert decision.position_size == 0.0
-        assert 'error' in decision.metadata
+        assert 'error' in decision.signal.metadata
     
     def test_performance_metrics_compatibility(self):
         """Test that performance metrics are compatible with existing monitoring"""

@@ -162,7 +162,7 @@ class TestPerformanceComparisonEngine:
         engine = PerformanceComparisonEngine()
         
         assert isinstance(engine.config, ComparisonConfig)
-        assert engine.backtest_engine is None  # Backtest engine is optional and provided by caller
+        assert engine.backtest_engine is not None  # Default backtest engine is created
         assert engine.parity_validator is not None
         assert engine.statistical_tests is not None
         assert engine.equivalence_tests is not None

@@ -13,9 +13,11 @@ from unittest.mock import Mock, patch
 
 from src.strategies.components.strategy import Strategy, TradingDecision
 from src.strategies.components.signal_generator import (
-    MLBasicSignalGenerator, TechnicalSignalGenerator, WeightedVotingSignalGenerator,
+    WeightedVotingSignalGenerator,
     SignalDirection, Signal
 )
+from src.strategies.components.technical_signal_generator import TechnicalSignalGenerator
+from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator
 from src.strategies.components.risk_manager import (
     FixedRiskManager, VolatilityRiskManager, RegimeAdaptiveRiskManager,
     Position, MarketData
