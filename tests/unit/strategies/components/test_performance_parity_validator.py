@@ -223,6 +223,47 @@ class TestPerformanceParityValidator:
                          if comp.metric_type == MetricType.RETURN]
         assert len(return_metrics) >= 2
     
+    def test_cagr_calculation_different_periods(self, validator):
+        """Test that CAGR calculation uses separate periods for legacy and new strategies."""
+        # Create legacy results with 365 days - 10% annual growth
+        legacy_start = pd.Timestamp('2023-01-01')
+        legacy_end = pd.Timestamp('2023-12-31')
+        legacy_final_balance = 10000 * (1.1 ** (365/365))  # 10% growth over 365 days
+        legacy_results = pd.DataFrame({
+            'timestamp': [legacy_start, legacy_end],
+            'balance': [10000, legacy_final_balance]
+        })
+        
+        # Create new results with 180 days - 10% annual growth
+        new_start = pd.Timestamp('2023-07-01')
+        new_end = pd.Timestamp('2023-12-28')
+        new_final_balance = 10000 * (1.1 ** (180/365))  # 10% annualized growth over 180 days
+        new_results = pd.DataFrame({
+            'timestamp': [new_start, new_end],
+            'balance': [10000, new_final_balance]
+        })
+        
+        report = PerformanceComparisonReport(
+            strategy_name="Test",
+            comparison_period="test",
+            legacy_strategy_id="legacy",
+            new_strategy_id="new",
+            overall_result=ValidationResult.INCONCLUSIVE
+        )
+        
+        validator._compare_return_metrics(legacy_results, new_results, report)
+        
+        # Find CAGR comparison
+        cagr_comparison = next(comp for comp in report.metric_comparisons 
+                             if comp.metric_name == "CAGR")
+        
+        # Both should have ~10% CAGR since both are designed for 10% annual growth
+        assert abs(cagr_comparison.legacy_value - 0.10) < 0.01  # ~10% CAGR
+        assert abs(cagr_comparison.new_value - 0.10) < 0.01     # ~10% CAGR
+        
+        # The difference should be small since both are 10% annualized
+        assert abs(cagr_comparison.difference) < 0.01
+    
     def test_compare_risk_metrics(self, validator, sample_backtest_data):
         """Test risk metrics comparison."""
         legacy_results, new_results = sample_backtest_data
