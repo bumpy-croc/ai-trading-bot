@@ -261,9 +261,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             else:
                 # Check if this is expected (future dates) or an error
                 current_time = datetime.now()
-                if end > current_time:
+                if end is not None and end > current_time:
                     logger.info(f"No data available for future dates: requested {start} to {end}, current time is {current_time}")
-                elif end > current_time - timedelta(hours=1):
+                elif end is not None and end > current_time - timedelta(hours=1):
                     logger.info(f"No recent data available yet: requested {start} to {end}, current time is {current_time}")
                 else:
                     logger.warning(f"No data returned for {symbol} {timeframe} from {start} to {end}")
