@@ -81,7 +81,7 @@ class FinancialStatisticalTests:
                 test_name="Kolmogorov-Smirnov Two-Sample Test",
                 statistic=ks_stat,
                 p_value=ks_p,
-                reject_null=ks_p < self.significance_level,
+                reject_null=bool(ks_p < self.significance_level),
                 interpretation=(
                     "Distributions are significantly different" if ks_p < self.significance_level
                     else "No significant difference in distributions"
@@ -99,7 +99,7 @@ class FinancialStatisticalTests:
                 statistic=ad_stat,
                 p_value=ad_p,
                 critical_value=ad_critical[2],  # 5% significance level
-                reject_null=ad_p < self.significance_level,
+                reject_null=bool(ad_p < self.significance_level),
                 interpretation=(
                     "Distributions are significantly different" if ad_p < self.significance_level
                     else "No significant difference in distributions"
@@ -142,7 +142,7 @@ class FinancialStatisticalTests:
                 test_name="Welch's t-test (Unequal Variances)",
                 statistic=t_stat,
                 p_value=t_p,
-                reject_null=t_p < self.significance_level,
+                reject_null=bool(t_p < self.significance_level),
                 interpretation=(
                     "Means are significantly different" if t_p < self.significance_level
                     else "No significant difference in means"
@@ -161,7 +161,7 @@ class FinancialStatisticalTests:
                 test_name="Mann-Whitney U Test",
                 statistic=mw_stat,
                 p_value=mw_p,
-                reject_null=mw_p < self.significance_level,
+                reject_null=bool(mw_p < self.significance_level),
                 interpretation=(
                     "Medians are significantly different" if mw_p < self.significance_level
                     else "No significant difference in medians"
@@ -204,7 +204,7 @@ class FinancialStatisticalTests:
                 test_name="Levene's Test for Equal Variances",
                 statistic=levene_stat,
                 p_value=levene_p,
-                reject_null=levene_p < self.significance_level,
+                reject_null=bool(levene_p < self.significance_level),
                 interpretation=(
                     "Variances are significantly different" if levene_p < self.significance_level
                     else "No significant difference in variances"
@@ -221,7 +221,7 @@ class FinancialStatisticalTests:
                 test_name="Bartlett's Test for Equal Variances",
                 statistic=bartlett_stat,
                 p_value=bartlett_p,
-                reject_null=bartlett_p < self.significance_level,
+                reject_null=bool(bartlett_p < self.significance_level),
                 interpretation=(
                     "Variances are significantly different" if bartlett_p < self.significance_level
                     else "No significant difference in variances"
@@ -259,7 +259,7 @@ class FinancialStatisticalTests:
                     test_name="Shapiro-Wilk Normality Test",
                     statistic=sw_stat,
                     p_value=sw_p,
-                    reject_null=sw_p < self.significance_level,
+                    reject_null=bool(sw_p < self.significance_level),
                     interpretation=(
                         "Data is not normally distributed" if sw_p < self.significance_level
                         else "Data appears normally distributed"
@@ -276,7 +276,7 @@ class FinancialStatisticalTests:
                 test_name="Jarque-Bera Normality Test",
                 statistic=jb_stat,
                 p_value=jb_p,
-                reject_null=jb_p < self.significance_level,
+                reject_null=bool(jb_p < self.significance_level),
                 interpretation=(
                     "Data is not normally distributed" if jb_p < self.significance_level
                     else "Data appears normally distributed"
@@ -293,7 +293,7 @@ class FinancialStatisticalTests:
                 test_name="D'Agostino's Normality Test",
                 statistic=da_stat,
                 p_value=da_p,
-                reject_null=da_p < self.significance_level,
+                reject_null=bool(da_p < self.significance_level),
                 interpretation=(
                     "Data is not normally distributed" if da_p < self.significance_level
                     else "Data appears normally distributed"
@@ -344,7 +344,7 @@ class FinancialStatisticalTests:
                 test_name="Ljung-Box Autocorrelation Test",
                 statistic=lb_stat,
                 p_value=lb_p,
-                reject_null=lb_p < self.significance_level,
+                reject_null=bool(lb_p < self.significance_level),
                 interpretation=(
                     "Significant autocorrelation detected" if lb_p < self.significance_level
                     else "No significant autocorrelation"
@@ -397,7 +397,7 @@ class FinancialStatisticalTests:
                 statistic=adf_result[0],
                 p_value=adf_result[1],
                 critical_value=adf_result[4]['5%'],
-                reject_null=adf_result[1] < self.significance_level,
+                reject_null=bool(adf_result[1] < self.significance_level),
                 interpretation=(
                     "Series is stationary" if adf_result[1] < self.significance_level
                     else "Series is non-stationary (has unit root)"
@@ -412,7 +412,7 @@ class FinancialStatisticalTests:
                 statistic=kpss_result[0],
                 p_value=kpss_result[1],
                 critical_value=kpss_result[3]['5%'],
-                reject_null=kpss_result[1] < self.significance_level,
+                reject_null=bool(kpss_result[1] < self.significance_level),
                 interpretation=(
                     "Series is non-stationary" if kpss_result[1] < self.significance_level
                     else "Series is stationary"
@@ -507,7 +507,7 @@ class EquivalenceTests:
         
         if len(returns1_clean) < 10 or len(returns2_clean) < 10:
             return StatisticalTestResult(
-                test_name="Two One-Sided Test (TOST)",
+                test_name="Two One-Sided Test (TOST) for Equivalence",
                 statistic=0.0,
                 p_value=1.0,
                 interpretation="Insufficient data for equivalence test"
@@ -539,10 +539,10 @@ class EquivalenceTests:
             tost_p = max(p1, p2)
             
             return StatisticalTestResult(
-                test_name="Two One-Sided Test (TOST)",
+                test_name="Two One-Sided Test (TOST) for Equivalence",
                 statistic=max(abs(t1), abs(t2)),
                 p_value=tost_p,
-                reject_null=tost_p < 0.05,  # Reject null of non-equivalence
+                reject_null=bool(tost_p < 0.05),  # Reject null of non-equivalence
                 interpretation=(
                     f"Means are practically equivalent (within ±{margin:.4f})" 
                     if tost_p < 0.05 else 
@@ -554,7 +554,7 @@ class EquivalenceTests:
         except Exception as e:
             self.logger.warning(f"TOST failed: {e}")
             return StatisticalTestResult(
-                test_name="Two One-Sided Test (TOST)",
+                test_name="Two One-Sided Test (TOST) for Equivalence",
                 statistic=0.0,
                 p_value=1.0,
                 interpretation=f"Test failed: {str(e)}"

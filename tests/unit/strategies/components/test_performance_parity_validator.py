@@ -179,11 +179,11 @@ class TestPerformanceParityValidator:
         
         assert comparison.metric_name == "Test Metric"
         assert comparison.metric_type == MetricType.RETURN
-        assert comparison.legacy_value == 0.10
-        assert comparison.new_value == 0.11
-        assert comparison.difference == 0.01
-        assert comparison.relative_difference == 0.01
-        assert comparison.tolerance == 0.02
+        assert comparison.legacy_value == pytest.approx(0.10)
+        assert comparison.new_value == pytest.approx(0.11)
+        assert comparison.difference == pytest.approx(0.01)
+        assert comparison.relative_difference == pytest.approx(0.01)
+        assert comparison.tolerance == pytest.approx(0.02)
         assert comparison.result == ValidationResult.PASS  # Within tolerance
     
     def test_create_metric_comparison_relative_tolerance(self, validator):
@@ -197,7 +197,7 @@ class TestPerformanceParityValidator:
             use_relative_tolerance=True
         )
         
-        assert comparison.relative_difference == 0.2  # 20% relative difference
+        assert comparison.relative_difference == pytest.approx(0.2)  # 20% relative difference
         assert comparison.result == ValidationResult.FAIL  # Outside 15% tolerance
     
     def test_compare_return_metrics(self, validator, sample_backtest_data):
@@ -303,8 +303,8 @@ class TestPerformanceParityValidator:
         
         validator._analyze_equity_curve_correlation(legacy_results, new_results, report)
         
-        # Should have calculated correlation
-        assert 0 <= report.equity_curve_correlation <= 1
+        # Should have calculated correlation (can be negative)
+        assert -1 <= report.equity_curve_correlation <= 1
         
         # Should have added correlation metric
         metric_names = [comp.metric_name for comp in report.metric_comparisons]
@@ -444,8 +444,8 @@ class TestPerformanceParityValidator:
             report.metrics_passed + report.metrics_failed + report.metrics_warning
         )
         
-        # Should have correlation
-        assert 0 <= report.equity_curve_correlation <= 1
+        # Should have correlation (can be negative)
+        assert -1 <= report.equity_curve_correlation <= 1
     
     def test_generate_certification_report(self, validator, sample_backtest_data):
         """Test generating certification report."""
