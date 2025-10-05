@@ -28,27 +28,55 @@ config = DynamicRiskConfig(
     risk_reduction_factors=[0.8, 0.6, 0.4]
 )
 risk_mgr = DynamicRiskManager(config, database_manager)
+
+# Calculate risk adjustments based on current performance
 adjustments = risk_mgr.calculate_dynamic_risk_adjustments(
-    current_balance=10000,
-    peak_balance=12000,
-    trades_history=[]
+    current_balance=10000.0,
+    peak_balance=12000.0,
+    session_id=None,  # Optional: for database queries
+    previous_peak_balance=11000.0  # Optional: for recovery calculation
 )
 
 # Access adjustment factors
 print(f"Position size factor: {adjustments.position_size_factor}")
-print(f"Adjustment reason: {adjustments.primary_reason}")
+print(f"Stop loss tightening: {adjustments.stop_loss_tightening}")
+print(f"Primary reason: {adjustments.primary_reason}")
 ```
 
 ### Correlation Control
 ```python
-from src.position_management.correlation_engine import CorrelationEngine
+import pandas as pd
+from src.position_management.correlation_engine import CorrelationEngine, CorrelationConfig
 
-corr_engine = CorrelationEngine()
-is_allowed, adjusted_size = corr_engine.check_entry_allowed(
-    candidate_symbol='ETHUSDT',
-    candidate_size=0.05,
-    active_positions={'BTCUSDT': 0.10}
+# Configure correlation engine
+config = CorrelationConfig(
+    correlation_threshold=0.7,  # High correlation threshold
+    max_correlated_exposure=0.15  # Max 15% exposure to correlated assets
 )
+corr_engine = CorrelationEngine(config)
+
+# Calculate correlations from price series
+price_series = {
+    'BTCUSDT': pd.Series([50000, 51000, 52000], index=pd.date_range('2024-01-01', periods=3)),
+    'ETHUSDT': pd.Series([3000, 3100, 3200], index=pd.date_range('2024-01-01', periods=3))
+}
+
+corr_matrix = corr_engine.calculate_position_correlations(price_series)
+
+# Get correlated groups
+groups = corr_engine.get_correlation_groups(corr_matrix)
+print(f"Correlated groups: {groups}")
+
+# Calculate size reduction factor for new position
+active_positions = {'BTCUSDT': 0.10}  # 10% of balance in BTC
+reduction_factor = corr_engine.compute_size_reduction_factor(
+    candidate_symbol='ETHUSDT',
+    candidate_size_fraction=0.05,
+    existing_positions=active_positions,
+    corr_matrix=corr_matrix
+)
+print(f"Reduction factor: {reduction_factor}")
+adjusted_size = 0.05 * reduction_factor
 ```
 
 ### Partial Exits and Scale-Ins
