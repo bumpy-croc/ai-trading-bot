@@ -203,6 +203,77 @@ class TestPerformanceComparisonEngine:
         with pytest.raises(ValueError, match="missing 'balance' column"):
             engine._run_backtest(legacy_strategy, sample_market_data, "legacy")
     
+    def test_run_backtest_missing_timestamp_column(self, mock_strategies, sample_market_data):
+        """Test backtest run with missing timestamp column."""
+        # Create mock engine that returns results without timestamp column
+        mock_engine = Mock()
+        mock_engine.run_backtest.return_value = pd.DataFrame({
+            'balance': [10000, 10100, 10200],
+            'trade_pnl': [0, 100, 200]
+        })
+        
+        engine = PerformanceComparisonEngine(backtest_engine=mock_engine)
+        legacy_strategy, _ = mock_strategies
+        
+        with pytest.raises(ValueError, match="missing 'timestamp' column"):
+            engine._run_backtest(legacy_strategy, sample_market_data, "legacy")
+    
+    def test_run_backtest_timestamp_index_success(self, mock_strategies, sample_market_data):
+        """Test backtest run with timestamp as index name."""
+        # Create mock engine that returns results with timestamp as index
+        dates = pd.date_range('2023-01-01', periods=3, freq='D')
+        mock_engine = Mock()
+        mock_engine.run_backtest.return_value = pd.DataFrame({
+            'balance': [10000, 10100, 10200],
+            'trade_pnl': [0, 100, 200]
+        }, index=dates).rename_axis('timestamp')
+        
+        engine = PerformanceComparisonEngine(backtest_engine=mock_engine)
+        legacy_strategy, _ = mock_strategies
+        
+        result = engine._run_backtest(legacy_strategy, sample_market_data, "legacy")
+        
+        assert isinstance(result, pd.DataFrame)
+        assert 'timestamp' in result.columns
+        assert 'balance' in result.columns
+        assert len(result) == 3
+        # Verify the timestamp column contains the expected dates
+        assert result['timestamp'].tolist() == dates.tolist()
+    
+    def test_run_backtest_index_with_name_but_not_timestamp(self, mock_strategies, sample_market_data):
+        """Test backtest run with index that has a name but not 'timestamp'."""
+        # Create mock engine that returns results with named index (not 'timestamp')
+        dates = pd.date_range('2023-01-01', periods=3, freq='D')
+        mock_engine = Mock()
+        mock_engine.run_backtest.return_value = pd.DataFrame({
+            'balance': [10000, 10100, 10200],
+            'trade_pnl': [0, 100, 200]
+        }, index=dates).rename_axis('date')  # Index name is 'date', not 'timestamp'
+        
+        engine = PerformanceComparisonEngine(backtest_engine=mock_engine)
+        legacy_strategy, _ = mock_strategies
+        
+        with pytest.raises(ValueError, match="missing 'timestamp' column"):
+            engine._run_backtest(legacy_strategy, sample_market_data, "legacy")
+    
+    def test_run_backtest_range_index_with_name_none(self, mock_strategies, sample_market_data):
+        """Test backtest run with RangeIndex that has name=None."""
+        # Create mock engine that returns results with RangeIndex (name=None)
+        mock_engine = Mock()
+        df = pd.DataFrame({
+            'balance': [10000, 10100, 10200],
+            'trade_pnl': [0, 100, 200]
+        })
+        # RangeIndex has name=None by default
+        assert df.index.name is None
+        mock_engine.run_backtest.return_value = df
+        
+        engine = PerformanceComparisonEngine(backtest_engine=mock_engine)
+        legacy_strategy, _ = mock_strategies
+        
+        with pytest.raises(ValueError, match="missing 'timestamp' column"):
+            engine._run_backtest(legacy_strategy, sample_market_data, "legacy")
+    
     def test_perform_statistical_analysis(self, mock_backtest_engine):
         """Test statistical analysis performance."""
         engine = PerformanceComparisonEngine(backtest_engine=mock_backtest_engine)
