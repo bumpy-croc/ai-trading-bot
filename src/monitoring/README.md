@@ -16,7 +16,7 @@ make deps-server  # or make deps for full development setup
 
 # Start monitoring dashboard
 atb dashboards run monitoring --port 8000
-# https://localhost:8000
+# http://localhost:8000
 ```
 
 Or run directly:

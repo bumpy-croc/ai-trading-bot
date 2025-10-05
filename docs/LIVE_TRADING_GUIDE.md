@@ -147,4 +147,52 @@ atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 ## 📈 **Strategy Integration**
 
 ### **Supported Strategies:**
-- **`ml_basic`**
+
+- **`ml_basic`** - Machine Learning Basic Strategy
+  - Uses ONNX price model predictions (price-only)
+  - Recommended for 1h timeframe
+  - Conservative position sizing with ML confidence weighting
+  
+- **`ml_sentiment`** - ML Strategy with Sentiment Analysis
+  - Integrates Fear & Greed Index sentiment data
+  - Adaptive position sizing based on sentiment confidence
+  - Enhanced prediction accuracy during volatile markets
+  - Robust fallback when sentiment data unavailable
+  
+- **`ml_adaptive`** - Adaptive ML Strategy
+  - Incorporates regime detection for market condition awareness
+  - Adjusts strategy parameters based on detected market regime
+  - Optimizes performance across different market conditions
+  
+- **`bull`** - Bull Market Optimized Strategy
+  - Tailored for uptrending markets
+  - Aggressive position sizing in favorable conditions
+  
+- **`bear`** - Bear Market Optimized Strategy
+  - Designed for downtrending or defensive trading
+  - Conservative risk management in challenging markets
+  
+- **`ensemble_weighted`** - Weighted Ensemble Strategy
+  - Combines multiple strategies using weighted voting
+  - Performance-based dynamic weighting
+  - Aggressive position sizing (up to 80% allocation)
+  
+- **`momentum_leverage`** - Momentum Strategy
+  - Pure momentum-based approach with pseudo-leverage
+  - Ultra-aggressive position sizing (40-95% allocation)
+  - Multi-timeframe momentum analysis
+
+### **Usage Examples:**
+
+```bash
+# ML Basic Strategy (Recommended for beginners)
+atb live ml_basic --symbol BTCUSDT --paper-trading
+
+# ML Sentiment Strategy (requires sentiment API access)
+atb live ml_sentiment --symbol BTCUSDT --paper-trading --use-sentiment
+
+# Adaptive Strategy (best for varying market conditions)
+atb live ml_adaptive --symbol BTCUSDT --paper-trading
+```
+
+For more details on strategies, see `src/strategies/README.md`.
