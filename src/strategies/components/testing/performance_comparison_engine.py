@@ -280,8 +280,11 @@ class PerformanceComparisonEngine:
             raise ValueError(f"Backtest results missing 'balance' column for {strategy_type} strategy")
         
         if 'timestamp' not in results.columns:
-            if results.index.name == 'timestamp' or hasattr(results.index, 'name'):
+            if results.index.name == 'timestamp':
                 results = results.reset_index()
+                # Verify that reset_index actually created a timestamp column
+                if 'timestamp' not in results.columns:
+                    raise ValueError(f"Backtest results index named 'timestamp' but reset_index did not create 'timestamp' column for {strategy_type} strategy")
             else:
                 raise ValueError(f"Backtest results missing 'timestamp' column for {strategy_type} strategy")
         
