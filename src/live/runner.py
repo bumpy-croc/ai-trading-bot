@@ -30,14 +30,9 @@ def load_strategy(strategy_name: str):
     strategies = {
         "ml_basic": MlBasic,
         "test_high_frequency": TestHighFrequencyStrategy,
-        "bear": None,
     }
 
     # Lazy import for optional strategies to keep startup fast
-    if strategy_name == "bear":
-        from src.strategies.bear import BearStrategy
-
-        strategies["bear"] = BearStrategy
 
     if strategy_name not in strategies or strategies[strategy_name] is None:
         logger.error(f"Unknown strategy: {strategy_name}")

@@ -188,10 +188,10 @@ class TestEnsembleOptimized:
             assert col in df_with_indicators.columns
     
     def test_enhanced_strategy_components(self):
-        """Test that bull and bear strategies are included"""
+        """Test that ML strategies are included"""
         strategy = EnsembleWeighted()
         
-        # Should include trend-following strategies
-        assert "bull" in strategy.strategies
-        assert "bear" in strategy.strategies
-        assert len(strategy.strategies) >= 4  # ML Basic, ML Adaptive, Bull, Bear
+        # Should include ML strategies (bull and bear were removed)
+        assert "ml_basic" in strategy.strategies
+        assert "ml_adaptive" in strategy.strategies
+        assert len(strategy.strategies) >= 2  # ML Basic, ML Adaptive

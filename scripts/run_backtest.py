@@ -33,17 +33,9 @@ def load_strategy(strategy_name: str):
             from src.strategies.ml_sentiment import MlSentiment
 
             strategy = MlSentiment()
-        elif strategy_name == "bear":
-            from src.strategies.bear import BearStrategy
-
-            strategy = BearStrategy()
-        elif strategy_name == "bull":
-            from src.strategies.bull import Bull
-
-            strategy = Bull()
         else:
             print(f"Unknown strategy: {strategy_name}")
-            available_strategies = ["ml_basic", "ml_adaptive", "ml_sentiment", "bear", "bull"]
+            available_strategies = ["ml_basic", "ml_adaptive", "ml_sentiment"]
             print(f"Available strategies: {', '.join(available_strategies)}")
             sys.exit(1)
 

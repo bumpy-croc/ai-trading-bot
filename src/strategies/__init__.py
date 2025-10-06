@@ -1,6 +1,4 @@
 from .base import BaseStrategy
-from .bear import BearStrategy
-from .bull import Bull
 from .ensemble_weighted import EnsembleWeighted
 from .ml_adaptive import MlAdaptive
 from .ml_basic import MlBasic
@@ -14,8 +12,6 @@ __all__ = [
     "MlAdaptive",
     "MlSentiment",
     "TestHighFrequencyStrategy",
-    "BearStrategy",
-    "Bull",
     "EnsembleWeighted",
     "MomentumLeverage",
 ]

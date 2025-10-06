@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from src.strategies.base import BaseStrategy
-from src.strategies.bull import Bull
 from src.strategies.ml_basic import MlBasic
 
 logger = logging.getLogger(__name__)
@@ -65,14 +64,7 @@ class StrategyManager:
         # Strategy registry
         self.strategy_registry = {
             "ml_basic": MlBasic,
-            "bull": Bull,
         }
-        try:
-            from src.strategies.bear import BearStrategy
-
-            self.strategy_registry["bear"] = BearStrategy
-        except Exception as e:
-            logger.debug(f"Bear strategy not available: {e}")
             
         # Register new ensemble strategies
         try:
