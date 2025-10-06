@@ -160,13 +160,19 @@ class RegimeDetector:
 
     @staticmethod
     def _percentile_rank(series: pd.Series, lookback: int) -> pd.Series:
+        """Optimized percentile rank calculation"""
         def rank_last(window: pd.Series) -> float:
             if window.isna().any():
                 return np.nan
             last = window.iloc[-1]
             return (window <= last).mean()
 
-        return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False)
+        # Use engine='numba' for better performance if available
+        try:
+            return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False, engine='numba')
+        except Exception:
+            # Fallback to default engine
+            return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False)
 
     def annotate(self, df: pd.DataFrame) -> pd.DataFrame:
         cfg = self.config

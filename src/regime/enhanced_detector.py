@@ -26,7 +26,7 @@ class EnhancedRegimeConfig:
     slope_window: int = 40
     band_window: int = 20
     atr_window: int = 14
-    atr_percentile_lookback: int = 200
+    atr_percentile_lookback: int = 50  # Reduced for performance
     trend_threshold: float = 0.001
     r2_min: float = 0.3
     atr_high_percentile: float = 0.7
