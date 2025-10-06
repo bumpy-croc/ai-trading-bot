@@ -67,7 +67,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          mypy --config-file mypy.ini src | tee artifacts/mypy.txt
+          mypy --config-file mypy.ini -p src.strategies -p src.database -p src.prediction -p src.data_providers -p src.config -p src.utils -p src.live -p src.backtesting -p src.risk -p src.position_management | tee artifacts/mypy.txt
           echo "mypy_exit=$?" >> $GITHUB_OUTPUT || true
 
       - name: Run bandit
@@ -126,16 +126,16 @@ jobs:
               fi
             else
               python - <<'PY'
-              import json,sys
-          try:
-              with open('artifacts/security/pip-audit.json') as f:
-                  data=json.load(f)
-              deps=data.get('dependencies',[])
-              print('true' if any(d.get('vulns') for d in deps) else 'false')
-          except Exception:
-              print('false')
-          PY
-          | grep -q true && pipaudit_has_vulns=true || true
+import json,sys
+try:
+    with open('artifacts/security/pip-audit.json') as f:
+        data=json.load(f)
+    deps=data.get('dependencies',[])
+    print('true' if any(d.get('vulns') for d in deps) else 'false')
+except Exception:
+    print('false')
+PY
+              | grep -q true && pipaudit_has_vulns=true || true
             fi
           fi
 

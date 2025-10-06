@@ -26,4 +26,5 @@ print(pred.price, pred.confidence, pred.direction)
 
 ## Status
 - Strategies currently load ONNX directly; migration to `PredictionModelRegistry` is planned.
-- Models available: `btcusdt_price.onnx`, `btcusdt_sentiment.onnx`, `btcusdt_price_v2.onnx`.
+- Models available: `btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`.
+- Metadata files: `btcusdt_price_metadata.json`, `btcusdt_sentiment_metadata.json`, `ethusdt_sentiment_metadata.json`.

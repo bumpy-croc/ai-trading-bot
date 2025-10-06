@@ -273,10 +273,11 @@ class PerformanceParityValidator:
             )
         )
         
-        # CAGR comparison
-        days = (legacy_results['timestamp'].iloc[-1] - legacy_results['timestamp'].iloc[0]).days
-        legacy_cagr = cagr(legacy_initial, legacy_final, days) / 100.0
-        new_cagr = cagr(new_initial, new_final, days) / 100.0
+        # CAGR comparison - compute period separately for each DataFrame
+        legacy_days = (legacy_results['timestamp'].iloc[-1] - legacy_results['timestamp'].iloc[0]).days
+        new_days = (new_results['timestamp'].iloc[-1] - new_results['timestamp'].iloc[0]).days
+        legacy_cagr = cagr(legacy_initial, legacy_final, legacy_days) / 100.0
+        new_cagr = cagr(new_initial, new_final, new_days) / 100.0
         
         report.metric_comparisons.append(
             self._create_metric_comparison(
