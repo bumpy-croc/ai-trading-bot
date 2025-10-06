@@ -134,7 +134,7 @@ class PerformanceComparisonEngine:
         
         Args:
             config: Configuration for comparison process
-            backtest_engine: Backtesting engine (will create default if None)
+            backtest_engine: Backtesting engine (required, will raise ValueError if None when compare_strategies is called)
         """
         self.config = config or ComparisonConfig()
         self.backtest_engine = backtest_engine  # Will be provided by caller
@@ -280,8 +280,10 @@ class PerformanceComparisonEngine:
             raise ValueError(f"Backtest results missing 'balance' column for {strategy_type} strategy")
         
         if 'timestamp' not in results.columns:
-            if results.index.name == 'timestamp':
-                results = results.reset_index()
+            # Check if timestamp is in index names (handles both single index and MultiIndex)
+            # For MultiIndex, index.name is None but index.names is a list containing level names
+            if hasattr(results.index, 'names') and 'timestamp' in results.index.names:
+                results = results.reset_index(level='timestamp')
                 # Verify that reset_index actually created a timestamp column
                 if 'timestamp' not in results.columns:
                     raise ValueError(f"Backtest results index named 'timestamp' but reset_index did not create 'timestamp' column for {strategy_type} strategy")
@@ -340,9 +342,10 @@ class PerformanceComparisonEngine:
                     statistical_failures.append(f"{category}: {test.test_name}")
         
         # Check equivalence test results
+        # TOST (Two One-Sided Test) tests for equivalence, so we check if reject_null is True
+        # reject_null=True means we reject the null hypothesis of non-equivalence (i.e., equivalence confirmed)
         equivalence_passed = any(
             test.reject_null for test in result.equivalence_tests
-            if "equivalence" in test.test_name.lower()
         )
         
         # Determine overall result
