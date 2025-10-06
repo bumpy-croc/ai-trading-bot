@@ -10,6 +10,7 @@ Built-in strategies using indicators and/or ML predictions.
 - `bear.py`: Bear market optimized strategy
 - `ensemble_weighted.py`: Weighted ensemble strategy combining multiple strategies
 - `momentum_leverage.py`: Aggressive momentum-based strategy with pseudo-leverage
+- `trend_momentum.py`: Multi-timeframe trend following with momentum confirmation
 - `regime_adaptive.py`: Meta-strategy that switches between strategies based on market regimes
 
 ## Usage (with backtester)
@@ -19,6 +20,7 @@ atb backtest ml_sentiment --symbol BTCUSDT --timeframe 1h --days 90
 atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 90
 atb backtest ensemble_weighted --symbol BTCUSDT --timeframe 1h --days 90
 atb backtest momentum_leverage --symbol BTCUSDT --timeframe 1h --days 90
+atb backtest trend_momentum --symbol BTCUSDT --timeframe 1h --days 90
 atb backtest regime_adaptive --symbol BTCUSDT --timeframe 1h --days 90
 ```
 
@@ -44,6 +46,15 @@ atb backtest regime_adaptive --symbol BTCUSDT --timeframe 1h --days 90
 - Multi-timeframe momentum analysis (3, 7, 20 periods)
 - Trend confirmation using exponential moving averages
 - Volatility-based position scaling for optimal risk management
+
+### Trend Momentum Strategy
+- Multi-timeframe trend following with momentum confirmation
+- Uses 3 different timeframes (10, 20, 50 periods) for trend confirmation
+- Multiple momentum indicators (RSI, MACD, Rate of Change) for entry timing
+- Breakout detection with volume confirmation for major moves
+- Dynamic position sizing (20-60% of balance) based on signal strength
+- Adaptive stop losses and profit targets based on volatility
+- Designed to capture major trend moves while managing risk effectively
 
 ### Regime Adaptive Strategy
 - Meta-strategy that automatically switches between optimal strategies based on market regimes

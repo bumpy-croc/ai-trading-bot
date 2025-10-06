@@ -7,6 +7,7 @@ from .ml_basic import MlBasic
 from .ml_sentiment import MlSentiment
 from .momentum_leverage import MomentumLeverage
 from .test_high_frequency import TestHighFrequencyStrategy
+from .trend_momentum import TrendMomentum
 
 __all__ = [
     "BaseStrategy",
@@ -18,4 +19,5 @@ __all__ = [
     "Bull",
     "EnsembleWeighted",
     "MomentumLeverage",
+    "TrendMomentum",
 ]
