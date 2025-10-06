@@ -93,7 +93,7 @@ Candle: 8760 of 43780
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 365
 ```
 
-### Full 5-Year Test with Fresh Data
+### Full 5-Year Test
 ```bash
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 1825
 ```

@@ -14,7 +14,7 @@ Real-time web dashboard for monitoring cryptocurrency trading bot performance, r
 ```bash
 make deps-server  # or make deps for full development setup
 atb dashboards run monitoring --port 8000
-# Open https://localhost:8000
+# Open http://localhost:8000
 ```
 
 - Default update interval: 3600 seconds (1 hour)

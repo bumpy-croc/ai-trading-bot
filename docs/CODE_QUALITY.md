@@ -48,7 +48,7 @@ Deep nesting makes code hard to read and understand.
 
 Classes handling multiple concerns violate the Single Responsibility Principle.
 
-## Eiminate obvious within-file duplication
+## Eliminate obvious within-file duplication
 
 ### Languages it applies to: all
 
