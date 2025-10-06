@@ -126,15 +126,15 @@ jobs:
               fi
             else
               python - <<'PY'
-import json,sys
-try:
-    with open('artifacts/security/pip-audit.json') as f:
-        data=json.load(f)
-    deps=data.get('dependencies',[])
-    print('true' if any(d.get('vulns') for d in deps) else 'false')
-except Exception:
-    print('false')
-PY
+              import json,sys
+              try:
+                  with open('artifacts/security/pip-audit.json') as f:
+                      data=json.load(f)
+                  deps=data.get('dependencies',[])
+                  print('true' if any(d.get('vulns') for d in deps) else 'false')
+                  except Exception:
+                  print('false')
+              PY
               | grep -q true && pipaudit_has_vulns=true || true
             fi
           fi
