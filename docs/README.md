@@ -1,5 +1,9 @@
 # Documentation
 
+> **Last Updated:** 2025-10-07  
+> **Documentation Status:** ✅ All current and verified  
+> See [Documentation Audit Report](../DOCUMENTATION_AUDIT_2025-10-07.md) for detailed review.
+
 ## Getting Started
 - [Trading Concepts Overview](TRADING_CONCEPTS_OVERVIEW.md) - Core trading concepts and terminology
 - [Paper Trading Quickstart](PAPER_TRADING_QUICKSTART.md) - Fast setup for safe trading
@@ -47,3 +51,11 @@
 - [Engine Integration Status](ENGINE_INTEGRATION_STATUS.md) - System integration status
 - [Optimizer MVP](OPTIMIZER_MVP.md) - Parameter optimization features
 - [Lessons Learnt](lessons-learnt.md) - Development insights and retrospectives
+
+## Documentation Maintenance
+- [Collation Version Mismatch Guide](COLLATION_VERSION_MISMATCH_GUIDE.md) - PostgreSQL collation troubleshooting
+- [Offline Cache Preloading](OFFLINE_CACHE_PRELOADING.md) - Air-gapped environment support
+
+---
+
+**Need Help?** Check the relevant guide above or open an issue on GitHub.

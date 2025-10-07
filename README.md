@@ -173,9 +173,14 @@ src/
 
 ## Documentation
 
+> 📚 **Documentation Status:** All guides up-to-date as of 2025-10-07  
+> See [Documentation Audit Report](DOCUMENTATION_AUDIT_2025-10-07.md) for comprehensive review.
+
 See `docs/README.md` for the full documentation index.
 
-**Key Guides:**
+**Essential Documentation:**
+- [Architecture Guide](ARCHITECTURE.md) - System design and component overview
+- [Contributing Guide](CONTRIBUTING.md) - Development workflow and standards
 - [Offline Cache Pre-loading](docs/OFFLINE_CACHE_PRELOADING.md) - Pre-load data for air-gapped environments
 - [Backtest Guide](docs/BACKTEST_GUIDE.md) - Comprehensive backtesting documentation
 - [Live Trading Guide](docs/LIVE_TRADING_GUIDE.md) - Live trading setup and configuration
