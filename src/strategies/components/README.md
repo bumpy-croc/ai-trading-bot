@@ -884,8 +884,8 @@ strategy = Strategy(
 ## Related Documentation
 
 - [Testing Framework](testing/README.md) - Comprehensive testing documentation
-- [Strategy System Design](../.kiro/specs/strategy-system-redesign/) - Architecture design documents
-- [Component Examples](../examples/) - Usage examples and tutorials
+- [Strategy System Design](../../../.kiro/specs/strategy-system-redesign/) - Architecture design documents
+- [Component Examples](../../../examples/) - Usage examples and tutorials
 
 ---
 

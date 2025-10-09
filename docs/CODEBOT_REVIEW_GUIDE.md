@@ -244,7 +244,7 @@ codebot performance
 
 - [Cursor Background Agent API](https://cursor.com/docs/background-agent/api/overview)
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Repository Workflows](.github/workflows/)
+- [Repository Workflows](../.github/workflows/)
 
 ## Feedback & Issues
 
