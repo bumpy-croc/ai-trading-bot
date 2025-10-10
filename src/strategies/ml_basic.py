@@ -155,6 +155,38 @@ class MlBasic(LegacyStrategyAdapter):
         
         return signal_generator, risk_manager, position_sizer, regime_detector
 
+    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate indicators including ML predictions
+        
+        This method adds the ml_prediction column to maintain backward compatibility
+        with tests and existing code that expect this column.
+        """
+        # First call the parent implementation to get regime annotations
+        df = super().calculate_indicators(df)
+        
+        # Initialize prediction columns with safe defaults
+        df["ml_prediction"] = np.nan
+        df["prediction_confidence"] = np.nan
+        
+        # Use the signal generator's feature pipeline if available
+        signal_gen = self.signal_generator
+        if hasattr(signal_gen, 'feature_pipeline') and signal_gen.feature_pipeline is not None:
+            df = signal_gen.feature_pipeline.transform(df)
+        
+        # Generate predictions for each row using the signal generator's logic
+        if hasattr(signal_gen, '_get_ml_prediction'):
+            for i in range(len(df)):
+                try:
+                    prediction = signal_gen._get_ml_prediction(df, i)
+                    if prediction is not None:
+                        df.loc[df.index[i], "ml_prediction"] = prediction
+                except Exception:
+                    # Skip rows where prediction fails
+                    pass
+        
+        return df
+    
     def get_parameters(self) -> dict:
         """Get strategy parameters for backward compatibility."""
         return {
