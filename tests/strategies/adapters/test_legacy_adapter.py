@@ -259,13 +259,12 @@ class TestLegacyStrategyAdapter:
         
         # Mock components to return specific values
         adapter.risk_manager.calculate_position_size.return_value = 100.0
-        adapter.position_sizer.calculate_size.return_value = 200.0
-        
+
         result = adapter.calculate_position_size(sample_data, 50, 10000.0)
-        
-        assert result == 200.0
+
+        assert result == 100.0
         adapter.risk_manager.calculate_position_size.assert_called_once()
-        adapter.position_sizer.calculate_size.assert_called_once()
+        adapter.position_sizer.calculate_size.assert_not_called()
     
     def test_calculate_position_size_with_cached_signal(self, adapter, sample_data):
         """Test calculate_position_size uses cached signal"""

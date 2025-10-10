@@ -104,6 +104,39 @@ class StrategyManager:
 
         logger.info("StrategyManager initialized")
 
+    @staticmethod
+    def _display_name(strategy: Optional[BaseStrategy]) -> str:
+        """Return a human readable name for a strategy instance."""
+
+        if strategy is None:
+            return "None"
+
+        return getattr(strategy, "name", strategy.__class__.__name__)
+
+    def _instantiate_strategy(
+        self, strategy_name: str, version: str, config: Optional[dict] = None
+    ) -> tuple[BaseStrategy, StrategyVersion]:
+        """Create a strategy instance and version record without mutating state."""
+
+        if strategy_name not in self.strategy_registry:
+            raise ValueError(f"Unknown strategy: {strategy_name}")
+
+        strategy_class = self.strategy_registry[strategy_name]
+
+        if config:
+            strategy = strategy_class(**config)
+        else:
+            strategy = strategy_class()
+
+        strategy_version = StrategyVersion(
+            strategy_name=strategy_name,
+            version=version,
+            timestamp=datetime.now(),
+            config=config,
+        )
+
+        return strategy, strategy_version
+
     def load_strategy(
         self, strategy_name: str, version: str = "latest", config: Optional[dict] = None
     ) -> BaseStrategy:
@@ -111,27 +144,10 @@ class StrategyManager:
 
         with self.update_lock:
             try:
-                # Load strategy class
-                if strategy_name not in self.strategy_registry:
-                    raise ValueError(f"Unknown strategy: {strategy_name}")
-
-                strategy_class = self.strategy_registry[strategy_name]
-
-                # Create strategy instance with config
-                if config:
-                    strategy = strategy_class(**config)
-                else:
-                    strategy = strategy_class()
-
-                # Create version record
-                strategy_version = StrategyVersion(
-                    strategy_name=strategy_name,
-                    version=version,
-                    timestamp=datetime.now(),
-                    config=config,
+                strategy, strategy_version = self._instantiate_strategy(
+                    strategy_name, version, config
                 )
 
-                # Set as current
                 self.current_strategy = strategy
                 self.current_version = strategy_version
                 self.version_history[f"{strategy_name}_{version}"] = strategy_version
@@ -170,16 +186,19 @@ class StrategyManager:
 
                 logger.info(f"🔄 Starting hot-swap to strategy: {new_strategy_name}")
 
-                # Load new strategy in staging
+                # Load new strategy in staging without mutating current state
                 old_strategy = self.current_strategy
                 new_version = f"{int(time.time())}"
 
-                new_strategy = self.load_strategy(new_strategy_name, new_version, new_config)
+                new_strategy, staged_version = self._instantiate_strategy(
+                    new_strategy_name, new_version, new_config
+                )
 
                 # Prepare swap data
                 swap_data = {
                     "old_strategy": old_strategy,
                     "new_strategy": new_strategy,
+                    "new_version": staged_version,
                     "close_positions": close_existing_positions,
                     "timestamp": datetime.now(),
                 }
@@ -191,7 +210,10 @@ class StrategyManager:
                 if self.on_strategy_change:
                     self.on_strategy_change(swap_data)
 
-                logger.info(f"✅ Hot-swap prepared: {old_strategy.name} → {new_strategy.name}")
+                logger.info(
+                    f"✅ Hot-swap prepared: {self._display_name(old_strategy)} "
+                    f"→ {self._display_name(new_strategy)}"
+                )
                 return True
 
             except Exception as e:
@@ -295,11 +317,20 @@ class StrategyManager:
         try:
             old_strategy = swap_data["old_strategy"]
             new_strategy = swap_data["new_strategy"]
+            new_version = swap_data.get("new_version")
 
             # Update current strategy
             self.current_strategy = new_strategy
 
-            logger.info(f"✅ Strategy swapped: {old_strategy.name} → {new_strategy.name}")
+            if isinstance(new_version, StrategyVersion):
+                self.current_version = new_version
+                version_key = f"{new_version.strategy_name}_{new_version.version}"
+                self.version_history[version_key] = new_version
+
+            logger.info(
+                f"✅ Strategy swapped: {self._display_name(old_strategy)} "
+                f"→ {self._display_name(new_strategy)}"
+            )
             return True
 
         except Exception as e:

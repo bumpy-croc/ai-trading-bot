@@ -307,7 +307,7 @@ class LegacyStrategyAdapter(BaseStrategy):
         """
         Calculate the position size for a new trade
         
-        Uses both the risk manager and position sizer components to determine optimal size.
+        Delegates sizing to the component risk manager and preserves its output.
         """
         start_time = time.time()
         
@@ -323,12 +323,18 @@ class LegacyStrategyAdapter(BaseStrategy):
             else:
                 signal = self._last_signal
             
-            # Calculate risk amount using risk manager
-            risk_amount = self.risk_manager.calculate_position_size(signal, balance, regime_context)
-            
-            # Calculate final position size using position sizer
-            position_size = self.position_sizer.calculate_size(signal, balance, risk_amount, regime_context)
-            
+            # Calculate the final position size using the risk manager.
+            #
+            # Component risk managers already return a fully-evaluated position size in
+            # base units. The legacy adapter previously treated this value as a monetary
+            # "risk budget" and fed it back into the position sizer, which recomputed
+            # its own balance fraction and effectively discarded the limits imposed by
+            # the risk manager. By using the risk manager's output directly we preserve
+            # the configured risk behaviour for component strategies.
+            position_size = self.risk_manager.calculate_position_size(
+                signal, balance, regime_context
+            )
+
             # Log position sizing decision
             self.log_execution(
                 signal_type="position_sizing",
@@ -339,7 +345,7 @@ class LegacyStrategyAdapter(BaseStrategy):
                 confidence_score=signal.confidence,
                 additional_context={
                     'balance': balance,
-                    'risk_amount': risk_amount,
+                    'risk_amount': position_size,
                     'position_fraction': position_size / balance if balance > 0 else 0,
                     'regime_trend': regime_context.trend.value if regime_context else 'unknown',
                     'regime_volatility': regime_context.volatility.value if regime_context else 'unknown'
@@ -350,9 +356,11 @@ class LegacyStrategyAdapter(BaseStrategy):
             execution_time = time.time() - start_time
             self.performance_metrics['execution_times']['position_sizing'].append(execution_time)
             
-            self.adapter_logger.debug(f"Position size calculated at index {index}: {position_size:.4f} "
-                                    f"(balance: {balance:.2f}, risk: {risk_amount:.4f}, "
-                                    f"fraction: {position_size/balance*100:.2f}%)")
+            self.adapter_logger.debug(
+                f"Position size calculated at index {index}: {position_size:.4f} "
+                f"(balance: {balance:.2f}, risk: {position_size:.4f}, "
+                f"fraction: {position_size / balance * 100:.2f}%)"
+            )
             
             return position_size
             
