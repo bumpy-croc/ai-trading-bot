@@ -17,7 +17,6 @@ from src.risk.risk_manager import RiskParameters
 
 # Import strategies
 from src.strategies.ml_basic import MlBasic
-from src.strategies.test_high_frequency import TestHighFrequencyStrategy
 from src.utils.logging_config import configure_logging
 
 # Configure logging
@@ -29,7 +28,6 @@ def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
         "ml_basic": MlBasic,
-        "test_high_frequency": TestHighFrequencyStrategy,
     }
 
     # Lazy import for optional strategies to keep startup fast
