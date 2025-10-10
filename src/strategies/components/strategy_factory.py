@@ -258,7 +258,7 @@ class StrategyFactory:
         
         risk_manager = FixedRiskManager(
             risk_per_trade=0.02,
-            stop_loss_pct=0.04,
+            stop_loss_pct=0.02,
         )
         
         position_sizer = ConfidenceWeightedSizer(
@@ -360,12 +360,7 @@ class StrategyFactory:
         
         position_sizer = ConfidenceWeightedSizer(
             base_fraction=0.20,
-            min_fraction=0.05,
-            max_fraction=0.25,
-            confidence_multiplier=12,
-            # Sentiment-specific adjustments
-            sentiment_boost_multiplier=1.2,
-            sentiment_reduction_multiplier=0.8,
+            min_confidence=0.3,
         )
         
         return Strategy(
@@ -403,7 +398,7 @@ class StrategyFactory:
         )
         
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.70,
+            base_fraction=0.50,
             min_confidence=0.3,
         )
         
