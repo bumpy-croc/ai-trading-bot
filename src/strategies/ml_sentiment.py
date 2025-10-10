@@ -23,24 +23,14 @@ Ideal for:
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-import onnxruntime as ort
-import pandas as pd
-
 from src.config.config_manager import get_config
 from src.config.constants import DEFAULT_USE_PREDICTION_ENGINE
-from src.prediction import PredictionConfig, PredictionEngine
-from src.prediction.features.pipeline import FeaturePipeline
-from src.prediction.features.sentiment import SentimentFeatureExtractor
-from src.prediction.features.technical import TechnicalFeatureExtractor
-from src.prediction.models.registry import PredictionModelRegistry
 from src.strategies.adapters.legacy_adapter import LegacyStrategyAdapter
 from src.strategies.components import (
-    Strategy,
-    MLSignalGenerator,
-    FixedRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
+    FixedRiskManager,
+    MLSignalGenerator,
 )
 
 
@@ -74,8 +64,12 @@ class MlSentiment(LegacyStrategyAdapter):
         model_type: Optional[str] = None,
         timeframe: Optional[str] = None,
     ):
-        # Create component-based strategy
-        component_strategy = self._create_component_strategy(
+        # Set risk parameters before creating components
+        self.stop_loss_pct = 0.02  # 2% stop loss
+        self.take_profit_pct = 0.04  # 4% take profit
+        
+        # Create components
+        signal_generator, risk_manager, position_sizer, regime_detector = self._create_components(
             name=name,
             model_path=model_path,
             sequence_length=sequence_length,
@@ -85,8 +79,14 @@ class MlSentiment(LegacyStrategyAdapter):
             timeframe=timeframe,
         )
         
-        # Initialize adapter with component strategy
-        super().__init__(component_strategy, name=name)
+        # Initialize adapter with components
+        super().__init__(
+            signal_generator=signal_generator,
+            risk_manager=risk_manager,
+            position_sizer=position_sizer,
+            regime_detector=regime_detector,
+            name=name
+        )
         
         # Preserve legacy attributes for backward compatibility
         self.trading_pair = "BTCUSDT"
@@ -94,8 +94,6 @@ class MlSentiment(LegacyStrategyAdapter):
         self.model_timeframe = timeframe or "1h"
         self.model_path = model_path
         self.sequence_length = sequence_length
-        self.stop_loss_pct = 0.02  # 2% stop loss
-        self.take_profit_pct = 0.04  # 4% take profit
         
         # Optional prediction engine integration
         cfg = get_config()
@@ -115,7 +113,7 @@ class MlSentiment(LegacyStrategyAdapter):
             except Exception:
                 self.model_name = None
 
-    def _create_component_strategy(
+    def _create_components(
         self,
         name: str,
         model_path: str,
@@ -124,8 +122,8 @@ class MlSentiment(LegacyStrategyAdapter):
         model_name: Optional[str],
         model_type: Optional[str],
         timeframe: Optional[str],
-    ) -> Strategy:
-        """Create the component-based strategy with ML Sentiment configuration."""
+    ):
+        """Create the component instances with ML Sentiment configuration."""
         
         # Create signal generator with ML Sentiment parameters (sentiment model)
         signal_generator = MLSignalGenerator(
@@ -134,43 +132,24 @@ class MlSentiment(LegacyStrategyAdapter):
             sequence_length=sequence_length,
             use_prediction_engine=use_prediction_engine,
             model_name=model_name,
-            model_type=model_type,
-            timeframe=timeframe,
-            confidence_multiplier=self.CONFIDENCE_MULTIPLIER,
-            # Sentiment-specific parameters
-            sentiment_boost_multiplier=self.SENTIMENT_BOOST_MULTIPLIER,
-            sentiment_reduction_multiplier=self.SENTIMENT_REDUCTION_MULTIPLIER,
-            min_sentiment_confidence=self.MIN_SENTIMENT_CONFIDENCE,
         )
         
         # Create fixed risk manager
         risk_manager = FixedRiskManager(
+            risk_per_trade=0.02,  # 2% risk per trade
             stop_loss_pct=self.stop_loss_pct,
-            take_profit_pct=self.take_profit_pct,
         )
         
-        # Create position sizer with confidence weighting and sentiment adjustment
+        # Create position sizer with confidence weighting
         position_sizer = ConfidenceWeightedSizer(
             base_fraction=self.BASE_POSITION_SIZE,
-            min_fraction=self.MIN_POSITION_SIZE_RATIO,
-            max_fraction=self.MAX_POSITION_SIZE_RATIO,
-            confidence_multiplier=self.CONFIDENCE_MULTIPLIER,
-            # Sentiment-specific adjustments
-            sentiment_boost_multiplier=self.SENTIMENT_BOOST_MULTIPLIER,
-            sentiment_reduction_multiplier=self.SENTIMENT_REDUCTION_MULTIPLIER,
+            min_confidence=0.3,  # Minimum confidence threshold
         )
         
         # Create regime detector
         regime_detector = EnhancedRegimeDetector()
         
-        # Create component-based strategy
-        return Strategy(
-            name=f"{name}_component",
-            signal_generator=signal_generator,
-            risk_manager=risk_manager,
-            position_sizer=position_sizer,
-            regime_detector=regime_detector,
-        )
+        return signal_generator, risk_manager, position_sizer, regime_detector
 
 
     def get_parameters(self) -> dict:

@@ -21,16 +21,12 @@ Key insight: Beat buy-and-hold by being MORE aggressive, not more conservative.
 
 from typing import Any, Optional
 
-import numpy as np
-import pandas as pd
-
 from src.strategies.adapters.legacy_adapter import LegacyStrategyAdapter
 from src.strategies.components import (
-    Strategy,
-    MomentumSignalGenerator,
-    VolatilityRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
+    MomentumSignalGenerator,
+    VolatilityRiskManager,
 )
 
 
@@ -57,52 +53,52 @@ class MomentumLeverage(LegacyStrategyAdapter):
     TREND_LOOKBACK = 15  # 15-period for faster response
     
     def __init__(self, name: str = "MomentumLeverage"):
-        # Create component-based strategy
-        component_strategy = self._create_component_strategy(name)
+        # Create components
+        signal_generator, risk_manager, position_sizer, regime_detector = self._create_components(name)
         
-        # Initialize adapter with component strategy
-        super().__init__(component_strategy, name=name)
+        # Initialize adapter with components
+        super().__init__(
+            signal_generator=signal_generator,
+            risk_manager=risk_manager,
+            position_sizer=position_sizer,
+            regime_detector=regime_detector,
+            name=name
+        )
         
         # Preserve legacy attributes for backward compatibility
         self.trading_pair = "BTCUSDT"
 
-    def _create_component_strategy(self, name: str) -> Strategy:
-        """Create the component-based strategy with Momentum Leverage configuration."""
+    def _create_components(self, name: str):
+        """Create the component instances with Momentum Leverage configuration."""
         
         # Create momentum signal generator
         signal_generator = MomentumSignalGenerator(
             name=f"{name}_signals",
             momentum_entry_threshold=self.MOMENTUM_ENTRY_THRESHOLD,
             strong_momentum_threshold=self.STRONG_MOMENTUM_THRESHOLD,
-            trend_lookback=self.TREND_LOOKBACK,
         )
         
         # Create volatility-based risk manager
+        # Note: VolatilityRiskManager uses base_risk, not stop_loss_pct
+        # Converting 10% stop loss to risk percentage (10% = 0.10)
         risk_manager = VolatilityRiskManager(
-            base_stop_loss_pct=self.STOP_LOSS_PCT,
-            base_take_profit_pct=self.TAKE_PROFIT_PCT,
-            volatility_window=20,
+            base_risk=self.STOP_LOSS_PCT,
+            atr_multiplier=2.0,
+            min_risk=0.005,
+            max_risk=0.15,
         )
         
         # Create aggressive position sizer
+        # Note: ConfidenceWeightedSizer max base_fraction is 0.5, so we cap it
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=self.BASE_POSITION_SIZE,
-            min_fraction=self.MIN_POSITION_SIZE_RATIO,
-            max_fraction=self.MAX_POSITION_SIZE_RATIO,
-            confidence_multiplier=10,  # Aggressive confidence weighting
+            base_fraction=min(0.5, self.BASE_POSITION_SIZE),  # Cap at 50%
+            min_confidence=0.2,  # Lower threshold for aggressive trading
         )
         
         # Create regime detector
         regime_detector = EnhancedRegimeDetector()
         
-        # Create component-based strategy
-        return Strategy(
-            name=f"{name}_component",
-            signal_generator=signal_generator,
-            risk_manager=risk_manager,
-            position_sizer=position_sizer,
-            regime_detector=regime_detector,
-        )
+        return signal_generator, risk_manager, position_sizer, regime_detector
     
     def get_risk_overrides(self) -> Optional[dict[str, Any]]:
         """Aggressive risk management for beating buy-and-hold"""
