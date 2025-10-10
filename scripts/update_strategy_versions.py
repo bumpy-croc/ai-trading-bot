@@ -27,10 +27,11 @@ STRATEGIES_DIR.mkdir(exist_ok=True, parents=True)
 def lazy_import_strategies():
     """Lazy import strategies to avoid import-time issues."""
     from src.strategies import EnsembleWeighted, MlAdaptive, MlBasic, MlSentiment
-    from src.strategies.components import StrategyRegistry
-    
+    from src.strategies.components import Strategy, StrategyRegistry
+
     return {
         "StrategyRegistry": StrategyRegistry,
+        "Strategy": Strategy,
         "MlBasic": MlBasic,
         "MlAdaptive": MlAdaptive,
         "MlSentiment": MlSentiment,
@@ -113,6 +114,29 @@ def save_strategy_version(registry, strategy_id: str, strategy_name: str):
     print(f"✓ Saved {strategy_name} version to {config_file}")
 
 
+def _build_component_strategy(strategy_instance, strategy_cls):
+    """Convert a legacy adapter instance into a component Strategy."""
+
+    missing_attrs = [
+        attr
+        for attr in ("signal_generator", "risk_manager", "position_sizer")
+        if not hasattr(strategy_instance, attr)
+    ]
+    if missing_attrs:
+        raise AttributeError(
+            "Strategy instance is missing required component attributes: "
+            + ", ".join(missing_attrs)
+        )
+
+    return strategy_cls(
+        name=getattr(strategy_instance, "name", strategy_instance.__class__.__name__),
+        signal_generator=strategy_instance.signal_generator,
+        risk_manager=strategy_instance.risk_manager,
+        position_sizer=strategy_instance.position_sizer,
+        regime_detector=getattr(strategy_instance, "regime_detector", None),
+    )
+
+
 def process_strategy_file(strategy_file: Path) -> bool:
     """
     Process a modified strategy file and update version if needed.
@@ -124,6 +148,7 @@ def process_strategy_file(strategy_file: Path) -> bool:
     try:
         imports = lazy_import_strategies()
         StrategyRegistry = imports["StrategyRegistry"]
+        Strategy = imports["Strategy"]
         strategy_classes = {
             "MlBasic": imports["MlBasic"],
             "MlAdaptive": imports["MlAdaptive"],
@@ -156,7 +181,16 @@ def process_strategy_file(strategy_file: Path) -> bool:
     except Exception as e:
         print(f"✗ Failed to instantiate {class_name}: {e}")
         return False
-    
+
+    try:
+        component_strategy = _build_component_strategy(strategy_instance, Strategy)
+    except Exception as e:
+        print(
+            "✗ Failed to build component strategy from legacy adapter: "
+            f"{e}"
+        )
+        return False
+
     # Calculate current configuration hash
     current_hash = calculate_strategy_hash(strategy_instance)
     
@@ -192,7 +226,7 @@ def process_strategy_file(strategy_file: Path) -> bool:
         # Update strategy
         new_version = registry.update_strategy(
             strategy_id=strategy_id,
-            strategy=strategy_instance.component_strategy,  # Get the component strategy
+            strategy=component_strategy,
             changes=changes,
             is_major=is_major
         )
@@ -201,7 +235,7 @@ def process_strategy_file(strategy_file: Path) -> bool:
     else:
         # Register new strategy
         strategy_id = registry.register_strategy(
-            strategy=strategy_instance.component_strategy,
+            strategy=component_strategy,
             metadata={
                 'created_by': 'developer',
                 'description': f'{class_name} trading strategy',
