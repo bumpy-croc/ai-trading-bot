@@ -147,4 +147,10 @@ atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 ## 📈 **Strategy Integration**
 
 ### **Supported Strategies:**
-- **`ml_basic`**
+- **`ml_basic`** - Price-only ML model (recommended for beginners)
+- **`ml_sentiment`** - ML model with sentiment analysis integration
+- **`ml_adaptive`** - Adaptive ML strategy with regime detection
+- **`ensemble_weighted`** - Weighted ensemble combining multiple strategies
+- **`momentum_leverage`** - Aggressive momentum-based strategy
+- **`bull`** - Bull market optimized strategy
+- **`bear`** - Bear market optimized strategy

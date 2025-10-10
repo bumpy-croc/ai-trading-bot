@@ -20,7 +20,13 @@ atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 1825 --initial-bala
 
 ## Available Strategies
 
-- `ml_basic` - Machine Learning Basic Strategy (recommended for 1h timeframe)
+- `ml_basic` - Machine Learning Basic Strategy (price-only model, recommended for 1h timeframe)
+- `ml_sentiment` - ML Strategy with Sentiment Analysis (price + Fear & Greed Index)
+- `ml_adaptive` - Adaptive ML Strategy with Regime Detection
+- `ensemble_weighted` - Weighted Ensemble combining multiple strategies
+- `momentum_leverage` - Aggressive momentum-based strategy with pseudo-leverage
+- `bull` - Bull market optimized strategy
+- `bear` - Bear market optimized strategy
 
 ## Timeframe Recommendations
 
@@ -90,12 +96,31 @@ Candle: 8760 of 43780
 
 ### Quick 1-Year Test
 ```bash
+# ML Basic Strategy (price-only)
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 365
+
+# ML Sentiment Strategy (with sentiment analysis)
+atb backtest ml_sentiment --symbol BTCUSDT --timeframe 1h --days 365
+
+# Adaptive ML Strategy (with regime detection)
+atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 365
+
+# Ensemble Strategy (weighted combination)
+atb backtest ensemble_weighted --symbol BTCUSDT --timeframe 1h --days 365
 ```
 
 ### Full 5-Year Test
 ```bash
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 1825
+```
+
+### Testing Different Strategies
+```bash
+# Compare different strategies over the same period
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90
+atb backtest ml_sentiment --symbol BTCUSDT --timeframe 1h --days 90
+atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 90
+atb backtest ensemble_weighted --symbol BTCUSDT --timeframe 1h --days 90
 ```
 
 ## Troubleshooting

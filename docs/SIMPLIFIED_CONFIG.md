@@ -61,6 +61,8 @@ class MyStrategy(BaseStrategy):
 | `ml_basic` | BTCUSDT | Price-only ML model |
 | `ml_sentiment` | BTCUSDT | Price + sentiment ML model |
 | `ml_adaptive` | BTCUSDT | Adaptive ML with regime detection |
+| `ensemble_weighted` | BTCUSDT | Weighted ensemble combining multiple strategies |
+| `momentum_leverage` | BTCUSDT | Aggressive momentum-based strategy with pseudo-leverage |
 | `bull` | BTCUSDT | Bull market optimized strategy |
 | `bear` | BTCUSDT | Bear market optimized strategy |
 
@@ -75,6 +77,8 @@ atb backtest ml_sentiment --symbol ETHUSDT --timeframe 1h --days 100
 
 # Try different strategies
 atb backtest ml_adaptive --symbol BTCUSDT --timeframe 4h --days 365
+atb backtest ensemble_weighted --symbol BTCUSDT --timeframe 1h --days 90
+atb backtest momentum_leverage --symbol BTCUSDT --timeframe 1h --days 30
 ```
 
 ## Benefits
