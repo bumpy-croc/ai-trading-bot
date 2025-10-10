@@ -141,7 +141,7 @@ class MlBasic(LegacyStrategyAdapter):
         # Create risk manager with fixed stop loss and take profit
         risk_manager = FixedRiskManager(
             risk_per_trade=self.stop_loss_pct,
-            stop_loss_pct=self.take_profit_pct,
+            stop_loss_pct=self.stop_loss_pct,
         )
         
         # Create position sizer with confidence weighting
