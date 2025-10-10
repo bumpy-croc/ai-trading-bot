@@ -57,7 +57,13 @@ Our bot ingests multiple data flavours; combining them tends to outperform any s
 
 | Strategy | Primary Edge | File |
 |----------|--------------|------|
-| **ML Basic** | Simplified ML without adaptation | `strategies.ml_basic` |
+| **ML Basic** | Price-only ML model with normalized features | `strategies.ml_basic` |
+| **ML Sentiment** | ML model enhanced with Fear & Greed Index | `strategies.ml_sentiment` |
+| **ML Adaptive** | Adaptive ML with regime detection | `strategies.ml_adaptive` |
+| **Ensemble Weighted** | Weighted combination of multiple strategies | `strategies.ensemble_weighted` |
+| **Momentum Leverage** | Aggressive momentum-based with pseudo-leverage | `strategies.momentum_leverage` |
+| **Bull** | Bull market optimized strategy | `strategies.bull` |
+| **Bear** | Bear market optimized strategy | `strategies.bear` |
 
 Each strategy plugs into a common base class (`strategies.base`) and is orchestrated by `live.strategy_manager`.
 
