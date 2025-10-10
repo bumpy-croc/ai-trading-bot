@@ -1522,8 +1522,6 @@ class Backtester:
                 'ml_basic': ('src.strategies.ml_basic', 'MlBasic'),
                 'ml_adaptive': ('src.strategies.ml_adaptive', 'MlAdaptive'),
                 'ml_sentiment': ('src.strategies.ml_sentiment', 'MlSentiment'),
-                'bear': ('src.strategies.bear', 'BearStrategy'),
-                'bull': ('src.strategies.bull', 'Bull'),
                 'ensemble_weighted': ('src.strategies.ensemble_weighted', 'EnsembleWeighted'),
                 'momentum_leverage': ('src.strategies.momentum_leverage', 'MomentumLeverage')
             }
