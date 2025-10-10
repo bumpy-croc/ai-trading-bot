@@ -40,6 +40,7 @@ from .technical_signal_generator import (
     RSISignalGenerator, 
     MACDSignalGenerator
 )
+from .momentum_signal_generator import MomentumSignalGenerator
 from .testing.test_datasets import TestDatasetGenerator
 from .testing.component_performance_tester import ComponentPerformanceTester
 from .testing.regime_tester import RegimeTester
@@ -77,6 +78,7 @@ __all__ = [
     "TechnicalSignalGenerator",
     "RSISignalGenerator",
     "MACDSignalGenerator",
+    "MomentumSignalGenerator",
     "HoldSignalGenerator",
     "RandomSignalGenerator",
     "WeightedVotingSignalGenerator",

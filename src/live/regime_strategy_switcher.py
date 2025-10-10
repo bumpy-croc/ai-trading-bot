@@ -27,8 +27,8 @@ class RegimeStrategyMapping:
     bull_high_vol: str = "ensemble_weighted"   # Use ensemble in volatile bull markets
     
     # Bear market strategies  
-    bear_low_vol: str = "bear"                 # Use bear strategy in calm bear markets
-    bear_high_vol: str = "bear"                # Use bear strategy in volatile bear markets
+    bear_low_vol: str = "ml_basic"             # Use ML in calm bear markets
+    bear_high_vol: str = "ml_adaptive"         # Use adaptive ML in volatile bear markets
     
     # Range/sideways market strategies
     range_low_vol: str = "ml_basic"            # Use ML in calm range markets

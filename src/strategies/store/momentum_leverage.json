@@ -1,0 +1,140 @@
+{
+  "lineage": {
+    "ancestors": [],
+    "branch_name": null,
+    "descendants": [],
+    "lineage_path": [],
+    "merge_source": null,
+    "strategy_id": "momentum_leverage_40cefdf3"
+  },
+  "metadata": {
+    "branch_name": null,
+    "component_hash": "b658b11ea25db44601dd9d7cafcd1779c96888ab6645629794be0303901b5aa9",
+    "config_hash": "3b116bfc5b8cced54e71c05ce023bf499c4b72733417129f8bba58b6887dba88",
+    "created_at": "2025-10-10T12:16:37.834928",
+    "created_by": "bootstrap",
+    "description": "Aggressive momentum-based strategy",
+    "id": "momentum_leverage_40cefdf3",
+    "lineage_path": [],
+    "merge_source": null,
+    "name": "momentum_leverage",
+    "parameters": {},
+    "parent_id": null,
+    "performance_summary": null,
+    "position_sizer_config": {
+      "class_name": "ConfidenceWeightedSizer",
+      "parameters": {
+        "base_fraction": 0.5,
+        "min_confidence": 0.2,
+        "name": "confidence_weighted_sizer",
+        "type": "ConfidenceWeightedSizer"
+      },
+      "type": "position_sizer",
+      "version": "1.0.0"
+    },
+    "regime_detector_config": {
+      "class_name": "EnhancedRegimeDetector",
+      "parameters": {},
+      "type": "regime_detector",
+      "version": "1.0.0"
+    },
+    "risk_manager_config": {
+      "class_name": "VolatilityRiskManager",
+      "parameters": {
+        "atr_multiplier": 2.0,
+        "base_risk": 0.1,
+        "max_risk": 0.15,
+        "min_risk": 0.005,
+        "name": "volatility_risk_manager",
+        "type": "VolatilityRiskManager"
+      },
+      "type": "risk_manager",
+      "version": "1.0.0"
+    },
+    "signal_generator_config": {
+      "class_name": "MomentumSignalGenerator",
+      "parameters": {
+        "breakout_lookback": 20,
+        "ema_fast": 12,
+        "ema_mid": 26,
+        "ema_slow": 50,
+        "momentum_entry_threshold": 0.01,
+        "momentum_fast_window": 3,
+        "momentum_mid_window": 7,
+        "momentum_slow_window": 20,
+        "name": "MomentumLeverage_signals",
+        "strong_momentum_threshold": 0.025,
+        "type": "MomentumSignalGenerator"
+      },
+      "type": "signal_generator",
+      "version": "1.0.0"
+    },
+    "status": "EXPERIMENTAL",
+    "tags": [],
+    "validation_results": null,
+    "version": "1.0.0"
+  },
+  "versions": [
+    {
+      "changes": [
+        "Initial version"
+      ],
+      "component_hash": "b658b11ea25db44601dd9d7cafcd1779c96888ab6645629794be0303901b5aa9",
+      "config_hash": "3b116bfc5b8cced54e71c05ce023bf499c4b72733417129f8bba58b6887dba88",
+      "created_at": "2025-10-10T12:16:37.834936",
+      "is_major": true,
+      "parameters": {},
+      "performance_delta": null,
+      "position_sizer_config": {
+        "class_name": "ConfidenceWeightedSizer",
+        "parameters": {
+          "base_fraction": 0.5,
+          "min_confidence": 0.2,
+          "name": "confidence_weighted_sizer",
+          "type": "ConfidenceWeightedSizer"
+        },
+        "type": "position_sizer",
+        "version": "1.0.0"
+      },
+      "regime_detector_config": {
+        "class_name": "EnhancedRegimeDetector",
+        "parameters": {},
+        "type": "regime_detector",
+        "version": "1.0.0"
+      },
+      "risk_manager_config": {
+        "class_name": "VolatilityRiskManager",
+        "parameters": {
+          "atr_multiplier": 2.0,
+          "base_risk": 0.1,
+          "max_risk": 0.15,
+          "min_risk": 0.005,
+          "name": "volatility_risk_manager",
+          "type": "VolatilityRiskManager"
+        },
+        "type": "risk_manager",
+        "version": "1.0.0"
+      },
+      "signal_generator_config": {
+        "class_name": "MomentumSignalGenerator",
+        "parameters": {
+          "breakout_lookback": 20,
+          "ema_fast": 12,
+          "ema_mid": 26,
+          "ema_slow": 50,
+          "momentum_entry_threshold": 0.01,
+          "momentum_fast_window": 3,
+          "momentum_mid_window": 7,
+          "momentum_slow_window": 20,
+          "name": "MomentumLeverage_signals",
+          "strong_momentum_threshold": 0.025,
+          "type": "MomentumSignalGenerator"
+        },
+        "type": "signal_generator",
+        "version": "1.0.0"
+      },
+      "strategy_id": "momentum_leverage_40cefdf3",
+      "version": "1.0.0"
+    }
+  ]
+}

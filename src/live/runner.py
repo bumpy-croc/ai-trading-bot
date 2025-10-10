@@ -17,7 +17,6 @@ from src.risk.risk_manager import RiskParameters
 
 # Import strategies
 from src.strategies.ml_basic import MlBasic
-from src.strategies.test_high_frequency import TestHighFrequencyStrategy
 from src.utils.logging_config import configure_logging
 
 # Configure logging
@@ -29,15 +28,9 @@ def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
         "ml_basic": MlBasic,
-        "test_high_frequency": TestHighFrequencyStrategy,
-        "bear": None,
     }
 
     # Lazy import for optional strategies to keep startup fast
-    if strategy_name == "bear":
-        from src.strategies.bear import BearStrategy
-
-        strategies["bear"] = BearStrategy
 
     if strategy_name not in strategies or strategies[strategy_name] is None:
         logger.error(f"Unknown strategy: {strategy_name}")

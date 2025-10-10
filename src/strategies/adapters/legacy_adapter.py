@@ -131,6 +131,25 @@ class LegacyStrategyAdapter(BaseStrategy):
             signal = self.signal_generator.generate_signal(df, index, regime_context)
             self._last_signal = signal
             
+            # Prepare reasons for logging
+            reasons = []
+            
+            # Check for missing ML prediction in legacy onnx_pred column
+            if 'onnx_pred' in df.columns and pd.isna(df.iloc[index]['onnx_pred']):
+                reasons.append('missing_ml_prediction')
+            
+            # Add signal generator reasons
+            if signal.metadata and 'reason' in signal.metadata:
+                if signal.metadata['reason'] == 'prediction_failed':
+                    reasons.append('missing_ml_prediction')
+                elif signal.metadata['reason'] == 'insufficient_history':
+                    reasons.append('insufficient_history')
+            
+            # Add prediction availability info
+            if 'onnx_pred' in df.columns:
+                prediction_available = not pd.isna(df.iloc[index]['onnx_pred'])
+                reasons.append(f"prediction_available={prediction_available}")
+            
             # Log signal generation
             self.log_execution(
                 signal_type="entry_check",
@@ -138,6 +157,7 @@ class LegacyStrategyAdapter(BaseStrategy):
                 price=float(df.iloc[index]['close']),
                 signal_strength=signal.strength,
                 confidence_score=signal.confidence,
+                reasons=reasons,
                 additional_context={
                     'regime_trend': regime_context.trend.value if regime_context else 'unknown',
                     'regime_volatility': regime_context.volatility.value if regime_context else 'unknown',
@@ -184,11 +204,29 @@ class LegacyStrategyAdapter(BaseStrategy):
         Check if exit conditions are met at the given index
         
         Uses the risk manager component to determine exit conditions.
+        Also supports legacy onnx_pred-based exit logic for backward compatibility.
         """
         start_time = time.time()
         
         try:
             self.performance_metrics['exit_conditions_checked'] += 1
+            
+            # Check for legacy onnx_pred-based exit logic first
+            if 'onnx_pred' in df.columns and not pd.isna(df.iloc[index]['onnx_pred']):
+                current_price = float(df.iloc[index]['close'])
+                prediction = float(df.iloc[index]['onnx_pred'])
+                
+                # Legacy logic: exit if prediction indicates opposite direction
+                # If we entered at 0.98 * current_price and prediction is 0.95 * current_price,
+                # that's a bearish signal, so we should exit a long position
+                price_change_from_entry = (current_price - entry_price) / entry_price
+                prediction_change_from_current = (prediction - current_price) / current_price
+                
+                # Exit if prediction suggests opposite direction from our entry
+                if price_change_from_entry > 0 and prediction_change_from_current < -0.01:  # Long position, bearish prediction
+                    return True
+                elif price_change_from_entry < 0 and prediction_change_from_current > 0.01:  # Short position, bullish prediction
+                    return True
             
             # Get current regime context
             regime_context = self._get_regime_context(df, index)
@@ -269,7 +307,7 @@ class LegacyStrategyAdapter(BaseStrategy):
         """
         Calculate the position size for a new trade
         
-        Uses both the risk manager and position sizer components to determine optimal size.
+        Delegates sizing to the component risk manager and preserves its output.
         """
         start_time = time.time()
         
@@ -285,12 +323,18 @@ class LegacyStrategyAdapter(BaseStrategy):
             else:
                 signal = self._last_signal
             
-            # Calculate risk amount using risk manager
-            risk_amount = self.risk_manager.calculate_position_size(signal, balance, regime_context)
-            
-            # Calculate final position size using position sizer
-            position_size = self.position_sizer.calculate_size(signal, balance, risk_amount, regime_context)
-            
+            # Calculate the final position size using the risk manager.
+            #
+            # Component risk managers already return a fully-evaluated position size in
+            # base units. The legacy adapter previously treated this value as a monetary
+            # "risk budget" and fed it back into the position sizer, which recomputed
+            # its own balance fraction and effectively discarded the limits imposed by
+            # the risk manager. By using the risk manager's output directly we preserve
+            # the configured risk behaviour for component strategies.
+            position_size = self.risk_manager.calculate_position_size(
+                signal, balance, regime_context
+            )
+
             # Log position sizing decision
             self.log_execution(
                 signal_type="position_sizing",
@@ -301,7 +345,7 @@ class LegacyStrategyAdapter(BaseStrategy):
                 confidence_score=signal.confidence,
                 additional_context={
                     'balance': balance,
-                    'risk_amount': risk_amount,
+                    'risk_amount': position_size,
                     'position_fraction': position_size / balance if balance > 0 else 0,
                     'regime_trend': regime_context.trend.value if regime_context else 'unknown',
                     'regime_volatility': regime_context.volatility.value if regime_context else 'unknown'
@@ -312,9 +356,11 @@ class LegacyStrategyAdapter(BaseStrategy):
             execution_time = time.time() - start_time
             self.performance_metrics['execution_times']['position_sizing'].append(execution_time)
             
-            self.adapter_logger.debug(f"Position size calculated at index {index}: {position_size:.4f} "
-                                    f"(balance: {balance:.2f}, risk: {risk_amount:.4f}, "
-                                    f"fraction: {position_size/balance*100:.2f}%)")
+            self.adapter_logger.debug(
+                f"Position size calculated at index {index}: {position_size:.4f} "
+                f"(balance: {balance:.2f}, risk: {position_size:.4f}, "
+                f"fraction: {position_size / balance * 100:.2f}%)"
+            )
             
             return position_size
             

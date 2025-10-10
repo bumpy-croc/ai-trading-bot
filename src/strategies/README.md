@@ -6,8 +6,6 @@ Built-in strategies using indicators and/or ML predictions.
 - `ml_basic.py`: ONNX price model predictions (price-only)
 - `ml_sentiment.py`: ONNX model predictions with sentiment analysis
 - `ml_adaptive.py`: Adaptive ML strategy with regime detection
-- `bull.py`: Bull market optimized strategy  
-- `bear.py`: Bear market optimized strategy
 - `ensemble_weighted.py`: Weighted ensemble strategy combining multiple strategies
 - `momentum_leverage.py`: Aggressive momentum-based strategy with pseudo-leverage
 
@@ -30,7 +28,7 @@ atb backtest momentum_leverage --symbol BTCUSDT --timeframe 1h --days 90
 - Supports both BTC and ETH models with sentiment integration
 
 ### Ensemble Weighted Strategy
-- Combines multiple strategies (ML Basic, ML Adaptive, Bull, Bear) using weighted voting
+- Combines multiple strategies (ML Basic, ML Adaptive) using weighted voting
 - Performance-based dynamic weighting that adapts over time
 - Aggressive position sizing (up to 80% allocation) with pseudo-leverage
 - Advanced momentum and trend indicators for enhanced entry timing

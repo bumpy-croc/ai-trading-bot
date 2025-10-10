@@ -1,0 +1,148 @@
+{
+  "lineage": {
+    "ancestors": [],
+    "branch_name": null,
+    "descendants": [],
+    "lineage_path": [],
+    "merge_source": null,
+    "strategy_id": "ml_adaptive_46a14ea3"
+  },
+  "metadata": {
+    "branch_name": null,
+    "component_hash": "2fa748a73ff71a7b67b6fbbd5bb7a1cdeb1c09d1c1ae91863f6cd1d2a3d7938e",
+    "config_hash": "6e95dd36e57656740a7e6ddf47a293c3321db1622aba3224210381e682edbf77",
+    "created_at": "2025-10-10T12:16:37.146388",
+    "created_by": "bootstrap",
+    "description": "Adaptive ML strategy with regime detection",
+    "id": "ml_adaptive_46a14ea3",
+    "lineage_path": [],
+    "merge_source": null,
+    "name": "ml_adaptive",
+    "parameters": {},
+    "parent_id": null,
+    "performance_summary": null,
+    "position_sizer_config": {
+      "class_name": "ConfidenceWeightedSizer",
+      "parameters": {
+        "base_fraction": 0.2,
+        "min_confidence": 0.3,
+        "name": "confidence_weighted_sizer",
+        "type": "ConfidenceWeightedSizer"
+      },
+      "type": "position_sizer",
+      "version": "1.0.0"
+    },
+    "regime_detector_config": {
+      "class_name": "RegimeDetector",
+      "parameters": {},
+      "type": "regime_detector",
+      "version": "1.0.0"
+    },
+    "risk_manager_config": {
+      "class_name": "RegimeAdaptiveRiskManager",
+      "parameters": {
+        "base_risk": 0.02,
+        "name": "regime_adaptive_risk_manager",
+        "regime_multipliers": {
+          "bear_high_vol": 0.3,
+          "bear_low_vol": 0.5,
+          "bull_high_vol": 1.0,
+          "bull_low_vol": 1.5,
+          "sideways_high_vol": 0.4,
+          "sideways_low_vol": 0.8,
+          "unknown": 0.6
+        },
+        "type": "RegimeAdaptiveRiskManager"
+      },
+      "type": "risk_manager",
+      "version": "1.0.0"
+    },
+    "signal_generator_config": {
+      "class_name": "MLSignalGenerator",
+      "parameters": {
+        "confidence_multiplier": 12,
+        "model_name": "btcusdt_price",
+        "model_path": "src/ml/btcusdt_price.onnx",
+        "name": "MlAdaptive_signals",
+        "sequence_length": 120,
+        "short_entry_threshold": -0.0005,
+        "type": "MLSignalGenerator",
+        "use_prediction_engine": true
+      },
+      "type": "signal_generator",
+      "version": "1.0.0"
+    },
+    "status": "EXPERIMENTAL",
+    "tags": [
+      "ml"
+    ],
+    "validation_results": null,
+    "version": "1.0.0"
+  },
+  "versions": [
+    {
+      "changes": [
+        "Initial version"
+      ],
+      "component_hash": "2fa748a73ff71a7b67b6fbbd5bb7a1cdeb1c09d1c1ae91863f6cd1d2a3d7938e",
+      "config_hash": "6e95dd36e57656740a7e6ddf47a293c3321db1622aba3224210381e682edbf77",
+      "created_at": "2025-10-10T12:16:37.146396",
+      "is_major": true,
+      "parameters": {},
+      "performance_delta": null,
+      "position_sizer_config": {
+        "class_name": "ConfidenceWeightedSizer",
+        "parameters": {
+          "base_fraction": 0.2,
+          "min_confidence": 0.3,
+          "name": "confidence_weighted_sizer",
+          "type": "ConfidenceWeightedSizer"
+        },
+        "type": "position_sizer",
+        "version": "1.0.0"
+      },
+      "regime_detector_config": {
+        "class_name": "RegimeDetector",
+        "parameters": {},
+        "type": "regime_detector",
+        "version": "1.0.0"
+      },
+      "risk_manager_config": {
+        "class_name": "RegimeAdaptiveRiskManager",
+        "parameters": {
+          "base_risk": 0.02,
+          "name": "regime_adaptive_risk_manager",
+          "regime_multipliers": {
+            "bear_high_vol": 0.3,
+            "bear_low_vol": 0.5,
+            "bull_high_vol": 1.0,
+            "bull_low_vol": 1.5,
+            "sideways_high_vol": 0.4,
+            "sideways_low_vol": 0.8,
+            "unknown": 0.6
+          },
+          "type": "RegimeAdaptiveRiskManager"
+        },
+        "type": "risk_manager",
+        "version": "1.0.0"
+      },
+      "signal_generator_config": {
+        "class_name": "MLSignalGenerator",
+        "parameters": {
+          "confidence_multiplier": 12,
+          "model_name": "btcusdt_price",
+          "model_path": "src/ml/btcusdt_price.onnx",
+          "name": "MlAdaptive_signals",
+          "sequence_length": 120,
+          "short_entry_threshold": -0.0005,
+          "type": "MLSignalGenerator",
+          "use_prediction_engine": true
+        },
+        "type": "signal_generator",
+        "version": "1.0.0"
+      },
+      "strategy_id": "ml_adaptive_46a14ea3",
+      "version": "1.0.0"
+    }
+  ]
+}

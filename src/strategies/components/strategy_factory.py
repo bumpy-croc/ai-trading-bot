@@ -30,6 +30,8 @@ from .signal_generator import (
     SignalGenerator,
     WeightedVotingSignalGenerator,
 )
+from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
+from .momentum_signal_generator import MomentumSignalGenerator
 from .strategy import Strategy
 
 
@@ -210,6 +212,249 @@ class StrategyFactory:
         
         risk_manager = FixedRiskManager(risk_per_trade=0.025, stop_loss_pct=0.04)
         position_sizer = FixedFractionSizer(fraction=0.03, adjust_for_confidence=True)
+        
+        return Strategy(
+            name=name,
+            signal_generator=signal_generator,
+            risk_manager=risk_manager,
+            position_sizer=position_sizer,
+            regime_detector=EnhancedRegimeDetector()
+        )
+    
+    @staticmethod
+    def create_ml_basic_strategy(
+        name: str = "MLBasic",
+        model_path: str = "src/ml/btcusdt_price.onnx",
+        sequence_length: int = 120,
+        use_prediction_engine: bool = False,
+        model_name: Optional[str] = None,
+        model_type: str = "basic",
+        timeframe: str = "1h",
+    ) -> Strategy:
+        """
+        Create ML Basic strategy with component-based architecture
+        
+        Args:
+            name: Strategy name
+            model_path: Path to ONNX model
+            sequence_length: Sequence length for LSTM
+            use_prediction_engine: Whether to use prediction engine
+            model_name: Model name for registry
+            model_type: Model type
+            timeframe: Model timeframe
+            
+        Returns:
+            Configured ML Basic strategy
+        """
+        signal_generator = MLBasicSignalGenerator(
+            name=f"{name}_signals",
+            model_path=model_path,
+            sequence_length=sequence_length,
+            use_prediction_engine=use_prediction_engine,
+            model_name=model_name,
+            model_type=model_type,
+            timeframe=timeframe,
+        )
+        
+        risk_manager = FixedRiskManager(
+            risk_per_trade=0.02,
+            stop_loss_pct=0.02,
+        )
+        
+        position_sizer = ConfidenceWeightedSizer(
+            base_fraction=0.20,
+            min_confidence=0.3,
+        )
+        
+        return Strategy(
+            name=name,
+            signal_generator=signal_generator,
+            risk_manager=risk_manager,
+            position_sizer=position_sizer,
+            regime_detector=EnhancedRegimeDetector()
+        )
+    
+    @staticmethod
+    def create_ml_adaptive_strategy(
+        name: str = "MLAdaptive",
+        model_path: str = "src/ml/btcusdt_price.onnx",
+        sequence_length: int = 120,
+        use_prediction_engine: bool = False,
+        model_name: Optional[str] = None,
+    ) -> Strategy:
+        """
+        Create ML Adaptive strategy with component-based architecture
+        
+        Args:
+            name: Strategy name
+            model_path: Path to ONNX model
+            sequence_length: Sequence length for LSTM
+            use_prediction_engine: Whether to use prediction engine
+            model_name: Model name for registry
+            
+        Returns:
+            Configured ML Adaptive strategy
+        """
+        signal_generator = MLSignalGenerator(
+            name=f"{name}_signals",
+            model_path=model_path,
+            sequence_length=sequence_length,
+            use_prediction_engine=use_prediction_engine,
+            model_name=model_name,
+        )
+        
+        risk_manager = RegimeAdaptiveRiskManager(
+            base_risk=0.02,
+        )
+        
+        position_sizer = ConfidenceWeightedSizer(
+            base_fraction=0.20,
+            min_confidence=0.3,
+        )
+        
+        return Strategy(
+            name=name,
+            signal_generator=signal_generator,
+            risk_manager=risk_manager,
+            position_sizer=position_sizer,
+            regime_detector=EnhancedRegimeDetector()
+        )
+    
+    @staticmethod
+    def create_ml_sentiment_strategy(
+        name: str = "MLSentiment",
+        model_path: str = "src/ml/btcusdt_sentiment.onnx",
+        sequence_length: int = 120,
+        use_prediction_engine: bool = False,
+        model_name: Optional[str] = None,
+        model_type: str = "sentiment",
+        timeframe: str = "1h",
+    ) -> Strategy:
+        """
+        Create ML Sentiment strategy with component-based architecture
+        
+        Args:
+            name: Strategy name
+            model_path: Path to ONNX model
+            sequence_length: Sequence length for LSTM
+            use_prediction_engine: Whether to use prediction engine
+            model_name: Model name for registry
+            model_type: Model type
+            timeframe: Model timeframe
+            
+        Returns:
+            Configured ML Sentiment strategy
+        """
+        signal_generator = MLSignalGenerator(
+            name=f"{name}_signals",
+            model_path=model_path,
+            sequence_length=sequence_length,
+            use_prediction_engine=use_prediction_engine,
+            model_name=model_name,
+        )
+        
+        risk_manager = FixedRiskManager(
+            risk_per_trade=0.02,
+            stop_loss_pct=0.04,
+        )
+        
+        position_sizer = ConfidenceWeightedSizer(
+            base_fraction=0.20,
+            min_confidence=0.3,
+        )
+        
+        return Strategy(
+            name=name,
+            signal_generator=signal_generator,
+            risk_manager=risk_manager,
+            position_sizer=position_sizer,
+            regime_detector=EnhancedRegimeDetector()
+        )
+    
+    @staticmethod
+    def create_momentum_leverage_strategy(
+        name: str = "MomentumLeverage",
+    ) -> Strategy:
+        """
+        Create Momentum Leverage strategy with component-based architecture
+        
+        Args:
+            name: Strategy name
+            
+        Returns:
+            Configured Momentum Leverage strategy
+        """
+        signal_generator = MomentumSignalGenerator(
+            name=f"{name}_signals",
+            momentum_entry_threshold=0.01,
+            strong_momentum_threshold=0.025,
+        )
+        
+        risk_manager = VolatilityRiskManager(
+            base_risk=0.10,
+            atr_multiplier=2.0,
+            min_risk=0.05,
+            max_risk=0.35,
+        )
+        
+        position_sizer = ConfidenceWeightedSizer(
+            base_fraction=0.50,
+            min_confidence=0.3,
+        )
+        
+        return Strategy(
+            name=name,
+            signal_generator=signal_generator,
+            risk_manager=risk_manager,
+            position_sizer=position_sizer,
+            regime_detector=EnhancedRegimeDetector()
+        )
+    
+    @staticmethod
+    def create_ensemble_weighted_strategy(
+        name: str = "EnsembleWeighted",
+        use_ml_basic: bool = True,
+        use_ml_adaptive: bool = True,
+        use_ml_sentiment: bool = False,
+    ) -> Strategy:
+        """
+        Create Ensemble Weighted strategy with component-based architecture
+        
+        Args:
+            name: Strategy name
+            use_ml_basic: Whether to include ML Basic
+            use_ml_adaptive: Whether to include ML Adaptive
+            use_ml_sentiment: Whether to include ML Sentiment
+            
+        Returns:
+            Configured Ensemble Weighted strategy
+        """
+        # Create individual signal generators
+        generators = {}
+        if use_ml_basic:
+            generators[MLBasicSignalGenerator(name="ml_basic_signals")] = 0.30
+        if use_ml_adaptive:
+            generators[MLSignalGenerator(name="ml_adaptive_signals")] = 0.30
+        if use_ml_sentiment:
+            generators[MLSignalGenerator(name="ml_sentiment_signals")] = 0.15
+        
+        signal_generator = WeightedVotingSignalGenerator(
+            generators=generators,
+            min_confidence=0.3,
+            consensus_threshold=0.6,
+        )
+        
+        risk_manager = VolatilityRiskManager(
+            base_risk=0.06,
+            atr_multiplier=2.0,
+            min_risk=0.03,
+            max_risk=0.20,
+        )
+        
+        position_sizer = ConfidenceWeightedSizer(
+            base_fraction=0.50,
+            min_confidence=0.3,
+        )
         
         return Strategy(
             name=name,
