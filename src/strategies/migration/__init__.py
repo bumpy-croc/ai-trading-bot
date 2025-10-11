@@ -28,6 +28,7 @@ from .regression_testing import (
     RegressionTestResult,
     RegressionTestSuite,
 )
+from .runtime_regression import BacktestComparison, compare_backtest_results
 from .rollback_manager import (
     RollbackManager,
     RollbackPoint,
@@ -74,6 +75,10 @@ __all__ = [
     "RegressionTestCase",
     "RegressionTestResult",
     "RegressionTestSuite",
+
+    # Runtime regression harness
+    "BacktestComparison",
+    "compare_backtest_results",
 
     # Difference Analysis
     "DifferenceAnalyzer",

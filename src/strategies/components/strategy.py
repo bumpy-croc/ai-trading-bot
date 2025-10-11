@@ -546,7 +546,12 @@ class Strategy:
                 'risk_position_size': risk_position_size,
                 'final_position_size': final_position_size,
                 'size_adjustment_ratio': final_position_size / risk_position_size if risk_position_size > 0 else 0
-            }
+            },
+            # Explicitly gate short entries – the runtime engines will only
+            # attempt to open a short position when this flag is set. By
+            # default it remains ``False`` so sell signals simply act as exit
+            # instructions unless strategy components opt in.
+            'enter_short': bool(signal.metadata.get('enter_short', False))
         }
         
         # Add regime information if available

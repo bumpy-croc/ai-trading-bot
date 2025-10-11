@@ -51,6 +51,13 @@ from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.base import BaseStrategy
+from src.strategies.components.runtime import RuntimeContext, StrategyRuntime
+from src.strategies.components.risk_manager import (
+    MarketData as ComponentMarketData,
+    Position as ComponentPosition,
+)
+from src.strategies.components.signal_generator import SignalDirection
+from src.strategies.components.strategy import Strategy as ComponentStrategy, TradingDecision
 from src.utils.logging_context import set_context, update_context
 from src.utils.logging_events import (
     log_data_event,
@@ -203,6 +210,14 @@ class LiveTradingEngine:
             raise ValueError("Account snapshot interval must be non-negative")
 
         self.strategy = strategy
+        self._component_strategy: ComponentStrategy | None = (
+            strategy if isinstance(strategy, ComponentStrategy) else None
+        )
+        self._runtime: StrategyRuntime | None = (
+            StrategyRuntime(self._component_strategy) if self._component_strategy else None
+        )
+        self._runtime_dataset = None
+        self._using_runtime = self._component_strategy is not None
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
         self.risk_manager = RiskManager(risk_parameters)
@@ -718,6 +733,13 @@ class LiveTradingEngine:
                 session_id=self.trading_session_id, final_balance=self.current_balance
             )
 
+        if self._using_runtime and self._runtime is not None:
+            try:
+                self._runtime.finalize()
+            except Exception:
+                pass
+            self._runtime_dataset = None
+
         logger.info("Trading engine stopped")
 
     def _signal_handler(self, signum, frame):
@@ -778,8 +800,15 @@ class LiveTradingEngine:
                         logger.error("❌ Failed to apply strategy/model update")
                 # Proceed to indicator calculation
 
-                # Calculate indicators
-                df = self.strategy.calculate_indicators(df)
+                # Calculate indicators / prepare runtime dataset
+                if self._using_runtime:
+                    df = self._prepare_runtime_dataset(df)
+                    warmup_period = (
+                        self._runtime_dataset.warmup_period if self._runtime_dataset else 0
+                    )
+                else:
+                    df = self.strategy.calculate_indicators(df)
+                    warmup_period = 0
                 # Remove warmup period and ensure we have enough data
                 try:
                     essential_columns = ["open", "high", "low", "close", "volume"]
@@ -792,7 +821,7 @@ class LiveTradingEngine:
                 safety_mode = not ready
                 if safety_mode:
                     logger.info("Safety mode active: %s", reason)
-                if len(df) < 2:
+                if len(df) < max(2, warmup_period + 1):
                     try:
                         tail_nan_counts = df.tail(5).isna().sum().to_dict()
                     except Exception:
@@ -806,6 +835,9 @@ class LiveTradingEngine:
                     self._sleep_with_interrupt(self.check_interval)
                     continue
                 current_index = len(df) - 1
+                if self._using_runtime and current_index < warmup_period:
+                    self._sleep_with_interrupt(self._calculate_adaptive_interval())
+                    continue
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
                 if steps % heartbeat_every == 0:
@@ -821,6 +853,20 @@ class LiveTradingEngine:
                 )
                 # Update position PnL
                 self._update_position_pnl(current_price)
+                runtime_decision: TradingDecision | None = None
+                if self._using_runtime and self._runtime is not None:
+                    try:
+                        runtime_decision = self._runtime.process(
+                            current_index,
+                            self._runtime_context(df.index[current_index]),
+                        )
+                    except Exception as runtime_error:
+                        logger.warning(
+                            "Runtime decision processing failed at %s: %s",
+                            df.index[current_index],
+                            runtime_error,
+                        )
+                        runtime_decision = None
                 # Apply trailing stop adjustments and update MFE/MAE before exit checks
                 try:
                     if safety_mode:
@@ -835,7 +881,7 @@ class LiveTradingEngine:
                 if safety_mode:
                     self._check_protective_exits_only(df, current_index, current_price)
                 else:
-                    self._check_exit_conditions(df, current_index, current_price)
+                    self._check_exit_conditions(df, current_index, current_price, runtime_decision)
                 # Evaluate partial exits and scale-ins for open positions
                 if not safety_mode:
                     self._check_partial_and_scale_ops(df, current_index, current_price)
@@ -843,9 +889,11 @@ class LiveTradingEngine:
                 if (not safety_mode) and (
                     len(self.positions) < self.risk_manager.get_max_concurrent_positions()
                 ):
-                    self._check_entry_conditions(df, current_index, symbol, current_price)
+                    self._check_entry_conditions(
+                        df, current_index, symbol, current_price, runtime_decision
+                    )
                     # Check for short entry if strategy supports it
-                    if hasattr(self.strategy, "check_short_entry_conditions"):
+                    if not self._using_runtime and hasattr(self.strategy, "check_short_entry_conditions"):
                         short_entry_signal = self.strategy.check_short_entry_conditions(
                             df, current_index
                         )
@@ -1231,7 +1279,13 @@ class LiveTradingEngine:
                 except Exception as e:
                     logger.debug(f"MFE/MAE DB update failed for {order_id}: {e}")
 
-    def _check_exit_conditions(self, df: pd.DataFrame, current_index: int, current_price: float):
+    def _check_exit_conditions(
+        self,
+        df: pd.DataFrame,
+        current_index: int,
+        current_price: float,
+        decision: TradingDecision | None = None,
+    ):
         """Check if any positions should be closed"""
         positions_to_close = []
 
@@ -1245,29 +1299,33 @@ class LiveTradingEngine:
             exit_reason = ""
 
             # Check strategy exit conditions
-            if self.strategy.check_exit_conditions(df, current_index, position.entry_price):
+            if self._using_runtime:
+                should_exit, exit_reason = self._runtime_should_exit_position(
+                    df,
+                    current_index,
+                    position,
+                    current_price,
+                    decision,
+                )
+            elif self.strategy.check_exit_conditions(df, current_index, position.entry_price):
                 should_exit = True
                 exit_reason = "Strategy signal"
 
-            # Check stop loss
-            elif position.stop_loss and self._check_stop_loss(position, current_price):
+            if not should_exit and position.stop_loss and self._check_stop_loss(position, current_price):
                 should_exit = True
                 exit_reason = "Stop loss"
 
-            # Check take profit
-            elif position.take_profit and self._check_take_profit(position, current_price):
+            if not should_exit and position.take_profit and self._check_take_profit(position, current_price):
                 should_exit = True
                 exit_reason = "Take profit"
 
-            # * Time-based exits only when policy is specified
-            else:
+            if not should_exit:
                 hit_time_exit = False
                 reason = None
                 if self.time_exit_policy is not None:
                     hit_time_exit, reason = self.time_exit_policy.check_time_exit_conditions(
                         position.entry_time, datetime.utcnow()
                     )
-                # * No time exit policy means no time-based exits
                 if hit_time_exit:
                     should_exit = True
                     exit_reason = reason or "Time exit"
@@ -1316,9 +1374,20 @@ class LiveTradingEngine:
             self._close_position(position, reason)
 
     def _check_entry_conditions(
-        self, df: pd.DataFrame, current_index: int, symbol: str, current_price: float
+        self,
+        df: pd.DataFrame,
+        current_index: int,
+        symbol: str,
+        current_price: float,
+        decision: TradingDecision | None = None,
     ):
         """Check if new positions should be opened"""
+        if self._using_runtime:
+            if decision is None:
+                return
+            self._handle_runtime_entry(decision, df, current_index, symbol, current_price)
+            return
+
         # Check strategy entry conditions
         entry_signal = self.strategy.check_entry_conditions(df, current_index)
 
@@ -1424,6 +1493,162 @@ class LiveTradingEngine:
         self._open_position(
             symbol, PositionSide.LONG, position_size, current_price, stop_loss, take_profit
         )
+
+    def _prepare_runtime_dataset(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare runtime dataset for component strategies."""
+
+        if not self._runtime:
+            return df
+
+        self._runtime_dataset = self._runtime.prepare_data(df)
+        return self._runtime_dataset.data
+
+    def _runtime_context(self, current_time: datetime) -> RuntimeContext:
+        """Construct runtime context for the current candle."""
+
+        return RuntimeContext(
+            balance=self.current_balance,
+            current_positions=None,
+            metadata={"timestamp": current_time},
+        )
+
+    def _runtime_size_fraction(self, decision: TradingDecision) -> float:
+        """Convert runtime decision size into balance fraction."""
+
+        if decision.position_size <= 0 or self.current_balance <= 0:
+            return 0.0
+        fraction = decision.position_size / self.current_balance
+        return max(0.0, min(1.0, float(fraction)))
+
+    def _runtime_should_exit_position(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        position: Position,
+        current_price: float,
+        decision: TradingDecision | None,
+    ) -> tuple[bool, str]:
+        """Determine if a live position should exit under runtime control."""
+
+        if self._component_strategy is None:
+            return False, ""
+
+        side = "long" if position.side == PositionSide.LONG else "short"
+        component_position = ComponentPosition(
+            symbol=position.symbol,
+            side=side,
+            size=float(position.size),
+            entry_price=float(position.entry_price),
+            current_price=float(current_price),
+            entry_time=position.entry_time,
+        )
+        market_data = ComponentMarketData(
+            symbol=position.symbol,
+            price=float(current_price),
+            volume=float(df.iloc[index].get("volume", 0.0)),
+            timestamp=df.index[index] if hasattr(df.index, "__getitem__") else None,
+        )
+        regime = decision.regime if decision else None
+
+        should_exit = False
+        try:
+            should_exit = bool(
+                self._component_strategy.should_exit_position(
+                    component_position, market_data, regime
+                )
+            )
+        except Exception:
+            should_exit = False
+
+        if decision is not None:
+            if position.side == PositionSide.LONG and decision.signal.direction == SignalDirection.SELL:
+                should_exit = True or should_exit
+            elif position.side == PositionSide.SHORT and decision.signal.direction == SignalDirection.BUY:
+                should_exit = True or should_exit
+
+        return should_exit, "Strategy signal"
+
+    def _handle_runtime_entry(
+        self,
+        decision: TradingDecision,
+        df: pd.DataFrame,
+        current_index: int,
+        symbol: str,
+        current_price: float,
+    ) -> None:
+        """Execute runtime-driven entry decisions."""
+
+        size_fraction = self._runtime_size_fraction(decision)
+        if size_fraction <= 0:
+            return
+
+        size_fraction = self._get_dynamic_risk_adjusted_size(size_fraction)
+        allow_short = bool(decision.metadata.get("enter_short"))
+
+        if self.db_manager:
+            indicators = self._extract_indicators(df, current_index)
+            sentiment_data = self._extract_sentiment_data(df, current_index)
+            ml_predictions = self._extract_ml_predictions(df, current_index)
+            if decision.signal.direction == SignalDirection.BUY and size_fraction > 0:
+                action_taken = "opened_long"
+            elif (
+                decision.signal.direction == SignalDirection.SELL
+                and size_fraction > 0
+                and allow_short
+            ):
+                action_taken = "opened_short"
+            else:
+                action_taken = "no_action"
+            self.db_manager.log_strategy_execution(
+                strategy_name=self.strategy.__class__.__name__,
+                symbol=symbol,
+                signal_type="entry",
+                action_taken=action_taken,
+                price=current_price,
+                timeframe="1m",
+                signal_strength=decision.signal.strength,
+                confidence_score=decision.signal.confidence,
+                indicators=indicators,
+                sentiment_data=sentiment_data if sentiment_data else None,
+                ml_predictions=ml_predictions if ml_predictions else None,
+                position_size=size_fraction if size_fraction > 0 else None,
+                reasons=[
+                    f"runtime_direction_{decision.signal.direction.value}",
+                    f"position_size_{size_fraction:.4f}",
+                    f"balance_{self.current_balance:.2f}",
+                ],
+                additional_context=decision.metadata,
+                volume=indicators.get("volume"),
+                volatility=indicators.get("volatility"),
+                session_id=self.trading_session_id,
+            )
+
+        if decision.signal.direction == SignalDirection.BUY:
+            stop_loss = self._component_strategy.get_stop_loss_price(
+                current_price, decision.signal, decision.regime
+            )
+            take_profit = current_price * 1.04
+            self._open_position(
+                symbol,
+                PositionSide.LONG,
+                size_fraction,
+                current_price,
+                stop_loss,
+                take_profit,
+            )
+        elif decision.signal.direction == SignalDirection.SELL and allow_short:
+            stop_loss = self._component_strategy.get_stop_loss_price(
+                current_price, decision.signal, decision.regime
+            )
+            take_profit = current_price * (1 - getattr(self.strategy, "take_profit_pct", 0.04))
+            self._open_position(
+                symbol,
+                PositionSide.SHORT,
+                size_fraction,
+                current_price,
+                stop_loss,
+                take_profit,
+            )
 
     def _open_position(
         self,

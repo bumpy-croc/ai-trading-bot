@@ -1,0 +1,27 @@
+{
+  "symbol": "BENCHUSDT",
+  "timeframe": "1h",
+  "legacy": {
+    "total_trades": 6.0,
+    "final_balance": 1025.9097592468413,
+    "total_return": 2.5909759246841357,
+    "max_drawdown": 0.0,
+    "win_rate": 100.0
+  },
+  "runtime": {
+    "total_trades": 6.0,
+    "final_balance": 1025.9097592468413,
+    "total_return": 2.5909759246841357,
+    "max_drawdown": 0.0,
+    "win_rate": 100.0
+  },
+  "differences": {
+    "total_trades": 0.0,
+    "final_balance": 0.0,
+    "total_return": 0.0,
+    "max_drawdown": 0.0,
+    "win_rate": 0.0
+  },
+  "legacy_duration": 0.011989831924438477,
+  "runtime_duration": 0.3376779556274414
+}
