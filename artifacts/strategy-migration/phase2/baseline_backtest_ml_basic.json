@@ -1,0 +1,50 @@
+{
+  "mode": "backtest",
+  "strategy": "ml_basic",
+  "timeframe": "1h",
+  "start": "2025-09-11T19:58:02.754102",
+  "end": "2025-10-11T19:58:02.754102",
+  "rows": 721,
+  "wall_time_seconds": 3.415852166013792,
+  "cpu_time_seconds": 3.331781,
+  "results": {
+    "total_trades": 300,
+    "win_rate": 50.0,
+    "total_return": 1.4726203428369722,
+    "max_drawdown": 3.0096389187656443,
+    "sharpe_ratio": 1.6745424633947017,
+    "final_balance": 10147.262034283698,
+    "annualized_return": 19.466090118650747,
+    "yearly_returns": {
+      "2025": 1.4726203428369722
+    },
+    "hold_return": -1.481156280873197,
+    "trading_vs_hold_difference": 2.9537766237101692,
+    "session_id": null,
+    "early_stop_reason": null,
+    "early_stop_date": null,
+    "early_stop_candle_index": null,
+    "prediction_metrics": {
+      "directional_accuracy_pct": 0.0,
+      "mae": 0.0,
+      "mape_pct": 0.0,
+      "brier_score_direction": 0.0
+    },
+    "dynamic_risk_adjustments": [],
+    "dynamic_risk_summary": {
+      "total_adjustments": 0,
+      "adjustment_frequency": 0.0,
+      "average_factor": 1.0,
+      "most_common_reason": null,
+      "max_reduction": 0.0,
+      "time_under_adjustment": 0.0
+    },
+    "regime_switching_enabled": false,
+    "strategy_switches": [],
+    "regime_history": [],
+    "total_strategy_switches": 0
+  },
+  "artifact_json": "artifacts/strategy-migration/phase2/baseline_backtest_ml_basic.json",
+  "artifact_trades": "artifacts/strategy-migration/phase2/baseline_backtest_ml_basic_trades.csv",
+  "artifact_log": "artifacts/strategy-migration/phase2/baseline_backtest_ml_basic.log"
+}

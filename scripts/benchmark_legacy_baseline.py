@@ -60,9 +60,15 @@ DEFAULT_TIMEFRAME = "1h"
 DEFAULT_BACKTEST_DAYS = 30
 DEFAULT_LIVE_STEPS = 50
 
+# Global variable to store custom output directory
+_OUTPUT_DIR: Path | None = None
+
 
 def _baseline_dir() -> Path:
-    out = _project_root() / "artifacts" / "strategy-migration" / "baseline"
+    if _OUTPUT_DIR is not None:
+        out = _OUTPUT_DIR
+    else:
+        out = _project_root() / "artifacts" / "strategy-migration" / "baseline"
     out.mkdir(parents=True, exist_ok=True)
     return out
 
@@ -337,11 +343,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip live (paper trading) baseline generation",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Custom output directory (relative to project root or absolute path)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
+    global _OUTPUT_DIR
     args = parse_args()
+    
+    # Set the output directory if provided
+    if args.output_dir:
+        output_path = Path(args.output_dir)
+        if not output_path.is_absolute():
+            output_path = _project_root() / output_path
+        _OUTPUT_DIR = output_path
+    
     results: list[dict[str, Any]] = []
 
     for strategy in args.strategies:
