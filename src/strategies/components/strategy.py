@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import pandas as pd
 
@@ -18,6 +18,9 @@ from .position_sizer import PositionSizer
 from .regime_context import EnhancedRegimeDetector, RegimeContext
 from .risk_manager import MarketData, Position, RiskManager
 from .signal_generator import Signal, SignalDirection, SignalGenerator
+
+if TYPE_CHECKING:
+    from ..runtime import FeatureGenerator, StrategyDataset
 
 
 @dataclass
@@ -122,7 +125,33 @@ class Strategy:
                         f"SignalGen={signal_generator.name}, "
                         f"RiskMgr={risk_manager.name}, "
                         f"PosSizer={position_sizer.name}")
-    
+
+    @property
+    def warmup_period(self) -> int:
+        """Minimum history length required before emitting reliable decisions."""
+
+        return 0
+
+    def get_feature_generators(self) -> Sequence['FeatureGenerator']:
+        """Return feature generators required by the strategy.
+
+        Strategies can override this to declare batch-computed features. The
+        default implementation returns an empty sequence, signalling that the
+        runtime does not need to enrich the dataset.
+        """
+
+        return []
+
+    def prepare_runtime(self, dataset: 'StrategyDataset') -> None:
+        """Hook executed after the runtime prepares the dataset."""
+
+        _ = dataset  # pragma: no cover - default implementation is a no-op
+
+    def finalize_runtime(self, dataset: 'StrategyDataset') -> None:
+        """Hook executed when the runtime finalizes execution."""
+
+        _ = dataset  # pragma: no cover - default implementation is a no-op
+
     def process_candle(self, df: pd.DataFrame, index: int, balance: float,
                       current_positions: Optional[list[Position]] = None) -> TradingDecision:
         """

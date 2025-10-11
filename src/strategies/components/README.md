@@ -22,6 +22,7 @@ Each component has a single responsibility and can be tested, optimized, and rep
 ## Table of Contents
 
 - [Core Components](#core-components)
+  - [Strategy Runtime](#strategy-runtime-runtime)
 - [Management Components](#management-components)
 - [Specialized Components](#specialized-components)
 - [Testing Framework](#testing-framework)
@@ -32,6 +33,40 @@ Each component has a single responsibility and can be tested, optimized, and rep
 ---
 
 ## Core Components
+
+### Strategy Runtime (`runtime/`)
+
+The runtime layer prepares market data for component strategies and coordinates
+execution during both backtests and live runs.
+
+**Purpose**: Provide a single orchestration contract (`StrategyRuntime`) that
+translates prepared datasets and runtime context into `TradingDecision`
+objects.
+
+**Key Features**:
+- Vectorised feature preparation via the `FeatureGenerator` interface
+- Warmup coordination so strategies only emit decisions after the required
+  history is available
+- Optional runtime hooks (`prepare_runtime`, `finalize_runtime`) that allow
+  strategies to hydrate caches or emit diagnostics without leaking orchestration
+  details into engines
+
+**Usage**:
+```python
+from src.strategies.runtime import StrategyRuntime, RuntimeContext
+
+runtime = StrategyRuntime(strategy)
+dataset = runtime.prepare_data(market_df)
+
+for index in range(dataset.warmup_period, len(dataset.data)):
+    decision = runtime.process(
+        index,
+        RuntimeContext(balance=current_balance, current_positions=open_positions),
+    )
+    handle_decision(decision)
+
+runtime.finalize()
+```
 
 ### 1. Strategy (`strategy.py`)
 
