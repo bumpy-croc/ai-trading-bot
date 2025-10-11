@@ -477,26 +477,26 @@ def test_ml_basic_predictions():
 
 🚧 **In Progress:**
 - [ ] Create comprehensive test suite for component-based flow
-- [ ] Set up parallel execution framework (legacy + component)
-- [ ] Implement feature flags for gradual rollout
+- Set up parallel execution framework (legacy + component)
+- Implement feature flags for gradual rollout
 
-📋 **TODO:**
-- [ ] Create monitoring dashboards for decision parity
-- [ ] Document rollback procedures
-- [ ] Train team on component-based architecture
+**Next Steps:**
+- Create monitoring dashboards for decision parity
+- Document rollback procedures
+- Train team on component-based architecture
 
 ### Phase 2: Backtesting Engine Migration (3-4 weeks)
 
 **Goal:** Migrate backtesting engine to use `Strategy.process_candle()`
 
 **Week 1: Preparation**
-- [ ] Create feature flag `USE_COMPONENT_STRATEGY_INTERFACE`
-- [ ] Implement parallel execution mode (both interfaces)
-- [ ] Set up decision parity logging
+- Create feature flag `USE_COMPONENT_STRATEGY_INTERFACE`
+- Implement parallel execution mode (both interfaces)
+- Set up decision parity logging
 
 **Week 2: Implementation**
-- [ ] Refactor main backtest loop to use `process_candle()`
-- [ ] Update regime switching to use component interface
+- Refactor main backtest loop to use `process_candle()`
+- Update regime switching to use component interface
 - [ ] Remove `calculate_indicators()` call
 
 **Week 3: Testing**
