@@ -9,10 +9,11 @@ strategy architecture.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
+    from .runtime import FeatureGeneratorSpec
     from .signal_generator import Signal
 
 
@@ -233,7 +234,7 @@ class RiskManager(ABC):
     def get_parameters(self) -> dict[str, Any]:
         """
         Get risk manager parameters for logging and serialization
-        
+
         Returns:
             Dictionary of parameter names and values
         """
@@ -241,6 +242,17 @@ class RiskManager(ABC):
             'name': self.name,
             'type': self.__class__.__name__
         }
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required for the risk manager."""
+
+        return 0
+
+    def get_feature_generators(self) -> Sequence['FeatureGeneratorSpec']:
+        """Return feature generators used by the risk manager."""
+
+        return []
 
 
 class FixedRiskManager(RiskManager):

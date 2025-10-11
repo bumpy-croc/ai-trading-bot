@@ -7,10 +7,13 @@ for providing market regime information to strategy components.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Sequence, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .runtime import FeatureGeneratorSpec
 
 # Import existing regime detection components
 from src.regime.detector import RegimeDetector as BaseRegimeDetector
@@ -163,6 +166,17 @@ class EnhancedRegimeDetector:
         # Current regime state
         self.current_regime: Optional[RegimeContext] = None
         self.regime_start_index: int = 0
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required for regime detection."""
+
+        return 0
+
+    def get_feature_generators(self) -> Sequence['FeatureGeneratorSpec']:
+        """Return feature generators used to enrich regime analysis."""
+
+        return []
     
     def detect_regime(self, df: pd.DataFrame, index: int) -> RegimeContext:
         """

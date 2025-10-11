@@ -6,13 +6,18 @@ and PositionSizer components to create a unified trading strategy with comprehen
 logging and decision tracking.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Sequence, TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .runtime import FeatureGeneratorSpec, StrategyDataset
 
 from .position_sizer import PositionSizer
 from .regime_context import EnhancedRegimeDetector, RegimeContext
@@ -101,11 +106,11 @@ class Strategy:
         self.logger = logging.getLogger(f"Strategy.{name}")
         if enable_logging:
             self.logger.setLevel(logging.INFO)
-        
+
         # Decision history
         self.decision_history: list[TradingDecision] = []
         self.max_history = max_history
-        
+
         # Performance metrics
         self.metrics = {
             'total_decisions': 0,
@@ -117,12 +122,74 @@ class Strategy:
             'avg_position_size': 0.0,
             'last_updated': datetime.now()
         }
+
+        # Runtime configuration
+        self._warmup_override: Optional[int] = None
         
         self.logger.info(f"Strategy '{name}' initialized with components: "
                         f"SignalGen={signal_generator.name}, "
                         f"RiskMgr={risk_manager.name}, "
                         f"PosSizer={position_sizer.name}")
-    
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required before producing decisions."""
+
+        if self._warmup_override is not None:
+            return self._warmup_override
+
+        warmups: list[int] = []
+        for component in (
+            self.signal_generator,
+            self.risk_manager,
+            self.position_sizer,
+            self.regime_detector,
+        ):
+            component_warmup = getattr(component, 'warmup_period', 0)
+            if isinstance(component_warmup, int) and component_warmup >= 0:
+                warmups.append(component_warmup)
+
+        return max(warmups or [0])
+
+    def set_warmup_period(self, periods: int) -> None:
+        """Override the automatically derived warmup period."""
+
+        if periods < 0:
+            raise ValueError("warmup period must be non-negative")
+        self._warmup_override = periods
+
+    def get_feature_generators(self) -> Sequence[FeatureGeneratorSpec]:
+        """Return feature generators declared by composed components."""
+
+        generators: list[FeatureGeneratorSpec] = []
+        for component in (
+            self.signal_generator,
+            self.risk_manager,
+            self.position_sizer,
+            self.regime_detector,
+        ):
+            getter = getattr(component, 'get_feature_generators', None)
+            if callable(getter):
+                component_generators = list(getter())
+                if component_generators:
+                    generators.extend(component_generators)
+        return generators
+
+    def prepare_runtime(self, dataset: StrategyDataset) -> None:
+        """Hook for runtime initialisation. Default implementation is a no-op."""
+
+        self.logger.debug(
+            "Runtime prepared for %s with %d rows and %d feature sets",
+            self.name,
+            len(dataset.data),
+            len(dataset.feature_caches),
+        )
+
+    def finalize_runtime(self) -> None:
+        """Hook invoked after runtime execution completes."""
+
+        self.logger.debug("Runtime finalised for %s", self.name)
+
     def process_candle(self, df: pd.DataFrame, index: int, balance: float,
                       current_positions: Optional[list[Position]] = None) -> TradingDecision:
         """
