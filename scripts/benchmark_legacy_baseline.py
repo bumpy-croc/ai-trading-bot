@@ -82,19 +82,22 @@ def load_strategy(name: str):
 
 
 def _json_safe(value: Any) -> Any:
-    """Recursively convert objects into JSON serialisable values."""
+    """Convert values into JSON-serialisable forms."""
 
-    if isinstance(value, dict):
-        return {key: _json_safe(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(item) for item in value]
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if is_dataclass(value):
+        return _json_safe(asdict(value))
+
     try:
         json.dumps(value)
-        return value
     except TypeError:
         return str(value)
+    return value
 
 
 def _serialize_trades(trades: Iterable[Any]) -> list[dict[str, Any]]:
@@ -103,20 +106,20 @@ def _serialize_trades(trades: Iterable[Any]) -> list[dict[str, Any]]:
     serialised: list[dict[str, Any]] = []
     for trade in trades:
         if isinstance(trade, dict):
-            data: dict[str, Any] = dict(trade)
+            serialised.append({key: _json_safe(value) for key, value in trade.items()})
         elif is_dataclass(trade):
-            data = asdict(trade)
+            serialised.append(_json_safe(asdict(trade)))
         else:
             # Fallback to object attributes for unexpected types
-            data = {}
+            data: dict[str, Any] = {}
             for attr in dir(trade):
                 if attr.startswith("_"):
                     continue
                 value = getattr(trade, attr)
                 if callable(value):
                     continue
-                data[attr] = value
-        serialised.append(_json_safe(data))
+                data[attr] = _json_safe(value)
+            serialised.append(data)
     return serialised
 
 
