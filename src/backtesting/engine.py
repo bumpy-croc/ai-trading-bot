@@ -50,6 +50,14 @@ from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager
 from src.strategies.base import BaseStrategy
+from src.strategies.components import (
+    MarketData as ComponentMarketData,
+    Position as ComponentPosition,
+    RuntimeContext,
+    SignalDirection,
+    Strategy as ComponentStrategy,
+    StrategyRuntime,
+)
 from src.utils.logging_context import set_context, update_context
 from src.utils.logging_events import log_engine_event
 
@@ -121,6 +129,7 @@ class ActiveTrade:
         self.trailing_stop_activated: bool = False
         self.breakeven_triggered: bool = False
         self.trailing_stop_price: Optional[float] = None
+        self.component_notional: Optional[float] = None
 
 
 class Backtester:
@@ -128,7 +137,7 @@ class Backtester:
 
     def __init__(
         self,
-        strategy: BaseStrategy,
+        strategy: BaseStrategy | ComponentStrategy | StrategyRuntime,
         data_provider: DataProvider,
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[Any] = None,
@@ -152,8 +161,16 @@ class Backtester:
         strategy_mapping: Optional[Any] = None,
         switching_config: Optional[Any] = None,
     ):
-        self.strategy = strategy
-        self.initial_strategy_name = strategy.name  # Store original strategy name
+        self._runtime_dataset = None
+        self._runtime_warmup = 0
+        self._configure_strategy(strategy)
+
+        name_source = strategy if isinstance(strategy, StrategyRuntime) else self.strategy
+        self.initial_strategy_name = getattr(
+            name_source,
+            "name",
+            name_source.__class__.__name__,
+        )
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
         self.risk_parameters = risk_parameters
@@ -286,7 +303,7 @@ class Backtester:
 
                 self.db_manager = DatabaseManager(selected_db_url)
                 # Set up strategy logging
-                if self.db_manager:
+                if self.db_manager and hasattr(self.strategy, "set_database_manager"):
                     self.strategy.set_database_manager(self.db_manager)
             except (SQLAlchemyError, ValueError) as db_err:
                 # Fallback to in-memory SQLite to satisfy tests that expect db_manager presence
@@ -295,7 +312,7 @@ class Backtester:
                 )
                 try:
                     self.db_manager = DatabaseManager("sqlite:///:memory:")
-                    if self.db_manager:
+                    if self.db_manager and hasattr(self.strategy, "set_database_manager"):
                         self.strategy.set_database_manager(self.db_manager)
                 except (SQLAlchemyError, ValueError) as sqlite_err:
                     logger.warning(
@@ -307,7 +324,11 @@ class Backtester:
         """Merge strategy risk overrides with base dynamic risk configuration"""
         try:
             # Get strategy risk overrides
-            strategy_overrides = strategy.get_risk_overrides() if strategy else None
+            strategy_overrides = (
+                strategy.get_risk_overrides()
+                if strategy and hasattr(strategy, "get_risk_overrides")
+                else None
+            )
             if not strategy_overrides or 'dynamic_risk' not in strategy_overrides:
                 return base_config
                 
@@ -428,6 +449,177 @@ class Backtester:
             )
         except Exception:
             return None
+
+    def _configure_strategy(
+        self, strategy: BaseStrategy | ComponentStrategy | StrategyRuntime
+    ) -> None:
+        """Normalise strategy inputs and prepare runtime state."""
+
+        runtime = strategy if isinstance(strategy, StrategyRuntime) else None
+        base_strategy = runtime.strategy if runtime is not None else strategy
+
+        self.strategy = base_strategy
+        self._component_strategy = (
+            base_strategy if isinstance(base_strategy, ComponentStrategy) else None
+        )
+
+        if runtime is not None:
+            self._runtime = runtime
+        elif self._component_strategy is not None:
+            self._runtime = StrategyRuntime(self._component_strategy)
+        else:
+            self._runtime = None
+
+    # Runtime integration helpers -------------------------------------------------
+
+    def _is_runtime_strategy(self) -> bool:
+        return self._runtime is not None
+
+    def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare strategy data using either legacy hooks or the runtime."""
+
+        if not self._is_runtime_strategy():
+            return self.strategy.calculate_indicators(df)
+
+        dataset = self._runtime.prepare_data(df)
+        self._runtime_dataset = dataset
+        self._runtime_warmup = max(0, int(dataset.warmup_period or 0))
+        return dataset.data
+
+    def _build_runtime_context(
+        self,
+        balance: float,
+        current_price: float,
+        current_time: datetime,
+    ) -> RuntimeContext:
+        """Construct runtime context from the engine's current state."""
+
+        positions: list[ComponentPosition] = []
+        if self.current_trade is not None:
+            notional = getattr(self.current_trade, "component_notional", None)
+            if notional is None:
+                notional = float(self.current_trade.current_size) * float(balance)
+            try:
+                component_position = ComponentPosition(
+                    symbol=self.current_trade.symbol,
+                    side=self.current_trade.side,
+                    size=float(notional),
+                    entry_price=float(self.current_trade.entry_price),
+                    current_price=float(current_price),
+                    entry_time=self.current_trade.entry_time,
+                )
+                positions.append(component_position)
+            except Exception:
+                positions = []
+
+        return RuntimeContext(balance=float(balance), current_positions=positions or None)
+
+    def _runtime_process_decision(
+        self,
+        index: int,
+        balance: float,
+        current_price: float,
+        current_time: datetime,
+    ):
+        """Request a decision from the runtime, returning ``None`` if unavailable."""
+
+        if not self._is_runtime_strategy():
+            return None
+        if self._runtime_dataset is None:
+            return None
+        if index < self._runtime_warmup:
+            return None
+
+        context = self._build_runtime_context(balance, current_price, current_time)
+        try:
+            decision = self._runtime.process(index, context)
+            return decision
+        except Exception as exc:
+            logger.warning("Runtime decision failed at index %s: %s", index, exc)
+            return None
+
+    def _runtime_should_exit(
+        self,
+        decision,
+        symbol: str,
+        candle,
+        current_price: float,
+    ) -> tuple[bool, str]:
+        """Determine whether to exit using runtime constructs."""
+
+        if decision is None or self.current_trade is None or not self._component_strategy:
+            return False, "Hold"
+
+        if self.current_trade.side == "long" and decision.signal.direction == SignalDirection.SELL:
+            return True, "Signal reversal"
+        if self.current_trade.side == "short" and decision.signal.direction == SignalDirection.BUY:
+            return True, "Signal reversal"
+
+        try:
+            position = ComponentPosition(
+                symbol=self.current_trade.symbol,
+                side=self.current_trade.side,
+                size=float(getattr(self.current_trade, "component_notional", 0.0) or 0.0),
+                entry_price=float(self.current_trade.entry_price),
+                current_price=float(current_price),
+                entry_time=self.current_trade.entry_time,
+            )
+        except Exception:
+            position = None
+
+        if position is None:
+            return False, "Hold"
+
+        try:
+            market_data = ComponentMarketData(
+                symbol=symbol,
+                price=float(current_price),
+                volume=float(candle.get("volume", 0.0) if hasattr(candle, "get") else 0.0),
+                timestamp=candle.name if hasattr(candle, "name") else None,
+            )
+        except Exception:
+            market_data = ComponentMarketData(symbol=symbol, price=float(current_price), volume=0.0)
+
+        try:
+            should_exit = self._component_strategy.should_exit_position(
+                position,
+                market_data,
+                decision.regime,
+            )
+        except Exception as exc:
+            logger.debug("Runtime exit evaluation failed: %s", exc)
+            return False, "Hold"
+
+        return bool(should_exit), "Strategy signal" if should_exit else "Hold"
+
+    def _runtime_entry_plan(
+        self,
+        decision,
+        balance: float,
+    ) -> tuple[str | None, float]:
+        """Translate runtime decision into an entry side and size fraction."""
+
+        if decision is None:
+            return None, 0.0
+
+        if balance <= 0:
+            return None, 0.0
+
+        if decision.signal.direction == SignalDirection.HOLD or decision.position_size <= 0:
+            return None, 0.0
+
+        side = "long" if decision.signal.direction == SignalDirection.BUY else "short"
+        size_fraction = float(decision.position_size) / float(balance)
+        size_fraction = max(0.0, min(1.0, size_fraction))
+        return side, size_fraction
+
+    def _finalize_runtime(self) -> None:
+        if self._is_runtime_strategy():
+            try:
+                self._runtime.finalize()
+            finally:
+                self._runtime_dataset = None
+                self._runtime_warmup = 0
 
     def _get_dynamic_risk_adjusted_size(self, original_size: float, current_time: datetime) -> float:
         """Apply dynamic risk adjustments to position size in backtesting"""
@@ -560,8 +752,8 @@ class Backtester:
             if self.sentiment_provider:
                 df = self._merge_sentiment_data(df, symbol, timeframe, start, end)
 
-            # Calculate indicators
-            df = self.strategy.calculate_indicators(df)
+            # Calculate indicators / prepare runtime dataset
+            df = self._prepare_strategy_dataframe(df)
 
             # Remove warmup period - only drop rows where essential price data is missing
             # Don't drop rows just because ML predictions or sentiment data is missing
@@ -590,6 +782,13 @@ class Backtester:
                 candle = df.iloc[i]
                 current_time = candle.name
                 current_price = float(candle["close"])
+
+                runtime_decision = self._runtime_process_decision(
+                    i,
+                    self.balance,
+                    current_price,
+                    current_time,
+                )
 
                 # Record current balance for time-series analytics
                 balance_history.append((current_time, self.balance))
@@ -667,7 +866,9 @@ class Backtester:
                                 new_strategy = self._load_strategy_by_name(new_strategy_name)
                                 if new_strategy:
                                     logger.info(f"Strategy switch at {current_time} (candle {i}): {old_strategy_name} -> {new_strategy_name} (regime: {switch_decision['new_regime']})")
-                                    self.strategy = new_strategy
+                                    self._configure_strategy(new_strategy)
+                                    self._runtime_dataset = None
+                                    self._runtime_warmup = 0
                                     
                                     # Update regime switcher state properly
                                     try:
@@ -760,9 +961,18 @@ class Backtester:
                             except Exception:
                                 pass
 
-                    exit_signal = self.strategy.check_exit_conditions(
-                        df, i, self.current_trade.entry_price
-                    )
+                    if self._is_runtime_strategy():
+                        exit_signal, runtime_exit_reason = self._runtime_should_exit(
+                            runtime_decision,
+                            symbol,
+                            candle,
+                            current_price,
+                        )
+                    else:
+                        exit_signal = self.strategy.check_exit_conditions(
+                            df, i, self.current_trade.entry_price
+                        )
+                        runtime_exit_reason = "Strategy signal"
 
                     # Evaluate partial exits and scale-ins before full exit
                     try:
@@ -869,7 +1079,7 @@ class Backtester:
 
                     should_exit = exit_signal or hit_stop_loss or hit_take_profit or hit_time_limit
                     exit_reason = (
-                        "Strategy signal"
+                        runtime_exit_reason
                         if exit_signal
                         else (
                             "Stop loss"
@@ -1037,6 +1247,136 @@ class Backtester:
                             break
 
                 # Check for entry if not in position
+                elif self._is_runtime_strategy():
+                    entry_side, size_fraction = self._runtime_entry_plan(
+                        runtime_decision,
+                        self.balance,
+                    )
+
+                    if entry_side is None or size_fraction <= 0:
+                        if i % 10 == 0 and self.log_to_database and self.db_manager:
+                            indicators = self._extract_indicators(df, i)
+                            sentiment_data = self._extract_sentiment_data(df, i)
+                            ml_predictions = self._extract_ml_predictions(df, i)
+
+                            self.db_manager.log_strategy_execution(
+                                strategy_name=self.strategy.__class__.__name__,
+                                symbol=symbol,
+                                signal_type="entry",
+                                action_taken="no_action",
+                                price=current_price,
+                                timeframe=timeframe,
+                                signal_strength=0.0,
+                                confidence_score=indicators.get("prediction_confidence", 0.5),
+                                indicators=indicators,
+                                sentiment_data=sentiment_data if sentiment_data else None,
+                                ml_predictions=ml_predictions if ml_predictions else None,
+                                position_size=None,
+                                reasons=[
+                                    "runtime_hold",
+                                    f"balance_{self.balance:.2f}",
+                                ],
+                                volume=indicators.get("volume"),
+                                volatility=indicators.get("volatility"),
+                                session_id=self.trading_session_id,
+                            )
+                        continue
+
+                    # Apply dynamic risk adjustments for runtime entry
+                    if size_fraction > 0 and self.enable_dynamic_risk:
+                        size_fraction = self._get_dynamic_risk_adjusted_size(
+                            size_fraction,
+                            current_time,
+                        )
+
+                    if size_fraction <= 0:
+                        continue
+
+                    try:
+                        stop_loss = self._component_strategy.get_stop_loss_price(
+                            current_price,
+                            runtime_decision.signal if runtime_decision else None,
+                            runtime_decision.regime if runtime_decision else None,
+                        )
+                    except Exception:
+                        stop_loss = current_price * (0.95 if entry_side == "long" else 1.05)
+
+                    tp_pct = (
+                        self.default_take_profit_pct
+                        if self.default_take_profit_pct is not None
+                        else getattr(self.strategy, "take_profit_pct", 0.04)
+                    )
+                    take_profit = (
+                        current_price * (1 + tp_pct)
+                        if entry_side == "long"
+                        else current_price * (1 - tp_pct)
+                    )
+
+                    self.current_trade = ActiveTrade(
+                        symbol=symbol,
+                        side=entry_side,
+                        entry_price=current_price,
+                        entry_time=current_time,
+                        size=size_fraction,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                    )
+                    self.current_trade.component_notional = float(
+                        runtime_decision.position_size if runtime_decision else size_fraction * self.balance
+                    )
+
+                    if self.log_to_database and self.db_manager:
+                        indicators = self._extract_indicators(df, i)
+                        sentiment_data = self._extract_sentiment_data(df, i)
+                        ml_predictions = self._extract_ml_predictions(df, i)
+
+                        self.db_manager.log_strategy_execution(
+                            strategy_name=self.strategy.__class__.__name__,
+                            symbol=symbol,
+                            signal_type="entry",
+                            action_taken="opened_long" if entry_side == "long" else "opened_short",
+                            price=current_price,
+                            timeframe=timeframe,
+                            signal_strength=runtime_decision.signal.strength if runtime_decision else 0.0,
+                            confidence_score=runtime_decision.signal.confidence if runtime_decision else 0.0,
+                            indicators=indicators,
+                            sentiment_data=sentiment_data if sentiment_data else None,
+                            ml_predictions=ml_predictions if ml_predictions else None,
+                            position_size=size_fraction,
+                            reasons=[
+                                "runtime_entry",
+                                f"side_{entry_side}",
+                                f"position_size_{size_fraction:.4f}",
+                                f"balance_{self.balance:.2f}",
+                            ],
+                            volume=indicators.get("volume"),
+                            volatility=indicators.get("volatility"),
+                            session_id=self.trading_session_id,
+                        )
+
+                    logger.info(
+                        "Entered %s position at %s via runtime decision",
+                        entry_side,
+                        current_price,
+                    )
+
+                    try:
+                        self.risk_manager.update_position(
+                            symbol=symbol,
+                            side=entry_side,
+                            size=size_fraction,
+                            entry_price=current_price,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to update risk manager for %s on %s: %s",
+                            entry_side,
+                            symbol,
+                            e,
+                        )
+
+                    continue
+
                 elif self.strategy.check_entry_conditions(df, i):
                     # Calculate position size (as fraction of balance)
                     try:
@@ -1470,6 +1810,8 @@ class Backtester:
         except Exception as e:
             logger.error(f"Error running backtest: {str(e)}")
             raise
+        finally:
+            self._finalize_runtime()
 
     def _summarize_dynamic_risk_adjustments(self) -> dict:
         """Summarize dynamic risk adjustments for backtest results"""
