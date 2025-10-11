@@ -8,12 +8,13 @@ for generating trading signals in the component-based strategy architecture.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import pandas as pd
 
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
+    from .runtime import FeatureGeneratorSpec
 
 
 class SignalDirection(Enum):
@@ -139,7 +140,7 @@ class SignalGenerator(ABC):
     def get_parameters(self) -> dict[str, Any]:
         """
         Get signal generator parameters for logging and serialization
-        
+
         Returns:
             Dictionary of parameter names and values
         """
@@ -147,6 +148,17 @@ class SignalGenerator(ABC):
             'name': self.name,
             'type': self.__class__.__name__
         }
+
+    @property
+    def warmup_period(self) -> int:
+        """Declare the minimum history required by the generator."""
+
+        return 0
+
+    def get_feature_generators(self) -> Sequence['FeatureGeneratorSpec']:
+        """Return feature generators required by this signal generator."""
+
+        return []
 
 
 class HoldSignalGenerator(SignalGenerator):

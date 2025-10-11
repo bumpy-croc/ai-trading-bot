@@ -7,12 +7,13 @@ strategy architecture.
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import numpy as np
 
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
+    from .runtime import FeatureGeneratorSpec
     from .signal_generator import Signal
 
 
@@ -96,7 +97,7 @@ class PositionSizer(ABC):
     def get_parameters(self) -> dict[str, Any]:
         """
         Get position sizer parameters for logging and serialization
-        
+
         Returns:
             Dictionary of parameter names and values
         """
@@ -104,6 +105,17 @@ class PositionSizer(ABC):
             'name': self.name,
             'type': self.__class__.__name__
         }
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required for the position sizer."""
+
+        return 0
+
+    def get_feature_generators(self) -> Sequence['FeatureGeneratorSpec']:
+        """Return feature generators required by the position sizer."""
+
+        return []
 
 
 class FixedFractionSizer(PositionSizer):

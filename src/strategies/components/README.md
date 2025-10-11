@@ -76,6 +76,38 @@ print(f"Confidence: {decision.signal.confidence}")
 - `get_recent_decisions()` - Get recent trading decisions
 - `should_exit_position()` - Determine if position should be closed
 
+### 1b. StrategyRuntime (`runtime.py`)
+
+The `StrategyRuntime` provides the orchestration layer between trading engines
+and component strategies.
+
+**Purpose**: Prepare datasets, execute strategies candle-by-candle, and manage
+feature caching during a run.
+
+**Key Concepts**:
+- `StrategyRuntime.prepare_data(df)` enriches the input DataFrame using
+  component-declared `FeatureGeneratorSpec`s and returns a `StrategyDataset`
+  containing the augmented data, warmup period, and feature cache metadata.
+- `RuntimeContext` carries per-candle execution information such as account
+  balance and open positions.
+- `StrategyRuntime.process(index, context)` delegates to the strategy's
+  `process_candle` method using the prepared dataset.
+- Feature generators can optionally provide incremental update callables that
+  support efficient live trading updates without recomputing entire columns.
+
+```python
+from src.strategies.components import StrategyRuntime, RuntimeContext
+
+runtime = StrategyRuntime(strategy)
+dataset = runtime.prepare_data(price_dataframe)
+
+for i in range(dataset.warmup_period, len(dataset.data)):
+    decision = runtime.process(i, RuntimeContext(balance=10_000))
+    # translate TradingDecision into engine-specific actions
+
+runtime.finalize()
+```
+
 ### 2. SignalGenerator (`signal_generator.py`)
 
 Abstract base class for generating trading signals based on market data.

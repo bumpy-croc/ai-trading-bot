@@ -14,6 +14,13 @@ Components:
 """
 
 from .strategy import Strategy
+from .runtime import (
+    FeatureGeneratorSpec,
+    FeatureCache,
+    StrategyDataset,
+    RuntimeContext,
+    StrategyRuntime,
+)
 from .signal_generator import (
     SignalGenerator, Signal, SignalDirection,
     HoldSignalGenerator, RandomSignalGenerator,
@@ -61,6 +68,11 @@ __all__ = [
     "TrendLabel",
     "VolLabel",
     "EnhancedRegimeDetector",
+    "FeatureGeneratorSpec",
+    "FeatureCache",
+    "StrategyDataset",
+    "RuntimeContext",
+    "StrategyRuntime",
     
     # Management classes
     "StrategyManager",
