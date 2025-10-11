@@ -101,6 +101,7 @@ Each phase below includes context, architectural focus, and concrete deliverable
 * **Deliverables**
   * Backtester changes invoking `StrategyRuntime` when supplied with component strategies, including translation of decisions into orders, fills, and portfolio updates mirroring legacy logic.
   * Live trading engine modifications maintaining a shared `RuntimeContext`, executing decisions, and falling back to legacy hooks when required.
+  * Documentation and guardrails ensuring short entries are only executed when component strategies explicitly opt in via `decision.metadata["enter_short"]`, preventing unintended sell-to-short conversions.
   * Side-by-side regression harness that replays datasets through both engines (legacy vs runtime) and asserts identical trade sequences, PnL, and risk metrics.
   * Benchmark artefacts demonstrating that backtest throughput remains within agreed bounds compared with Phase 0.
 
