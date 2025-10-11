@@ -1,0 +1,28 @@
+{
+  "mode": "live_paper",
+  "strategy": "ml_basic",
+  "timeframe": "1h",
+  "steps": 20,
+  "wall_time_seconds": 43.10624199999984,
+  "cpu_time_seconds": 2.3809596839999987,
+  "summary": {
+    "initial_balance": 10000.0,
+    "current_balance": 10000.0,
+    "total_return": 0.0,
+    "total_return_pct": 0.0,
+    "total_pnl": 0.0,
+    "current_drawdown": 0.0,
+    "max_drawdown_pct": 0.0,
+    "total_trades": 0,
+    "winning_trades": 0,
+    "win_rate": 0,
+    "win_rate_pct": 0,
+    "active_positions": 0,
+    "last_update": "2025-10-10T22:13:02.322465",
+    "is_running": false
+  },
+  "trades": [],
+  "artifact_json": "artifacts/strategy-migration/baseline/baseline_live_ml_basic.json",
+  "artifact_trades": "artifacts/strategy-migration/baseline/baseline_live_ml_basic_trades.csv",
+  "artifact_log": "artifacts/strategy-migration/baseline/baseline_live_ml_basic.log"
+}

@@ -30,7 +30,12 @@ todo.txt
 
 # Data and artifacts
 data/
-artifacts/
+artifacts/*
+!artifacts/strategy-migration/
+artifacts/strategy-migration/*
+!artifacts/strategy-migration/baseline/
+artifacts/strategy-migration/baseline/*
+!artifacts/strategy-migration/baseline/**
 
 # Security and audit reports
 bandit-report.json
