@@ -81,30 +81,42 @@ def load_strategy(name: str):
     )
 
 
+def _json_safe(value: Any) -> Any:
+    """Recursively convert objects into JSON serialisable values."""
+
+    if isinstance(value, dict):
+        return {key: _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
+
+
 def _serialize_trades(trades: Iterable[Any]) -> list[dict[str, Any]]:
     """Convert trade records (dicts or dataclasses) into serialisable dicts."""
 
     serialised: list[dict[str, Any]] = []
     for trade in trades:
         if isinstance(trade, dict):
-            serialised.append(trade)
+            data: dict[str, Any] = dict(trade)
         elif is_dataclass(trade):
-            serialised.append(asdict(trade))
+            data = asdict(trade)
         else:
             # Fallback to object attributes for unexpected types
-            data: dict[str, Any] = {}
+            data = {}
             for attr in dir(trade):
                 if attr.startswith("_"):
                     continue
                 value = getattr(trade, attr)
                 if callable(value):
                     continue
-                try:
-                    json.dumps(value)
-                    data[attr] = value
-                except TypeError:
-                    data[attr] = str(value)
-            serialised.append(data)
+                data[attr] = value
+        serialised.append(_json_safe(data))
     return serialised
 
 
@@ -177,7 +189,7 @@ def run_backtest_baseline(strategy_name: str, timeframe: str, days: int) -> dict
     )
 
     json_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
-    _write_trade_log(results.get("trades", []), trades_path)
+    _write_trade_log(backtester.trades, trades_path)
     return output
 
 
