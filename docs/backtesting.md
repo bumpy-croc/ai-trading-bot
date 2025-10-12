@@ -1,0 +1,71 @@
+# Backtesting
+
+The vectorised backtesting engine in `src/backtesting/engine.py` replays historical candles, applies the strategy lifecycle, and
+records trades, risk metrics, and optional database logs. It mirrors the live engine behaviour: partial exits, trailing stops,
+regime-aware strategy switching, and dynamic risk controls all share the same helpers.
+
+## Key components
+
+- `Backtester` orchestrates the run, handles warm-up periods, and computes summary metrics using
+  `src/backtesting/utils.compute_performance_metrics`.
+- Strategies inherit from `src.strategies.base.BaseStrategy` and expose hooks such as `calculate_indicators`,
+  `check_entry_conditions`, and `check_exit_conditions`.
+- Risk controls rely on `RiskManager`, `DynamicRiskManager`, `TrailingStopPolicy`, and optional partial exit policies – the same
+  classes used by the live engine.
+- When `log_to_database=True`, the engine persists trades, strategy executions, and session records through
+  `DatabaseManager` so dashboards can visualise results next to live data.
+
+## CLI usage
+
+The `atb backtest` command (`cli/commands/backtest.py`) is the fastest way to run a simulation:
+
+```bash
+# 90 day simulation with cached Binance data
+atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90 --initial-balance 10000
+```
+
+Important flags:
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--provider {binance,coinbase}` | Switches the market data source. |
+| `--no-cache` / `--cache-ttl` | Control the `CachedDataProvider` wrapper. |
+| `--use-sentiment` | Adds `FearGreedProvider` data to the candle frame. |
+| `--regime-aware` | Enables automatic switching via `RegimeStrategySwitcher`. |
+| `--risk-per-trade` / `--max-risk-per-trade` | Override `RiskParameters` for the run. |
+| `--log-to-db` | Persist the session to PostgreSQL for later inspection. |
+| `--start` / `--end` | Explicit date boundaries (override `--days`). |
+
+Strategies available via the CLI loader today: `ml_basic`, `ml_sentiment`, `ml_adaptive`, `ensemble_weighted`, and
+`momentum_leverage`. Add new strategies under `src/strategies` and register them in `_load_strategy` to expose them through the
+command.
+
+## Programmatic execution
+
+Backtests can also run from Python modules or notebooks:
+
+```python
+from datetime import datetime, timedelta
+
+from src.backtesting.engine import Backtester
+from src.data_providers.binance_provider import BinanceProvider
+from src.data_providers.cached_data_provider import CachedDataProvider
+from src.strategies.ml_basic import MlBasic
+
+strategy = MlBasic()
+provider = CachedDataProvider(BinanceProvider(), cache_ttl_hours=24)
+backtester = Backtester(strategy=strategy, data_provider=provider, initial_balance=10_000)
+start = datetime.utcnow() - timedelta(days=120)
+results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start)
+print(results["total_return"], results["max_drawdown"])
+```
+
+The returned dictionary includes cumulative metrics, yearly breakdowns, and a trade list. When sentiment or ML prediction columns
+are present they are captured in the trade audit entries to support detailed analysis.
+
+## Optimisation loop
+
+`atb optimizer` (`cli/commands/optimizer.py`) runs a baseline backtest, feeds the results into the
+`src/optimizer/analyzer.PerformanceAnalyzer`, and optionally evaluates a candidate configuration suggested by the analyzer. When
+`--persist` is supplied the cycle records an `OptimizationCycle` row via `DatabaseManager`, creating an auditable trail of proposed
+risk or strategy adjustments.
