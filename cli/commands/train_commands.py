@@ -416,18 +416,26 @@ def get_price_data(
     symbol, timeframe="1d", start_date="2000-01-01T00:00:00Z", end_date="2024-12-01T00:00:00Z"
 ):
     """Get price data using download script"""
-    from cli.commands.data_commands import download_binance_data_wrapper
-    
+    from argparse import Namespace
+
+    from cli.commands import data as data_commands
+
     project_root = Path(__file__).parent.parent.parent
     data_dir = project_root / "data"
     symbol = SymbolFactory.to_exchange_symbol(symbol, "binance")
-    csv_file = download_binance_data_wrapper(
+    ns = Namespace(
         symbol=symbol,
         timeframe=timeframe,
         start_date=start_date,
         end_date=end_date,
         output_dir=str(data_dir),
+        format="csv",
     )
+    status = data_commands._download(ns)
+    if status != 0:
+        raise RuntimeError("Failed to download price data")
+
+    csv_file = max(data_dir.glob(f"{symbol}_{timeframe}_{start_date}_{end_date}.*"))
 
     # Handle both CSV and feather files
     csv_file_str = str(csv_file)

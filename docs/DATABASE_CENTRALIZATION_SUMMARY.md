@@ -87,20 +87,20 @@ else:
 ### Setup and Verification
 ```bash
 # Display setup instructions
-python scripts/railway_database_setup.py
+atb db setup-railway
 
 # Verify database connection
-python scripts/railway_database_setup.py --verify
+atb db setup-railway --verify
 
-# Check migration requirements
-python scripts/railway_database_setup.py --check-migration
+# Check local setup
+atb db setup-railway --check-local
 ```
 
 
 ### Database Testing
 ```bash
 # Test database connection
-python scripts/verify_database_connection.py
+atb db verify
 ```
 
 ## 📊 Benefits Achieved
@@ -142,7 +142,7 @@ print(f'Database URL: {config.get(\"DATABASE_URL\") or \"PostgreSQL (local)\"}')
 ### Railway Testing
 ```bash
 # On Railway deployment
-python scripts/railway_database_setup.py --verify
+atb db setup-railway --verify
 ```
 
 ## 🚨 Important Notes

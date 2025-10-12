@@ -86,7 +86,7 @@ balance = config.get_int('INITIAL_BALANCE', 1000)
 
 ```bash
 # Test configuration locally
-python scripts/verify_database_connection.py
+atb db verify
 
 # Test CLI loads configuration properly
 atb --help

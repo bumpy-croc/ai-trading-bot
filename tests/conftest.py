@@ -253,7 +253,7 @@ def mock_data_provider():
 def btcusdt_1h_2023_2024():
     """Load cached BTCUSDT 1-hour candles for 2023-01-01 → 2024-12-31.
 
-    The data must be generated with ``scripts/download_binance_data.py`` and
+    The data must be generated with ``atb data download`` and
     committed to the repository (preferably via Git LFS) under
     ``tests/data``.  If the file is missing, tests that depend on this
     fixture will be skipped automatically.

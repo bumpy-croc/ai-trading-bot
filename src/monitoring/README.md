@@ -163,7 +163,7 @@ src/dashboards/monitoring/
 
 ### Dashboard won't start
 - Verify `DATABASE_URL` is set: `echo $DATABASE_URL`
-- Check PostgreSQL is accessible: `python scripts/verify_database_connection.py`
+- Check PostgreSQL is accessible: `atb db verify`
 - Ensure port is not already in use: `lsof -i :8000`
 
 ### No data displayed

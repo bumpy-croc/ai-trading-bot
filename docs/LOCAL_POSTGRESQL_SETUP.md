@@ -28,7 +28,7 @@ docker compose up -d postgres
 export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
 
 # 4. Verify connection
-python scripts/verify_database_connection.py
+atb db verify
 ```
 
 ### Manual Setup
@@ -43,7 +43,7 @@ cp .env.example .env
 docker compose up -d postgres
 
 # 4. Verify connection
-python scripts/verify_database_connection.py
+atb db verify
 ```
 
 ## 🐘 PostgreSQL Management
@@ -141,10 +141,10 @@ redis:
 ### Database Connection Test
 ```bash
 # Test database connection and operations
-python scripts/verify_database_connection.py
+atb db verify
 
 # Railway-style verification
-python scripts/railway_database_setup.py --verify
+atb db setup-railway --verify
 ```
 
 ### Performance Testing
@@ -187,7 +187,7 @@ print(f'Connection Pool: {info[\"connection_pool_size\"]} connections')
 docker compose up -d postgres
 
 # 2. Verify connection
-python scripts/verify_database_connection.py
+atb db verify
 
 # 3. Run your development commands
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 7
@@ -204,7 +204,7 @@ DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading
 ### Data Management
 ```bash
 # Verify database connection
-python scripts/verify_database_connection.py
+atb db verify
 ```
 
 ## 🔍 Troubleshooting
@@ -251,7 +251,7 @@ GRANT ALL ON SCHEMA public TO trading_bot;
 "
 
 # Restart application to recreate tables
-python scripts/verify_database_connection.py
+atb db verify
 ```
 
 ### Performance Issues

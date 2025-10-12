@@ -46,7 +46,7 @@ export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_
 ```
 - Verify:
 ```bash
-python scripts/verify_database_connection.py
+atb db verify
 # optional migrations (tables are auto-created if missing)
 alembic upgrade head
 ```

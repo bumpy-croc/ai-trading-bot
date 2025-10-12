@@ -27,6 +27,11 @@ from sqlalchemy import inspect as sa_inspect  # type: ignore
 from sqlalchemy.exc import SQLAlchemyError  # type: ignore
 from sqlalchemy.pool import QueuePool  # type: ignore
 
+try:
+    import psycopg2
+except ImportError:  # pragma: no cover - optional dependency for local dev
+    psycopg2 = None  # type: ignore[assignment]
+
 from src.database.models import Base
 
 # * Constants for Alembic/DB
@@ -1129,6 +1134,143 @@ def _nuke(ns: argparse.Namespace) -> int:
         return 1
 
 
+def _collation_check(env: str | None) -> int:
+    if psycopg2 is None:
+        print("psycopg2 is required for collation checks. Install psycopg2-binary first.")
+        return 1
+    try:
+        db_url = _get_database_url_for_env(env)
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ {exc}")
+        return 1
+    try:
+        conn = psycopg2.connect(db_url)
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Failed to connect to database: {exc}")
+        return 1
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT datname, datcollate, datctype
+                FROM pg_database
+                WHERE datname = current_database();
+                """
+            )
+            db_info = cur.fetchone()
+            if db_info:
+                print(f"📊 Database: {db_info[0]}")
+                print(f"📊 LC_COLLATE: {db_info[1]}")
+                print(f"📊 LC_CTYPE: {db_info[2]}")
+            cur.execute("SELECT version();")
+            version = cur.fetchone()[0]
+            print(f"📊 PostgreSQL Version: {version.split(' ')[1]}")
+            try:
+                cur.execute(
+                    """
+                    SELECT pg_collation_actual_version(oid) as actual_version
+                    FROM pg_collation
+                    WHERE collname = 'default'
+                    LIMIT 1;
+                    """
+                )
+                actual_version = cur.fetchone()
+                if actual_version and actual_version[0]:
+                    print(f"📊 Collation Version: {actual_version[0]}")
+                else:
+                    print("⚠️  Collation version information unavailable")
+            except Exception as exc:  # noqa: BLE001
+                print(f"⚠️  Could not get collation version: {exc}")
+        print("✅ Collation check complete")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Collation check failed: {exc}")
+        return 1
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _collation_fix(env: str | None) -> int:
+    if psycopg2 is None:
+        print("psycopg2 is required for collation fixes. Install psycopg2-binary first.")
+        return 1
+    try:
+        db_url = _get_database_url_for_env(env)
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ {exc}")
+        return 1
+    try:
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Failed to connect to database: {exc}")
+        return 1
+    try:
+        with conn.cursor() as cur:
+            print("🔄 Attempting ALTER DATABASE REFRESH COLLATION VERSION...")
+            try:
+                cur.execute("ALTER DATABASE current_database() REFRESH COLLATION VERSION;")
+                print("✅ Successfully refreshed collation version!")
+                return 0
+            except Exception as exc:
+                if "REFRESH COLLATION VERSION" not in str(exc):
+                    print(f"❌ ALTER DATABASE failed: {exc}")
+                    return 1
+                print("⚠️  REFRESH COLLATION VERSION not supported; falling back to manual rebuild...")
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                AND table_type = 'BASE TABLE'
+                ORDER BY table_name;
+                """
+            )
+            tables = cur.fetchall()
+            print(f"📋 Found {len(tables)} tables to process")
+            for (table_name,) in tables:
+                cur.execute(
+                    """
+                    SELECT column_name, data_type, character_maximum_length
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                    AND table_name = %s
+                    AND data_type IN ('text', 'varchar', 'character varying');
+                    """,
+                    (table_name,),
+                )
+                columns = cur.fetchall()
+                if not columns:
+                    continue
+                print(f"🔧 Processing table: {table_name} ({len(columns)} text columns)")
+                for col_name, data_type, max_len in columns:
+                    if data_type == "text" or max_len is None:
+                        alter_sql = (
+                            f'ALTER TABLE {table_name} ALTER COLUMN "{col_name}" '
+                            'TYPE TEXT COLLATE "en_US.UTF-8"'
+                        )
+                    else:
+                        alter_sql = (
+                            f'ALTER TABLE {table_name} ALTER COLUMN "{col_name}" '
+                            f'TYPE VARCHAR({max_len}) COLLATE "en_US.UTF-8"'
+                        )
+                    cur.execute(alter_sql)
+        print("✅ Collation version mismatch fix completed!")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Collation fix failed: {exc}")
+        return 1
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("db", help="Database utilities")
     sub = p.add_subparsers(dest="db_cmd", required=True)
@@ -1181,6 +1323,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_nuke = sub.add_parser("nuke", help="⚠️  DANGEROUS: Completely destroy and reset database")
     p_nuke.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
     p_nuke.set_defaults(func=_nuke)
+
+    p_coll_check = sub.add_parser("check-collation", help="Inspect database collation status")
+    p_coll_check.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_coll_check.set_defaults(func=lambda ns: _collation_check(getattr(ns, "env", None)))
+
+    p_coll_fix = sub.add_parser("fix-collation", help="Fix PostgreSQL collation mismatches")
+    p_coll_fix.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_coll_fix.set_defaults(func=lambda ns: _collation_fix(getattr(ns, "env", None)))
 
     # Register railway subcommands
     railway.register(sub)

@@ -10,7 +10,7 @@ A minimal closed-loop component to run a backtest, analyze results, and emit bou
 
 ## Run
 ```bash
-python scripts/run_optimizer.py --strategy ml_basic --symbol BTCUSDT --timeframe 1h --days 60
+atb optimizer --strategy ml_basic --symbol BTCUSDT --timeframe 1h --days 60
 ```
 
 Flags:
