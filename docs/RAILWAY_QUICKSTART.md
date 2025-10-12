@@ -175,7 +175,7 @@ If you deployed the monitoring dashboard:
 railway variables
 
 # Test database connection
-railway run python scripts/verify_database_connection.py
+railway run atb db verify
 ```
 
 ### Build Failures

@@ -27,7 +27,7 @@ The AI Trading Bot now includes a comprehensive persistent balance and position 
 ### 1. **First Time Setup**
 ```bash
 # Ensure PostgreSQL is running and DATABASE_URL is set
-python scripts/verify_database_connection.py
+atb db verify
 
 # Start trading with initial balance
 atb live ml_basic --symbol BTCUSDT --paper-trading
@@ -148,7 +148,7 @@ CREATE TABLE account_balances (
 atb db migrate
 
 # 3. Validate database connectivity
-python scripts/verify_database_connection.py
+atb db verify
 
 # 4. Restart trading bot
 atb live ml_basic --symbol BTCUSDT --paper-trading
@@ -224,7 +224,7 @@ atb db verify
 # Or check via CLI: atb db --help  # Check available database commands
 
 # Ensure database connection is healthy
-python scripts/verify_database_connection.py
+atb db verify
 ```
 
 ### Positions Not Restored

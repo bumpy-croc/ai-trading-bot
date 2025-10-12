@@ -232,8 +232,8 @@ def load_strategy_configs():
 If you need to manually update a version (without the hook):
 
 ```bash
-# Run the versioning script directly
-python scripts/update_strategy_versions.py
+# Run the versioning command directly
+atb strategies version
 ```
 
 ## Troubleshooting
@@ -253,7 +253,7 @@ chmod +x .git/hooks/pre-commit
 If the hook fails due to import errors, it will skip versioning and allow the commit to proceed. Fix the import errors and run:
 
 ```bash
-python scripts/update_strategy_versions.py
+atb strategies version
 git add src/strategies/store/*.json
 git commit --amend
 ```

@@ -18,13 +18,13 @@ are committed to version control so they can be diffed in future phases.
 
 ```bash
 # Backtest and live (paper) baselines for ML Basic and ML Adaptive
-python scripts/benchmark_legacy_baseline.py
+atb migration baseline
 
 # Backtest only (skip live) for ML Basic
-python scripts/benchmark_legacy_baseline.py --strategies ml_basic --skip-live
+atb migration baseline --strategies ml_basic --skip-live
 
 # Custom timeframe / dataset length
-python scripts/benchmark_legacy_baseline.py \
+atb migration baseline \
   --strategies ml_basic ml_adaptive \
   --timeframe 4h \
   --backtest-days 60 \
@@ -34,7 +34,7 @@ python scripts/benchmark_legacy_baseline.py \
 The script uses in-memory SQLite for the live engine so no external
 database is required. The committed baseline was generated with::
 
-    python scripts/benchmark_legacy_baseline.py --strategies ml_basic --backtest-days 30 --live-steps 20
+    atb migration baseline --strategies ml_basic --backtest-days 30 --live-steps 20
 
 The resulting live-paper snapshot did not open any positions during the
 20-step observation window; this provides a clean control sample focused
