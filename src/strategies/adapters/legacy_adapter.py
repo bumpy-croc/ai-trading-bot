@@ -58,6 +58,7 @@ class LegacyStrategyAdapter(BaseStrategy):
         self.performance_metrics = {
             'signals_generated': 0,
             'entry_conditions_checked': 0,
+            'short_entry_conditions_checked': 0,
             'exit_conditions_checked': 0,
             'position_sizes_calculated': 0,
             'regime_detections': 0,
@@ -77,6 +78,7 @@ class LegacyStrategyAdapter(BaseStrategy):
         # Component state tracking
         self._last_signal = None
         self._last_regime_context = None
+        self._last_signal_index: Optional[int] = None
         self._current_position_side = None  # Track current position side ('long' or 'short')
         
         # Logging setup
@@ -119,84 +121,59 @@ class LegacyStrategyAdapter(BaseStrategy):
         
         Uses the signal generator component to determine entry conditions.
         """
-        start_time = time.time()
-        
         try:
             self.performance_metrics['entry_conditions_checked'] += 1
-            
-            # Get current regime context
-            regime_context = self._get_regime_context(df, index)
-            
-            # Generate signal
-            signal = self.signal_generator.generate_signal(df, index, regime_context)
-            self._last_signal = signal
-            
-            # Prepare reasons for logging
-            reasons = []
-            
-            # Check for missing ML prediction in legacy onnx_pred column
-            if 'onnx_pred' in df.columns and pd.isna(df.iloc[index]['onnx_pred']):
-                reasons.append('missing_ml_prediction')
-            
-            # Add signal generator reasons
-            if signal.metadata and 'reason' in signal.metadata:
-                if signal.metadata['reason'] == 'prediction_failed':
-                    reasons.append('missing_ml_prediction')
-                elif signal.metadata['reason'] == 'insufficient_history':
-                    reasons.append('insufficient_history')
-            
-            # Add prediction availability info
-            if 'onnx_pred' in df.columns:
-                prediction_available = not pd.isna(df.iloc[index]['onnx_pred'])
-                reasons.append(f"prediction_available={prediction_available}")
-            
-            # Log signal generation
-            self.log_execution(
-                signal_type="entry_check",
-                action_taken=f"signal_{signal.direction.value}",
-                price=float(df.iloc[index]['close']),
-                signal_strength=signal.strength,
-                confidence_score=signal.confidence,
-                reasons=reasons,
-                additional_context={
-                    'regime_trend': regime_context.trend.value if regime_context else 'unknown',
-                    'regime_volatility': regime_context.volatility.value if regime_context else 'unknown',
-                    'regime_confidence': regime_context.confidence if regime_context else 0.0,
-                    'signal_metadata': str(signal.metadata)
-                }
-            )
-            
-            self.performance_metrics['signals_generated'] += 1
-            
-            # Entry condition is met if signal is BUY or SELL
-            entry_condition = signal.direction in [SignalDirection.BUY, SignalDirection.SELL]
-            
-            # Track position side based on signal direction
+
+            signal, _ = self._evaluate_signal(df, index)
+
+            entry_condition = signal.direction == SignalDirection.BUY
+
             if entry_condition:
-                if signal.direction == SignalDirection.BUY:
-                    self._current_position_side = 'long'
-                elif signal.direction == SignalDirection.SELL:
-                    self._current_position_side = 'short'
-            
-            # Record execution time
-            execution_time = time.time() - start_time
-            self.performance_metrics['execution_times']['signal_generation'].append(execution_time)
-            
-            self.adapter_logger.debug(f"Entry check at index {index}: {entry_condition} "
-                                    f"(signal: {signal.direction.value}, "
-                                    f"strength: {signal.strength:.3f}, "
-                                    f"confidence: {signal.confidence:.3f})")
-            
+                self._current_position_side = 'long'
+
+            self.adapter_logger.debug(
+                "Entry check at index %s: %s (signal: %s, strength: %.3f, confidence: %.3f)",
+                index,
+                entry_condition,
+                signal.direction.value,
+                signal.strength,
+                signal.confidence,
+            )
+
             return entry_condition
             
         except Exception as e:
             self.adapter_logger.error(f"Error checking entry conditions at index {index}: {e}")
             self.performance_metrics['component_errors'] += 1
             
-            # Record execution time even for errors
-            execution_time = time.time() - start_time
-            self.performance_metrics['execution_times']['signal_generation'].append(execution_time)
-            
+            return False
+
+    def check_short_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+        """Check if short entry conditions are met at the given index."""
+
+        try:
+            self.performance_metrics['short_entry_conditions_checked'] += 1
+            signal, _ = self._evaluate_signal(df, index)
+
+            is_short_entry = signal.direction == SignalDirection.SELL
+
+            if is_short_entry:
+                self._current_position_side = 'short'
+
+            self.adapter_logger.debug(
+                "Short entry check at index %s: %s (signal: %s, strength: %.3f, confidence: %.3f)",
+                index,
+                is_short_entry,
+                signal.direction.value,
+                signal.strength,
+                signal.confidence,
+            )
+
+            return is_short_entry
+
+        except Exception as e:
+            self.adapter_logger.error(f"Error checking short entry conditions at index {index}: {e}")
+            self.performance_metrics['component_errors'] += 1
             return False
     
     def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
@@ -314,14 +291,8 @@ class LegacyStrategyAdapter(BaseStrategy):
         try:
             self.performance_metrics['position_sizes_calculated'] += 1
             
-            # Get current regime context
-            regime_context = self._get_regime_context(df, index)
-            
             # Use the last generated signal or generate a new one
-            if self._last_signal is None:
-                signal = self.signal_generator.generate_signal(df, index, regime_context)
-            else:
-                signal = self._last_signal
+            signal, regime_context = self._evaluate_signal(df, index)
             
             # Calculate the final position size using the risk manager.
             #
@@ -382,14 +353,8 @@ class LegacyStrategyAdapter(BaseStrategy):
         Uses the risk manager component to determine stop loss level.
         """
         try:
-            # Get current regime context
-            regime_context = self._get_regime_context(df, index)
-            
             # Use the last generated signal or generate a new one
-            if self._last_signal is None:
-                signal = self.signal_generator.generate_signal(df, index, regime_context)
-            else:
-                signal = self._last_signal
+            signal, regime_context = self._evaluate_signal(df, index)
             
             # Calculate stop loss using risk manager
             stop_loss = self.risk_manager.get_stop_loss(price, signal, regime_context)
@@ -423,8 +388,60 @@ class LegacyStrategyAdapter(BaseStrategy):
             'position_sizer': self.position_sizer.get_parameters(),
             'performance_metrics': self.get_performance_metrics()
         }
-        
+
         return parameters
+
+    def _evaluate_signal(self, df: pd.DataFrame, index: int) -> tuple[Any, Optional[RegimeContext]]:
+        """Generate or reuse the trading signal for the specified index."""
+
+        if self._last_signal is not None and self._last_signal_index == index:
+            return self._last_signal, self._last_regime_context
+
+        start_time = time.time()
+
+        regime_context = self._get_regime_context(df, index)
+
+        signal = self.signal_generator.generate_signal(df, index, regime_context)
+        self._last_signal = signal
+        self._last_signal_index = index
+        self._last_regime_context = regime_context
+
+        reasons: list[str] = []
+
+        if 'onnx_pred' in df.columns and pd.isna(df.iloc[index]['onnx_pred']):
+            reasons.append('missing_ml_prediction')
+
+        if signal.metadata and 'reason' in signal.metadata:
+            if signal.metadata['reason'] == 'prediction_failed':
+                reasons.append('missing_ml_prediction')
+            elif signal.metadata['reason'] == 'insufficient_history':
+                reasons.append('insufficient_history')
+
+        if 'onnx_pred' in df.columns:
+            prediction_available = not pd.isna(df.iloc[index]['onnx_pred'])
+            reasons.append(f"prediction_available={prediction_available}")
+
+        self.log_execution(
+            signal_type="entry_check",
+            action_taken=f"signal_{signal.direction.value}",
+            price=float(df.iloc[index]['close']),
+            signal_strength=signal.strength,
+            confidence_score=signal.confidence,
+            reasons=reasons,
+            additional_context={
+                'regime_trend': regime_context.trend.value if regime_context else 'unknown',
+                'regime_volatility': regime_context.volatility.value if regime_context else 'unknown',
+                'regime_confidence': regime_context.confidence if regime_context else 0.0,
+                'signal_metadata': str(signal.metadata)
+            }
+        )
+
+        self.performance_metrics['signals_generated'] += 1
+
+        execution_time = time.time() - start_time
+        self.performance_metrics['execution_times']['signal_generation'].append(execution_time)
+
+        return signal, regime_context
     
     def _get_regime_context(self, df: pd.DataFrame, index: int) -> Optional[RegimeContext]:
         """
@@ -528,6 +545,7 @@ class LegacyStrategyAdapter(BaseStrategy):
         self.performance_metrics = {
             'signals_generated': 0,
             'entry_conditions_checked': 0,
+            'short_entry_conditions_checked': 0,
             'exit_conditions_checked': 0,
             'position_sizes_calculated': 0,
             'regime_detections': 0,
