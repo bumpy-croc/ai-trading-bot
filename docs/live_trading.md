@@ -18,6 +18,23 @@ continuous polling, account synchronisation, and resilience features required fo
 - **Sentiment and regime inputs** – pass a `SentimentDataProvider` (Fear & Greed) or enable the `RegimeStrategySwitcher` to swap
   strategies when market conditions change.
 
+## State recovery & account sync
+
+- The engine resumes balances and open positions from the last `trading_sessions` snapshot when `resume_from_last_balance=True`
+  (the default). Balance updates feed into risk sizing so restarts continue with the correct exposure.
+- `account_snapshot_interval` controls periodic reconciliations (default: 3600 seconds). Each pass checks balances, positions,
+  and order status against the exchange and records adjustments for auditing.
+- Trigger an emergency reconciliation whenever you suspect drift (for example after manual exchange trades):
+
+    ```python
+    from src.data_providers.binance_provider import BinanceProvider
+    from src.database.manager import DatabaseManager
+    from src.live.account_sync import AccountSynchronizer
+
+    sync = AccountSynchronizer(BinanceProvider(), DatabaseManager(), session_id=<current_session_id>)
+    sync.emergency_sync()
+    ```
+
 ## CLI usage
 
 `atb live` forwards arguments to `src/live/runner.py`:

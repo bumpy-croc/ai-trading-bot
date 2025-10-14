@@ -29,6 +29,12 @@ Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) us
 
 The repository enforces Ruff/Black style in CI, so commit formatted code to avoid failures.
 
+## Strategy versioning
+
+Run `atb strategies version` after modifying any file in `src/strategies/`. The helper inspects staged changes, prompts for a
+succinct changelog, bumps the semantic version, and auto-stages the updated manifests under `src/strategies/store/`. Add
+`--yes` when scripting the workflow; the bundled pre-commit hook simply delegates to this command when the helper is available.
+
 ## Helpful shortcuts
 
 - `make backtest STRATEGY=ml_basic DAYS=30` – quick simulations while iterating on strategies.

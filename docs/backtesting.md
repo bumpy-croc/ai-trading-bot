@@ -40,6 +40,25 @@ Strategies available via the CLI loader today: `ml_basic`, `ml_sentiment`, `ml_a
 `momentum_leverage`. Add new strategies under `src/strategies` and register them in `_load_strategy` to expose them through the
 command.
 
+## Built-in strategies
+
+- `ml_basic`, `ml_sentiment`, and `ml_adaptive` are tuned for `1h` candles – daily candles underperform because ML features lose
+  resolution.
+- `ensemble_weighted` mixes the ML strategies and shares the same timeframe expectations.
+- `momentum_leverage` targets high-volatility regimes; prefer shorter lookbacks (≤ 180 days) when comparing against ML baselines.
+
+## Safety limits
+
+Backtests stop early when max drawdown exceeds 50% to surface unbounded risk profiles. The run prints the stop reason, time, and
+candle index so you can inspect the raw data or adjust risk parameters (`--risk-per-trade`, `--max-drawdown`) before re-running.
+
+## Best practices
+
+- Prefill data with `atb data prefill-cache` before running long simulations to avoid partial years being fetched mid-run.
+- Benchmark new strategy ideas on 90–365 day windows first, then extend to multi-year ranges once the signal is stable.
+- Use `--no-cache` when validating fixes against freshly downloaded data, and re-enable caching for regular workflows.
+- Capture DB logs (`--log-to-db`) when comparing against live trading so dashboards show apples-to-apples metrics.
+
 ## Programmatic execution
 
 Backtests can also run from Python modules or notebooks:

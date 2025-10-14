@@ -40,9 +40,33 @@ The manager falls back to creating tables automatically when connecting to an em
 
 - `atb db verify` – checks connection health, expected tables, row counts, and type mismatches.
 - `atb db migrate` – runs Alembic migrations using the repository’s migration scripts.
-- `atb db backup --output backup.sql.gz` – dumps data using `pg_dump` with safe defaults.
+- `atb db backup` – dumps data using `pg_dump` with safe defaults (see Backups & recovery for scheduling tips).
 - `atb db reset-railway` / `setup-railway` – remote administration helpers for Railway deployments.
 - `atb db nuke` – drops all objects (including enums) and recreates the schema; intended for local resets only.
+
+## Backups & recovery
+
+- Create compressed dumps with retention management:
+
+    ```bash
+    atb db backup --env production --backup-dir ./backups --retention 7
+    ```
+
+  Dumps live under `backups/<db name>/<YYYY>/<MM>/<DD>/backup-<timestamp>.dump`. Schedule the command (Railway jobs or cron) hourly
+  to meet the current 15 minute RPO when paired with heartbeat alerts.
+- Restore by running `pg_restore -d <target_db> --clean --create backup-<ts>.dump` and applying `alembic upgrade head` to reach
+  the latest revision before repointing the app.
+- Test restores quarterly by loading a random dump into a sandbox database and running the integration test suite; this keeps
+  recovery times well under the 60 minute RTO target.
+
+## Railway deployments
+
+- `atb db setup-railway --verify` checks that `DATABASE_URL` points to PostgreSQL, opens a session, and seeds a verification trade
+  so monitoring dashboards see activity.
+- `atb db reset-railway staging --yes` (or `production`) automates schema resets when you need a clean environment. Always take a
+  backup first.
+- Configure project variables (`BINANCE_API_KEY`, `BINANCE_API_SECRET`, `TRADING_MODE`, `INITIAL_BALANCE`) through the Railway CLI
+  or dashboard; `ConfigManager` will pick them up automatically at runtime.
 
 ## Programmatic access
 
