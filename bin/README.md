@@ -28,4 +28,4 @@ railway add postgresql
 railway up
 ```
 
-See `docs/RAILWAY_QUICKSTART.md` for detailed deployment instructions.
+See `docs/development.md#railway-deployment-quick-start` for detailed deployment and environment automation guidance.

@@ -122,4 +122,5 @@ mapping = RegimeStrategyMapping(
 
 ## Documentation
 
-See [docs/REGIME_DETECTION_MVP.md](../../docs/REGIME_DETECTION_MVP.md) for detailed information on regime detection algorithms and usage patterns.
+See [docs/backtesting.md](../../docs/backtesting.md#regime-detection) for an overview of regime switching workflows and CLI
+tooling.

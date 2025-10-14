@@ -873,7 +873,7 @@ def _setup_railway(ns: argparse.Namespace) -> int:
     print("🚀 Railway PostgreSQL Database Setup")
     print("=" * 60)
     print(
-        "\n📋 Step-by-Step Instructions:\n... (see docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md)"
+        "\n📋 Step-by-Step Instructions:\n... (see docs/database.md#railway-deployments)"
     )
     return 0
 

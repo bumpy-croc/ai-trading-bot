@@ -128,4 +128,5 @@ policy = TrailingStopPolicy(
 
 ## Documentation
 
-See [docs/RISK_AND_POSITION_MANAGEMENT.md](../../docs/RISK_AND_POSITION_MANAGEMENT.md) for comprehensive documentation on all position management features.
+See [docs/live_trading.md](../../docs/live_trading.md#position-management-features) for an overview of the live risk and position
+management toolchain.

@@ -2,7 +2,7 @@
 
 A modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live), ML-driven models (price and sentiment), PostgreSQL logging, and optional Railway deployment.
 
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/LOCAL_POSTGRESQL_SETUP.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
 ---
 
@@ -175,10 +175,15 @@ src/
 
 See `docs/README.md` for the full documentation index.
 
-**Key Guides:**
-- [Offline Cache Pre-loading](docs/OFFLINE_CACHE_PRELOADING.md) - Pre-load data for air-gapped environments
-- [Backtest Guide](docs/BACKTEST_GUIDE.md) - Comprehensive backtesting documentation
-- [Live Trading Guide](docs/LIVE_TRADING_GUIDE.md) - Live trading setup and configuration
+**Key guides:**
+- [Backtesting](docs/backtesting.md) – engine internals, CLI usage, and optimisation loop tips
+- [Live trading](docs/live_trading.md) – safety controls, account synchronisation, and deployment helpers
+- [Data pipeline](docs/data_pipeline.md) – offline cache preloading, download utilities, and cache management
+- [Monitoring](docs/monitoring.md) – logging configuration, dashboards, and health endpoints
+- [Prediction & models](docs/prediction.md) – model registry, inference workflow, and training controls
+- [Configuration](docs/configuration.md) – provider chain, feature flags, and local workflow
+- [Database](docs/database.md) – migrations, backups, and Railway operations
+- [Development workflow](docs/development.md) – environment bootstrap, quality gates, and strategy versioning
 
 ---
 
@@ -199,23 +204,22 @@ TRADING_MODE=paper
 INITIAL_BALANCE=1000
 ```
 
-See `docs/CONFIGURATION_SYSTEM_SUMMARY.md`.
+See `docs/configuration.md`.
 
 ---
 
 ## Deployment
 
 - Railway: 
-  - Quick start: see [Railway Quickstart](docs/RAILWAY_QUICKSTART.md)
-  - Database setup: see [Railway Database Centralization Guide](docs/RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md)
+  - Quick start: see [Railway deployment quick start](docs/development.md#railway-deployment-quick-start) for environment automation
+  - Database operations: see [Database](docs/database.md#railway-deployments)
 
 ---
 
 ## Sentiment & models
 
-Sentiment data and ML training are supported. Pretrained models live in `src/ml`. For details and training examples, see:
-- `docs/LIVE_SENTIMENT_ANALYSIS.md`
-- `docs/MODEL_TRAINING_AND_INTEGRATION_GUIDE.md`
+Sentiment data and ML training are supported. Pretrained models live in `src/ml`. For details and training examples, see
+[docs/prediction.md](docs/prediction.md).
 
 ---
 
@@ -232,7 +236,7 @@ Sentiment data and ML training are supported. Pretrained models live in `src/ml`
 ## Logging
 - Centralized logging via `src.utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
 - JSON logs default to enabled in production-like environments (Railway or ENV/APP_ENV=production).
-- See `docs/LOGGING_GUIDE.md` for structured events, context, and operations guidance.
+- See `docs/monitoring.md` for structured events, context, and operations guidance.
 
 ---
 

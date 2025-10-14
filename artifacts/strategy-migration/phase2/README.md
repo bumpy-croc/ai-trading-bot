@@ -105,7 +105,7 @@ Phase 2 is complete when:
 
 ## Migration Proposal Compliance
 
-Per `docs/strategy_migration_proposal.md`, Phase 2 requires:
+Per `artifacts/strategy-migration/strategy_migration_proposal.md`, Phase 2 requires:
 
 > "Results produced by the engines must remain equivalent to the current legacy path"
 
@@ -118,7 +118,7 @@ Per `docs/strategy_migration_proposal.md`, Phase 2 requires:
 
 ## Related Documentation
 
-- **Migration Proposal**: `docs/strategy_migration_proposal.md`
+- **Migration Proposal**: `artifacts/strategy-migration/strategy_migration_proposal.md`
 - **Baseline Results**: `artifacts/strategy-migration/baseline/`
 - **Strategy Migration Guide**: `src/strategies/MIGRATION.md`
 - **Benchmark Script**: `scripts/benchmark_legacy_baseline.py`
@@ -134,7 +134,7 @@ Check git history for previous comprehensive documents including:
 ## Contact
 
 For questions about:
-- **Migration strategy**: See `docs/strategy_migration_proposal.md`
+- **Migration strategy**: See `artifacts/strategy-migration/strategy_migration_proposal.md`
 - **Benchmark methodology**: See `scripts/benchmark_legacy_baseline.py`
 - **Technical details**: See `ANALYSIS.md` in this directory
 
@@ -143,4 +143,3 @@ For questions about:
 **Last Updated**: 2025-10-11  
 **Phase**: 2 (Engine Integration) - BLOCKED  
 **Next Review**: After adapter fixes implemented
-
