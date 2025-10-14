@@ -9,7 +9,7 @@ DAYS ?= 30
 
 .PHONY: help install deps deps-server atb dashboards dashboard-monitoring \
         dashboard-backtesting live live-health backtest optimizer test lint fmt clean \
-        rules setup-pre-commit dev-setup migrate startup
+        setup-pre-commit dev-setup migrate startup
 
 help:
 	@echo "Common targets:"
@@ -17,7 +17,7 @@ help:
 	@echo "  make install              # install CLI (editable) and upgrade pip"
 	@echo "  make deps                 # install dev deps (requirements.txt)"
 	@echo "  make deps-server          # install production deps (requirements-server.txt)"
-	@echo "  make setup-pre-commit     # install pre-commit hooks"
+        @echo "  make setup-pre-commit     # install pre-commit hooks"
 	@echo "  make dashboards           # list dashboards"
 	@echo "  make dashboard-monitoring # run monitoring dashboard on PORT=$(PORT)"
 	@echo "  make live                 # run live trading (paper by default)"
@@ -41,7 +41,7 @@ deps-server: install
 	pip install -r requirements-server.txt
 
 setup-pre-commit: deps
-	python scripts/setup_pre_commit.py
+        pre-commit install
 
 # ------------- CLI wrappers (direct execution) -------------
 atb: install
@@ -85,12 +85,10 @@ clean:
 
 # --------------------------------- Development Setup --------------------------------------------
 dev-setup:
-	python scripts/setup_development.py
+        atb dev setup
 
 # --------------------------------- Database Migrations --------------------------------------------
 migrate: install
 	atb db migrate
 
 # --------------------------------- Rules Generation --------------------------------------------
-rules: deps
-	python scripts/generate_rules.py
