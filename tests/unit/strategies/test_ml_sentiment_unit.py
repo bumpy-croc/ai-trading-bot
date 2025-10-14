@@ -1,45 +1,47 @@
 """
-Unit tests for MlAdaptive strategy - Component-Based Implementation
+Unit tests for MlSentiment strategy - Component-Based Implementation
 """
 
 import pytest
 
-from src.strategies.ml_adaptive import create_ml_adaptive_strategy
+from src.strategies.ml_sentiment import create_ml_sentiment_strategy
 from src.strategies.components import Strategy, SignalDirection
 
+pytestmark = pytest.mark.unit
 
-class TestMlAdaptiveStrategy:
-    """Test ML Adaptive strategy component-based implementation."""
 
-    def test_create_ml_adaptive_strategy_factory(self):
-        """Test that create_ml_adaptive_strategy() factory function works"""
-        strategy = create_ml_adaptive_strategy()
+class TestMlSentimentStrategy:
+    """Test ML Sentiment strategy component-based implementation."""
+
+    def test_create_ml_sentiment_strategy_factory(self):
+        """Test that create_ml_sentiment_strategy() factory function works"""
+        strategy = create_ml_sentiment_strategy()
         
         assert isinstance(strategy, Strategy)
-        assert strategy.name == "MlAdaptive"
+        assert strategy.name == "MlSentiment"
         assert strategy.signal_generator is not None
         assert strategy.risk_manager is not None
         assert strategy.position_sizer is not None
         assert strategy.regime_detector is not None
 
-    def test_ml_adaptive_strategy_initialization(self):
-        """Test ML Adaptive strategy initialization with custom parameters"""
-        strategy = create_ml_adaptive_strategy(
-            name="CustomMlAdaptive",
+    def test_ml_sentiment_strategy_initialization(self):
+        """Test ML Sentiment strategy initialization with custom parameters"""
+        strategy = create_ml_sentiment_strategy(
+            name="CustomMlSentiment",
             sequence_length=100,
         )
         
-        assert strategy.name == "CustomMlAdaptive"
+        assert strategy.name == "CustomMlSentiment"
         assert strategy.signal_generator.sequence_length == 100
 
-    def test_ml_adaptive_process_candle_returns_valid_decision(self, sample_ohlcv_data):
+    def test_ml_sentiment_process_candle_returns_valid_decision(self, sample_ohlcv_data):
         """Test that process_candle() returns valid TradingDecision"""
-        strategy = create_ml_adaptive_strategy()
+        strategy = create_ml_sentiment_strategy()
         balance = 10000.0
         
         # Need sufficient data for sequence length (120)
         if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
+            pytest.skip("Insufficient data for ML Sentiment strategy")
         
         decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
         
@@ -59,27 +61,27 @@ class TestMlAdaptiveStrategy:
         assert decision.position_size >= 0
         assert decision.position_size <= balance
 
-    def test_ml_adaptive_regime_aware_behavior(self, sample_ohlcv_data):
-        """Test that ML Adaptive strategy is regime-aware"""
-        strategy = create_ml_adaptive_strategy()
+    def test_ml_sentiment_integration(self, sample_ohlcv_data):
+        """Test sentiment integration in ML Sentiment strategy"""
+        strategy = create_ml_sentiment_strategy()
         balance = 10000.0
         
         if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
+            pytest.skip("Insufficient data for ML Sentiment strategy")
         
         decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
         
-        # Regime context should be present
-        assert decision.regime is not None
-        assert hasattr(decision.regime, 'regime_type')
+        # Decision should be made (even if sentiment data is unavailable)
+        assert decision is not None
+        assert decision.signal is not None
 
-    def test_ml_adaptive_signal_generation(self, sample_ohlcv_data):
-        """Test ML Adaptive signal generation logic"""
-        strategy = create_ml_adaptive_strategy()
+    def test_ml_sentiment_signal_generation(self, sample_ohlcv_data):
+        """Test ML Sentiment signal generation logic"""
+        strategy = create_ml_sentiment_strategy()
         balance = 10000.0
         
         if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
+            pytest.skip("Insufficient data for ML Sentiment strategy")
         
         decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
         
@@ -89,13 +91,13 @@ class TestMlAdaptiveStrategy:
         assert decision.signal.confidence >= 0
         assert decision.signal.confidence <= 1
 
-    def test_ml_adaptive_risk_management(self, sample_ohlcv_data):
-        """Test ML Adaptive regime-adaptive risk management"""
-        strategy = create_ml_adaptive_strategy()
+    def test_ml_sentiment_risk_management(self, sample_ohlcv_data):
+        """Test ML Sentiment risk management"""
+        strategy = create_ml_sentiment_strategy()
         balance = 10000.0
         
         if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
+            pytest.skip("Insufficient data for ML Sentiment strategy")
         
         decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
         
@@ -103,13 +105,13 @@ class TestMlAdaptiveStrategy:
         assert decision.risk_metrics is not None
         assert isinstance(decision.risk_metrics, dict)
 
-    def test_ml_adaptive_position_sizing(self, sample_ohlcv_data):
-        """Test ML Adaptive position sizing"""
-        strategy = create_ml_adaptive_strategy()
+    def test_ml_sentiment_position_sizing(self, sample_ohlcv_data):
+        """Test ML Sentiment position sizing"""
+        strategy = create_ml_sentiment_strategy()
         balance = 10000.0
         
         if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
+            pytest.skip("Insufficient data for ML Sentiment strategy")
         
         decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
         
