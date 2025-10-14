@@ -2591,9 +2591,14 @@ class LiveTradingEngine:
 
             for pos_data in db_positions:
                 # Convert database position to Position object
+                # Handle both uppercase and lowercase side values from database
+                side_value = pos_data["side"]
+                if isinstance(side_value, str):
+                    side_value = side_value.lower()
+                
                 position = Position(
                     symbol=pos_data["symbol"],
-                    side=PositionSide(pos_data["side"]),
+                    side=PositionSide(side_value),
                     size=pos_data["size"],
                     entry_price=pos_data["entry_price"],
                     entry_time=pos_data["entry_time"],
