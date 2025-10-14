@@ -546,7 +546,13 @@ class Strategy:
                 'risk_position_size': risk_position_size,
                 'final_position_size': final_position_size,
                 'size_adjustment_ratio': final_position_size / risk_position_size if risk_position_size > 0 else 0
-            }
+            },
+            # Runtime engines only honour sell signals as short entries when
+            # strategies explicitly opt in through this metadata flag. By
+            # default it remains ``False`` so component strategies continue to
+            # treat sell decisions as exit instructions unless they request
+            # short exposure.
+            'enter_short': bool(signal.metadata.get('enter_short', False))
         }
         
         # Add regime information if available

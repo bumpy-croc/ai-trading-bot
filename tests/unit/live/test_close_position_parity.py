@@ -4,6 +4,13 @@ from unittest.mock import Mock
 import pytest
 
 from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from src.strategies.components import (
+    FixedFractionSizer,
+    FixedRiskManager,
+    HoldSignalGenerator,
+    Strategy,
+    StrategyRuntime,
+)
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 
 
@@ -51,3 +58,31 @@ def test_close_position_cash_matches_backtester(side, fraction, entry_price, exi
     assert engine.current_balance == pytest.approx(initial_balance + expected_cash)
     assert engine.total_pnl == pytest.approx(expected_cash)
     assert position.order_id not in engine.positions
+
+
+def _build_component_strategy() -> Strategy:
+    signal = HoldSignalGenerator()
+    risk = FixedRiskManager(risk_per_trade=0.01, stop_loss_pct=0.05)
+    sizer = FixedFractionSizer(fraction=0.05)
+    return Strategy("runtime_component", signal, risk, sizer)
+
+
+def test_live_engine_accepts_strategy_runtime():
+    component_strategy = _build_component_strategy()
+    runtime = StrategyRuntime(component_strategy)
+
+    data_provider = Mock()
+    data_provider.get_current_price.return_value = 100.0
+
+    engine = LiveTradingEngine(
+        strategy=runtime,
+        data_provider=data_provider,
+        initial_balance=1_000.0,
+        enable_live_trading=False,
+        log_trades=False,
+        enable_hot_swapping=False,
+    )
+
+    assert engine.strategy is component_strategy
+    assert engine._runtime is runtime
+    assert engine._component_strategy is component_strategy
