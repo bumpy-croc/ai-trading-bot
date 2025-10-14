@@ -1,6 +1,6 @@
 # Database Backup & Restore Policy
 
-_Last updated: 06-Jul-2025_
+_Last updated: 14-Oct-2025_
 
 This document defines how the **AI-Trading-Bot** project backs-up,
 retains and restores its PostgreSQL database along with the recovery‐time
