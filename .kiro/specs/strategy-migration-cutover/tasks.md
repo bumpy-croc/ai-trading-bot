@@ -44,7 +44,7 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Remove `BaseStrategy` inheritance and legacy methods
   - _Requirements: 6.4, 6.6_
 
-- [ ] 1.5 Convert momentum_leverage.py to component-based strategy
+- [x] 1.5 Convert momentum_leverage.py to component-based strategy
   - Create factory function `create_momentum_leverage_strategy()` that returns configured `Strategy` instance
   - Use `MomentumSignalGenerator` for momentum-based signals
   - Use appropriate risk manager and position sizer for aggressive sizing
