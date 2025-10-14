@@ -218,7 +218,7 @@ Phase 2 is **not complete** until:
 
 ## Migration Proposal Compliance
 
-Per `docs/strategy_migration_proposal.md`:
+Per `artifacts/strategy-migration/strategy_migration_proposal.md`:
 
 > "Results produced by the engines must remain equivalent to the current legacy path"
 
@@ -253,6 +253,5 @@ This Phase 2 implementation has **identical behavioral issues** as the previous 
 **Previous Analysis**: See git history for detailed action plan and debugging steps
 
 **Related Docs**:
-- `docs/strategy_migration_proposal.md` - Migration requirements
+- `artifacts/strategy-migration/strategy_migration_proposal.md` - Migration requirements
 - `artifacts/strategy-migration/baseline/` - Ground truth results
-

@@ -211,7 +211,7 @@ See `docs/configuration.md`.
 ## Deployment
 
 - Railway: 
-  - Quick start: see [Development workflow](docs/development.md) for environment automation
+  - Quick start: see [Railway deployment quick start](docs/development.md#railway-deployment-quick-start) for environment automation
   - Database operations: see [Database](docs/database.md#railway-deployments)
 
 ---

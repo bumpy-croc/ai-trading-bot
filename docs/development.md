@@ -12,6 +12,17 @@ make deps               # install development dependencies (pytest, ruff, mypy, 
 
 Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) used by maintainers.
 
+## Railway deployment quick start
+
+1. Install the Railway CLI (`npm install -g @railway/cli`) and authenticate with `railway login`.
+2. From the project root run `railway init` and select the target environment, then provision PostgreSQL with `railway add postgresql`.
+3. Set required variables (`BINANCE_API_KEY`, `BINANCE_API_SECRET`, `TRADING_MODE`, `INITIAL_BALANCE`, `DATABASE_URL`) via `railway variables set <KEY>=<VALUE>`.
+4. Deploy the service with `railway up`; the workflow builds the container and applies environment variables automatically.
+5. After the deploy succeeds, verify connectivity from your workstation:
+   - `railway run atb db setup-railway --verify`
+   - `railway run atb db backup --env production --backup-dir ./backups --retention 7`
+6. Monitor logs (`railway logs --environment production`) and dashboards exposed by `atb live-health` to confirm the strategy is processing market data.
+
 ## Tests and diagnostics
 
 - `pytest -q` – run the entire unit/integration suite.
