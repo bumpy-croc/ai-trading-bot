@@ -131,49 +131,50 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Test strategy transitions with `TradingDecision` objects
   - _Requirements: 5.5_
 
-- [ ] 4. Update strategy unit tests
+- [x] 4. Update strategy unit tests
   - Update all strategy tests to use component-based interface
   - Remove calls to `calculate_indicators()`
   - Test `process_candle()` and validate `TradingDecision` objects
   - Test individual components in isolation
+  - Plenty of tests already exist, only write new tests if they don't exist. Modify existing tests first.
   - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-- [ ] 4.1 Update ml_basic strategy tests
+- [x] 4.1 Update ml_basic strategy tests
   - Remove tests that call `calculate_indicators()`
   - Add tests for `create_ml_basic_strategy()` factory function
   - Test `process_candle()` returns valid `TradingDecision`
   - Test signal generation, risk management, position sizing
   - _Requirements: 7.1, 7.2, 7.3_
 
-- [ ] 4.2 Update ml_adaptive strategy tests
+- [x] 4.2 Update ml_adaptive strategy tests
   - Remove tests that call `calculate_indicators()`
   - Add tests for `create_ml_adaptive_strategy()` factory function
   - Test regime-aware behavior
   - Test `process_candle()` returns valid `TradingDecision`
   - _Requirements: 7.1, 7.2, 7.3_
 
-- [ ] 4.3 Update ml_sentiment strategy tests
+- [x] 4.3 Update ml_sentiment strategy tests
   - Remove tests that call `calculate_indicators()`
   - Add tests for `create_ml_sentiment_strategy()` factory function
   - Test sentiment integration
   - Test `process_candle()` returns valid `TradingDecision`
   - _Requirements: 7.1, 7.2, 7.3_
 
-- [ ] 4.4 Update ensemble_weighted strategy tests
+- [x] 4.4 Update ensemble_weighted strategy tests
   - Remove tests that call `calculate_indicators()`
   - Add tests for `create_ensemble_weighted_strategy()` factory function
   - Test signal combination logic
   - Test `process_candle()` returns valid `TradingDecision`
   - _Requirements: 7.1, 7.2, 7.3_
 
-- [ ] 4.5 Update momentum_leverage strategy tests
+- [x] 4.5 Update momentum_leverage strategy tests
   - Remove tests that call `calculate_indicators()`
   - Add tests for `create_momentum_leverage_strategy()` factory function
   - Test momentum signal generation
   - Test `process_candle()` returns valid `TradingDecision`
   - _Requirements: 7.1, 7.2, 7.3_
 
-- [ ] 4.6 Add component isolation tests
+- [x] 4.6 Add component isolation tests
   - Test signal generators in isolation
   - Test risk managers in isolation
   - Test position sizers in isolation
