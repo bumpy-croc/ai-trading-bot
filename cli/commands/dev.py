@@ -280,23 +280,31 @@ def _test_setup() -> bool:
     print("\n🧪 Testing Setup...")
 
     try:
-        # Test configuration
-        result = subprocess.run(
-            [sys.executable, "scripts/verify_database_connection.py"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-        )
+        from src.config.config_manager import get_config
+        from src.database.manager import DatabaseManager
 
-        if result.returncode == 0:
-            print("✅ Database connection test passed")
-            return True
-        else:
-            print("❌ Database connection test failed:")
-            print(result.stdout)
-            print(result.stderr)
+        config = get_config()
+        database_url = config.get("DATABASE_URL")
+        if not database_url:
+            print("❌ DATABASE_URL not set")
             return False
 
+        db_manager = DatabaseManager()
+        if not db_manager.test_connection():
+            print("❌ Database connection test failed")
+            return False
+
+        session_id = db_manager.create_trading_session(
+            strategy_name="SetupVerification",
+            symbol="BTCUSDT",
+            timeframe="1h",
+            mode="PAPER",
+            initial_balance=10_000.0,
+            session_name="dev_setup_check",
+        )
+        db_manager.end_trading_session(session_id, final_balance=10_000.0)
+        print("✅ Database connection test passed")
+        return True
     except Exception as e:
         print(f"❌ Error testing setup: {e}")
         return False

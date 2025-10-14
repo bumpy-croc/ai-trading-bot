@@ -342,7 +342,7 @@ New position found on exchange: BTCUSDT long 0.001
 
 ```bash
 # Test exchange connection
-python scripts/test_account_sync.py
+pytest tests/integration/test_account_sync.py -k "exchange"
 
 # Check database integrity
 python -c "
@@ -411,7 +411,7 @@ elif exchange_type == 'binance':
 
 3. **Test Integration**:
 ```bash
-python scripts/test_account_sync.py --exchange coinbase
+pytest tests/integration/test_account_sync.py -k "coinbase"
 ```
 
 ## 📈 Benefits

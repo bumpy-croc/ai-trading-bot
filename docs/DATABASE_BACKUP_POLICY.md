@@ -12,7 +12,7 @@ objectives (RTO) and recovery-point objectives (RPO).
 
 | Item | Value |
 |------|-------|
-| Tool | `scripts/backup_database.py` (pg_dump → local backup) |
+| Tool | `atb db backup` (pg_dump → local backup) |
 | Schedule | Every 1 h via Railway Scheduled Jobs |
 | Destination | Local backup directory `${BACKUP_DIR}` |
 | Format | `pg_dump` custom (`-Fc`) – compressed, schema-aware |

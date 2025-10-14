@@ -91,7 +91,7 @@ Run the CLI to verify configuration:
 
 ```bash
 # Test database connection (requires config)
-python scripts/verify_database_connection.py
+atb db verify
 
 # Test the CLI loads properly
 atb --help
