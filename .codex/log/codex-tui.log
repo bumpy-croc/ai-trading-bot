@@ -227,3 +227,53 @@
 +- Template Principle 3 → Consistent User Experience
 +- Template Principle 4 → Performance Safeguards Decisions
 *** End Patch
+[2m2025-10-14T21:39:57.329873Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","rg \"\\[\" .specify/memory/constitution.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:40:02.645174Z[0m [32m INFO[0m ToolCall: apply_patch *** Begin Patch
+*** Update File: .specify/memory/constitution.md
+@@
+-- Feature work MUST follow the `/specs/[feature]/` lifecycle: research → plan → spec → tasks, keeping
++- Feature work MUST follow the `/specs/<feature>/` lifecycle: research → plan → spec → tasks, keeping
+*** End Patch
+[2m2025-10-14T21:40:10.124115Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","rg \"\\[\" .specify/memory/constitution.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:40:16.130063Z[0m [32m INFO[0m ToolCall: update_plan {"plan":[{"status":"completed","step":"Inspect existing constitution and identify placeholders/structure"},{"status":"completed","step":"Derive concrete values and draft updated principles/governance content"},{"status":"completed","step":"Propagate updates to related templates and docs, ensuring consistency"}]}
+[2m2025-10-14T21:40:23.649004Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","git status -sb"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:40:34.412239Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","git diff .specify/templates/plan-template.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:40:42.368417Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","cat .specify/templates/plan-template.md | sed -n '1,120p'"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:40:47.059980Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","git status -sb"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:40:54.935226Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","git diff --stat .specify/templates"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:41:02.202969Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","rg \"UX Consistency\" -n .specify/templates/spec-template.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:41:06.884647Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","git ls-files -v .specify/templates/plan-template.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:41:27.013199Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","nl -ba .specify/memory/constitution.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:41:32.336165Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","nl -ba .specify/templates/plan-template.md | sed -n '33,80p'"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:41:40.613285Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","nl -ba .specify/templates/spec-template.md | sed -n '1,200p'"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:41:46.569854Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","nl -ba .specify/templates/tasks-template.md | sed -n '1,200p'"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:41:54.873220Z[0m [32m INFO[0m ToolCall: apply_patch *** Begin Patch
+*** Update File: .specify/templates/tasks-template.md
+@@
+-198	```bash
+-199	# Launch all tests for User Story 1 together (if tests requested):
+-200	Task: "Contract test for [endpoint] in tests/contract/test_[name].py"
+-201	Task: "Integration test for [user journey] in tests/integration/test_[name].py"
++198	```bash
++199	# Launch all tests for User Story 1 together:
++200	Task: "Contract test for [endpoint] in tests/contract/test_[name].py"
++201	Task: "Integration test for [user journey] in tests/integration/test_[name].py"
+*** End Patch
+[2m2025-10-14T21:42:02.672527Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","sed -n '196,220p' .specify/templates/tasks-template.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:42:09.588028Z[0m [32m INFO[0m ToolCall: apply_patch *** Begin Patch
+*** Update File: .specify/templates/tasks-template.md
+@@
+-```bash
+-# Launch all tests for User Story 1 together (if tests requested):
++```bash
++# Launch all tests for User Story 1 together:
+*** End Patch
+[2m2025-10-14T21:42:16.777829Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","sed -n '172,190p' .specify/templates/tasks-template.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:42:20.996088Z[0m [32m INFO[0m ToolCall: apply_patch *** Begin Patch
+*** Update File: .specify/templates/tasks-template.md
+@@
+-- Tests (if included) MUST be written and FAIL before implementation
++- Tests MUST be written and FAIL before implementation
+*** End Patch
+[2m2025-10-14T21:42:28.176476Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","sed -n '196,210p' .specify/templates/tasks-template.md"],"workdir":"/Users/alex/Sites/ai-trading-bot"}
+[2m2025-10-14T21:42:33.282372Z[0m [32m INFO[0m ToolCall: shell {"command":["bash","-lc","git status -sb"],"workdir":"/Users/alex/Sites/ai-trading-bot"}

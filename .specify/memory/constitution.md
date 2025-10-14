@@ -79,7 +79,7 @@ Teams MUST satisfy these checks before implementation work begins and again befo
   or `artifacts/` as appropriate.
 
 ## Delivery Workflow & Documentation
-- Feature work MUST follow the `/specs/[feature]/` lifecycle: research → plan → spec → tasks, keeping
+- Feature work MUST follow the `/specs/<feature>/` lifecycle: research → plan → spec → tasks, keeping
   user stories independently deliverable and testable.
 - Plans MUST describe the affected domains under `src/` and how dependencies preserve the constitution's
   quality and performance guarantees.
