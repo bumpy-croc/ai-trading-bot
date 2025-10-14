@@ -51,7 +51,7 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Remove `BaseStrategy` inheritance and legacy methods
   - _Requirements: 6.5, 6.6_
 
-- [ ] 2. Update backtesting engine to use component-based interface
+- [x] 2. Update backtesting engine to use component-based interface
   - Remove upfront `calculate_indicators()` call
   - Replace legacy interface calls with `process_candle()`
   - Use `TradingDecision` objects for entry/exit logic
@@ -60,32 +60,32 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Update regime switching to work with component strategies
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
 
-- [ ] 2.1 Remove calculate_indicators() from backtesting engine
+- [x] 2.1 Remove calculate_indicators() from backtesting engine
   - Find and remove all calls to `strategy.calculate_indicators(df)`
   - Remove any DataFrame column expectations from legacy interface
   - Ensure DataFrame contains only OHLCV data
   - _Requirements: 4.2_
 
-- [ ] 2.2 Replace entry/exit checks with process_candle()
+- [x] 2.2 Replace entry/exit checks with process_candle()
   - Replace `check_entry_conditions()` calls with `process_candle()`
   - Replace `check_exit_conditions()` calls with `should_exit_position()`
   - Use `decision.signal.direction` to determine entry/exit
   - Handle HOLD signals appropriately
   - _Requirements: 4.1, 4.3_
 
-- [ ] 2.3 Update position sizing in backtesting engine
+- [x] 2.3 Update position sizing in backtesting engine
   - Remove `calculate_position_size()` calls
   - Use `decision.position_size` from `TradingDecision`
   - Validate position size bounds
   - _Requirements: 4.4_
 
-- [ ] 2.4 Update stop loss logic in backtesting engine
+- [x] 2.4 Update stop loss logic in backtesting engine
   - Remove `calculate_stop_loss()` calls
   - Use `strategy.get_stop_loss_price()` method
   - Pass `decision.signal` and `decision.regime` to stop loss calculation
   - _Requirements: 4.5_
 
-- [ ] 2.5 Update regime switching in backtesting engine
+- [x] 2.5 Update regime switching in backtesting engine
   - Remove `calculate_indicators()` calls during strategy switches
   - Ensure regime switching works with component strategies
   - Test regime transitions with `TradingDecision` objects

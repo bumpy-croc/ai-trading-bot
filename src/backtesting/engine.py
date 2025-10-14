@@ -476,10 +476,12 @@ class Backtester:
         return self._runtime is not None
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Prepare strategy data using either legacy hooks or the runtime."""
+        """Prepare strategy data using the runtime."""
 
         if not self._is_runtime_strategy():
-            return self.strategy.calculate_indicators(df)
+            # All strategies are now component-based
+            # They calculate indicators on-demand in process_candle()
+            return df
 
         dataset = self._runtime.prepare_data(df)
         self._runtime_dataset = dataset
@@ -888,24 +890,9 @@ class Backtester:
                                         if hasattr(self.regime_switcher, 'strategy_manager') and self.regime_switcher.strategy_manager:
                                             self.regime_switcher.strategy_manager.current_strategy = new_strategy
                                     
-                                    # Recalculate indicators for new strategy
-                                    # This ensures the new strategy has all required indicators
-                                    try:
-                                        # Recalculate indicators for the entire remaining dataset
-                                        # This prevents future candles from having missing data
-                                        temp_df = df.copy()
-                                        temp_df = new_strategy.calculate_indicators(temp_df)
-                                        
-                                        # Update the main dataframe with new indicators
-                                        # Only update columns that don't exist yet or are strategy-specific
-                                        for col in temp_df.columns:
-                                            if col not in df.columns or col.startswith(('ml_', 'ensemble_', 'momentum_', 'regime_')):
-                                                df[col] = temp_df[col]
-                                        
-                                        logger.debug(f"Recalculated indicators for strategy {new_strategy_name}")
-                                    except Exception as indicator_error:
-                                        logger.warning(f"Failed to recalculate indicators for {new_strategy_name}: {indicator_error}")
-                                        # Continue with existing indicators if recalculation fails
+                                    # All strategies are now component-based
+                                    # They calculate indicators on-demand in process_candle()
+                                    logger.debug(f"Strategy switched to {new_strategy_name} (component-based)")
                                     
                             except Exception as switch_error:
                                 logger.warning(f"Failed to switch to strategy {new_strategy_name}: {switch_error}")
@@ -967,18 +954,13 @@ class Backtester:
                             except Exception:
                                 pass
 
-                    if self._is_runtime_strategy():
-                        exit_signal, runtime_exit_reason = self._runtime_should_exit(
-                            runtime_decision,
-                            symbol,
-                            candle,
-                            current_price,
-                        )
-                    else:
-                        exit_signal = self.strategy.check_exit_conditions(
-                            df, i, self.current_trade.entry_price
-                        )
-                        runtime_exit_reason = "Strategy signal"
+                    # All strategies are now component-based
+                    exit_signal, runtime_exit_reason = self._runtime_should_exit(
+                        runtime_decision,
+                        symbol,
+                        candle,
+                        current_price,
+                    )
 
                     # Evaluate partial exits and scale-ins before full exit
                     try:
@@ -1384,7 +1366,9 @@ class Backtester:
 
                     continue
 
-                elif self.strategy.check_entry_conditions(df, i):
+                # All strategies are now component-based using runtime decisions
+                # Legacy check_entry_conditions and check_short_entry_conditions removed
+                elif False:  # Placeholder for removed legacy code
                     # Calculate position size (as fraction of balance)
                     try:
                         overrides = (
@@ -1545,11 +1529,8 @@ class Backtester:
                                 f"Failed to update risk manager for opened long on {symbol}: {e}"
                             )
 
-                # Short entry if supported by strategy
-                elif (
-                    hasattr(self.strategy, "check_short_entry_conditions")
-                    and self.strategy.check_short_entry_conditions(df, i)
-                ):
+                # Short entry removed - all strategies use component-based runtime decisions
+                elif False:  # Placeholder for removed legacy code
                     try:
                         overrides = (
                             self.strategy.get_risk_overrides()
