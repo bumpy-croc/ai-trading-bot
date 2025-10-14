@@ -6,6 +6,10 @@ Application code lives in `src/`, grouped by domain: trading flows in `src/tradi
 ## Build, Test, and Development Commands
 Use `make dev-setup` to bootstrap a Python 3.11 virtualenv and install editable dependencies. `make install` upgrades `pip` and installs the CLI (`atb`) locally. `make deps` and `make deps-server` pull dev and runtime requirements. Run `make backtest STRATEGY=ml_basic DAYS=30` to replay a strategy, or `make optimizer STRATEGY=ml_basic` to sweep parameters. `make test` executes `pytest -n 4`, while `make code-quality` chains Black, Ruff, MyPy, and Bandit. For ad-hoc dashboards, `make dashboard-monitoring PORT=8090` exposes the monitoring UI.
 
+# ExecPlans
+
+When writing complex features or significant refactors, use an ExecPlan (as described in .agent/PLANS.md) from design to implementation.
+
 ## Coding Style & Naming Conventions
 Follow four-space indentation and Python typing throughout. Black and Ruff enforce a 100-character line limit; run `black .` and `ruff check .` before committing. Keep modules and functions in `snake_case`, classes in `PascalCase`, and constants in `UPPER_CASE`. Configuration files (`*.yaml`, `.json`) should mirror the project’s existing naming, e.g., `feature_flags.json`. Prefer dependency injection via constructors to keep components testable.
 
