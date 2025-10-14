@@ -7,9 +7,10 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 from src.strategies.base import BaseStrategy
+from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.ml_basic import MlBasic
 
 logger = logging.getLogger(__name__)
@@ -57,11 +58,12 @@ class StrategyManager:
         # Create staging directory for safe updates in /tmp
         self.staging_dir.mkdir(exist_ok=True, parents=True)
 
-        # Current active strategy
-        self.current_strategy: Optional[BaseStrategy] = None
+        # Current active strategy (supports both legacy and component-based)
+        self.current_strategy: Optional[Union[BaseStrategy, ComponentStrategy]] = None
         self.current_version: Optional[StrategyVersion] = None
 
-        # Strategy registry
+        # Strategy registry (can contain both strategy classes and factory functions)
+        # Factory functions are used for component-based strategies
         self.strategy_registry = {
             "ml_basic": MlBasic,
         }
@@ -115,18 +117,30 @@ class StrategyManager:
 
     def _instantiate_strategy(
         self, strategy_name: str, version: str, config: Optional[dict] = None
-    ) -> tuple[BaseStrategy, StrategyVersion]:
-        """Create a strategy instance and version record without mutating state."""
+    ) -> tuple[Union[BaseStrategy, ComponentStrategy], StrategyVersion]:
+        """Create a strategy instance and version record without mutating state.
+        
+        Supports both legacy BaseStrategy and component-based Strategy instances.
+        """
 
         if strategy_name not in self.strategy_registry:
             raise ValueError(f"Unknown strategy: {strategy_name}")
 
-        strategy_class = self.strategy_registry[strategy_name]
+        strategy_class_or_factory = self.strategy_registry[strategy_name]
 
-        if config:
-            strategy = strategy_class(**config)
+        # Check if it's a factory function (for component-based strategies)
+        if callable(strategy_class_or_factory) and not isinstance(strategy_class_or_factory, type):
+            # It's a factory function, call it with config
+            if config:
+                strategy = strategy_class_or_factory(**config)
+            else:
+                strategy = strategy_class_or_factory()
         else:
-            strategy = strategy_class()
+            # It's a class, instantiate it
+            if config:
+                strategy = strategy_class_or_factory(**config)
+            else:
+                strategy = strategy_class_or_factory()
 
         strategy_version = StrategyVersion(
             strategy_name=strategy_name,
@@ -139,8 +153,11 @@ class StrategyManager:
 
     def load_strategy(
         self, strategy_name: str, version: str = "latest", config: Optional[dict] = None
-    ) -> BaseStrategy:
-        """Load a strategy with version control"""
+    ) -> Union[BaseStrategy, ComponentStrategy]:
+        """Load a strategy with version control.
+        
+        Supports both legacy BaseStrategy and component-based Strategy instances.
+        """
 
         with self.update_lock:
             try:
@@ -152,7 +169,8 @@ class StrategyManager:
                 self.current_version = strategy_version
                 self.version_history[f"{strategy_name}_{version}"] = strategy_version
 
-                logger.info(f"Loaded strategy: {strategy_name} v{version}")
+                strategy_type = "component-based" if isinstance(strategy, ComponentStrategy) else "legacy"
+                logger.info(f"Loaded {strategy_type} strategy: {strategy_name} v{version}")
                 return strategy
 
             except Exception as e:

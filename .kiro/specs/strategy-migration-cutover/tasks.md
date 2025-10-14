@@ -91,7 +91,7 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Test regime transitions with `TradingDecision` objects
   - _Requirements: 4.6_
 
-- [ ] 3. Update live trading engine to use component-based interface
+- [x] 3. Update live trading engine to use component-based interface
   - Remove upfront `calculate_indicators()` call
   - Replace legacy interface calls with `process_candle()`
   - Use `TradingDecision` objects for entry/exit logic
@@ -99,33 +99,33 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Update strategy hot-swapping to work with component strategies
   - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6_
 
-- [ ] 3.1 Remove calculate_indicators() from live trading engine
+- [x] 3.1 Remove calculate_indicators() from live trading engine
   - Find and remove all calls to `strategy.calculate_indicators(df)`
   - Remove any DataFrame column expectations from legacy interface
   - Ensure DataFrame contains only OHLCV data
   - _Requirements: 5.2_
 
-- [ ] 3.2 Replace entry/exit checks with process_candle() in live trading
+- [x] 3.2 Replace entry/exit checks with process_candle() in live trading
   - Replace `check_entry_conditions()` calls with `process_candle()`
   - Replace `check_exit_conditions()` calls with `should_exit_position()`
   - Use `decision.signal.direction` to determine entry/exit
   - Handle HOLD signals appropriately
   - _Requirements: 5.1, 5.3_
 
-- [ ] 3.3 Update position sizing in live trading engine
+- [x] 3.3 Update position sizing in live trading engine
   - Remove `calculate_position_size()` calls
   - Use `decision.position_size` from `TradingDecision`
   - Validate position size bounds
   - _Requirements: 5.4_
 
-- [ ] 3.4 Update database logging for TradingDecision
+- [x] 3.4 Update database logging for TradingDecision
   - Modify database logging to capture `decision.to_dict()`
   - Log signal direction, confidence, strength
   - Log regime context if available
   - Log risk metrics and metadata
   - _Requirements: 5.6_
 
-- [ ] 3.5 Update strategy hot-swapping for component strategies
+- [x] 3.5 Update strategy hot-swapping for component strategies
   - Ensure hot-swapping works with component-based strategies
   - Remove legacy interface dependencies from hot-swap logic
   - Test strategy transitions with `TradingDecision` objects
