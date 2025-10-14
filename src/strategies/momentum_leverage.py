@@ -19,6 +19,8 @@ Research-backed approach:
 Key insight: Beat buy-and-hold by being MORE aggressive, not more conservative.
 """
 
+from typing import Any
+
 from src.strategies.components import (
     Strategy,
     MomentumSignalGenerator,
@@ -84,3 +86,35 @@ def create_momentum_leverage_strategy(
         position_sizer=position_sizer,
         regime_detector=regime_detector,
     )
+
+
+# Backward compatibility wrapper - will be removed after engine migration (Task 2 & 3)
+class MomentumLeverage:
+    """
+    Legacy class wrapper for backward compatibility.
+    
+    This allows existing code to continue using `MomentumLeverage()` while
+    internally using the new component-based factory function.
+    
+    Deprecated: Use create_momentum_leverage_strategy() instead.
+    This wrapper will be removed once the backtesting and live engines
+    are updated to use factory functions directly.
+    """
+    
+    def __new__(
+        cls,
+        name: str = "MomentumLeverage",
+        momentum_entry_threshold: float = 0.01,
+        strong_momentum_threshold: float = 0.025,
+        base_risk: float = 0.10,
+        base_fraction: float = 0.5,
+        **kwargs: Any
+    ) -> Strategy:
+        """Create strategy instance using factory function."""
+        return create_momentum_leverage_strategy(
+            name=name,
+            momentum_entry_threshold=momentum_entry_threshold,
+            strong_momentum_threshold=strong_momentum_threshold,
+            base_risk=base_risk,
+            base_fraction=base_fraction,
+        )

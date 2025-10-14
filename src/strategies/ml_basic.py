@@ -19,7 +19,7 @@ Ideal for:
 - Simple deployment scenarios
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from src.strategies.components import (
     Strategy,
@@ -87,3 +87,39 @@ def create_ml_basic_strategy(
         position_sizer=position_sizer,
         regime_detector=regime_detector,
     )
+
+
+# Backward compatibility wrapper - will be removed after engine migration (Task 2 & 3)
+class MlBasic:
+    """
+    Legacy class wrapper for backward compatibility.
+    
+    This allows existing code to continue using `MlBasic()` while
+    internally using the new component-based factory function.
+    
+    Deprecated: Use create_ml_basic_strategy() instead.
+    This wrapper will be removed once the backtesting and live engines
+    are updated to use factory functions directly.
+    """
+    
+    def __new__(
+        cls,
+        name: str = "MlBasic",
+        model_path: str = "src/ml/btcusdt_price.onnx",
+        sequence_length: int = 120,
+        use_prediction_engine: Optional[bool] = None,
+        model_name: Optional[str] = None,
+        model_type: Optional[str] = None,
+        timeframe: Optional[str] = None,
+        **kwargs: Any
+    ) -> Strategy:
+        """Create strategy instance using factory function."""
+        return create_ml_basic_strategy(
+            name=name,
+            model_path=model_path,
+            sequence_length=sequence_length,
+            use_prediction_engine=use_prediction_engine,
+            model_name=model_name,
+            model_type=model_type,
+            timeframe=timeframe,
+        )
