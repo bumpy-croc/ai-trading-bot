@@ -178,4 +178,4 @@ src/dashboards/monitoring/
 
 ## Documentation
 
-See [docs/MONITORING_SUMMARY.md](../../docs/MONITORING_SUMMARY.md) for additional information on monitoring architecture and deployment.
+See [docs/monitoring.md](../../docs/monitoring.md) for additional information on monitoring architecture and deployment.

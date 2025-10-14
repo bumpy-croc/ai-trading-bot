@@ -112,4 +112,5 @@ result_custom = runner.run(config_with_params)
 
 ## Documentation
 
-See [docs/OPTIMIZER_MVP.md](../../docs/OPTIMIZER_MVP.md) for detailed information on optimizer features and usage patterns.
+See [docs/backtesting.md](../../docs/backtesting.md#optimisation-loop) for detailed information on optimizer features and usage
+patterns.

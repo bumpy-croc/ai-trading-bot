@@ -9,4 +9,4 @@ Pretrained models and training artifacts used by strategies and the prediction e
 
 ## Notes
 - The prediction engine auto-discovers models in this folder
-- See `docs/MODEL_TRAINING_AND_INTEGRATION_GUIDE.md` for training details
+- See [docs/prediction.md](../../docs/prediction.md) for training details

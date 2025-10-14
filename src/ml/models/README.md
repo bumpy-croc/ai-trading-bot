@@ -23,4 +23,5 @@ Models in this directory are organized for future expansion but are currently di
 - **basic/**: Price prediction models using technical indicators
 - **sentiment/**: Sentiment-based prediction models using external data
 
-See the parent `ml/README.md` and `docs/MODEL_TRAINING_AND_INTEGRATION_GUIDE.md` for more details on model training and deployment.
+See the parent `ml/README.md` and [docs/prediction.md](../../../docs/prediction.md) for more details on model training and
+deployment.

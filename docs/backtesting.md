@@ -59,6 +59,15 @@ candle index so you can inspect the raw data or adjust risk parameters (`--risk-
 - Use `--no-cache` when validating fixes against freshly downloaded data, and re-enable caching for regular workflows.
 - Capture DB logs (`--log-to-db`) when comparing against live trading so dashboards show apples-to-apples metrics.
 
+## Regime detection
+
+- Enable regime-aware switching via `--regime-aware` to let `RegimeStrategySwitcher` choose between compatible component
+  strategies (for example `ml_basic` versus `ml_sentiment`) based on the current market state.
+- Regime detectors live under `src/regime/` and expose reusable analyzers such as `VolatilityRegimeDetector` and
+  `TrendRegimeDetector`. Combine them with the prediction engine or ML features to feed richer context into switching logic.
+- Use the CLI under `atb regime ...` to profile historical regime labels, export summaries, or validate detector thresholds before
+  enabling live.
+
 ## Programmatic execution
 
 Backtests can also run from Python modules or notebooks:

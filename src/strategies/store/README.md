@@ -20,7 +20,7 @@ When you modify a strategy file, the hook:
 3. Saves the new version to this directory
 4. Auto-stages the file for commit
 
-See `docs/STRATEGY_VERSIONING.md` for details.
+See [docs/development.md](../../docs/development.md#strategy-versioning) for details.
 
 ## Loading Versions
 
@@ -41,4 +41,3 @@ def load_strategy_configs():
     
     return registry
 ```
-

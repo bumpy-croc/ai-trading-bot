@@ -35,6 +35,20 @@ continuous polling, account synchronisation, and resilience features required fo
     sync.emergency_sync()
     ```
 
+## Position management features
+
+- Dynamic risk adjustment (`DynamicRiskManager`) tapers exposure after drawdowns and relaxes limits during recoveries. Configure
+  thresholds via `DynamicRiskConfig` and inspect changes through the monitoring dashboards.
+- Correlation controls (`CorrelationEngine`) review active exposure across symbols before approving new trades. Set
+  `max_correlated_exposure` to cap aggregate risk when assets move together.
+- Partial exits and scale-ins (`PartialExitPolicy`) automate laddered profit-taking and controlled averaging strategies with
+  explicit percentage targets and sizes.
+- Time-based exits (`TimeExitPolicy`) enforce maximum holding periods, end-of-day flattening, or weekend shutdowns for markets
+  with gaps.
+- Trailing stops (`TrailingStopPolicy`) and breakeven rules lock in gains once price moves in favour of the position.
+- MFE/MAE tooling (`MfeMaeAnalyzer`) feeds analytics back into strategy tuning so component strategies can adjust thresholds over
+  time.
+
 ## CLI usage
 
 `atb live` forwards arguments to `src/live/runner.py`:
