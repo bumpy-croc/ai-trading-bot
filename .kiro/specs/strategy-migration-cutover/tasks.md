@@ -6,7 +6,7 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
 
 ## Implementation Tasks
 
-- [ ] 1. Convert concrete strategy implementations to component-based
+- [x] 1. Convert concrete strategy implementations to component-based
   - Convert ml_basic.py to use component composition
   - Convert ml_adaptive.py to use component composition
   - Convert ml_sentiment.py to use component composition
