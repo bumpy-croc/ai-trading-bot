@@ -1,21 +1,36 @@
-# Strategy System Redesign Requirements
+# Strategy System Migration - Complete Cutover Requirements
 
 ## Introduction
 
-The current trading strategy system has evolved into a complex architecture with multiple overlapping approaches to regime awareness and strategy composition. This redesign aims to simplify and optimize the strategy system while maintaining flexibility for experimentation and iterative improvement.
+The strategy system has been partially migrated to a component-based architecture, but currently maintains both the legacy `BaseStrategy` system and the new component-based system with adapters bridging between them. This creates ~7,229 lines of technical debt including adapters, migration utilities, and duplicate testing infrastructure.
 
+This specification defines the requirements for **completing the migration** by removing all legacy code, adapters, and migration utilities, leaving only the clean component-based system.
 
 ## Current System Analysis
 
-The existing system has three main approaches:
-1. **Regime-aware strategies** (e.g., `ml_adaptive.py`) that internally adjust behavior based on market regimes
+The codebase currently has:
 
-2. **Ensemble strategies** (e.g., `ensemble_weighted.py`) that combine multiple strategies with weighted voting
+1. **Component-Based System** (Target Architecture)
+   - `Strategy` class that composes `SignalGenerator`, `RiskManager`, `PositionSizer`
+   - `TradingDecision` objects with rich context
+   - Clean separation of concerns, testable components
 
-3. **Hot-swapping system** that switches entire strategies based on market regimes via `RegimeStrategySwitcher`
+2. **Legacy System** (To Be Removed)
+   - `BaseStrategy` abstract class with `calculate_indicators()`, `check_entry_conditions()`, etc.
+   - Concrete strategy implementations extending `BaseStrategy`
+   - DataFrame pollution with strategy-specific columns
 
+3. **Adapter Layer** (To Be Removed)
+   - `LegacyStrategyAdapter` (563 lines) - bridges component strategies to legacy interface
+   - `adapter_factory.py` (573 lines) - creates adapters
+   - Migration utilities (6,666 lines) - conversion, validation, cross-validation tools
 
-This creates confusion, redundancy, and makes testing individual components difficult.
+4. **Dual Interface Support** (To Be Removed)
+   - Backtesting engine supports both interfaces
+   - Live trading engine supports both interfaces
+   - Tests written for both interfaces
+
+The goal is to remove items 2, 3, and 4, keeping only the component-based system.
 
 
 ## Requirements
