@@ -36,6 +36,8 @@ artifacts/strategy-migration/*
 !artifacts/strategy-migration/baseline/
 artifacts/strategy-migration/baseline/*
 !artifacts/strategy-migration/baseline/**
+!artifacts/strategy-migration/phase2/
+!artifacts/strategy-migration/phase2/**
 
 # Security and audit reports
 bandit-report.json

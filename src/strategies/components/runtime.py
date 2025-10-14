@@ -108,6 +108,18 @@ class StrategyRuntime:
         self._dataset: StrategyDataset | None = None
 
     @property
+    def strategy(self) -> SupportsRuntimeHooks:
+        """Return the underlying strategy instance driving this runtime."""
+
+        return self._strategy
+
+    @property
+    def name(self) -> str:
+        """Expose the strategy name for convenient logging and diagnostics."""
+
+        return getattr(self._strategy, "name", self._strategy.__class__.__name__)
+
+    @property
     def dataset(self) -> StrategyDataset:
         """Return the prepared dataset or raise if preparation has not happened."""
 

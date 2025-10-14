@@ -33,9 +33,15 @@ DEFAULT_TIMEFRAME = "1h"
 DEFAULT_BACKTEST_DAYS = 30
 DEFAULT_LIVE_STEPS = 50
 
+# Global variable to store custom output directory
+_OUTPUT_DIR: Path | None = None
+
 
 def _baseline_dir() -> Path:
-    out = PROJECT_ROOT / "artifacts" / "strategy-migration" / "baseline"
+    if _OUTPUT_DIR is not None:
+        out = _OUTPUT_DIR
+    else:
+        out = PROJECT_ROOT / "artifacts" / "strategy-migration" / "baseline"
     out.mkdir(parents=True, exist_ok=True)
     return out
 
@@ -238,6 +244,15 @@ def _write_summary(results: list[dict[str, Any]]) -> None:
 
 
 def _handle_baseline(ns: argparse.Namespace) -> int:
+    global _OUTPUT_DIR
+    
+    # Set the output directory if provided
+    if hasattr(ns, "output_dir") and ns.output_dir:
+        output_path = Path(ns.output_dir)
+        if not output_path.is_absolute():
+            output_path = PROJECT_ROOT / output_path
+        _OUTPUT_DIR = output_path
+    
     results: list[dict[str, Any]] = []
     for strategy in ns.strategies:
         print(f"Running backtest baseline for {strategy}...")
@@ -293,5 +308,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--skip-live",
         action="store_true",
         help="Skip live (paper trading) baseline generation",
+    )
+    p_baseline.add_argument(
+        "--output-dir",
+        type=str,
+        help="Custom output directory (relative to project root or absolute path)",
     )
     p_baseline.set_defaults(func=_handle_baseline)
