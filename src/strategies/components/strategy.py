@@ -23,6 +23,7 @@ from .position_sizer import PositionSizer
 from .regime_context import EnhancedRegimeDetector, RegimeContext
 from .risk_manager import MarketData, Position, RiskManager
 from .signal_generator import Signal, SignalDirection, SignalGenerator
+from src.utils.symbol_factory import SymbolFactory
 
 
 @dataclass
@@ -100,6 +101,17 @@ class Strategy:
         self.risk_manager = risk_manager
         self.position_sizer = position_sizer
         self.regime_detector = regime_detector or EnhancedRegimeDetector()
+
+        # Strategy identification and metadata
+        self.trading_pair = "BTCUSDT"
+        self.model_type: str | None = None
+        self.model_timeframe: str | None = None
+        self._risk_overrides: dict[str, Any] | None = None
+
+        # Execution logging configuration
+        self.db_manager = None
+        self.session_id = None
+        self.enable_execution_logging = True
         
         # Logging setup
         self.enable_logging = enable_logging
@@ -189,6 +201,96 @@ class Strategy:
         """Hook invoked after runtime execution completes."""
 
         self.logger.debug("Runtime finalised for %s", self.name)
+
+    # ------------------------------------------------------------------
+    # Strategy metadata and logging utilities
+    # ------------------------------------------------------------------
+
+    def set_database_manager(self, db_manager, session_id: Optional[int] = None) -> None:
+        """Configure database logging for strategy execution."""
+
+        self.db_manager = db_manager
+        self.session_id = session_id
+
+    def set_risk_overrides(self, overrides: Optional[dict[str, Any]]) -> None:
+        """Provide custom risk settings consumed by trading engines."""
+
+        self._risk_overrides = overrides
+
+    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
+        """Return configured risk overrides if available."""
+
+        return self._risk_overrides
+
+    def get_trading_pair(self) -> str:
+        """Return the trading pair associated with the strategy."""
+
+        return self.trading_pair
+
+    def set_trading_pair(self, trading_pair: str) -> None:
+        """Update the trading pair associated with the strategy."""
+
+        self.trading_pair = trading_pair
+
+    def log_execution(
+        self,
+        signal_type: str,
+        action_taken: str,
+        price: float,
+        symbol: Optional[str] = None,
+        timeframe: Optional[str] = None,
+        signal_strength: Optional[float] = None,
+        confidence_score: Optional[float] = None,
+        indicators: Optional[dict] = None,
+        sentiment_data: Optional[dict] = None,
+        ml_predictions: Optional[dict] = None,
+        position_size: Optional[float] = None,
+        reasons: Optional[list[str]] = None,
+        volume: Optional[float] = None,
+        volatility: Optional[float] = None,
+        additional_context: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Persist execution metadata when a database manager is configured."""
+
+        if not self.db_manager or not self.enable_execution_logging:
+            return
+
+        final_reasons = list(reasons) if reasons else []
+        if additional_context:
+            try:
+                final_reasons.extend(
+                    f"{key}={value}" for key, value in additional_context.items()
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self.logger.debug("Failed to serialise additional context: %s", exc)
+
+        effective_symbol = symbol or self.trading_pair
+        try:
+            symbol_code = SymbolFactory.to_exchange_symbol(effective_symbol, "binance")
+        except Exception:
+            symbol_code = effective_symbol
+
+        try:
+            self.db_manager.log_strategy_execution(
+                strategy_name=self.__class__.__name__,
+                symbol=symbol_code,
+                signal_type=signal_type,
+                action_taken=action_taken,
+                price=price,
+                timeframe=timeframe,
+                signal_strength=signal_strength,
+                confidence_score=confidence_score,
+                indicators=indicators,
+                sentiment_data=sentiment_data,
+                ml_predictions=ml_predictions,
+                position_size=position_size,
+                reasons=final_reasons,
+                volume=volume,
+                volatility=volatility,
+                session_id=self.session_id,
+            )
+        except Exception as exc:  # pragma: no cover - database issues shouldn't crash
+            self.logger.warning("Failed to log execution: %s", exc)
 
     def process_candle(self, df: pd.DataFrame, index: int, balance: float,
                       current_positions: Optional[list[Position]] = None) -> TradingDecision:

@@ -42,5 +42,6 @@ atb backtest momentum_leverage --symbol BTCUSDT --timeframe 1h --days 90
 - Volatility-based position scaling for optimal risk management
 
 ## Create your own
-- Subclass `strategies.base.BaseStrategy`
-- Implement required methods: `calculate_indicators()`, `check_entry_conditions()`, `check_exit_conditions()`, `calculate_position_size()`, `calculate_stop_loss()`, `get_parameters()`
+- Compose a `Strategy` from `signal_generator`, `risk_manager`, `position_sizer`, and optional `regime_detector` components
+- Expose configuration through helper functions or lightweight subclasses that customise component parameters
+- Provide a `get_parameters()` method for metadata and ensure `set_risk_overrides()` is called when custom risk settings are required

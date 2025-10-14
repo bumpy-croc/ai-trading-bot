@@ -41,17 +41,20 @@ INITIAL_BALANCE=1000
 Each strategy defines its own parameters and trading pair:
 
 ```python
-class MyStrategy(BaseStrategy):
-    def __init__(self, name="MyStrategy"):
-        super().__init__(name)
+from src.strategies.components import (
+    Strategy,
+    HoldSignalGenerator,
+    FixedRiskManager,
+    FixedFractionSizer,
+)
 
-        # Set strategy-specific trading pair
-        self.trading_pair = 'ETH-USD'  # Use SymbolFactory for conversion if needed
-
-        # Strategy parameters
-        self.risk_per_trade = 0.02
-        self.stop_loss_pct = 0.015
-        # ... other parameters
+my_strategy = Strategy(
+    name="MyStrategy",
+    signal_generator=HoldSignalGenerator(),
+    risk_manager=FixedRiskManager(risk_per_trade=0.02, stop_loss_pct=0.015),
+    position_sizer=FixedFractionSizer(fraction=0.05),
+)
+my_strategy.trading_pair = 'ETHUSDT'
 ```
 
 ## Current Strategy Trading Pairs
@@ -102,17 +105,7 @@ atb backtest momentum_leverage --symbol BTCUSDT --timeframe 1h --days 30
 
 When creating new strategies:
 
-1. **Inherit from BaseStrategy**
-2. **Set trading pair** in constructor: `self.trading_pair = 'SYMBOL'`
-3. **Define parameters** directly in the class
-4. **Add to strategy registry** in `src/strategies/__init__.py`
-
-Example:
-```python
-class NewStrategy(BaseStrategy):
-    def __init__(self, name="NewStrategy"):
-        super().__init__(name)
-        self.trading_pair = 'ADAUSDT'  # Strategy-specific pair
-        self.risk_per_trade = 0.015
-        # ... other parameters
-```
+1. Compose a `Strategy` by selecting signal, risk, and sizing components.
+2. Set the desired trading pair on the strategy instance.
+3. Provide `set_risk_overrides()` when custom behaviour is required.
+4. Register the factory or class in `src/strategies/__init__.py` if needed by higher-level utilities.

@@ -72,21 +72,35 @@ print(df[['close', 'ma_20', 'ma_50', 'rsi', 'atr', 'bb_upper', 'bb_lower']].tail
 
 ### Strategy Integration
 ```python
-from src.strategies.base import BaseStrategy
 from src.indicators.technical import (
     calculate_moving_averages,
     calculate_rsi,
     calculate_atr
 )
+from src.strategies.components import Strategy, HoldSignalGenerator, FixedRiskManager, FixedFractionSizer
 
-class MyStrategy(BaseStrategy):
-    def calculate_indicators(self, df):
-        # Calculate multiple indicators
+def build_indicator_strategy() -> Strategy:
+    def feature_generator(df):
         df = calculate_moving_averages(df, periods=[20, 50])
         df['rsi'] = calculate_rsi(df, period=14)
         df = calculate_atr(df, period=14)
-        
         return df
+
+    signal = HoldSignalGenerator()
+    risk = FixedRiskManager(risk_per_trade=0.02)
+    sizer = FixedFractionSizer(fraction=0.05)
+
+    strategy = Strategy(
+        name="indicator_demo",
+        signal_generator=signal,
+        risk_manager=risk,
+        position_sizer=sizer,
+    )
+
+    # Feature generators can be attached via runtime configuration
+    strategy_feature = lambda df: feature_generator(df)
+    strategy.get_feature_generators = lambda: []  # Placeholder override for docs
+    return strategy
 ```
 
 ### Vectorized Operations

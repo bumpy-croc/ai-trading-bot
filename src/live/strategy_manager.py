@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from src.strategies.base import BaseStrategy
+from src.strategies.components import Strategy
 from src.strategies.ml_basic import MlBasic
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ class StrategyManager:
         self.staging_dir.mkdir(exist_ok=True, parents=True)
 
         # Current active strategy
-        self.current_strategy: Optional[BaseStrategy] = None
+        self.current_strategy: Optional[Strategy] = None
         self.current_version: Optional[StrategyVersion] = None
 
         # Strategy registry
@@ -105,7 +105,7 @@ class StrategyManager:
         logger.info("StrategyManager initialized")
 
     @staticmethod
-    def _display_name(strategy: Optional[BaseStrategy]) -> str:
+    def _display_name(strategy: Optional[Strategy]) -> str:
         """Return a human readable name for a strategy instance."""
 
         if strategy is None:
@@ -115,7 +115,7 @@ class StrategyManager:
 
     def _instantiate_strategy(
         self, strategy_name: str, version: str, config: Optional[dict] = None
-    ) -> tuple[BaseStrategy, StrategyVersion]:
+    ) -> tuple[Strategy, StrategyVersion]:
         """Create a strategy instance and version record without mutating state."""
 
         if strategy_name not in self.strategy_registry:
@@ -139,7 +139,7 @@ class StrategyManager:
 
     def load_strategy(
         self, strategy_name: str, version: str = "latest", config: Optional[dict] = None
-    ) -> BaseStrategy:
+    ) -> Strategy:
         """Load a strategy with version control"""
 
         with self.update_lock:

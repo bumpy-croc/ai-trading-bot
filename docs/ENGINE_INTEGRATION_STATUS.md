@@ -15,7 +15,7 @@ Note: The prediction engine is available and strategies will migrate to it; data
   - Single warning per run on engine init/predict failure, then fallback to legacy ONNX path.
   - Per-init engine `health_check()` with a single warning when degraded.
 - Logging and auditability:
-  - Log engine metadata (`engine_enabled`, `engine_model_name`, `engine_batch`) in `ml_predictions` via `BaseStrategy.log_execution`.
+  - Log engine metadata (`engine_enabled`, `engine_model_name`, `engine_batch`) in `ml_predictions` via `Strategy.log_execution`.
   - Added per-row capture of `engine_direction` and `engine_confidence` (for monitoring only; not used for sizing/signals yet).
 - Parity and smoke validation:
   - Parity test added: engine-off vs engine-on predictions over a 500-bar slice with relaxed relative error and direction-agreement thresholds.

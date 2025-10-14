@@ -48,10 +48,6 @@ from .technical_signal_generator import (
     MACDSignalGenerator
 )
 from .momentum_signal_generator import MomentumSignalGenerator
-from .testing.test_datasets import TestDatasetGenerator
-from .testing.component_performance_tester import ComponentPerformanceTester
-from .testing.regime_tester import RegimeTester
-from .testing.performance_attribution import PerformanceAttributionAnalyzer
 from src.database.models import StrategyExecution
 
 __all__ = [
@@ -108,9 +104,4 @@ __all__ = [
     "KellySizer",
     "RegimeAdaptiveSizer",
     
-    # Testing framework
-    "TestDatasetGenerator",
-    "ComponentPerformanceTester",
-    "RegimeTester",
-    "PerformanceAttributionAnalyzer",
 ]
