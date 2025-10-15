@@ -2,10 +2,21 @@
 Unit tests for MlAdaptive strategy - Component-Based Implementation
 """
 
-import pytest
+from types import MethodType
 
+from src.strategies.components import SignalDirection, Strategy
 from src.strategies.ml_adaptive import create_ml_adaptive_strategy
-from src.strategies.components import Strategy, SignalDirection
+
+
+def _process_with_fixture(strategy, sample_ohlcv_data, balance=10000.0):
+    """Run the adaptive strategy with adequate historical context for sequence models."""
+    index = strategy.signal_generator.sequence_length + 10
+    assert len(sample_ohlcv_data) > index, "sample_ohlcv_data must provide enough candles for ML tests"
+    strategy.signal_generator._get_ml_prediction = MethodType(
+        lambda self, df, idx: float(df["close"].iloc[idx - 1] * 1.01),
+        strategy.signal_generator,
+    )
+    return strategy.process_candle(sample_ohlcv_data, index=index, balance=balance)
 
 
 class TestMlAdaptiveStrategy:
@@ -37,11 +48,7 @@ class TestMlAdaptiveStrategy:
         strategy = create_ml_adaptive_strategy()
         balance = 10000.0
         
-        # Need sufficient data for sequence length (120)
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Validate TradingDecision structure
         assert decision is not None
@@ -64,10 +71,7 @@ class TestMlAdaptiveStrategy:
         strategy = create_ml_adaptive_strategy()
         balance = 10000.0
         
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Regime context should be present
         assert decision.regime is not None
@@ -78,10 +82,7 @@ class TestMlAdaptiveStrategy:
         strategy = create_ml_adaptive_strategy()
         balance = 10000.0
         
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Signal should have confidence and strength
         assert hasattr(decision.signal, 'confidence')
@@ -94,10 +95,7 @@ class TestMlAdaptiveStrategy:
         strategy = create_ml_adaptive_strategy()
         balance = 10000.0
         
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Risk metrics should be present
         assert decision.risk_metrics is not None
@@ -108,10 +106,7 @@ class TestMlAdaptiveStrategy:
         strategy = create_ml_adaptive_strategy()
         balance = 10000.0
         
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Adaptive strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Position size should be reasonable
         if decision.signal.direction != SignalDirection.HOLD:

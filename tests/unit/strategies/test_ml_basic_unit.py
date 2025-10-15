@@ -1,9 +1,22 @@
+from types import MethodType
+
 import pytest
 
-from src.strategies.ml_basic import create_ml_basic_strategy
 from src.strategies.components import SignalDirection, Strategy
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 pytestmark = pytest.mark.unit
+
+
+def _process_with_fixture(strategy, sample_ohlcv_data, balance=10000.0):
+    """Run the strategy with enough historical candles for sequence-based models."""
+    index = strategy.signal_generator.sequence_length + 10
+    assert len(sample_ohlcv_data) > index, "sample_ohlcv_data must provide enough candles for ML tests"
+    strategy.signal_generator._get_ml_prediction = MethodType(
+        lambda self, df, idx: float(df["close"].iloc[idx - 1] * 1.01),
+        strategy.signal_generator,
+    )
+    return strategy.process_candle(sample_ohlcv_data, index=index, balance=balance)
 
 
 class TestMlBasicStrategy:
@@ -32,12 +45,8 @@ class TestMlBasicStrategy:
         """Test that process_candle() returns valid TradingDecision"""
         strategy = create_ml_basic_strategy()
         balance = 10000.0
-        
-        # Need sufficient data for sequence length (120)
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Basic strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Validate TradingDecision structure
         assert decision is not None
@@ -59,11 +68,8 @@ class TestMlBasicStrategy:
         """Test ML Basic signal generation logic"""
         strategy = create_ml_basic_strategy()
         balance = 10000.0
-        
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Basic strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Signal should have confidence and strength
         assert hasattr(decision.signal, 'confidence')
@@ -75,11 +81,8 @@ class TestMlBasicStrategy:
         """Test ML Basic risk management"""
         strategy = create_ml_basic_strategy()
         balance = 10000.0
-        
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Basic strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Risk metrics should be present
         assert decision.risk_metrics is not None
@@ -89,11 +92,8 @@ class TestMlBasicStrategy:
         """Test ML Basic position sizing"""
         strategy = create_ml_basic_strategy()
         balance = 10000.0
-        
-        if len(sample_ohlcv_data) < 150:
-            pytest.skip("Insufficient data for ML Basic strategy")
-        
-        decision = strategy.process_candle(sample_ohlcv_data, index=130, balance=balance)
+
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
         # Position size should be reasonable
         if decision.signal.direction != SignalDirection.HOLD:

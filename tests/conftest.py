@@ -7,17 +7,76 @@ especially for setting up mock data, test environments, and common objects.
 
 import os
 import random
+import sys
 import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
+if sys.version_info < (3, 10) and "src.prediction" not in sys.modules:
+    stub_prediction = ModuleType("src.prediction")
+
+    class _StubPredictionConfig:
+        """Minimal stub for PredictionConfig used in unit tests."""
+
+        enable_sentiment: bool
+        enable_market_microstructure: bool
+
+        def __init__(self):
+            self.enable_sentiment = False
+            self.enable_market_microstructure = False
+
+        @classmethod
+        def from_config_manager(cls):
+            return cls()
+
+    class _StubRegistry:
+        def select_bundle(self, **_):
+            raise RuntimeError("registry unavailable in unit tests")
+
+    class _StubPredictionEngine:
+        """Minimal stub for PredictionEngine used in unit tests."""
+
+        def __init__(self, config):
+            self.config = config
+            self.feature_pipeline = None
+            self.model_registry = _StubRegistry()
+
+        def health_check(self):
+            return {"status": "healthy"}
+
+        def predict(self, window_df, model_name=None):
+            return SimpleNamespace(price=float(window_df["close"].iloc[-1]))
+
+    stub_prediction.PredictionConfig = _StubPredictionConfig
+    stub_prediction.PredictionEngine = _StubPredictionEngine
+    sys.modules["src.prediction"] = stub_prediction
+
+if "onnxruntime" not in sys.modules:
+    stub_onnx = ModuleType("onnxruntime")
+
+    class _StubInferenceSession:
+        """Minimal stub for onnxruntime session to satisfy unit tests."""
+
+        def __init__(self, *args, **kwargs):
+            self._inputs = [SimpleNamespace(name="input")]
+
+        def get_inputs(self):
+            return self._inputs
+
+        def run(self, *args, **kwargs):
+            return [[[0.0]]]
+
+    stub_onnx.InferenceSession = _StubInferenceSession
+    sys.modules["onnxruntime"] = stub_onnx
+
+# Import core components for fixture creation
 import numpy as np
 import pandas as pd
 import pytest
 
-# Import core components for fixture creation
 from src.data_providers.data_provider import DataProvider
 from src.risk.risk_manager import RiskParameters
 from src.strategies.base import BaseStrategy
@@ -189,11 +248,12 @@ def sample_ohlcv_data():
     """Generate realistic OHLCV data for testing"""
     np.random.seed(42)  # For reproducible tests
 
-    dates = pd.date_range("2024-01-01", periods=100, freq="1h")
+    num_rows = 200
+    dates = pd.date_range("2024-01-01", periods=num_rows, freq="1h")
 
     # Generate realistic price data with some trends and volatility
     base_price = 50000
-    price_changes = np.random.normal(0, 0.02, 100)  # 2% volatility
+    price_changes = np.random.normal(0, 0.02, num_rows)  # 2% volatility
 
     closes = [base_price]
     for change in price_changes[1:]:

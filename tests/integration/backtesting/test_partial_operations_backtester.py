@@ -6,7 +6,7 @@ import pytest
 from src.backtesting.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.position_management.partial_manager import PartialExitPolicy
-from src.strategies.ml_adaptive import MlAdaptive
+from src.strategies.ml_adaptive import create_ml_adaptive_strategy
 
 pytestmark = pytest.mark.integration
 
@@ -32,7 +32,7 @@ class SimpleMockProvider(MockDataProvider):
 def test_backtester_partial_ops_flow():
     prices = [100, 101, 102, 103, 104, 105, 106, 107]
     provider = SimpleMockProvider(prices)
-    strategy = MlAdaptive()
+    strategy = create_ml_adaptive_strategy()
     pem = PartialExitPolicy(
         exit_targets=[0.03, 0.06],
         exit_sizes=[0.25, 0.25],
@@ -44,3 +44,5 @@ def test_backtester_partial_ops_flow():
     res = bt.run("BTCUSDT", "1m", start=datetime.utcnow() - timedelta(minutes=10))
     # Basic sanity: produces results without error
     assert "total_trades" in res
+    # Validate that component-based strategy was used
+    assert strategy.name in ["ml_adaptive", "MlAdaptive"]

@@ -4,7 +4,7 @@ import pandas as pd
 
 from src.backtesting.engine import Backtester
 from src.position_management.time_exits import MarketSessionDef, TimeExitPolicy
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 def test_backtester_time_exit_max_holding(mock_data_provider):
@@ -24,7 +24,7 @@ def test_backtester_time_exit_max_holding(mock_data_provider):
     )
     mock_data_provider.get_historical_data.return_value = df
 
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
 
     # Exit after 1 hour
     policy = TimeExitPolicy(max_holding_hours=1)
@@ -36,6 +36,8 @@ def test_backtester_time_exit_max_holding(mock_data_provider):
     # Should not accumulate a very long open trade due to time exit
     # We can't assert exact counts because strategy logic drives entries, but ensure it runs
     assert "final_balance" in results
+    # Validate component-based strategy was used
+    assert strategy.name in ["ml_basic", "MlBasic"]
 
 
 def test_backtester_time_exit_end_of_day(mock_data_provider):
@@ -65,8 +67,10 @@ def test_backtester_time_exit_end_of_day(mock_data_provider):
     )
     mock_data_provider.get_historical_data.return_value = df
 
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
     bt = Backtester(strategy=strategy, data_provider=mock_data_provider, time_exit_policy=policy)
 
     results = bt.run("BTCUSDT", "1h", start=idx[0].to_pydatetime(), end=idx[-1].to_pydatetime())
     assert isinstance(results, dict)
+    # Validate component-based strategy was used
+    assert strategy.name in ["ml_basic", "MlBasic"]

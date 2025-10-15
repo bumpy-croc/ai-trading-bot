@@ -181,32 +181,32 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Test component composition
   - _Requirements: 7.4_
 
-- [ ] 5. Update backtesting integration tests
+- [x] 5. Update backtesting integration tests
   - Update all backtesting tests to use component-based strategies
   - Remove legacy interface references
   - Validate `TradingDecision` objects in tests
   - Ensure all backtesting integration tests pass
   - _Requirements: 8.1, 8.2, 8.3, 8.4_
 
-- [ ] 5.1 Update single strategy backtest tests
+- [x] 5.1 Update single strategy backtest tests
   - Use component-based strategies in backtest tests
   - Validate `TradingDecision` objects
   - Test entry/exit logic with new interface
   - _Requirements: 8.1, 8.2_
 
-- [ ] 5.2 Update regime switching backtest tests
+- [x] 5.2 Update regime switching backtest tests
   - Test regime switching with component strategies
   - Validate strategy transitions
   - Ensure regime detection works correctly
   - _Requirements: 8.1, 8.2_
 
-- [ ] 5.3 Update performance metrics tests
+- [x] 5.3 Update performance metrics tests
   - Test performance calculation with component strategies
   - Validate metrics accuracy
   - Test regime-specific performance metrics
   - _Requirements: 8.1, 8.2_
 
-- [ ] 5.4 Remove legacy interface references from backtest tests
+- [x] 5.4 Remove legacy interface references from backtest tests
   - Remove all calls to `calculate_indicators()`
   - Remove all calls to `check_entry_conditions()`, `check_exit_conditions()`
   - Remove DataFrame column assertions for legacy columns
