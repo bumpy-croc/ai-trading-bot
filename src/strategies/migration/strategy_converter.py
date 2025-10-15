@@ -387,6 +387,10 @@ class StrategyConverter:
         """Get default component mapping for a strategy"""
         strategy_type = strategy.__class__.__name__
 
+        # Component strategies expose their logical name rather than class type
+        if strategy_type == "Strategy" and hasattr(strategy, "name"):
+            strategy_type = getattr(strategy, "name")
+
         # Try exact match first
         if strategy_type in self._conversion_mappings:
             return self._conversion_mappings[strategy_type]

@@ -77,13 +77,33 @@ def create_ml_adaptive_strategy(
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
     
-    return Strategy(
+    strategy = Strategy(
         name=name,
         signal_generator=signal_generator,
         risk_manager=risk_manager,
         position_sizer=position_sizer,
         regime_detector=regime_detector,
     )
+
+    strategy.model_path = model_path
+    strategy.sequence_length = sequence_length
+    strategy.use_prediction_engine = use_prediction_engine
+    strategy.model_name = model_name
+    strategy.stop_loss_pct = 0.05  # regime manager adapts but expose baseline
+    strategy.risk_per_trade = 0.02
+    strategy.base_fraction = 0.2
+    strategy.min_confidence = 0.3
+    strategy._risk_overrides = {
+        "partial_operations": {
+            "exit_targets": [0.03, 0.06, 0.10],
+            "exit_sizes": [0.25, 0.25, 0.50],
+            "scale_in_thresholds": [0.02, 0.05],
+            "scale_in_sizes": [0.25, 0.25],
+            "max_scale_ins": 2,
+        }
+    }
+
+    return strategy
 
 
 # Backward compatibility wrapper - will be removed after engine migration (Task 2 & 3)

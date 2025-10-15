@@ -80,13 +80,28 @@ def create_ml_basic_strategy(
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
     
-    return Strategy(
+    strategy = Strategy(
         name=name,
         signal_generator=signal_generator,
         risk_manager=risk_manager,
         position_sizer=position_sizer,
         regime_detector=regime_detector,
     )
+
+    # Attach key parameters for compatibility with legacy workflows
+    strategy.model_path = model_path
+    strategy.sequence_length = sequence_length
+    strategy.use_prediction_engine = use_prediction_engine
+    strategy.model_name = model_name
+    strategy.model_type = model_type
+    strategy.timeframe = timeframe
+    strategy.stop_loss_pct = 0.02
+    strategy.take_profit_pct = 0.04
+    strategy.risk_per_trade = 0.02
+    strategy.base_fraction = 0.2
+    strategy.min_confidence = 0.3
+
+    return strategy
 
 
 # Backward compatibility wrapper - will be removed after engine migration (Task 2 & 3)

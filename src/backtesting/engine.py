@@ -621,6 +621,146 @@ class Backtester:
         size_fraction = max(0.0, min(1.0, size_fraction))
         return side, size_fraction
 
+    def _apply_correlation_control(
+        self,
+        symbol: str,
+        timeframe: str,
+        df: pd.DataFrame,
+        index: int,
+        candidate_fraction: float,
+    ) -> float:
+        """Apply correlation control to candidate position size for runtime strategies."""
+        if candidate_fraction <= 0 or self.correlation_engine is None:
+            return candidate_fraction
+
+        try:
+            overrides = (
+                self.strategy.get_risk_overrides()
+                if hasattr(self.strategy, "get_risk_overrides")
+                else None
+            )
+        except Exception:
+            overrides = None
+
+        max_exposure_override = None
+        if overrides:
+            try:
+                corr_cfg = overrides.get("correlation_control", {})
+                max_exposure_override = corr_cfg.get("max_correlated_exposure")
+            except Exception:
+                max_exposure_override = None
+
+        price_series: dict[str, pd.Series] = {}
+        try:
+            price_series[str(symbol)] = df["close"].astype(float)
+        except Exception:
+            try:
+                price_series[str(symbol)] = df["close"]
+            except Exception:
+                return candidate_fraction
+
+        end_ts = None
+        try:
+            end_ts = df.index[index]
+        except Exception:
+            try:
+                end_ts = df.index[-1]
+            except Exception:
+                end_ts = None
+
+        start_ts = None
+        if isinstance(end_ts, pd.Timestamp):
+            try:
+                start_ts = end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days)
+            except Exception:
+                start_ts = None
+
+        open_symbols = set()
+        try:
+            if getattr(self, "risk_manager", None) and self.risk_manager.positions:
+                open_symbols = set(map(str, self.risk_manager.positions.keys()))
+        except Exception:
+            open_symbols = set()
+
+        for sym in open_symbols:
+            if sym == str(symbol) or sym in price_series:
+                continue
+            try:
+                if start_ts is not None and isinstance(end_ts, pd.Timestamp):
+                    hist = self.data_provider.get_historical_data(
+                        sym,
+                        timeframe=timeframe,
+                        start=start_ts.to_pydatetime(),
+                        end=end_ts.to_pydatetime(),
+                    )
+                else:
+                    hist = self.data_provider.get_historical_data(sym, timeframe=timeframe)
+            except Exception:
+                continue
+            if hist is None or hist.empty or "close" not in hist.columns:
+                continue
+            try:
+                price_series[sym] = hist["close"].astype(float)
+            except Exception:
+                price_series[sym] = hist["close"]
+
+        corr_matrix = None
+        try:
+            corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
+        except Exception as exc:
+            logger.debug("Failed to calculate correlation matrix for %s: %s", symbol, exc)
+            corr_matrix = None
+
+        factor = 1.0
+        try:
+            factor = float(
+                self.correlation_engine.compute_size_reduction_factor(
+                    positions=self.risk_manager.positions,
+                    corr_matrix=corr_matrix,
+                    candidate_symbol=str(symbol),
+                    candidate_fraction=float(candidate_fraction),
+                    max_exposure_override=max_exposure_override,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Correlation size reduction failed for %s: %s", symbol, exc)
+            factor = 1.0
+
+        adjusted = candidate_fraction * factor
+
+        max_allowed = None
+        try:
+            if overrides and max_exposure_override is not None:
+                max_allowed = float(max_exposure_override)
+            else:
+                max_allowed = float(self.correlation_engine.config.max_correlated_exposure)
+        except Exception:
+            max_allowed = None
+
+        if max_allowed is not None and corr_matrix is not None:
+            try:
+                groups = self.correlation_engine.get_correlation_groups(corr_matrix)
+            except Exception as exc:
+                logger.debug("Failed to derive correlation groups for %s: %s", symbol, exc)
+                groups = []
+
+            candidate_group_exposure = None
+            for group in groups:
+                if str(symbol) in group:
+                    current = 0.0
+                    for sym in group:
+                        current += float(self.risk_manager.positions.get(sym, {}).get("size", 0.0))
+                    candidate_group_exposure = current
+                    break
+
+            if candidate_group_exposure is not None:
+                remaining_capacity = max(0.0, max_allowed - candidate_group_exposure)
+                if remaining_capacity <= 0:
+                    return 0.0
+                return max(0.0, min(adjusted, remaining_capacity))
+
+        return max(0.0, adjusted)
+
     def _finalize_runtime(self) -> None:
         if self._is_runtime_strategy():
             try:
@@ -1269,6 +1409,15 @@ class Backtester:
                                 session_id=self.trading_session_id,
                             )
                         continue
+
+                    if size_fraction > 0:
+                        size_fraction = self._apply_correlation_control(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            df=df,
+                            index=i,
+                            candidate_fraction=size_fraction,
+                        )
 
                     # Apply dynamic risk adjustments for runtime entry
                     if size_fraction > 0 and self.enable_dynamic_risk:

@@ -100,6 +100,7 @@ class Strategy:
         self.risk_manager = risk_manager
         self.position_sizer = position_sizer
         self.regime_detector = regime_detector or EnhancedRegimeDetector()
+        self.trading_pair = "BTCUSDT"
         
         # Logging setup
         self.enable_logging = enable_logging
@@ -125,6 +126,7 @@ class Strategy:
 
         # Runtime configuration
         self._warmup_override: Optional[int] = None
+        self._last_signal: Optional[Signal] = None
         
         self.logger.info(f"Strategy '{name}' initialized with components: "
                         f"SignalGen={signal_generator.name}, "
@@ -430,6 +432,121 @@ class Strategy:
             'position_sizer': self.position_sizer.get_parameters(),
             'regime_detector': {'type': 'EnhancedRegimeDetector'}
         }
+
+    # ------------------------------------------------------------------
+    # Legacy compatibility helpers (temporary during migration)
+    # ------------------------------------------------------------------
+
+    def set_trading_pair(self, trading_pair: str) -> None:
+        """Set default trading pair for compatibility with BaseStrategy."""
+        self.trading_pair = trading_pair
+
+    def get_trading_pair(self) -> str:
+        """Return current trading pair."""
+        return self.trading_pair
+
+    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prepare dataframe with required annotations.
+        
+        Component strategies operate directly on supplied data, but legacy
+        callers expect this helper to add regime annotations.
+        """
+        result = df.copy()
+        try:
+            if hasattr(self.regime_detector, "base_detector") and "regime_label" not in result.columns:
+                result = self.regime_detector.base_detector.annotate(result)
+        except Exception as exc:
+            self.logger.debug("Failed to annotate regime data: %s", exc)
+        return result
+
+    def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+        """Return True when the generated signal advises opening a position."""
+        regime = self._detect_regime(df, index)
+        signal = self._generate_signal(df, index, regime)
+        self._last_signal = signal
+        return signal.direction in (SignalDirection.BUY, SignalDirection.SELL)
+
+    def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float,
+                              side: str = "long") -> bool:
+        """
+        Evaluate exit rules using the risk manager.
+        
+        When position context is unavailable we assume unit size for evaluation.
+        """
+        regime = self._detect_regime(df, index)
+        current_price = float(df.iloc[index]["close"])
+        position = Position(
+            symbol=self.trading_pair,
+            side=side,
+            size=1.0,
+            entry_price=entry_price,
+            current_price=current_price,
+            entry_time=datetime.now(),
+        )
+        market_data = MarketData(
+            symbol=self.trading_pair,
+            price=current_price,
+            volume=float(df.iloc[index].get("volume", 0.0)),
+            timestamp=df.index[index] if isinstance(df.index, pd.Index) else None,
+        )
+        try:
+            return self.risk_manager.should_exit(position, market_data, regime)
+        except Exception as exc:
+            self.logger.debug("Exit evaluation failed: %s", exc)
+            return False
+
+    def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
+        """Mirror legacy sizing workflow using component pipeline."""
+        regime = self._detect_regime(df, index)
+        signal = self._last_signal or self._generate_signal(df, index, regime)
+        risk_size = self._calculate_risk_position_size(signal, balance, regime)
+        final_size = self._calculate_final_position_size(signal, balance, risk_size, regime)
+        validated_size = self._validate_position_size(final_size, signal, balance, regime)
+        # Reset cached signal so subsequent calls recompute if needed
+        self._last_signal = None
+        return validated_size
+
+    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float,
+                            side: str = "long") -> float:
+        """Provide stop loss level using risk manager helpers when available."""
+        regime = self._detect_regime(df, index)
+        signal = self._generate_signal(df, index, regime)
+        get_stop_loss = getattr(self.risk_manager, "get_stop_loss", None)
+        if callable(get_stop_loss):
+            try:
+                return get_stop_loss(price, signal, regime)
+            except Exception as exc:
+                self.logger.debug("Risk manager stop loss failed: %s", exc)
+        return price * (0.95 if side == "long" else 1.05)
+
+    def get_parameters(self) -> dict[str, Any]:
+        """Expose key configuration parameters for compatibility."""
+        params: dict[str, Any] = {
+            "name": self.name,
+            "trading_pair": self.trading_pair,
+            "components": self.get_component_info(),
+        }
+        for attr in (
+            "model_path",
+            "sequence_length",
+            "use_prediction_engine",
+            "model_name",
+            "model_type",
+            "timeframe",
+            "stop_loss_pct",
+            "take_profit_pct",
+            "risk_per_trade",
+            "base_fraction",
+            "min_confidence",
+        ):
+            if hasattr(self, attr):
+                params[attr] = getattr(self, attr)
+        return params
+
+    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
+        """Return configured risk overrides when provided."""
+        return getattr(self, "_risk_overrides", None)
     
     def _validate_inputs(self, df: pd.DataFrame, index: int, balance: float) -> None:
         """Validate input parameters"""

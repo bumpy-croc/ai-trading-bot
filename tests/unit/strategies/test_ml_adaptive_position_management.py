@@ -73,9 +73,10 @@ class TestMlAdaptiveStrategy:
         
         decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
         
-        # Regime context should be present
+        # Regime context should be present with trend/volatility annotations
         assert decision.regime is not None
-        assert hasattr(decision.regime, 'regime_type')
+        assert hasattr(decision.regime, 'trend')
+        assert hasattr(decision.regime, 'volatility')
 
     def test_ml_adaptive_signal_generation(self, sample_ohlcv_data):
         """Test ML Adaptive signal generation logic"""
