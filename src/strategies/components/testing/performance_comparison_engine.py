@@ -24,7 +24,7 @@ class BacktestEngineProtocol(Protocol):
     
     def run_backtest(
         self,
-        strategy: 'BaseStrategy',
+        strategy: Any,
         data: pd.DataFrame,
         **kwargs: Any
     ) -> pd.DataFrame:
@@ -40,7 +40,6 @@ class BacktestEngineProtocol(Protocol):
             DataFrame with columns: timestamp, balance, and optionally trade_pnl
         """
         ...
-from src.strategies.base import BaseStrategy
 from src.strategies.components.testing.performance_parity_validator import (
     PerformanceComparisonReport,
     PerformanceParityValidator,

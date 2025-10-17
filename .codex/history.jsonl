@@ -12,3 +12,6 @@
 {"session_id":"0199e4a5-5b78-78f2-b041-6b876f71fdab","ts":1760735192,"text":"test failures"}
 {"session_id":"0199e4a5-5b78-78f2-b041-6b876f71fdab","ts":1760735355,"text":"For issue A, assume everything uses the new runtime. Is this test still necessary? Should we just test that the signalGenerator generates the predictions?"}
 {"session_id":"0199e4a5-5b78-78f2-b041-6b876f71fdab","ts":1760735433,"text":"Great let's do that. Replace the test with your suggestion and make sure it passes. Raise any issues you find"}
+{"session_id":"0199e4a5-5b78-78f2-b041-6b876f71fdab","ts":1760737192,"text":"fix any failing unit tests. Use the context from the changes on this branch and the docs in .kiro/specs/strategy-migration-cutover"}
+{"session_id":"0199f41d-9079-7662-ba8d-eff8c75f8a7a","ts":1760737213,"text":"fix any failing unit tests. Use the context from the changes on this branch and the docs in .kiro/specs/strategy-migration-cutover"}
+{"session_id":"0199f41d-9079-7662-ba8d-eff8c75f8a7a","ts":1760737318,"text":"python3 should point to python 3.11. Please make it so"}

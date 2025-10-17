@@ -279,71 +279,71 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Delete any migration-related tests
   - _Requirements: 2.4_
 
-- [ ] 8. Update documentation and remove migration references
+- [x] 8. Update documentation and remove migration references
   - Delete or archive `MIGRATION.md`
   - Update `README.md` to remove legacy references
   - Update code comments to remove "legacy", "componentised", "new" terminology
   - Update docstrings to reflect component-based interface only
   - _Requirements: 3.3, 3.4, 10.1, 10.2, 10.3, 10.4, 10.5, 10.6_
 
-- [ ] 8.1 Delete migration documentation
+- [x] 8.1 Delete migration documentation
   - Delete `src/strategies/MIGRATION.md`
   - Remove migration references from other documentation files
   - _Requirements: 3.3_
 
-- [ ] 8.2 Update README files
+- [x] 8.2 Update README files
   - Update `src/strategies/README.md` to document component-based approach only
   - Remove references to `BaseStrategy` and legacy interface
   - Add examples of creating strategies using component composition
   - _Requirements: 3.4, 10.4, 10.5_
 
-- [ ] 8.3 Clean up code comments
+- [x] 8.3 Clean up code comments
   - Remove comments referring to "legacy" strategies
   - Remove comments referring to "componentised" or "new" strategies
   - Remove comments referring to "migration" or "adapter"
   - Update comments to describe component-based architecture
   - _Requirements: 10.1, 10.2, 10.3_
 
-- [ ] 8.4 Update docstrings
+- [x] 8.4 Update docstrings
   - Update docstrings to reflect component-based interface
   - Remove references to legacy methods
   - Document `process_candle()` and `TradingDecision` usage
   - _Requirements: 10.4, 10.6_
 
-- [ ] 9. Verify all tests pass
+- [x] 9. Verify all tests pass
   - Run all unit tests and ensure they pass
   - Run all integration tests and ensure they pass
   - Run backtesting tests with component strategies
   - Run live trading tests with component strategies
   - _Requirements: 7.6, 8.4, 9.4_
 
-- [ ] 9.1 Run unit test suite
+- [x] 9.1 Run unit test suite
   - Execute all unit tests
   - Verify no tests reference legacy interface
   - Fix any failing tests
   - _Requirements: 7.6_
 
-- [ ] 9.2 Run integration test suite
+- [x] 9.2 Run integration test suite
   - Execute all integration tests
   - Verify backtesting integration tests pass
   - Verify live trading integration tests pass
   - Fix any failing tests
   - _Requirements: 8.4, 9.4_
 
-- [ ] 9.3 Run end-to-end validation
+- [x] 9.3 Run end-to-end validation
   - Run complete backtests with all strategies
   - Verify results are reasonable
   - Test live trading in paper mode
   - _Requirements: 8.4, 9.4_
 
-- [ ] 10. Final cleanup and validation
+- [x] 10. Final cleanup and validation
   - Search codebase for any remaining legacy references
   - Verify no imports of deleted modules
   - Verify no calls to legacy methods
   - Update any remaining documentation
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 2.4, 3.1, 3.2, 3.3, 3.4, 10.1, 10.2, 10.3, 10.4, 10.5, 10.6_
 
-- [ ] 10.1 Search for legacy references
+- [x] 10.1 Search for legacy references
   - Search for "BaseStrategy" in codebase
   - Search for "calculate_indicators" in codebase
   - Search for "check_entry_conditions" in codebase
@@ -351,20 +351,20 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Search for "LegacyStrategyAdapter" in codebase
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 2.1, 2.2_
 
-- [ ] 10.2 Verify no imports of deleted modules
+- [x] 10.2 Verify no imports of deleted modules
   - Check for imports from `src.strategies.base`
   - Check for imports from `src.strategies.adapters`
   - Check for imports from `src.strategies.migration`
   - Fix any remaining imports
   - _Requirements: 1.1, 2.1, 3.1_
 
-- [ ] 10.3 Verify no calls to legacy methods
+- [x] 10.3 Verify no calls to legacy methods
   - Search for calls to legacy interface methods
   - Verify all code uses `process_candle()`
   - Verify all code uses `TradingDecision` objects
   - _Requirements: 1.2, 1.3, 1.4_
 
-- [ ] 10.4 Final documentation review
+- [x] 10.4 Final documentation review
   - Review all documentation for accuracy
   - Ensure component-based architecture is well documented
   - Remove any remaining migration references

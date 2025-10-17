@@ -68,10 +68,10 @@ class TestEndToEndWorkflows:
         # 1. Strategy Development Phase
         strategy = MlBasic()
 
-        # Verify strategy has required methods
-        assert hasattr(strategy, "calculate_indicators")
-        assert hasattr(strategy, "check_entry_conditions")
-        assert hasattr(strategy, "check_exit_conditions")
+        # Verify strategy has required component-based interface
+        assert hasattr(strategy, "process_candle")
+        assert hasattr(strategy, "should_exit_position")
+        assert hasattr(strategy, "get_stop_loss_price")
 
         # 2. Backtesting Phase
         backtester = Backtester(

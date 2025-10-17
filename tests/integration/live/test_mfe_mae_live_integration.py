@@ -4,39 +4,7 @@ import pytest
 
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.live.trading_engine import LiveTradingEngine
-from src.strategies.base import BaseStrategy
-
-
-class QuickFlipStrategy(BaseStrategy):
-    def __init__(self):
-        super().__init__("QuickFlipStrategy")
-        self._opened = False
-
-    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        return df
-
-    def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
-        # Enter only once to keep test deterministic
-        if not self._opened and index >= 1:
-            self._opened = True
-            return True
-        return False
-
-    def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
-        # Exit when price moves even slightly from entry
-        if index < 1 or index >= len(df):
-            return False
-        current_price = float(df["close"].iloc[index])
-        return current_price != float(entry_price)
-
-    def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
-        return 0.1  # 10% of balance
-
-    def calculate_stop_loss(self, df, index, price, side: str = "long") -> float:
-        return float(price) * 0.98
-
-    def get_parameters(self) -> dict:
-        return {}
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 @pytest.mark.integration
@@ -45,7 +13,7 @@ def test_live_engine_records_mfe_mae():
     # Mock data provider with fast updates
     provider = MockDataProvider(interval_seconds=1, num_candles=50)
 
-    strategy = QuickFlipStrategy()
+    strategy = create_ml_basic_strategy()
 
     engine = LiveTradingEngine(
         strategy=strategy,

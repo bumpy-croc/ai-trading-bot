@@ -1,6 +1,33 @@
 import os
 import sys
 from pathlib import Path
+from shutil import which
+
+# Ensure we always execute under Python 3.11+ even if the system `python3` points
+# to an older interpreter (e.g., the macOS default 3.9). This repo depends on
+# 3.11 features like PEP 604 unions, so re-exec into a 3.11 binary when required.
+if sys.version_info < (3, 11):
+    candidates: list[str] = []
+
+    explicit_env = os.environ.get("PYTHON311")
+    if explicit_env:
+        candidates.append(explicit_env)
+
+    which_candidate = which("python3.11")
+    if which_candidate:
+        candidates.append(which_candidate)
+
+    default_homebrew = Path("/opt/homebrew/opt/python@3.11/bin/python3.11")
+    candidates.append(str(default_homebrew))
+
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            os.execv(candidate, [candidate, *sys.argv])
+
+    raise RuntimeError(
+        "Python 3.11 interpreter is required but could not be located. "
+        "Set PYTHON311 to the desired executable or install python@3.11."
+    )
 
 # If running under pytest, avoid altering sys.path/PYTHONPATH to keep imports predictable
 if os.environ.get("PYTEST_CURRENT_TEST"):

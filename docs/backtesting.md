@@ -8,8 +8,8 @@ regime-aware strategy switching, and dynamic risk controls all share the same he
 
 - `Backtester` orchestrates the run, handles warm-up periods, and computes summary metrics using
   `src/backtesting/utils.compute_performance_metrics`.
-- Strategies inherit from `src.strategies.base.BaseStrategy` and expose hooks such as `calculate_indicators`,
-  `check_entry_conditions`, and `check_exit_conditions`.
+- Strategies use component-based architecture with `Strategy` class that composes `SignalGenerator`, `RiskManager`, 
+  and `PositionSizer` components. The engine calls `strategy.process_candle()` for each candle to get trading decisions.
 - Risk controls rely on `RiskManager`, `DynamicRiskManager`, `TrailingStopPolicy`, and optional partial exit policies – the same
   classes used by the live engine.
 - When `log_to_database=True`, the engine persists trades, strategy executions, and session records through

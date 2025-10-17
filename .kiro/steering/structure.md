@@ -77,11 +77,23 @@ db_manager = DatabaseManager()
 
 ### Strategy Pattern
 ```python
-# All strategies inherit from BaseStrategy
-from src.strategies.base import BaseStrategy
-class MyStrategy(BaseStrategy):
-    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
-        # Implementation
+# All strategies use component composition
+from src.strategies.components.strategy import Strategy
+from src.strategies.components.signal_generators.base import SignalGenerator
+from src.strategies.components.risk_managers.base import RiskManager
+from src.strategies.components.position_sizers.base import PositionSizer
+
+def create_my_strategy() -> Strategy:
+    signal_generator = MySignalGenerator()
+    risk_manager = MyRiskManager()
+    position_sizer = MyPositionSizer()
+    
+    return Strategy(
+        name="my_strategy",
+        signal_generator=signal_generator,
+        risk_manager=risk_manager,
+        position_sizer=position_sizer
+    )
 ```
 
 ### Data Provider Pattern

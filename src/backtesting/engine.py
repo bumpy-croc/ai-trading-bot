@@ -57,10 +57,6 @@ from src.strategies.components import (
     Strategy as ComponentStrategy,
     StrategyRuntime,
 )
-try:
-    from src.strategies.base import BaseStrategy
-except ImportError:  # Legacy BaseStrategy may be removed during migration
-    BaseStrategy = None
 from src.utils.logging_context import set_context, update_context
 from src.utils.logging_events import log_engine_event
 
@@ -1997,26 +1993,26 @@ class Backtester:
     # --------------------
     # Modularized helpers
     # --------------------
-    def _load_strategy_by_name(self, strategy_name: str) -> Optional[BaseStrategy]:
+    def _load_strategy_by_name(self, strategy_name: str) -> Optional[ComponentStrategy]:
         """Load strategy by name for regime switching"""
         try:
-            strategy_classes = {
-                'ml_basic': ('src.strategies.ml_basic', 'MlBasic'),
-                'ml_adaptive': ('src.strategies.ml_adaptive', 'MlAdaptive'),
-                'ml_sentiment': ('src.strategies.ml_sentiment', 'MlSentiment'),
-                'ensemble_weighted': ('src.strategies.ensemble_weighted', 'EnsembleWeighted'),
-                'momentum_leverage': ('src.strategies.momentum_leverage', 'MomentumLeverage')
+            strategy_factories = {
+                'ml_basic': ('src.strategies.ml_basic', 'create_ml_basic_strategy'),
+                'ml_adaptive': ('src.strategies.ml_adaptive', 'create_ml_adaptive_strategy'),
+                'ml_sentiment': ('src.strategies.ml_sentiment', 'create_ml_sentiment_strategy'),
+                'ensemble_weighted': ('src.strategies.ensemble_weighted', 'create_ensemble_weighted_strategy'),
+                'momentum_leverage': ('src.strategies.momentum_leverage', 'create_momentum_leverage_strategy')
             }
             
-            if strategy_name not in strategy_classes:
+            if strategy_name not in strategy_factories:
                 logger.warning(f"Unknown strategy for switching: {strategy_name}")
                 return None
             
-            module_path, class_name = strategy_classes[strategy_name]
-            module = __import__(module_path, fromlist=[class_name])
-            strategy_class = getattr(module, class_name)
+            module_path, factory_name = strategy_factories[strategy_name]
+            module = __import__(module_path, fromlist=[factory_name])
+            factory_function = getattr(module, factory_name)
             
-            return strategy_class()
+            return factory_function()
             
         except Exception as e:
             logger.error(f"Failed to load strategy {strategy_name}: {e}")

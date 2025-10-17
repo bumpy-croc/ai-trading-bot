@@ -1,30 +1,27 @@
 """
 Complete Migration Workflow Example
 
-This example demonstrates the complete workflow for migrating legacy strategies
+DEPRECATED: This example is no longer functional as the migration has been completed
+and all legacy code has been removed. This file is kept for historical reference only.
+
+This example demonstrated the complete workflow for migrating legacy strategies
 to the new component-based architecture, including conversion, validation,
 cross-validation testing, and rollback capabilities.
+
+The migration has been completed and the following modules have been removed:
+- src.strategies.base (BaseStrategy)
+- src.strategies.adapters (LegacyStrategyAdapter, adapter_factory)
+- src.strategies.migration (all migration utilities)
+
+For current strategy development, see:
+- src/strategies/README.md - Component-based strategy guide
+- src/strategies/components/ - Strategy components
+- examples/component_testing_example.py - Component testing examples
 """
 
-import logging
-import pandas as pd
-from datetime import datetime
-from pathlib import Path
-
-# Import migration utilities
-from src.strategies.migration import (
-    StrategyConverter,
-    CrossValidationTester,
-    RegressionTester,
-    DifferenceAnalyzer,
-    RollbackManager,
-    RollbackValidator,
-    AuditTrailManager
-)
-
-# Import strategies
-from src.strategies.ml_basic import MlBasic
-from src.strategies.ml_adaptive import MlAdaptive
+# This file is deprecated and will not run
+import sys
+sys.exit("This migration example is deprecated. The migration has been completed and legacy code has been removed.")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

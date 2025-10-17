@@ -1094,13 +1094,10 @@ class LiveTradingEngine:
                                 )
                                 short_fraction = min(short_fraction, self.max_position_size)
                                 short_position_size = short_fraction
-                            elif hasattr(self.strategy, 'calculate_position_size'):
-                                short_position_size = self.strategy.calculate_position_size(
-                                    df, current_index, self.current_balance
-                                )
-                                short_position_size = min(
-                                    short_position_size, self.max_position_size
-                                )
+                            else:
+                                # All strategies should be component-based
+                                self.logger.error(f"Strategy {self.strategy.name} does not support component-based position sizing")
+                                short_position_size = 0.0
                             
                             # Apply dynamic risk adjustments
                             short_position_size = self._get_dynamic_risk_adjusted_size(short_position_size)
@@ -1123,9 +1120,9 @@ class LiveTradingEngine:
                                             1 - getattr(self.strategy, "take_profit_pct", 0.04)
                                         )
                                 else:
-                                    short_stop_loss = self.strategy.calculate_stop_loss(
-                                        df, current_index, current_price, PositionSide.SHORT
-                                    )
+                                    # All strategies should be component-based
+                                    self.logger.error(f"Strategy {self.strategy.name} does not support component-based stop loss calculation")
+                                    short_stop_loss = current_price * 1.05  # Default 5% stop for short
                                     short_take_profit = current_price * (
                                         1 - getattr(self.strategy, "take_profit_pct", 0.04)
                                     )
@@ -1510,11 +1507,9 @@ class LiveTradingEngine:
                         exit_reason = "Strategy signal"
                 except Exception as e:
                     self.logger.debug(f"Component exit check failed: {e}")
-            elif hasattr(self.strategy, 'check_exit_conditions'):
-                # Legacy strategy: use check_exit_conditions()
-                if self.strategy.check_exit_conditions(df, current_index, position.entry_price):
-                    should_exit = True
-                    exit_reason = "Strategy signal"
+            else:
+                # All strategies should be component-based
+                self.logger.warning(f"Strategy {self.strategy.name} does not support component-based exit checks")
 
             # Check stop loss
             if not should_exit and position.stop_loss and self._check_stop_loss(position, current_price):
@@ -1659,36 +1654,15 @@ class LiveTradingEngine:
             except Exception as e:
                 self.logger.warning(f"Component strategy decision failed: {e}")
                 entry_signal = False
-        elif hasattr(self.strategy, 'check_entry_conditions'):
-            # Legacy strategy: use check_entry_conditions()
-            entry_signal = self.strategy.check_entry_conditions(df, current_index)
-            if entry_signal:
-                try:
-                    overrides = (
-                        self.strategy.get_risk_overrides()
-                        if hasattr(self.strategy, "get_risk_overrides")
-                        else None
-                    )
-                except Exception:
-                    overrides = None
+        else:
+            # All strategies should be component-based
+            self.logger.error(f"Strategy {self.strategy.name} is not a component-based strategy")
+            entry_signal = False
 
-                correlation_ctx = self._build_correlation_context(symbol, df, overrides)
-                if overrides and overrides.get("position_sizer"):
-                    fraction = self.risk_manager.calculate_position_fraction(
-                        df=df,
-                        index=current_index,
-                        balance=self.current_balance,
-                        price=current_price,
-                        indicators=indicators,
-                        strategy_overrides=overrides,
-                        correlation_ctx=correlation_ctx,
-                    )
-                    position_size = min(fraction, self.max_position_size)
-                elif hasattr(self.strategy, 'calculate_position_size'):
-                    position_size = self.strategy.calculate_position_size(
-                        df, current_index, self.current_balance
-                    )
-                    position_size = min(position_size, self.max_position_size)
+        if entry_signal and not use_runtime:
+            # Component strategies supply their own sizing. Retain correlation context computation
+            # for downstream consumers that expect it to be populated as part of the entry check.
+            self._build_correlation_context(symbol, df, None)
 
         if position_size > 0:
             position_size = self._get_dynamic_risk_adjusted_size(position_size)
@@ -1827,9 +1801,9 @@ class LiveTradingEngine:
                 if take_profit is None:
                     take_profit = current_price * (1 + overrides.get("take_profit_pct", 0.04))
             else:
-                stop_loss = self.strategy.calculate_stop_loss(
-                    df, current_index, current_price, "long"
-                )
+                # All strategies should be component-based
+                self.logger.error(f"Strategy {self.strategy.name} does not support component-based stop loss calculation")
+                stop_loss = current_price * 0.95  # Default 5% stop for long
                 take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
             entry_side = PositionSide.LONG
 
