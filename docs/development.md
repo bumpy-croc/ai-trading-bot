@@ -1,8 +1,12 @@
 # Development workflow
 
+> **Last Updated**: 2025-10-17
+
 This project ships a command-line interface and Makefile targets that standardise local setup, quality checks, and diagnostics.
 
 ## Environment setup
+
+**Requirements**: Python 3.9+ (Python 3.11+ recommended)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -11,6 +15,8 @@ make deps               # install development dependencies (pytest, ruff, mypy, 
 ```
 
 Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) used by maintainers.
+
+**Related**: See [Configuration](configuration.md) for environment variable setup.
 
 ## Railway deployment quick start
 
