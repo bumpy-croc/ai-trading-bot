@@ -49,7 +49,6 @@ from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager
-from src.strategies.base import BaseStrategy
 from src.strategies.components import (
     MarketData as ComponentMarketData,
     Position as ComponentPosition,
@@ -58,6 +57,10 @@ from src.strategies.components import (
     Strategy as ComponentStrategy,
     StrategyRuntime,
 )
+try:
+    from src.strategies.base import BaseStrategy
+except ImportError:  # Legacy BaseStrategy may be removed during migration
+    BaseStrategy = None
 from src.utils.logging_context import set_context, update_context
 from src.utils.logging_events import log_engine_event
 
@@ -137,7 +140,7 @@ class Backtester:
 
     def __init__(
         self,
-        strategy: BaseStrategy | ComponentStrategy | StrategyRuntime,
+        strategy: ComponentStrategy | StrategyRuntime,
         data_provider: DataProvider,
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[Any] = None,
@@ -451,7 +454,7 @@ class Backtester:
             return None
 
     def _configure_strategy(
-        self, strategy: BaseStrategy | ComponentStrategy | StrategyRuntime
+        self, strategy: ComponentStrategy | StrategyRuntime
     ) -> None:
         """Normalise strategy inputs and prepare runtime state."""
 

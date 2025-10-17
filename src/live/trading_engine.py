@@ -50,7 +50,6 @@ from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
-from src.strategies.base import BaseStrategy
 from src.strategies.components import (
     MarketData as ComponentMarketData,
     Position as ComponentPosition,
@@ -161,7 +160,7 @@ class LiveTradingEngine:
 
     def __init__(
         self,
-        strategy: BaseStrategy | ComponentStrategy | StrategyRuntime,
+        strategy: ComponentStrategy | StrategyRuntime,
         data_provider: DataProvider,
         sentiment_provider: SentimentDataProvider | None = None,
         risk_parameters: RiskParameters | None = None,
@@ -355,8 +354,8 @@ class LiveTradingEngine:
             managed_strategy = (
                 strategy.strategy if isinstance(strategy, StrategyRuntime) else strategy
             )
-            # Support both legacy BaseStrategy and component-based Strategy
-            if isinstance(managed_strategy, (BaseStrategy, ComponentStrategy)):
+            # Support component-based Strategy
+            if isinstance(managed_strategy, ComponentStrategy):
                 self.strategy_manager = StrategyManager()
                 self.strategy_manager.current_strategy = managed_strategy
                 self.strategy_manager.on_strategy_change = self._handle_strategy_change
@@ -366,7 +365,7 @@ class LiveTradingEngine:
                 )
             else:
                 logger.info(
-                    "Hot swapping disabled: provided strategy does not implement BaseStrategy or Strategy"
+                    "Hot swapping disabled: provided strategy does not implement Strategy"
                 )
 
         # Set up strategy logging if database is available
@@ -564,7 +563,7 @@ class LiveTradingEngine:
             return self.risk_manager.params
 
     def _configure_strategy(
-        self, strategy: BaseStrategy | ComponentStrategy | StrategyRuntime
+        self, strategy: ComponentStrategy | StrategyRuntime
     ) -> None:
         """Normalise strategy inputs and configure runtime bookkeeping."""
 

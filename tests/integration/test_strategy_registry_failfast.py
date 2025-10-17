@@ -38,8 +38,8 @@ def _write_bundle(root: Path, symbol: str, model_type: str, timeframe: str, vers
     )
 
 
-def test_strategy_uses_registry_fail_fast(tmp_path: Path, monkeypatch):
-    # Only BTC is present, ETH missing
+def test_strategy_uses_registry_predictions(tmp_path: Path, monkeypatch):
+    # Only BTC is present, ETH missing (should still serve BTC predictions)
     root = tmp_path / "models"
     _write_bundle(root, "BTCUSDT", "basic", "1h", "2025-01-01_1h_v1")
 
@@ -47,11 +47,20 @@ def test_strategy_uses_registry_fail_fast(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(cfg, "model_registry_path", str(root))
 
     # Initialize strategy with registry-enabled engine
-    s = MlBasic(use_prediction_engine=True, model_type="basic", timeframe="1h")
+    strategy = MlBasic(use_prediction_engine=True, model_type="basic", timeframe="1h")
 
-    # Run calculate_indicators; with single symbol it should proceed fine
+    # Patch prediction lookup so the test stays deterministic
+    generator = strategy.signal_generator
+    invoked = {}
+
+    def _fake_get_ml_prediction(self, df, index):
+        invoked["index"] = index
+        return 125.0
+
+    monkeypatch.setattr(generator, "_get_ml_prediction", _fake_get_ml_prediction.__get__(generator))
+
     df = _make_price_df()
-    out = s.calculate_indicators(df)
-    assert "ml_prediction" in out.columns
+    decision = strategy.process_candle(df, index=150, balance=10_000.0)
 
-
+    assert "index" in invoked  # ensure prediction was requested
+    assert decision.signal.metadata.get("prediction") == 125.0
