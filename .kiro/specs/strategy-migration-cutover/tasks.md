@@ -243,21 +243,21 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Remove DataFrame column assertions for legacy columns
   - _Requirements: 9.3_
 
-- [ ] 7. Delete legacy code and adapters
+- [x] 7. Delete legacy code and adapters
   - Delete `src/strategies/adapters/` directory
   - Delete `src/strategies/migration/` directory
   - Delete `src/strategies/base.py` (BaseStrategy)
   - Delete adapter tests
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 2.4_
 
-- [ ] 7.1 Delete adapter directory
+- [x] 7.1 Delete adapter directory
   - Delete `src/strategies/adapters/legacy_adapter.py`
   - Delete `src/strategies/adapters/adapter_factory.py`
   - Delete `src/strategies/adapters/__init__.py`
   - Delete entire `src/strategies/adapters/` directory
   - _Requirements: 2.1, 2.2, 2.3_
 
-- [ ] 7.2 Delete migration utilities directory
+- [x] 7.2 Delete migration utilities directory
   - Delete `src/strategies/migration/strategy_converter.py`
   - Delete `src/strategies/migration/validation_utils.py`
   - Delete `src/strategies/migration/cross_validation.py`
@@ -268,12 +268,12 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Delete entire `src/strategies/migration/` directory
   - _Requirements: 3.1, 3.2_
 
-- [ ] 7.3 Delete BaseStrategy class
+- [x] 7.3 Delete BaseStrategy class
   - Delete `src/strategies/base.py`
   - Remove imports of `BaseStrategy` from other files
   - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-- [ ] 7.4 Delete adapter tests
+- [x] 7.4 Delete adapter tests
   - Delete tests for `LegacyStrategyAdapter`
   - Delete tests for `adapter_factory`
   - Delete any migration-related tests

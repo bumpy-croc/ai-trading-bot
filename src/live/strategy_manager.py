@@ -117,10 +117,10 @@ class StrategyManager:
 
     def _instantiate_strategy(
         self, strategy_name: str, version: str, config: Optional[dict] = None
-    ) -> tuple[Union[BaseStrategy, ComponentStrategy], StrategyVersion]:
+    ) -> tuple[ComponentStrategy, StrategyVersion]:
         """Create a strategy instance and version record without mutating state.
         
-        Supports both legacy BaseStrategy and component-based Strategy instances.
+        Supports component-based Strategy instances.
         """
 
         if strategy_name not in self.strategy_registry:
@@ -153,10 +153,10 @@ class StrategyManager:
 
     def load_strategy(
         self, strategy_name: str, version: str = "latest", config: Optional[dict] = None
-    ) -> Union[BaseStrategy, ComponentStrategy]:
+    ) -> ComponentStrategy:
         """Load a strategy with version control.
         
-        Supports both legacy BaseStrategy and component-based Strategy instances.
+        Supports component-based Strategy instances.
         """
 
         with self.update_lock:

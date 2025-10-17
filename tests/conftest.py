@@ -79,7 +79,6 @@ import pytest
 
 from src.data_providers.data_provider import DataProvider
 from src.risk.risk_manager import RiskParameters
-from src.strategies.base import BaseStrategy
 
 REGIME_TEST_SEED = 1337
 
@@ -345,19 +344,15 @@ def risk_parameters():
 @pytest.fixture
 def mock_strategy():
     """Create a mock strategy for testing"""
-    mock_strategy = Mock(spec=BaseStrategy)
+    from src.strategies.components import Strategy
+    
+    mock_strategy = Mock(spec=Strategy)
     mock_strategy.name = "TestStrategy"
     mock_strategy.trading_pair = "BTCUSDT"
 
-    # Setup default behaviors
-    mock_strategy.calculate_indicators.return_value = pd.DataFrame(
-        {"open": [50000, 50100], "close": [50100, 50200], "rsi": [45, 55], "atr": [500, 510]}
-    )
-
-    mock_strategy.check_entry_conditions.return_value = True
-    mock_strategy.check_exit_conditions.return_value = False
-    mock_strategy.calculate_position_size.return_value = 0.1
-    mock_strategy.calculate_stop_loss.return_value = 49500
+    # Setup default behaviors for component-based strategy
+    # Note: Component strategies don't have calculate_indicators, check_entry_conditions, etc.
+    # They use process_candle() instead
     mock_strategy.get_parameters.return_value = {"test": "params"}
 
     return mock_strategy
