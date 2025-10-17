@@ -212,32 +212,32 @@ This implementation plan completes the migration from the legacy `BaseStrategy` 
   - Remove DataFrame column assertions for legacy columns
   - _Requirements: 8.3_
 
-- [ ] 6. Update live trading integration tests
+- [x] 6. Update live trading integration tests
   - Update all live trading tests to use component-based strategies
   - Remove legacy interface references
   - Validate `TradingDecision` objects in tests
   - Ensure all live trading integration tests pass
   - _Requirements: 9.1, 9.2, 9.3, 9.4_
 
-- [ ] 6.1 Update order execution tests
+- [x] 6.1 Update order execution tests
   - Use component-based strategies in order execution tests
   - Validate `TradingDecision` objects
   - Test order placement with new interface
   - _Requirements: 9.1, 9.2_
 
-- [ ] 6.2 Update position management tests
+- [x] 6.2 Update position management tests
   - Test position management with component strategies
   - Validate exit logic using `should_exit_position()`
   - Test stop loss updates
   - _Requirements: 9.1, 9.2_
 
-- [ ] 6.3 Update database logging tests
+- [x] 6.3 Update database logging tests
   - Test database logging with `TradingDecision` objects
   - Validate logged data structure
   - Test signal, regime, and risk metrics logging
   - _Requirements: 9.1, 9.2_
 
-- [ ] 6.4 Remove legacy interface references from live trading tests
+- [x] 6.4 Remove legacy interface references from live trading tests
   - Remove all calls to `calculate_indicators()`
   - Remove all calls to `check_entry_conditions()`, `check_exit_conditions()`
   - Remove DataFrame column assertions for legacy columns

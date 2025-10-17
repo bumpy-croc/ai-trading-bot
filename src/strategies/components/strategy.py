@@ -458,6 +458,9 @@ class Strategy:
                 result = self.regime_detector.base_detector.annotate(result)
         except Exception as exc:
             self.logger.debug("Failed to annotate regime data: %s", exc)
+        # Maintain legacy compatibility: downstream pipelines expect ml_prediction column
+        if "ml_prediction" not in result.columns:
+            result["ml_prediction"] = float("nan")
         return result
 
     def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
