@@ -24,7 +24,21 @@ pred = registry.predict('btcusdt_price', features)
 print(pred.price, pred.confidence, pred.direction)
 ```
 
-## Status
-- Strategies currently load ONNX directly; migration to `PredictionModelRegistry` is planned.
-- Models available: `btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`.
-- Metadata files: `btcusdt_price_metadata.json`, `btcusdt_sentiment_metadata.json`, `ethusdt_sentiment_metadata.json`.
+## Model Storage
+
+Models are stored in two locations:
+- **Legacy location**: `src/ml/*.onnx` (root level) - Used by current strategies
+- **Structured registry**: `src/ml/models/SYMBOL/type/version/model.onnx` - New model registry structure
+
+Available models:
+- `btcusdt_price.onnx`, `btcusdt_price_v2.onnx` - BTC price prediction models
+- `btcusdt_sentiment.onnx` - BTC price with sentiment analysis
+- `ethusdt_sentiment.onnx` - ETH price with sentiment analysis
+
+Metadata files:
+- `btcusdt_price_metadata.json`
+- `btcusdt_sentiment_metadata.json`
+- `ethusdt_sentiment_metadata.json`
+
+## Migration Status
+Strategies currently load ONNX models directly from the legacy location. Migration to use `PredictionModelRegistry` exclusively for all model loading is planned.

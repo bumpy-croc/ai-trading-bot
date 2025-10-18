@@ -204,7 +204,7 @@ TRADING_MODE=paper
 INITIAL_BALANCE=1000
 ```
 
-See `docs/configuration.md`.
+Copy `.env.example` to `.env` and fill in your values. See `docs/configuration.md` for detailed configuration options.
 
 ---
 
