@@ -27,9 +27,12 @@ pred = registry.predict('btcusdt_price', features)
 print(pred.price, pred.confidence, pred.direction)
 ```
 
+## Model Storage
+
+Models are available in two structures:
+- **Flat (legacy)**: `src/ml/*.onnx` (e.g., `btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`) along with legacy artifacts (`.h5`, `.keras`, and `*_metadata.json` such as `btcusdt_price_metadata.json`)
+- **Nested (current)**: `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`) with colocated `metadata.json`
+
 ## Status
-- Strategies currently load ONNX directly; migration to `PredictionModelRegistry` is planned.
-- Models are organized in two structures:
-  - Flat structure (legacy): `src/ml/btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`
-  - Nested structure (current): `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`)
-- Metadata files are included in each versioned model directory.
+- Strategies currently load ONNX directly from the legacy location; migration to exclusive use of `PredictionModelRegistry` is planned.
+- Metadata lives alongside each model—legacy files keep the `*_metadata.json` naming, while the registry uses a single `metadata.json` per versioned directory.
