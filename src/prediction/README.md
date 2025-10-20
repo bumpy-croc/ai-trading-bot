@@ -34,5 +34,8 @@ Models are available in two structures:
 - **Nested (current)**: `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`) with colocated `metadata.json`
 
 ## Status
-- Strategies currently load ONNX directly from the legacy location; migration to exclusive use of `PredictionModelRegistry` is planned.
+- Strategies currently load ONNX directly from the legacy paths; migration to exclusive use of `PredictionModelRegistry` is planned.
+- Both storage layouts remain in place for backward compatibility:
+  - Flat structure (legacy, archival compatibility): `src/ml/btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`
+  - Nested structure (current default for component strategies): `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`)
 - Metadata lives alongside each model—legacy files keep the `*_metadata.json` naming, while the registry uses a single `metadata.json` per versioned directory.

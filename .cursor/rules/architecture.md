@@ -103,12 +103,12 @@ Cryptocurrency trading system with trend-following risk containment. Supports ba
 ### Available Strategies
 - `MlBasic`, `MlAdaptive`, `MlWithSentiment` (see `src/strategies/`)
 
-### Strategy Base Class
-All strategies implement:
-- `calculate_indicators()` - Strategy-specific indicators
-- `check_entry_conditions()` - Entry signal logic
-- `check_exit_conditions()` - Exit signal logic
-- `calculate_position_size()` - Position sizing logic
+### Strategy Component Architecture
+All strategies use component-based design:
+- `Strategy` class composes `SignalGenerator`, `RiskManager`, `PositionSizer`
+- Main interface: `process_candle(df, index, balance, positions) -> TradingDecision`
+- `TradingDecision` contains signal, position size, regime context, and risk metrics
+- Components are independently testable and reusable
 
 ---
 

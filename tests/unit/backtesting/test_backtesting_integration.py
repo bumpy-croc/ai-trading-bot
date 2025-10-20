@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from src.backtesting.engine import Backtester
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class TestBacktestingIntegration:
@@ -12,7 +12,7 @@ class TestBacktestingIntegration:
     def test_strategy_integration(self, mock_data_provider, sample_ohlcv_data):
         """Strategies should plug into the backtester cleanly."""
 
-        adaptive_strategy = MlBasic()
+        adaptive_strategy = create_ml_basic_strategy()
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
 
         backtester = Backtester(
@@ -27,7 +27,7 @@ class TestBacktestingIntegration:
     def test_database_logging_integration(self, mock_data_provider, sample_ohlcv_data):
         """Database logging flag should attach a DB manager."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
 
         backtester = Backtester(
@@ -47,7 +47,7 @@ class TestBacktestingIntegration:
     ):
         """Sentiment providers should integrate without issue."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
 
         backtester = Backtester(

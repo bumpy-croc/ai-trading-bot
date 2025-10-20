@@ -14,7 +14,8 @@ from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
 from src.optimizer.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
-from src.strategies.ml_basic import MlBasic
+from src.strategies.components import Strategy
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class _FixtureProvider(DataProvider):
@@ -157,12 +158,12 @@ class ExperimentRunner:
             return CachedDataProvider(provider, cache_ttl_hours=cache_ttl_hours)
         return provider
 
-    def _load_strategy(self, strategy_name: str) -> MlBasic:
+    def _load_strategy(self, strategy_name: str) -> Strategy:
         if strategy_name == "ml_basic":
-            return MlBasic()
+            return create_ml_basic_strategy()
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
-    def _apply_parameter_overrides(self, strategy: MlBasic, config: ExperimentConfig) -> None:
+    def _apply_parameter_overrides(self, strategy: Strategy, config: ExperimentConfig) -> None:
         if config.parameters and config.parameters.values:
             for key, value in config.parameters.values.items():
                 if key.startswith("MlBasic."):

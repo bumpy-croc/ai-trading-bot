@@ -92,9 +92,9 @@ def test_edge_cases_small_position_and_exact_hits():
 
 def test_strategy_integration():
     """Test that strategies can provide partial operations configuration"""
-    from src.strategies.ml_adaptive import MlAdaptive
+    from src.strategies.ml_adaptive import create_ml_adaptive_strategy
     
-    strategy = MlAdaptive()
+    strategy = create_ml_adaptive_strategy()
     overrides = strategy.get_risk_overrides()
     
     assert overrides is not None

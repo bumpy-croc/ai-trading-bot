@@ -25,8 +25,6 @@ from src.strategies.components.risk_manager import (
 from src.strategies.components.position_sizer import (
     ConfidenceWeightedSizer, KellySizer, RegimeAdaptiveSizer
 )
-from src.strategies.ml_basic import MlBasic
-from src.strategies.ml_adaptive import MlAdaptive
 
 
 pytestmark = pytest.mark.performance
@@ -43,7 +41,6 @@ class PerformanceBaseline:
             'complete_decision_cycle': {'target_ms': 15.0, 'max_ms': 30.0},
             'batch_processing_100': {'target_ms': 500.0, 'max_ms': 3500.0},  # Relaxed for CI environment
             'memory_usage_mb': {'target_mb': 50.0, 'max_mb': 100.0},
-            'legacy_compatibility': {'max_slowdown_pct': 100.0}  # Increased for component overhead
         }
     
     def check_performance(self, test_name: str, actual_value: float, 
@@ -369,176 +366,6 @@ class TestComponentPerformanceRegression:
             f"Memory usage regression: {memory_increase:.1f}MB > {result['max_allowed']}MB"
 
 
-class TestLegacyCompatibilityPerformance:
-    """Test performance compatibility with legacy systems"""
-    
-    def setup_method(self):
-        """Set up test fixtures"""
-        self.baseline = PerformanceBaseline()
-        self.test_data = self.create_test_data()
-    
-    def create_test_data(self):
-        """Create test data compatible with legacy strategies"""
-        np.random.seed(42)
-        size = 100
-        
-        dates = pd.date_range('2024-01-01', periods=size, freq='1H')
-        
-        data = {
-            'open': np.random.uniform(50000, 55000, size),
-            'high': np.random.uniform(55000, 60000, size),
-            'low': np.random.uniform(45000, 50000, size),
-            'close': np.random.uniform(50000, 55000, size),
-            'volume': np.random.uniform(1000, 10000, size),
-            'onnx_pred': np.random.uniform(49000, 56000, size),
-            'rsi': np.random.uniform(20, 80, size),
-            'macd': np.random.uniform(-2, 2, size),
-            'atr': np.random.uniform(100, 500, size)
-        }
-        
-        return pd.DataFrame(data, index=dates)
-    
-    def measure_legacy_performance(self, strategy, df, iterations=20):
-        """Measure legacy strategy performance"""
-        balance = 10000.0
-        times = []
-        
-        # Calculate indicators once
-        df_with_indicators = strategy.calculate_indicators(df)
-        
-        # Warm up
-        for i in range(20, 25):
-            strategy.check_entry_conditions(df_with_indicators, i)
-            strategy.calculate_position_size(df_with_indicators, i, balance)
-        
-        # Measure performance - simulate full decision process like component strategy
-        for i in range(25, 25 + iterations):
-            start_time = time.perf_counter()
-            
-            # Simulate full decision process for fair comparison
-            entry = strategy.check_entry_conditions(df_with_indicators, i)
-            if entry:
-                position_size = strategy.calculate_position_size(df_with_indicators, i, balance)
-            else:
-                position_size = 0.0
-            
-            # Add regime detection overhead to make comparison fair
-            # (component strategy includes regime detection in process_candle)
-            try:
-                if hasattr(strategy, 'regime_detector'):
-                    strategy.regime_detector.detect_regime(df_with_indicators, i)
-            except:
-                pass  # Ignore regime detection errors for legacy strategies
-            
-            end_time = time.perf_counter()
-            times.append((end_time - start_time) * 1000)
-        
-        return times
-    
-    def measure_component_performance(self, strategy, df, iterations=20):
-        """Measure component strategy performance"""
-        balance = 10000.0
-        times = []
-        
-        # Warm up
-        for i in range(20, 25):
-            strategy.process_candle(df, i, balance)
-        
-        # Measure performance
-        for i in range(25, 25 + iterations):
-            start_time = time.perf_counter()
-            decision = strategy.process_candle(df, i, balance)
-            end_time = time.perf_counter()
-            times.append((end_time - start_time) * 1000)
-        
-        return times
-    
-    @pytest.mark.skip(reason="Legacy vs component comparison is unfair - different architectures")
-    def test_ml_basic_compatibility_performance(self):
-        """Test ML Basic strategy performance compatibility"""
-        # Legacy strategy
-        legacy_strategy = MlBasic()
-        
-        # Component strategy
-        component_strategy = Strategy(
-            name="ml_basic_component",
-            signal_generator=MLBasicSignalGenerator(),
-            risk_manager=FixedRiskManager(risk_per_trade=0.02),
-            position_sizer=ConfidenceWeightedSizer()
-        )
-        
-        df = self.test_data
-        
-        # Measure both
-        legacy_times = self.measure_legacy_performance(legacy_strategy, df)
-        component_times = self.measure_component_performance(component_strategy, df)
-        
-        legacy_avg = statistics.mean(legacy_times)
-        component_avg = statistics.mean(component_times)
-        
-        # Calculate performance difference
-        if legacy_avg > 0:
-            slowdown_pct = ((component_avg - legacy_avg) / legacy_avg) * 100
-        else:
-            slowdown_pct = 0
-        
-        # Check against baseline
-        result = self.baseline.check_performance('legacy_compatibility', abs(slowdown_pct), 'pct')
-        
-        print(f"ML Basic Compatibility - Legacy: {legacy_avg:.2f}ms, "
-              f"Component: {component_avg:.2f}ms, Change: {slowdown_pct:+.1f}%, "
-              f"Status: {result['status']}")
-        
-        # Assert compatibility requirements
-        assert result['status'] != 'regression', \
-            f"Performance regression vs legacy: {slowdown_pct:.1f}% > {result['max_allowed']}%"
-    
-    @pytest.mark.skip(reason="MlAdaptive may not be available in test environment")
-    def test_ml_adaptive_compatibility_performance(self):
-        """Test ML Adaptive strategy performance compatibility"""
-        try:
-            # Legacy strategy
-            legacy_strategy = MlAdaptive()
-            
-            # Component strategy (ensemble approximation)
-            ml_gen = MLBasicSignalGenerator()
-            tech_gen = TechnicalSignalGenerator()
-            ensemble_gen = WeightedVotingSignalGenerator(
-                generators={ml_gen: 0.7, tech_gen: 0.3}
-            )
-            
-            component_strategy = Strategy(
-                name="ml_adaptive_component",
-                signal_generator=ensemble_gen,
-                risk_manager=RegimeAdaptiveRiskManager(),
-                position_sizer=RegimeAdaptiveSizer()
-            )
-            
-            df = self.test_data
-            
-            # Measure both
-            legacy_times = self.measure_legacy_performance(legacy_strategy, df)
-            component_times = self.measure_component_performance(component_strategy, df)
-            
-            legacy_avg = statistics.mean(legacy_times)
-            component_avg = statistics.mean(component_times)
-            
-            # Calculate performance difference
-            slowdown_pct = ((component_avg - legacy_avg) / legacy_avg) * 100
-            
-            # Check against baseline (allow more tolerance for complex strategies)
-            result = self.baseline.check_performance('legacy_compatibility', abs(slowdown_pct), 'pct')
-            
-            print(f"ML Adaptive Compatibility - Legacy: {legacy_avg:.2f}ms, "
-                  f"Component: {component_avg:.2f}ms, Change: {slowdown_pct:+.1f}%, "
-                  f"Status: {result['status']}")
-            
-            # Assert compatibility requirements (more lenient for complex strategies)
-            assert abs(slowdown_pct) <= 50, \
-                f"Significant performance change vs legacy: {slowdown_pct:.1f}%"
-        
-        except ImportError:
-            pytest.skip("MlAdaptive strategy not available")
 
 
 class TestPerformanceUnderLoad:

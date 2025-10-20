@@ -6,7 +6,7 @@ import pandas as pd
 
 from src.backtesting.engine import Backtester
 from src.risk.risk_manager import RiskParameters
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class TestBacktestingExecution:
@@ -15,7 +15,7 @@ class TestBacktestingExecution:
     def test_basic_backtest_execution(self, mock_data_provider, sample_ohlcv_data):
         """A standard run should return populated metrics."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         risk_params = RiskParameters()
 
         backtester = Backtester(
@@ -44,7 +44,7 @@ class TestBacktestingExecution:
     def test_backtest_with_no_trades(self, mock_data_provider):
         """No signals should yield zero trades while preserving balance."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         no_signal_data = pd.DataFrame(
             {
                 "open": [100, 100, 100, 100, 100],
@@ -71,7 +71,7 @@ class TestBacktestingExecution:
     def test_backtest_performance_metrics(self, mock_data_provider, sample_ohlcv_data):
         """Performance statistics should be included and bounded."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
 
         backtester = Backtester(

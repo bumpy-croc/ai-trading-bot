@@ -7,10 +7,9 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
-from src.strategies.base import BaseStrategy
-from src.strategies.ml_basic import MlBasic
+from src.strategies.components import Strategy
 
 logger = logging.getLogger(__name__)
 
@@ -57,37 +56,41 @@ class StrategyManager:
         # Create staging directory for safe updates in /tmp
         self.staging_dir.mkdir(exist_ok=True, parents=True)
 
-        # Current active strategy
-        self.current_strategy: Optional[BaseStrategy] = None
+        # Current active strategy (component-based)
+        self.current_strategy: Optional[Strategy] = None
         self.current_version: Optional[StrategyVersion] = None
 
-        # Strategy registry
-        self.strategy_registry = {
-            "ml_basic": MlBasic,
-        }
+        # Strategy registry with factory functions
+        self.strategy_registry = {}
             
-        # Register new ensemble strategies
+        # Register strategy factory functions
         try:
-            from src.strategies.ml_adaptive import MlAdaptive
-            self.strategy_registry["ml_adaptive"] = MlAdaptive
+            from src.strategies.ml_basic import create_ml_basic_strategy
+            self.strategy_registry["ml_basic"] = create_ml_basic_strategy
+        except Exception as e:
+            logger.debug(f"ML Basic strategy not available: {e}")
+            
+        try:
+            from src.strategies.ml_adaptive import create_ml_adaptive_strategy
+            self.strategy_registry["ml_adaptive"] = create_ml_adaptive_strategy
         except Exception as e:
             logger.debug(f"ML Adaptive strategy not available: {e}")
             
         try:
-            from src.strategies.ensemble_weighted import EnsembleWeighted
-            self.strategy_registry["ensemble_weighted"] = EnsembleWeighted
+            from src.strategies.ensemble_weighted import create_ensemble_weighted_strategy
+            self.strategy_registry["ensemble_weighted"] = create_ensemble_weighted_strategy
         except Exception as e:
             logger.debug(f"Ensemble Weighted strategy not available: {e}")
             
         try:
-            from src.strategies.momentum_leverage import MomentumLeverage
-            self.strategy_registry["momentum_leverage"] = MomentumLeverage
+            from src.strategies.momentum_leverage import create_momentum_leverage_strategy
+            self.strategy_registry["momentum_leverage"] = create_momentum_leverage_strategy
         except Exception as e:
             logger.debug(f"Momentum Leverage strategy not available: {e}")
             
         try:
-            from src.strategies.ml_sentiment import MlSentiment
-            self.strategy_registry["ml_sentiment"] = MlSentiment
+            from src.strategies.ml_sentiment import create_ml_sentiment_strategy
+            self.strategy_registry["ml_sentiment"] = create_ml_sentiment_strategy
         except Exception as e:
             logger.debug(f"ML Sentiment strategy not available: {e}")
 
@@ -105,7 +108,7 @@ class StrategyManager:
         logger.info("StrategyManager initialized")
 
     @staticmethod
-    def _display_name(strategy: Optional[BaseStrategy]) -> str:
+    def _display_name(strategy: Optional[Strategy]) -> str:
         """Return a human readable name for a strategy instance."""
 
         if strategy is None:
@@ -115,18 +118,22 @@ class StrategyManager:
 
     def _instantiate_strategy(
         self, strategy_name: str, version: str, config: Optional[dict] = None
-    ) -> tuple[BaseStrategy, StrategyVersion]:
-        """Create a strategy instance and version record without mutating state."""
+    ) -> tuple[Strategy, StrategyVersion]:
+        """Create a strategy instance and version record without mutating state.
+        
+        Uses factory functions to create component-based Strategy instances.
+        """
 
         if strategy_name not in self.strategy_registry:
             raise ValueError(f"Unknown strategy: {strategy_name}")
 
-        strategy_class = self.strategy_registry[strategy_name]
+        factory_function = self.strategy_registry[strategy_name]
 
+        # Call factory function with config
         if config:
-            strategy = strategy_class(**config)
+            strategy = factory_function(**config)
         else:
-            strategy = strategy_class()
+            strategy = factory_function()
 
         strategy_version = StrategyVersion(
             strategy_name=strategy_name,
@@ -139,8 +146,11 @@ class StrategyManager:
 
     def load_strategy(
         self, strategy_name: str, version: str = "latest", config: Optional[dict] = None
-    ) -> BaseStrategy:
-        """Load a strategy with version control"""
+    ) -> Strategy:
+        """Load a strategy with version control.
+        
+        Uses factory functions to create component-based Strategy instances.
+        """
 
         with self.update_lock:
             try:
@@ -152,7 +162,7 @@ class StrategyManager:
                 self.current_version = strategy_version
                 self.version_history[f"{strategy_name}_{version}"] = strategy_version
 
-                logger.info(f"Loaded strategy: {strategy_name} v{version}")
+                logger.info(f"Loaded component-based strategy: {strategy_name} v{version}")
                 return strategy
 
             except Exception as e:

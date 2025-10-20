@@ -2,6 +2,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from src.strategies.ml_basic import create_ml_basic_strategy
+
 pytestmark = pytest.mark.integration
 
 try:
@@ -33,16 +35,16 @@ except ImportError:
 class TestRiskIntegration:
     @pytest.mark.live_trading
     @pytest.mark.risk_management
-    def test_risk_manager_integration(self, mock_strategy, mock_data_provider, risk_parameters):
+    def test_risk_manager_integration(self, mock_data_provider, risk_parameters):
         if not LIVE_TRADING_AVAILABLE:
             pytest.skip("Live trading components not available")
+        strategy = create_ml_basic_strategy(fast_mode=True)
         engine = LiveTradingEngine(
-            strategy=mock_strategy,
+            strategy=strategy,
             data_provider=mock_data_provider,
             risk_parameters=risk_parameters,
             max_position_size=0.05,
         )
-        mock_strategy.calculate_position_size.return_value = 0.5
         engine._open_position(symbol="BTCUSDT", side=PositionSide.LONG, size=0.5, price=50000)
         position = list(engine.positions.values())[0]
         assert position.size <= 0.05

@@ -342,7 +342,9 @@ class WeightedVotingSignalGenerator(SignalGenerator):
                     'generator': self.name,
                     'index': index,
                     'reason': 'no_valid_signals',
-                    'total_generators': len(self.generators)
+                    'total_generators': len(self.generators),
+                    'valid_signals': 0,
+                    'consensus_threshold': self.consensus_threshold,
                 }
             )
         

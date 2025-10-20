@@ -1,45 +1,55 @@
-from unittest.mock import Mock
+from types import MethodType
 
-import numpy as np
 import pytest
 
-from src.strategies.ml_basic import MlBasic
+from src.strategies.components import SignalDirection
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 pytestmark = pytest.mark.unit
 
 
-class TestMlBasicLogging:
-    def test_ml_basic_strategy_execution_logging(self, sample_ohlcv_data):
-        strategy = MlBasic()
-        mock_db_manager = Mock()
-        strategy.set_database_manager(mock_db_manager, session_id=456)
-        df = strategy.calculate_indicators(sample_ohlcv_data)
-        valid_indices = range(max(120, len(df) - 3), len(df))
-        for i in valid_indices:
-            if i < len(df):
-                result = strategy.check_entry_conditions(df, i)
-                assert isinstance(result, bool)
-                mock_db_manager.log_strategy_execution.assert_called()
-                _, kwargs = mock_db_manager.log_strategy_execution.call_args
-                assert kwargs["strategy_name"] == strategy.name
-                assert kwargs["signal_type"] == "entry"
-                assert kwargs["price"] > 0
-                assert isinstance(kwargs["reasons"], list)
-                assert len(kwargs["reasons"]) > 0
-                assert "additional_context" in kwargs
-                ctx = kwargs["additional_context"]
-                assert "model_type" in ctx
+def _process_with_fixture(strategy, sample_ohlcv_data, balance=10000.0):
+    """Run the strategy with enough history to populate logging metadata."""
+    index = strategy.signal_generator.sequence_length + 10
+    assert len(sample_ohlcv_data) > index, "sample_ohlcv_data must provide enough candles for ML tests"
+    strategy.signal_generator._get_ml_prediction = MethodType(
+        lambda self, df, idx: float(df["close"].iloc[idx - 1] * 1.01),
+        strategy.signal_generator,
+    )
+    return strategy.process_candle(sample_ohlcv_data, index=index, balance=balance)
 
-    def test_ml_basic_strategy_missing_prediction_logging(self, sample_ohlcv_data):
-        strategy = MlBasic()
-        mock_db_manager = Mock()
-        strategy.set_database_manager(mock_db_manager, session_id=789)
-        df_no_predictions = sample_ohlcv_data.copy()
-        df_no_predictions["onnx_pred"] = np.nan
-        if len(df_no_predictions) > 1:
-            result = strategy.check_entry_conditions(df_no_predictions, 1)
-            assert result is False
-            mock_db_manager.log_strategy_execution.assert_called()
-            _, kwargs = mock_db_manager.log_strategy_execution.call_args
-            assert "missing_ml_prediction" in kwargs["reasons"]
-            assert any("prediction_available" in r for r in kwargs["reasons"])
+
+class TestMlBasicLogging:
+    def test_ml_basic_strategy_execution_metadata(self, sample_ohlcv_data):
+        """Test that ML Basic strategy includes execution metadata in decisions"""
+        strategy = create_ml_basic_strategy()
+        balance = 10000.0
+
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
+        
+        # Validate metadata is present
+        assert decision.metadata is not None
+        assert isinstance(decision.metadata, dict)
+        
+        # Check for execution time
+        assert decision.execution_time_ms >= 0
+        
+        # Metadata should contain useful information
+        assert len(decision.metadata) > 0
+
+    def test_ml_basic_strategy_decision_context(self, sample_ohlcv_data):
+        """Test that decisions include proper context"""
+        strategy = create_ml_basic_strategy()
+        balance = 10000.0
+
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
+        
+        # Decision should have timestamp
+        assert decision.timestamp is not None
+        
+        # Signal should have direction and confidence
+        assert decision.signal.direction in [SignalDirection.BUY, SignalDirection.SELL, SignalDirection.HOLD]
+        assert 0 <= decision.signal.confidence <= 1
+        
+        # Risk metrics should be present
+        assert decision.risk_metrics is not None

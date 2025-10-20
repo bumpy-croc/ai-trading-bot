@@ -17,7 +17,7 @@ help:
 	@echo "  make install              # install CLI (editable) and upgrade pip"
 	@echo "  make deps                 # install dev deps (requirements.txt)"
 	@echo "  make deps-server          # install production deps (requirements-server.txt)"
-        @echo "  make setup-pre-commit     # install pre-commit hooks"
+	@echo "  make setup-pre-commit     # install pre-commit hooks"
 	@echo "  make dashboards           # list dashboards"
 	@echo "  make dashboard-monitoring # run monitoring dashboard on PORT=$(PORT)"
 	@echo "  make live                 # run live trading (paper by default)"
@@ -41,7 +41,7 @@ deps-server: install
 	pip install -r requirements-server.txt
 
 setup-pre-commit: deps
-        pre-commit install
+	pre-commit install
 
 # ------------- CLI wrappers (direct execution) -------------
 atb: install
@@ -85,7 +85,7 @@ clean:
 
 # --------------------------------- Development Setup --------------------------------------------
 dev-setup:
-        atb dev setup
+	atb dev setup
 
 # --------------------------------- Database Migrations --------------------------------------------
 migrate: install

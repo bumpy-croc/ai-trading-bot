@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from src.backtesting.engine import Backtester
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class TestBacktestingEdgeCases:
@@ -16,7 +16,7 @@ class TestBacktestingEdgeCases:
     def test_single_data_point(self, mock_data_provider):
         """Single row inputs should not break execution."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         single_data = pd.DataFrame(
             {"open": [100], "high": [101], "low": [99], "close": [100.5], "volume": [1000]},
             index=[datetime(2024, 1, 1, 10, 0)],
@@ -37,7 +37,7 @@ class TestBacktestingEdgeCases:
     def test_very_large_dataset(self, mock_data_provider):
         """Large datasets should remain processable."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy(fast_mode=True)
         n_points = 10000
         large_data = pd.DataFrame(
             {
@@ -64,7 +64,7 @@ class TestBacktestingEdgeCases:
     def test_concurrent_trades_handling(self, mock_data_provider, sample_ohlcv_data):
         """Concurrent trade scenarios should not error."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data
 
         backtester = Backtester(

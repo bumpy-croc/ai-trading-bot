@@ -4,14 +4,14 @@ This guide explains how to migrate existing unit tests to work with the new comp
 
 ## Overview
 
-The new component-based strategy system requires updating existing tests to work with the new architecture while maintaining backward compatibility during the migration period.
+The component-based strategy system is now the default runtime, and this guide captures how we
+updated existing tests while preserving archived compatibility checks from the migration period.
 
 ## Migration Strategy
 
 ### Phase 1: Compatibility Tests
-- Create tests that verify both old and new systems produce equivalent results
-- Test that component strategies can be used where BaseStrategy is expected
-- Validate error handling compatibility
+- Create tests that verify component strategies integrate with existing backtesting and live engine fixtures
+- Validate error handling compatibility across component boundaries
 
 ### Phase 2: Component-Level Tests
 - Convert strategy-level tests to component-level tests
@@ -29,7 +29,7 @@ The new component-based strategy system requires updating existing tests to work
 Located in: `tests/unit/strategies/test_component_migration.py`
 
 These tests ensure that:
-- Component strategies produce equivalent results to legacy strategies
+- Component strategies stay aligned with archived legacy baselines
 - Existing test fixtures work with component strategies
 - Error handling is consistent between old and new systems
 - Performance metrics maintain the same structure
@@ -49,7 +49,7 @@ Located in: `tests/unit/strategies/migration/`
 Tests for migration utilities:
 - `test_strategy_converter.py` - Strategy conversion utilities
 - Parameter mapping validation
-- Component creation from legacy parameters
+- Component creation from archived legacy parameter snapshots
 
 ## Migration Checklist
 
@@ -65,12 +65,7 @@ Tests for migration utilities:
    - [ ] Create equivalent test for appropriate component
    - [ ] Ensure test covers edge cases from original test
 
-3. **Add Compatibility Test**
-   - [ ] Create test that compares old vs new behavior
-   - [ ] Verify results are equivalent (within tolerance)
-   - [ ] Test error handling compatibility
-
-4. **Update Test Fixtures**
+3. **Update Test Fixtures**
    - [ ] Ensure fixtures work with component interfaces
    - [ ] Add any new fixtures needed for components
    - [ ] Update mock objects for new interfaces
@@ -80,12 +75,12 @@ Tests for migration utilities:
 **Original Test:**
 ```python
 def test_ml_basic_entry_conditions(self):
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
     df = create_test_data()
-    df_with_indicators = strategy.calculate_indicators(df)
+    decision = strategy.process_candle(df, 50, balance=10_000.0)
     
-    entry = strategy.check_entry_conditions(df_with_indicators, 50)
-    assert isinstance(entry, bool)
+    assert decision.signal.direction is not None
+    assert decision.position_size >= 0
 ```
 
 **Migrated Component Test:**
@@ -97,24 +92,6 @@ def test_ml_basic_signal_generation(self):
     signal = signal_generator.generate_signal(df, 50)
     assert signal.direction in [SignalDirection.BUY, SignalDirection.SELL, SignalDirection.HOLD]
     assert 0 <= signal.confidence <= 1
-```
-
-**Compatibility Test:**
-```python
-def test_ml_basic_compatibility(self):
-    # Legacy
-    legacy_strategy = MlBasic()
-    df = create_test_data()
-    df_with_indicators = legacy_strategy.calculate_indicators(df)
-    legacy_entry = legacy_strategy.check_entry_conditions(df_with_indicators, 50)
-    
-    # Component
-    component_strategy = create_ml_basic_component_strategy()
-    decision = component_strategy.process_candle(df_with_indicators, 50, 10000.0)
-    
-    # Compare
-    if legacy_entry:
-        assert decision.signal.direction != SignalDirection.HOLD
 ```
 
 ## Test Data Management
@@ -146,7 +123,7 @@ def test_ml_basic_compatibility(self):
 ### 1. Strategy Method → Component Method
 ```python
 # Old
-strategy.check_entry_conditions(df, index) → bool
+strategy.process_candle(df, index, balance) → TradingDecision
 
 # New  
 signal_generator.generate_signal(df, index) → Signal
@@ -207,7 +184,7 @@ result = component.some_method()  # Always returns valid result
    - Check that mock behavior is consistent
 
 3. **Assertion Failures**
-   - Component results may differ slightly from legacy
+   - Component results may differ slightly from archived legacy outputs
    - Use appropriate tolerance for floating-point comparisons
    - Focus on behavioral equivalence, not exact matches
 

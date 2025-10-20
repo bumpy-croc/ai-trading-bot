@@ -11,8 +11,8 @@ regime-aware strategy switching, and dynamic risk controls all share the same he
 
 - `Backtester` orchestrates the run, handles warm-up periods, and computes summary metrics using
   `src/backtesting/utils.compute_performance_metrics`.
-- Strategies inherit from `src.strategies.base.BaseStrategy` and expose hooks such as `calculate_indicators`,
-  `check_entry_conditions`, and `check_exit_conditions`.
+- Strategies use component-based architecture with `Strategy` class that composes `SignalGenerator`, `RiskManager`, 
+  and `PositionSizer` components. The engine calls `strategy.process_candle()` for each candle to get trading decisions.
 - Risk controls rely on `RiskManager`, `DynamicRiskManager`, `TrailingStopPolicy`, and optional partial exit policies – the same
   classes used by the live engine.
 - When `log_to_database=True`, the engine persists trades, strategy executions, and session records through
@@ -81,9 +81,9 @@ from datetime import datetime, timedelta
 from src.backtesting.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
-strategy = MlBasic()
+strategy = create_ml_basic_strategy()
 provider = CachedDataProvider(BinanceProvider(), cache_ttl_hours=24)
 backtester = Backtester(strategy=strategy, data_provider=provider, initial_balance=10_000)
 start = datetime.utcnow() - timedelta(days=120)

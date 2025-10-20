@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Protocol
 
 import pandas as pd
 
+from src.strategies.components import Strategy
 # Note: Using a simplified interface for backtesting
 # In production, this would integrate with the actual Backtester class
 
@@ -24,7 +25,7 @@ class BacktestEngineProtocol(Protocol):
     
     def run_backtest(
         self,
-        strategy: 'BaseStrategy',
+        strategy: Any,
         data: pd.DataFrame,
         **kwargs: Any
     ) -> pd.DataFrame:
@@ -40,7 +41,6 @@ class BacktestEngineProtocol(Protocol):
             DataFrame with columns: timestamp, balance, and optionally trade_pnl
         """
         ...
-from src.strategies.base import BaseStrategy
 from src.strategies.components.testing.performance_parity_validator import (
     PerformanceComparisonReport,
     PerformanceParityValidator,
@@ -150,8 +150,8 @@ class PerformanceComparisonEngine:
     
     def compare_strategies(
         self,
-        legacy_strategy: BaseStrategy,
-        new_strategy: BaseStrategy,
+        legacy_strategy: Strategy,
+        new_strategy: Strategy,
         market_data: pd.DataFrame,
         comparison_id: Optional[str] = None
     ) -> StrategyComparisonResult:
@@ -253,7 +253,7 @@ class PerformanceComparisonEngine:
     
     def _run_backtest(
         self,
-        strategy: BaseStrategy,
+        strategy: Strategy,
         market_data: pd.DataFrame,
         strategy_type: str
     ) -> pd.DataFrame:
@@ -544,8 +544,8 @@ class PerformanceComparisonEngine:
 # Convenience functions for common use cases
 
 def quick_strategy_comparison(
-    legacy_strategy: BaseStrategy,
-    new_strategy: BaseStrategy,
+    legacy_strategy: Strategy,
+    new_strategy: Strategy,
     market_data: pd.DataFrame,
     tolerance_config: Optional[ToleranceConfig] = None
 ) -> StrategyComparisonResult:
@@ -570,8 +570,8 @@ def quick_strategy_comparison(
 
 
 def validate_migration_readiness(
-    legacy_strategy: BaseStrategy,
-    new_strategy: BaseStrategy,
+    legacy_strategy: Strategy,
+    new_strategy: Strategy,
     market_data: pd.DataFrame,
     strict_validation: bool = True
 ) -> Tuple[bool, List[str]]:

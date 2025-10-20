@@ -516,7 +516,11 @@ detector = EnhancedRegimeDetector()
 
 ## Migration Issues
 
-### 1. Legacy Compatibility Failures
+### 1. Legacy Compatibility Baseline Divergence (archived)
+
+These checks compare current component strategies against the archived `BaseStrategy`
+baselines. Failures here do not block the production runtime but help surface
+regressions against historical behaviour.
 
 **Symptoms**:
 ```
@@ -572,20 +576,12 @@ TypeError: process_candle() takes 4 positional arguments but 5 were given
 
 1. **Update Test Fixtures**:
    ```python
-   # Old fixture
-   @pytest.fixture
-   def legacy_strategy():
-       return MlBasic()
+   from src.strategies.ml_basic import create_ml_basic_strategy
    
-   # New fixture
+   # Updated fixture using component factory
    @pytest.fixture
    def component_strategy():
-       return Strategy(
-           name="ml_basic_component",
-           signal_generator=MLBasicSignalGenerator(),
-           risk_manager=FixedRiskManager(),
-           position_sizer=ConfidenceWeightedSizer()
-       )
+       return create_ml_basic_strategy()
    ```
 
 2. **Adapter Pattern for Tests**:

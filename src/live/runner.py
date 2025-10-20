@@ -16,7 +16,7 @@ from src.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
 
 # Import strategies
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 from src.utils.logging_config import configure_logging
 
 # Configure logging
@@ -27,7 +27,7 @@ logger = logging.getLogger("live_trading")
 def load_strategy(strategy_name: str):
     """Load a strategy by name"""
     strategies = {
-        "ml_basic": MlBasic,
+        "ml_basic": create_ml_basic_strategy,
     }
 
     # Lazy import for optional strategies to keep startup fast
@@ -40,8 +40,12 @@ def load_strategy(strategy_name: str):
         sys.exit(1)
 
     try:
-        strategy_class = strategies[strategy_name]
-        strategy = strategy_class() if callable(strategy_class) else strategy_class()
+        strategy_factory = strategies[strategy_name]
+        if not callable(strategy_factory):
+            msg = f"Strategy factory for {strategy_name} must be callable"
+            logger.error(msg)
+            raise TypeError(msg)
+        strategy = strategy_factory()
         logger.info(f"Loaded strategy: {strategy.name}")
         return strategy
     except Exception as e:

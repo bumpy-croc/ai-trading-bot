@@ -18,7 +18,7 @@ from src.config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_PERFORMANCE_MO
 from src.data_providers.binance_provider import BinanceProvider
 from src.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 def setup_paper_trading():
@@ -26,7 +26,7 @@ def setup_paper_trading():
     print("🚀 Setting up PAPER TRADING (Safe Mode)")
 
     # Load strategy
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
     print(f"Strategy loaded: {strategy.name}")
 
     # Setup data provider
@@ -65,7 +65,7 @@ def setup_paper_trading():
     print("\n" + "=" * 60)
     print("📄 PAPER TRADING MODE CONFIGURED")
     print("=" * 60)
-    print("- Strategy: MlBasic")
+    print(f"- Strategy: {strategy.name}")
     print("- Symbol: BTC-USD")
     print(f"- Balance: ${DEFAULT_INITIAL_BALANCE:,.0f} (virtual)")
     print("- Risk per trade: 1%")
@@ -97,7 +97,7 @@ def setup_live_trading():
         return None
 
     # Load strategy
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
 
     # Setup data provider
     data_provider = BinanceProvider()
@@ -125,7 +125,7 @@ def setup_live_trading():
     print("\n" + "=" * 60)
     print("🔴 LIVE TRADING MODE CONFIGURED")
     print("=" * 60)
-    print("- Strategy: MlBasic")
+    print(f"- Strategy: {strategy.name}")
     print("- Symbol: BTC-USD")
     print(f"- Balance: ${DEFAULT_INITIAL_BALANCE:,.0f} (REAL MONEY)")
     print("- Risk per trade: 0.5%")

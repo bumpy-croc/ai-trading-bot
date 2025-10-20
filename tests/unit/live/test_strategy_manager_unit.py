@@ -28,9 +28,9 @@ class TestStrategyManager:
     def test_strategy_loading(self, temp_directory):
         manager = StrategyManager(staging_dir=str(temp_directory))
         strategy = manager.load_strategy("ml_basic", version="test_v1")
-        from src.strategies.ml_basic import MlBasic
+        from src.strategies.components import Strategy as ComponentStrategy
 
-        assert isinstance(strategy, MlBasic)
+        assert isinstance(strategy, ComponentStrategy)
         assert manager.current_strategy == strategy
         assert manager.current_version.strategy_name == "ml_basic"
         assert manager.current_version.version == "test_v1"

@@ -1,5 +1,8 @@
 # Phase 2 Results Summary
 
+> **Status (2025-10)**: Archived snapshot of pre-cutover parity issues; the component runtime
+> now powers production directly without the legacy adapter.
+
 **Date**: 2025-10-11  
 **Status**: ❌ **BEHAVIORAL PARITY NOT ACHIEVED**
 
@@ -38,7 +41,7 @@
 
 ## Root Cause (Same as Before)
 
-**LegacyStrategyAdapter** has bugs:
+**LegacyStrategyAdapter** has bugs (historical path `src/strategies/adapters/legacy_adapter.py`):
 1. Not tracking position state
 2. Missing trade cooldown
 3. Entry signals too frequent
@@ -91,4 +94,3 @@ baseline_*.log       - Execution logs
 
 **Last Updated**: 2025-10-11  
 **Next Action**: Debug adapter position tracking
-

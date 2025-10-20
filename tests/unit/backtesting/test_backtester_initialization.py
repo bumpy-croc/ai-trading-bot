@@ -2,7 +2,7 @@
 
 from src.backtesting.engine import Backtester
 from src.risk.risk_manager import RiskParameters
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class TestBacktesterInitialization:
@@ -11,7 +11,7 @@ class TestBacktesterInitialization:
     def test_backtester_initialization(self, mock_data_provider):
         """Ensure explicit constructor arguments are wired correctly."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         risk_params = RiskParameters()
 
         backtester = Backtester(
@@ -32,7 +32,7 @@ class TestBacktesterInitialization:
     def test_backtester_with_default_parameters(self, mock_data_provider):
         """Backtester should populate defaults when optional args omitted."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         backtester = Backtester(strategy=strategy, data_provider=mock_data_provider)
 
         assert backtester.strategy == strategy
@@ -45,7 +45,7 @@ class TestBacktesterInitialization:
     ):
         """Sentiment providers should be captured when supplied."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         backtester = Backtester(
             strategy=strategy,
             data_provider=mock_data_provider,

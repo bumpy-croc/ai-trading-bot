@@ -13,7 +13,10 @@ import pytest
 
 from src.backtesting.engine import Backtester
 from src.data_providers.data_provider import DataProvider
-from src.strategies.base import BaseStrategy
+from src.strategies.components.strategy import Strategy
+from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.position_sizer import PositionSizer
 
 
 class FixtureDataProvider(DataProvider):
@@ -38,73 +41,134 @@ class FixtureDataProvider(DataProvider):
         return float(self._frame["close"].iloc[-1])
 
 
-class DeterministicStrategy(BaseStrategy):
-    """Simple deterministic strategy used for regression testing."""
+class DeterministicSignalGenerator(SignalGenerator):
+    """Deterministic signal generator for regression testing."""
 
-    def __init__(self, name: str, entry_period: int, hold_period: int, size: float):
-        super().__init__(name)
+    def __init__(self, entry_period: int, hold_period: int, max_entries: int | None = None):
+        super().__init__(name="deterministic_signal")
         self.entry_period = entry_period
         self.hold_period = hold_period
-        self.size = size
+        self.max_entries = max_entries
         self._active_entry_index: int | None = None
-        self.take_profit_pct = 0.02
-        self.stop_loss_pct = 0.01
         self.entry_events: list[int] = []
         self.exit_events: list[int] = []
         self.entry_checks: list[int] = []
 
-    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        enriched = df.copy()
-        self.indicator_na = enriched.isna().sum().to_dict()
-        enriched["base_signal"] = (pd.Series(range(len(enriched)), index=enriched.index) % self.entry_period) == 0
-        self.last_indicator_rows = len(enriched)
-        return enriched
-
-    def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
+    def generate_signal(self, df: pd.DataFrame, index: int, regime=None) -> Signal:
         self.entry_checks.append(index)
+
         if self._active_entry_index is not None and index - self._active_entry_index >= self.hold_period:
             self._active_entry_index = None
+            self.exit_events.append(index)
+            return Signal(
+                direction=SignalDirection.SELL,
+                confidence=0.8,
+                strength=1.0,
+                metadata={"timestamp": df.index[index]},
+            )
+
         if self._active_entry_index is not None:
-            return False
+            return Signal(
+                direction=SignalDirection.HOLD,
+                confidence=0.0,
+                strength=0.0,
+                metadata={"timestamp": df.index[index]},
+            )
+
         if index == 0:
-            return False
+            return Signal(
+                direction=SignalDirection.HOLD,
+                confidence=0.0,
+                strength=0.0,
+                metadata={"timestamp": df.index[index]},
+            )
+
+        if self.max_entries is not None and len(self.entry_events) >= self.max_entries:
+            return Signal(
+                direction=SignalDirection.HOLD,
+                confidence=0.0,
+                strength=0.0,
+                metadata={"timestamp": df.index[index]},
+            )
+
         if index % self.entry_period == 0:
             self._active_entry_index = index
             self.entry_events.append(index)
-            return True
-        return False
+            return Signal(
+                direction=SignalDirection.BUY,
+                confidence=0.8,
+                strength=1.0,
+                metadata={"timestamp": df.index[index]},
+            )
 
-    def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
-        if self._active_entry_index is None:
-            return False
-        if index - self._active_entry_index >= self.hold_period:
-            self._active_entry_index = None
-            self.exit_events.append(index)
-            return True
-        return False
+        return Signal(
+            direction=SignalDirection.HOLD,
+            confidence=0.0,
+            strength=0.0,
+            metadata={"timestamp": df.index[index]},
+        )
 
-    def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
+    def get_confidence(self, df: pd.DataFrame, index: int) -> float:
+        if self._active_entry_index is not None and index - self._active_entry_index >= self.hold_period:
+            return 0.8
+        if index > 0 and index % self.entry_period == 0:
+            return 0.8
+        return 0.0
+
+
+class DeterministicRiskManager(RiskManager):
+    """Deterministic risk manager for regression testing"""
+    
+    def __init__(self, size: float):
+        super().__init__(name="deterministic_risk")
+        self.size = size
+    
+    def calculate_position_size(self, signal: Signal, balance: float, regime=None) -> float:
+        return self.size * balance
+    
+    def should_exit(self, position, current_data, regime=None) -> bool:
+        return False
+    
+    def get_stop_loss(self, entry_price: float, signal: Signal, regime=None) -> float:
+        return entry_price * 0.99
+
+
+class DeterministicPositionSizer(PositionSizer):
+    """Deterministic position sizer for regression testing"""
+    
+    def __init__(self, size: float):
+        super().__init__(name="deterministic_sizer")
+        self.size = size
+    
+    def calculate_size(self, signal: Signal, balance: float, risk_amount: float, regime=None) -> float:
         return self.size
 
-    def calculate_stop_loss(self, df, index, price, side: str = "long") -> float:
-        return float(price) * (1 - self.stop_loss_pct)
 
-    def get_parameters(self) -> dict[str, Any]:
-        return {
-            "entry_period": self.entry_period,
-            "hold_period": self.hold_period,
-            "size": self.size,
-        }
+def create_deterministic_strategy(
+    name: str,
+    entry_period: int,
+    hold_period: int,
+    size: float,
+    max_entries: int | None = None,
+) -> Strategy:
+    """Create a deterministic component-based strategy for regression testing"""
+    signal_gen = DeterministicSignalGenerator(entry_period, hold_period, max_entries=max_entries)
+    return Strategy(
+        name=name,
+        signal_generator=signal_gen,
+        risk_manager=DeterministicRiskManager(size),
+        position_sizer=DeterministicPositionSizer(size)
+    )
 
 
 class StubStrategyManager:
     """Minimal stand-in for the live strategy manager."""
 
-    def __init__(self, factory: Callable[[str], BaseStrategy]):
+    def __init__(self, factory: Callable[[str], Strategy]):
         self._factory = factory
-        self.current_strategy: BaseStrategy | None = None
+        self.current_strategy: Strategy | None = None
 
-    def load_strategy(self, strategy_name: str) -> BaseStrategy:
+    def load_strategy(self, strategy_name: str) -> Strategy:
         strategy = self._factory(strategy_name)
         self.current_strategy = strategy
         return strategy
@@ -250,21 +314,21 @@ def test_regime_backtester_regression(monkeypatch):
     frame = _build_fixture_dataframe()
     provider = FixtureDataProvider(frame)
 
-    primary_strategy = DeterministicStrategy(
-        name="MlBasicStrategy", entry_period=30, hold_period=5, size=0.2
+    primary_strategy = create_deterministic_strategy(
+        name="MlBasicStrategy", entry_period=30, hold_period=5, size=0.2, max_entries=5
     )
 
-    def strategy_factory(key: str) -> BaseStrategy:
+    def strategy_factory(key: str) -> Strategy:
         if key in {"ml_basic", "mlbasic"}:
-            return DeterministicStrategy(
-                name="MlBasicStrategy", entry_period=30, hold_period=5, size=0.2
+            return create_deterministic_strategy(
+                name="MlBasicStrategy", entry_period=30, hold_period=5, size=0.2, max_entries=5
             )
         if key == "alternate":
-            return DeterministicStrategy(
-                name="AlternateStrategy", entry_period=24, hold_period=4, size=0.15
+            return create_deterministic_strategy(
+                name="AlternateStrategy", entry_period=24, hold_period=4, size=0.15, max_entries=0
             )
-        return DeterministicStrategy(
-            name="FallbackStrategy", entry_period=28, hold_period=4, size=0.18
+        return create_deterministic_strategy(
+            name="FallbackStrategy", entry_period=28, hold_period=4, size=0.18, max_entries=0
         )
 
     strategy_manager = StubStrategyManager(strategy_factory)
@@ -281,7 +345,7 @@ def test_regime_backtester_regression(monkeypatch):
 
     original_loader = Backtester._load_strategy_by_name
 
-    def _patched_loader(self: Backtester, strategy_name: str) -> BaseStrategy | None:
+    def _patched_loader(self: Backtester, strategy_name: str) -> Strategy | None:
         if strategy_name == "alternate":
             new_strategy = strategy_factory("alternate")
             strategy_manager.current_strategy = new_strategy
@@ -340,4 +404,3 @@ def test_regime_backtester_regression(monkeypatch):
         assert obs["regime"] == exp["regime"]
         assert obs["confidence"] == pytest.approx(exp["confidence"], rel=1e-6, abs=1e-6)
         assert obs["agreement"] == pytest.approx(exp["agreement"], rel=1e-6, abs=1e-6)
-

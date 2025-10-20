@@ -1,5 +1,8 @@
 # Strategy Migration Baseline Benchmarking
 
+> **Status (2025-10)**: These baselines are archived for reference; the component runtime
+> supersedes the legacy execution stack in current deployments.
+
 _Phase 0 deliverables for the strategy migration proposal._
 
 ## Overview

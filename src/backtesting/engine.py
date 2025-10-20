@@ -49,7 +49,6 @@ from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager
-from src.strategies.base import BaseStrategy
 from src.strategies.components import (
     MarketData as ComponentMarketData,
     Position as ComponentPosition,
@@ -137,7 +136,7 @@ class Backtester:
 
     def __init__(
         self,
-        strategy: BaseStrategy | ComponentStrategy | StrategyRuntime,
+        strategy: ComponentStrategy | StrategyRuntime,
         data_provider: DataProvider,
         sentiment_provider: Optional[SentimentDataProvider] = None,
         risk_parameters: Optional[Any] = None,
@@ -451,7 +450,7 @@ class Backtester:
             return None
 
     def _configure_strategy(
-        self, strategy: BaseStrategy | ComponentStrategy | StrategyRuntime
+        self, strategy: ComponentStrategy | StrategyRuntime
     ) -> None:
         """Normalise strategy inputs and prepare runtime state."""
 
@@ -476,10 +475,12 @@ class Backtester:
         return self._runtime is not None
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Prepare strategy data using either legacy hooks or the runtime."""
+        """Prepare strategy data using the runtime."""
 
         if not self._is_runtime_strategy():
-            return self.strategy.calculate_indicators(df)
+            # All strategies are now component-based
+            # They calculate indicators on-demand in process_candle()
+            return df
 
         dataset = self._runtime.prepare_data(df)
         self._runtime_dataset = dataset
@@ -618,6 +619,146 @@ class Backtester:
         size_fraction = float(decision.position_size) / float(balance)
         size_fraction = max(0.0, min(1.0, size_fraction))
         return side, size_fraction
+
+    def _apply_correlation_control(
+        self,
+        symbol: str,
+        timeframe: str,
+        df: pd.DataFrame,
+        index: int,
+        candidate_fraction: float,
+    ) -> float:
+        """Apply correlation control to candidate position size for runtime strategies."""
+        if candidate_fraction <= 0 or self.correlation_engine is None:
+            return candidate_fraction
+
+        try:
+            overrides = (
+                self.strategy.get_risk_overrides()
+                if hasattr(self.strategy, "get_risk_overrides")
+                else None
+            )
+        except Exception:
+            overrides = None
+
+        max_exposure_override = None
+        if overrides:
+            try:
+                corr_cfg = overrides.get("correlation_control", {})
+                max_exposure_override = corr_cfg.get("max_correlated_exposure")
+            except Exception:
+                max_exposure_override = None
+
+        price_series: dict[str, pd.Series] = {}
+        try:
+            price_series[str(symbol)] = df["close"].astype(float)
+        except Exception:
+            try:
+                price_series[str(symbol)] = df["close"]
+            except Exception:
+                return candidate_fraction
+
+        end_ts = None
+        try:
+            end_ts = df.index[index]
+        except Exception:
+            try:
+                end_ts = df.index[-1]
+            except Exception:
+                end_ts = None
+
+        start_ts = None
+        if isinstance(end_ts, pd.Timestamp):
+            try:
+                start_ts = end_ts - pd.Timedelta(days=self.risk_manager.params.correlation_window_days)
+            except Exception:
+                start_ts = None
+
+        open_symbols = set()
+        try:
+            if getattr(self, "risk_manager", None) and self.risk_manager.positions:
+                open_symbols = set(map(str, self.risk_manager.positions.keys()))
+        except Exception:
+            open_symbols = set()
+
+        for sym in open_symbols:
+            if sym == str(symbol) or sym in price_series:
+                continue
+            try:
+                if start_ts is not None and isinstance(end_ts, pd.Timestamp):
+                    hist = self.data_provider.get_historical_data(
+                        sym,
+                        timeframe=timeframe,
+                        start=start_ts.to_pydatetime(),
+                        end=end_ts.to_pydatetime(),
+                    )
+                else:
+                    hist = self.data_provider.get_historical_data(sym, timeframe=timeframe)
+            except Exception:
+                continue
+            if hist is None or hist.empty or "close" not in hist.columns:
+                continue
+            try:
+                price_series[sym] = hist["close"].astype(float)
+            except Exception:
+                price_series[sym] = hist["close"]
+
+        corr_matrix = None
+        try:
+            corr_matrix = self.correlation_engine.calculate_position_correlations(price_series)
+        except Exception as exc:
+            logger.debug("Failed to calculate correlation matrix for %s: %s", symbol, exc)
+            corr_matrix = None
+
+        factor = 1.0
+        try:
+            factor = float(
+                self.correlation_engine.compute_size_reduction_factor(
+                    positions=self.risk_manager.positions,
+                    corr_matrix=corr_matrix,
+                    candidate_symbol=str(symbol),
+                    candidate_fraction=float(candidate_fraction),
+                    max_exposure_override=max_exposure_override,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Correlation size reduction failed for %s: %s", symbol, exc)
+            factor = 1.0
+
+        adjusted = candidate_fraction * factor
+
+        max_allowed = None
+        try:
+            if overrides and max_exposure_override is not None:
+                max_allowed = float(max_exposure_override)
+            else:
+                max_allowed = float(self.correlation_engine.config.max_correlated_exposure)
+        except Exception:
+            max_allowed = None
+
+        if max_allowed is not None and corr_matrix is not None:
+            try:
+                groups = self.correlation_engine.get_correlation_groups(corr_matrix)
+            except Exception as exc:
+                logger.debug("Failed to derive correlation groups for %s: %s", symbol, exc)
+                groups = []
+
+            candidate_group_exposure = None
+            for group in groups:
+                if str(symbol) in group:
+                    current = 0.0
+                    for sym in group:
+                        current += float(self.risk_manager.positions.get(sym, {}).get("size", 0.0))
+                    candidate_group_exposure = current
+                    break
+
+            if candidate_group_exposure is not None:
+                remaining_capacity = max(0.0, max_allowed - candidate_group_exposure)
+                if remaining_capacity <= 0:
+                    return 0.0
+                return max(0.0, min(adjusted, remaining_capacity))
+
+        return max(0.0, adjusted)
 
     def _finalize_runtime(self) -> None:
         if self._is_runtime_strategy():
@@ -873,8 +1014,22 @@ class Backtester:
                                 if new_strategy:
                                     logger.info(f"Strategy switch at {current_time} (candle {i}): {old_strategy_name} -> {new_strategy_name} (regime: {switch_decision['new_regime']})")
                                     self._configure_strategy(new_strategy)
-                                    self._runtime_dataset = None
-                                    self._runtime_warmup = 0
+                                    # Rebuild runtime dataset for the newly selected strategy.
+                                    try:
+                                        prepared_dataset = self._prepare_strategy_dataframe(df)
+                                        df = prepared_dataset
+                                        logger.debug(
+                                            "Prepared runtime dataset for switched strategy %s",
+                                            new_strategy_name,
+                                        )
+                                    except Exception as prep_error:
+                                        logger.warning(
+                                            "Failed to prepare runtime dataset for %s: %s",
+                                            new_strategy_name,
+                                            prep_error,
+                                        )
+                                        self._runtime_dataset = None
+                                        self._runtime_warmup = 0
                                     
                                     # Update regime switcher state properly
                                     try:
@@ -888,24 +1043,9 @@ class Backtester:
                                         if hasattr(self.regime_switcher, 'strategy_manager') and self.regime_switcher.strategy_manager:
                                             self.regime_switcher.strategy_manager.current_strategy = new_strategy
                                     
-                                    # Recalculate indicators for new strategy
-                                    # This ensures the new strategy has all required indicators
-                                    try:
-                                        # Recalculate indicators for the entire remaining dataset
-                                        # This prevents future candles from having missing data
-                                        temp_df = df.copy()
-                                        temp_df = new_strategy.calculate_indicators(temp_df)
-                                        
-                                        # Update the main dataframe with new indicators
-                                        # Only update columns that don't exist yet or are strategy-specific
-                                        for col in temp_df.columns:
-                                            if col not in df.columns or col.startswith(('ml_', 'ensemble_', 'momentum_', 'regime_')):
-                                                df[col] = temp_df[col]
-                                        
-                                        logger.debug(f"Recalculated indicators for strategy {new_strategy_name}")
-                                    except Exception as indicator_error:
-                                        logger.warning(f"Failed to recalculate indicators for {new_strategy_name}: {indicator_error}")
-                                        # Continue with existing indicators if recalculation fails
+                                    # All strategies are now component-based
+                                    # They calculate indicators on-demand in process_candle()
+                                    logger.debug(f"Strategy switched to {new_strategy_name} (component-based)")
                                     
                             except Exception as switch_error:
                                 logger.warning(f"Failed to switch to strategy {new_strategy_name}: {switch_error}")
@@ -967,18 +1107,13 @@ class Backtester:
                             except Exception:
                                 pass
 
-                    if self._is_runtime_strategy():
-                        exit_signal, runtime_exit_reason = self._runtime_should_exit(
-                            runtime_decision,
-                            symbol,
-                            candle,
-                            current_price,
-                        )
-                    else:
-                        exit_signal = self.strategy.check_exit_conditions(
-                            df, i, self.current_trade.entry_price
-                        )
-                        runtime_exit_reason = "Strategy signal"
+                    # All strategies are now component-based
+                    exit_signal, runtime_exit_reason = self._runtime_should_exit(
+                        runtime_decision,
+                        symbol,
+                        candle,
+                        current_price,
+                    )
 
                     # Evaluate partial exits and scale-ins before full exit
                     try:
@@ -1288,6 +1423,15 @@ class Backtester:
                             )
                         continue
 
+                    if size_fraction > 0:
+                        size_fraction = self._apply_correlation_control(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            df=df,
+                            index=i,
+                            candidate_fraction=size_fraction,
+                        )
+
                     # Apply dynamic risk adjustments for runtime entry
                     if size_fraction > 0 and self.enable_dynamic_risk:
                         size_fraction = self._get_dynamic_risk_adjusted_size(
@@ -1384,7 +1528,9 @@ class Backtester:
 
                     continue
 
-                elif self.strategy.check_entry_conditions(df, i):
+                # All strategies are now component-based using runtime decisions
+                # Legacy check_entry_conditions and check_short_entry_conditions removed
+                elif False:  # Placeholder for removed legacy code
                     # Calculate position size (as fraction of balance)
                     try:
                         overrides = (
@@ -1545,11 +1691,8 @@ class Backtester:
                                 f"Failed to update risk manager for opened long on {symbol}: {e}"
                             )
 
-                # Short entry if supported by strategy
-                elif (
-                    hasattr(self.strategy, "check_short_entry_conditions")
-                    and self.strategy.check_short_entry_conditions(df, i)
-                ):
+                # Short entry removed - all strategies use component-based runtime decisions
+                elif False:  # Placeholder for removed legacy code
                     try:
                         overrides = (
                             self.strategy.get_risk_overrides()
@@ -1864,26 +2007,26 @@ class Backtester:
     # --------------------
     # Modularized helpers
     # --------------------
-    def _load_strategy_by_name(self, strategy_name: str) -> Optional[BaseStrategy]:
+    def _load_strategy_by_name(self, strategy_name: str) -> Optional[ComponentStrategy]:
         """Load strategy by name for regime switching"""
         try:
-            strategy_classes = {
-                'ml_basic': ('src.strategies.ml_basic', 'MlBasic'),
-                'ml_adaptive': ('src.strategies.ml_adaptive', 'MlAdaptive'),
-                'ml_sentiment': ('src.strategies.ml_sentiment', 'MlSentiment'),
-                'ensemble_weighted': ('src.strategies.ensemble_weighted', 'EnsembleWeighted'),
-                'momentum_leverage': ('src.strategies.momentum_leverage', 'MomentumLeverage')
+            strategy_factories = {
+                'ml_basic': ('src.strategies.ml_basic', 'create_ml_basic_strategy'),
+                'ml_adaptive': ('src.strategies.ml_adaptive', 'create_ml_adaptive_strategy'),
+                'ml_sentiment': ('src.strategies.ml_sentiment', 'create_ml_sentiment_strategy'),
+                'ensemble_weighted': ('src.strategies.ensemble_weighted', 'create_ensemble_weighted_strategy'),
+                'momentum_leverage': ('src.strategies.momentum_leverage', 'create_momentum_leverage_strategy')
             }
             
-            if strategy_name not in strategy_classes:
+            if strategy_name not in strategy_factories:
                 logger.warning(f"Unknown strategy for switching: {strategy_name}")
                 return None
             
-            module_path, class_name = strategy_classes[strategy_name]
-            module = __import__(module_path, fromlist=[class_name])
-            strategy_class = getattr(module, class_name)
+            module_path, factory_name = strategy_factories[strategy_name]
+            module = __import__(module_path, fromlist=[factory_name])
+            factory_function = getattr(module, factory_name)
             
-            return strategy_class()
+            return factory_function()
             
         except Exception as e:
             logger.error(f"Failed to load strategy {strategy_name}: {e}")

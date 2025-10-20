@@ -4,19 +4,21 @@ alwaysApply: false
 ---
 
 ### Implemented
-- `MlBasic`, `MlAdaptive`, `MlWithSentiment` (see `src/strategies/`).
+- `ml_basic`, `ml_adaptive`, `ml_sentiment`, `ensemble_weighted`, `momentum_leverage` (see `src/strategies/`).
+- Factory functions in respective files (e.g., `create_ml_basic_strategy()`).
 - Exported in `src/strategies/__init__.py`.
 
-### Base interface
-`BaseStrategy` requires:
-- `calculate_indicators(df) -> df`
-- `check_entry_conditions(df, i) -> bool`
-- `check_exit_conditions(df, i, entry_price) -> bool`
-- `calculate_position_size(df, i, balance) -> float`
-- `calculate_stop_loss(df, i, price, side='long') -> float`
-- `get_parameters() -> dict`
+### Component-Based Interface
+All strategies use `Strategy` class with composed components:
+- `SignalGenerator`: Generates trading signals with confidence
+- `RiskManager`: Calculates risk-based position sizes
+- `PositionSizer`: Determines final position size
+- `RegimeDetector` (optional): Detects market regimes
+
+Main method: `strategy.process_candle(df, index, balance, positions) -> TradingDecision`
 
 ### Add a strategy
-- Create `src/strategies/my_strategy.py` extending `BaseStrategy`.
+- Create factory function in `src/strategies/my_strategy.py` that returns configured `Strategy` instance.
+- Compose appropriate `SignalGenerator`, `RiskManager`, and `PositionSizer` components.
 - Register exports in `src/strategies/__init__.py`.
 - Backtest: `atb backtest my_strategy --symbol BTCUSDT --timeframe 1h --days 30`.

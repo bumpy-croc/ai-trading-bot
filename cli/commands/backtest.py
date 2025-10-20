@@ -18,6 +18,13 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 
 from src.utils.logging_config import configure_logging
 from src.utils.symbol_factory import SymbolFactory
+from src.strategies import (
+    create_ml_basic_strategy,
+    create_ml_sentiment_strategy,
+    create_ml_adaptive_strategy,
+    create_ensemble_weighted_strategy,
+    create_momentum_leverage_strategy,
+)
 
 logger = logging.getLogger("atb.backtest")
 
@@ -25,19 +32,17 @@ logger = logging.getLogger("atb.backtest")
 def _load_strategy(strategy_name: str):
     # Define available strategies with their import paths and classes
     available_strategies = {
-        "ml_basic": ("src.strategies.ml_basic", "MlBasic"),
-        "ml_sentiment": ("src.strategies.ml_sentiment", "MlSentiment"),
-        "ml_adaptive": ("src.strategies.ml_adaptive", "MlAdaptive"),
-        "ensemble_weighted": ("src.strategies.ensemble_weighted", "EnsembleWeighted"),
-        "momentum_leverage": ("src.strategies.momentum_leverage", "MomentumLeverage"),
+        "ml_basic": create_ml_basic_strategy,
+        "ml_sentiment": create_ml_sentiment_strategy,
+        "ml_adaptive": create_ml_adaptive_strategy,
+        "ensemble_weighted": create_ensemble_weighted_strategy,
+        "momentum_leverage": create_momentum_leverage_strategy,
     }
     
     try:
-        if strategy_name in available_strategies:
-            module_path, class_name = available_strategies[strategy_name]
-            module = __import__(module_path, fromlist=[class_name])
-            strategy_class = getattr(module, class_name)
-            return strategy_class()
+        builder = available_strategies.get(strategy_name)
+        if builder is not None:
+            return builder()
         
         print(f"Unknown strategy: {strategy_name}")
         print(f"Available strategies: {', '.join(available_strategies.keys())}")

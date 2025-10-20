@@ -6,7 +6,7 @@ import pytest
 from src.backtesting.engine import Backtester
 from src.data_providers.data_provider import DataProvider
 from src.position_management.trailing_stops import TrailingStopPolicy
-from src.strategies.ml_adaptive import MlAdaptive
+from src.strategies.ml_adaptive import create_ml_adaptive_strategy
 
 pytestmark = pytest.mark.integration
 
@@ -40,7 +40,7 @@ class DummyProvider(DataProvider):
 
 
 def test_backtester_applies_trailing_stops():
-    strategy = MlAdaptive()
+    strategy = create_ml_adaptive_strategy()
     provider = DummyProvider()
     ts_policy = TrailingStopPolicy(activation_threshold=0.005, trailing_distance_pct=0.005, breakeven_threshold=0.02, breakeven_buffer=0.001)
 
@@ -51,3 +51,4 @@ def test_backtester_applies_trailing_stops():
     assert isinstance(results, dict)
     # There should be at least one trade executed under simple upward drift, and trailing logic should not error
     assert "total_trades" in results
+    assert strategy.name == "MlAdaptive"

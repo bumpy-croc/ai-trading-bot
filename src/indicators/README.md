@@ -72,21 +72,24 @@ print(df[['close', 'ma_20', 'ma_50', 'rsi', 'atr', 'bb_upper', 'bb_lower']].tail
 
 ### Strategy Integration
 ```python
-from src.strategies.base import BaseStrategy
+from src.strategies.components.signal_generators.base import SignalGenerator
 from src.indicators.technical import (
     calculate_moving_averages,
     calculate_rsi,
     calculate_atr
 )
 
-class MyStrategy(BaseStrategy):
-    def calculate_indicators(self, df):
-        # Calculate multiple indicators
-        df = calculate_moving_averages(df, periods=[20, 50])
-        df['rsi'] = calculate_rsi(df, period=14)
-        df = calculate_atr(df, period=14)
+class MySignalGenerator(SignalGenerator):
+    def generate_signal(self, df, index, regime=None):
+        # Calculate indicators on-demand for the current candle
+        df_with_indicators = calculate_moving_averages(df, periods=[20, 50])
+        df_with_indicators['rsi'] = calculate_rsi(df_with_indicators, period=14)
+        df_with_indicators = calculate_atr(df_with_indicators, period=14)
         
-        return df
+        # Generate signal based on indicators
+        # ... signal logic here ...
+        
+        return signal
 ```
 
 ### Vectorized Operations

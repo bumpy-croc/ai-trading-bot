@@ -21,7 +21,7 @@ The component system testing framework provides comprehensive coverage for:
 - **Individual Components**: Signal generators, risk managers, position sizers
 - **Component Integration**: How components work together in strategies
 - **Performance Regression**: Ensuring performance doesn't degrade over time
-- **Migration Compatibility**: Backward compatibility with legacy systems
+- **Legacy Compatibility (archived)**: Spotting regressions against the retired `BaseStrategy` baseline
 - **Error Handling**: Graceful failure and recovery mechanisms
 
 ### Testing Philosophy
@@ -137,11 +137,11 @@ python tests/performance/automated_performance_monitor.py --full-cycle
 - Complete decision cycle timing
 - Memory usage and stability
 - Batch processing performance
-- Legacy system compatibility
+- Archival legacy parity snapshots
 
 ### 4. Migration Tests
 
-**Purpose**: Ensure compatibility during migration from legacy system
+**Purpose**: Guard ongoing compatibility against the archived legacy system baselines
 
 **Location**: `tests/unit/strategies/`
 
@@ -155,7 +155,7 @@ pytest tests/unit/strategies/migration/test_strategy_converter.py -v
 ```
 
 **Key Test Areas**:
-- Legacy vs component system equivalence
+- Component results versus archived legacy baselines
 - Parameter mapping and conversion
 - Backward compatibility maintenance
 - Test fixture compatibility

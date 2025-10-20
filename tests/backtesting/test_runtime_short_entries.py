@@ -31,7 +31,7 @@ class _FrameProvider(DataProvider):
 
 
 class _ShortSignalGenerator(SignalGenerator):
-    def __init__(self, enable_short: bool) -> None:
+    def __init__(self, enable_short: bool | None) -> None:
         super().__init__("short_signal")
         self._enable_short = enable_short
 
@@ -44,11 +44,15 @@ class _ShortSignalGenerator(SignalGenerator):
                 metadata={},
             )
 
+        metadata: dict[str, bool] = {}
+        if self._enable_short is not None:
+            metadata["enter_short"] = self._enable_short
+
         return Signal(
             direction=SignalDirection.SELL,
             strength=1.0,
             confidence=0.9,
-            metadata={"enter_short": self._enable_short},
+            metadata=metadata,
         )
 
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:  # type: ignore[override]
@@ -98,7 +102,7 @@ def _build_dataset() -> pd.DataFrame:
     return frame
 
 
-def _build_strategy(enable_short: bool) -> Strategy:
+def _build_strategy(enable_short: bool | None) -> Strategy:
     return Strategy(
         name="short_strategy",
         signal_generator=_ShortSignalGenerator(enable_short),
@@ -107,7 +111,7 @@ def _build_strategy(enable_short: bool) -> Strategy:
     )
 
 
-def test_runtime_short_entry_requires_metadata():
+def test_runtime_short_entry_blocks_when_flag_false():
     frame = _build_dataset()
     provider = _FrameProvider(frame)
     strategy = _build_strategy(enable_short=False)
@@ -154,3 +158,27 @@ def test_runtime_short_entry_honors_metadata():
     assert result["total_trades"] == 1
     assert backtester.trades
     assert backtester.trades[0].side == "short"
+
+
+def test_runtime_short_entry_blocks_when_metadata_missing():
+    frame = _build_dataset()
+    provider = _FrameProvider(frame)
+    strategy = _build_strategy(enable_short=None)
+
+    backtester = Backtester(
+        strategy,
+        provider,
+        log_to_database=False,
+        enable_dynamic_risk=False,
+        enable_engine_risk_exits=False,
+    )
+
+    result = backtester.run(
+        symbol="TESTUSDT",
+        timeframe="1h",
+        start=frame.index[0],
+        end=frame.index[-1],
+    )
+
+    assert result["total_trades"] == 0
+    assert backtester.trades == []

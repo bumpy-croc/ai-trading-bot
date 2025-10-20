@@ -48,8 +48,14 @@ Data Providers → Indicators → Strategies → Risk Manager → Execution Laye
 
 ---
 
-## Strategy Base Interface
-`BaseStrategy` requires: `calculate_indicators(df)`, `check_entry_conditions(df, i)`, `check_exit_conditions(df, i, entry_price)`, `calculate_position_size(df, i, balance)`, `calculate_stop_loss(df, i, price, side='long')`, `get_parameters()`.
+## Strategy Component Interface
+All strategies use component-based architecture with `Strategy` class that composes:
+- `SignalGenerator`: Generates trading signals (BUY/SELL/HOLD) with confidence
+- `RiskManager`: Calculates risk-based position sizes and stop losses
+- `PositionSizer`: Determines final position size based on signal and risk
+- `RegimeDetector` (optional): Detects market regimes for adaptive behavior
+
+Main interface: `strategy.process_candle(df, index, balance, positions) -> TradingDecision`
 
 ---
 

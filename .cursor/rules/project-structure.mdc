@@ -122,24 +122,25 @@ class YourStrategy(BaseStrategy):
         # Strategy-specific initialization
 
     def calculate_indicators(self, df):
-        # Calculate strategy-specific indicators
-        pass
-
-    def check_entry_conditions(self, df, index):
-        # Entry signal logic
-        pass
-
-    def check_exit_conditions(self, df, index, entry_price):
-        # Exit signal logic
-        pass
+        # Component-based strategy using factory function
+        signal_generator = MySignalGenerator()
+        risk_manager = MyRiskManager()
+        position_sizer = MyPositionSizer()
+        
+        return Strategy(
+            name="my_strategy",
+            signal_generator=signal_generator,
+            risk_manager=risk_manager,
+            position_sizer=position_sizer
+        )
 ```
 
 **Strategy Types**:
-- `adaptive.py` - Adjusts to market conditions
-- `enhanced.py` - Combines multiple indicators
-- `ml_basic.py` - Uses ML price predictions
-- `ml_with_sentiment.py` - Advanced ML with sentiment
-- `high_risk_high_reward.py` - Aggressive trading
+- `ml_basic.py` - Uses ML price predictions with basic risk management
+- `ml_adaptive.py` - ML with regime-aware adaptive behavior
+- `ml_sentiment.py` - ML with sentiment analysis integration
+- `ensemble_weighted.py` - Combines multiple signal sources
+- `momentum_leverage.py` - Momentum-based with aggressive sizing
 
 ### **4. Execution Layer**
 

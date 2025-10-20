@@ -100,6 +100,7 @@ class Strategy:
         self.risk_manager = risk_manager
         self.position_sizer = position_sizer
         self.regime_detector = regime_detector or EnhancedRegimeDetector()
+        self.trading_pair = "BTCUSDT"
         
         # Logging setup
         self.enable_logging = enable_logging
@@ -125,6 +126,7 @@ class Strategy:
 
         # Runtime configuration
         self._warmup_override: Optional[int] = None
+        self._last_signal: Optional[Signal] = None
         
         self.logger.info(f"Strategy '{name}' initialized with components: "
                         f"SignalGen={signal_generator.name}, "
@@ -430,6 +432,46 @@ class Strategy:
             'position_sizer': self.position_sizer.get_parameters(),
             'regime_detector': {'type': 'EnhancedRegimeDetector'}
         }
+
+    # ------------------------------------------------------------------
+    # Legacy compatibility helpers (temporary during migration)
+    # ------------------------------------------------------------------
+
+    def set_trading_pair(self, trading_pair: str) -> None:
+        """Set default trading pair."""
+        self.trading_pair = trading_pair
+
+    def get_trading_pair(self) -> str:
+        """Return current trading pair."""
+        return self.trading_pair
+
+    def get_parameters(self) -> dict[str, Any]:
+        """Expose key configuration parameters for compatibility."""
+        params: dict[str, Any] = {
+            "name": self.name,
+            "trading_pair": self.trading_pair,
+            "components": self.get_component_info(),
+        }
+        for attr in (
+            "model_path",
+            "sequence_length",
+            "use_prediction_engine",
+            "model_name",
+            "model_type",
+            "timeframe",
+            "stop_loss_pct",
+            "take_profit_pct",
+            "risk_per_trade",
+            "base_fraction",
+            "min_confidence",
+        ):
+            if hasattr(self, attr):
+                params[attr] = getattr(self, attr)
+        return params
+
+    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
+        """Return configured risk overrides when provided."""
+        return getattr(self, "_risk_overrides", None)
     
     def _validate_inputs(self, df: pd.DataFrame, index: int, balance: float) -> None:
         """Validate input parameters"""
@@ -547,13 +589,15 @@ class Strategy:
                 'final_position_size': final_position_size,
                 'size_adjustment_ratio': final_position_size / risk_position_size if risk_position_size > 0 else 0
             },
-            # Runtime engines only honour sell signals as short entries when
-            # strategies explicitly opt in through this metadata flag. By
-            # default it remains ``False`` so component strategies continue to
-            # treat sell decisions as exit instructions unless they request
-            # short exposure.
-            'enter_short': bool(signal.metadata.get('enter_short', False))
         }
+
+        # Runtime engines only allow SELL decisions to enter shorts when strategies
+        # explicitly opt in via ``enter_short=True`` metadata. Default to long-only.
+        enter_short_flag = signal.metadata.get('enter_short') if signal.metadata else None
+        if signal.direction == SignalDirection.SELL:
+            metadata['enter_short'] = bool(enter_short_flag) if enter_short_flag is not None else False
+        elif enter_short_flag is not None:
+            metadata['enter_short'] = bool(enter_short_flag)
         
         # Add regime information if available
         if regime:

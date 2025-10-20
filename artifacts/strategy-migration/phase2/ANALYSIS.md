@@ -1,5 +1,8 @@
 # Phase 2 Benchmark Analysis
 
+> **Status (2025-10)**: Component strategies now run directly in production; this analysis is
+> preserved to describe the pre-cutover adapter issues and legacy parity checks.
+
 **Date**: 2025-10-11  
 **Branch**: New Phase 2 Implementation  
 **Status**: 🚨 **BEHAVIORAL PARITY NOT ACHIEVED**
@@ -79,7 +82,7 @@ This Phase 2 implementation shows **identical behavioral issues** to the previou
 onent-based strategies should produce identical results to legacy  
 **Actual**: Completely different behavior (9 vs 300 trades)
 
-**Root Cause**: `LegacyStrategyAdapter` translation layer has bugs:
+**Root Cause**: `LegacyStrategyAdapter` translation layer has bugs (historical path `src/strategies/adapters/legacy_adapter.py`):
 - Not tracking position state correctly
 - Missing trade cooldown logic
 - Entry signals generated too frequently

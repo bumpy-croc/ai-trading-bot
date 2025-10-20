@@ -4,7 +4,7 @@ from datetime import datetime
 
 from src.backtesting.engine import Backtester
 from src.risk.risk_manager import RiskParameters
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class TestRiskManagementIntegration:
@@ -13,7 +13,7 @@ class TestRiskManagementIntegration:
     def test_risk_parameters_integration(self, mock_data_provider, sample_ohlcv_data):
         """Running with explicit risk limits should succeed."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         risk_params = RiskParameters(
             base_risk_per_trade=0.01,
             max_position_size=0.05,
@@ -37,7 +37,7 @@ class TestRiskManagementIntegration:
     def test_position_size_limits(self, mock_data_provider, sample_ohlcv_data):
         """Very small position limits should still run successfully."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         risk_params = RiskParameters(max_position_size=0.01)
 
         mock_data_provider.get_historical_data.return_value = sample_ohlcv_data

@@ -3,11 +3,11 @@ from datetime import time
 from src.data_providers.binance_provider import BinanceProvider
 from src.live.trading_engine import LiveTradingEngine
 from src.position_management.time_exits import MarketSessionDef, TimeExitPolicy
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 def test_live_engine_accepts_time_exit_policy_unique_name():
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
     dp = BinanceProvider()
     session = MarketSessionDef(
         name="US_EQUITIES",
