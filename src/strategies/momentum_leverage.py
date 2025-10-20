@@ -155,7 +155,7 @@ class MomentumLeverage:
         momentum_entry_threshold: float = 0.01,
         strong_momentum_threshold: float = 0.025,
         base_risk: float = 0.10,
-        base_fraction: float = 0.5,
+        base_fraction: float = 0.70,
         **kwargs: Any
     ) -> Strategy:
         """Create strategy instance using factory function."""

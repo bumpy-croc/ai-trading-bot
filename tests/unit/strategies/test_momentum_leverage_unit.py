@@ -112,7 +112,35 @@ class TestMomentumLeverageStrategy:
         strategy = create_momentum_leverage_strategy()
         
         # Check that position sizer has aggressive base fraction
-        assert strategy.position_sizer.base_fraction == 0.5  # 50% base allocation
+        assert strategy.position_sizer.base_fraction == 0.5  # 50% base allocation cap
+        assert strategy.base_position_size == pytest.approx(0.70)
         
         # Check that risk manager has wide stop loss
         assert strategy.risk_manager.base_risk == 0.10  # 10% stop loss
+        assert strategy.take_profit_pct == pytest.approx(0.35)
+
+    def test_momentum_leverage_risk_overrides_restore_aggressive_profile(self):
+        """Ensure risk overrides are attached for runtime engines"""
+        strategy = create_momentum_leverage_strategy()
+        overrides = strategy.get_risk_overrides()
+
+        assert overrides is not None
+        assert overrides["position_sizer"] == "confidence_weighted"
+        assert overrides["base_fraction"] == pytest.approx(0.70)
+        assert overrides["trailing_stop"]["activation_threshold"] == pytest.approx(0.06)
+        assert overrides["partial_operations"]["max_scale_ins"] == 3
+
+    def test_momentum_leverage_risk_overrides_follow_parameters(self):
+        """Risk overrides should reflect custom factory arguments"""
+        strategy = create_momentum_leverage_strategy(
+            base_fraction=0.6,
+            min_position_size_ratio=0.35,
+            max_position_size_ratio=0.9,
+            take_profit_pct=0.30,
+        )
+        overrides = strategy.get_risk_overrides()
+
+        assert overrides["base_fraction"] == pytest.approx(0.6)
+        assert overrides["min_fraction"] == pytest.approx(0.35)
+        assert overrides["max_fraction"] == pytest.approx(0.9)
+        assert overrides["take_profit_pct"] == pytest.approx(0.30)
