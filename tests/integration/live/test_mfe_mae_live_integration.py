@@ -91,7 +91,7 @@ def test_live_engine_records_mfe_mae():
 
     # Manually create a trading session to enable database logging
     session_id = engine.db_manager.create_trading_session(
-        strategy_name=strategy.__class__.__name__,
+        strategy_name=strategy.name,
         symbol="BTCUSDT",
         timeframe="1h",
         mode=TradeSource.PAPER,
