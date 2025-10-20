@@ -1,5 +1,8 @@
 # Prediction Engine
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: See [docs/prediction.md](../../docs/prediction.md) for comprehensive guide
+
 Centralized ONNX model loading, inference, and caching for all ML strategies.
 
 ## Components
