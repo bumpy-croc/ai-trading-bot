@@ -1062,10 +1062,9 @@ class LiveTradingEngine:
                         current_price,
                         runtime_decision=runtime_decision,
                     )
-                    # Check for short entry if strategy supports it
-                    # Component strategies handle short entries in process_candle(), so skip this
-                    if (not self._is_runtime_strategy()) and (not isinstance(self.strategy, ComponentStrategy)) and hasattr(
-                        self.strategy, "check_short_entry_conditions"
+                    # Check for short entry via legacy hook when available
+                    if (not self._is_runtime_strategy()) and callable(
+                        getattr(self.strategy, "check_short_entry_conditions", None)
                     ):
                         short_entry_signal = self.strategy.check_short_entry_conditions(
                             df, current_index
