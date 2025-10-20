@@ -500,8 +500,8 @@ class StrategyExecution(Base):
 
     # Signal information
     signal_type = Column(String(20))  # 'entry', 'exit', 'hold'
-    signal_strength = Column(Numeric(18, 8))
-    confidence_score = Column(Numeric(18, 8))
+    signal_strength = Column(Float(asdecimal=False))
+    confidence_score = Column(Float(asdecimal=False))
 
     # Decision factors
     indicators = Column(JSONType)  # Dict of indicator values
