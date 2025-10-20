@@ -4,7 +4,7 @@
 Application code lives in `src/`, grouped by domain: trading flows in `src/trading`, executable strategies in `src/strategies`, analytics in `src/performance`, and shared utilities in `src/utils`. Experimentation and ML assets sit under `src/ml` and `examples/`. Dash components are in `src/dashboards`, while database migrations reside in `migrations/` with settings in `alembic.ini`. Tests mirror the source tree: fast checks in `tests/unit`, scenario coverage in `tests/integration`, and latency/throughput checks in `tests/performance`.
 
 ## Build, Test, and Development Commands
-Use `make dev-setup` to bootstrap a Python virtual environment (3.9+ required) and install editable dependencies. `make install` upgrades `pip` and installs the CLI (`atb`) locally. `make deps` and `make deps-server` pull dev and runtime requirements. Run `make backtest STRATEGY=ml_basic DAYS=30` to replay a strategy, or `make optimizer STRATEGY=ml_basic` to sweep parameters. `make test` executes `pytest -n 4`, while `make code-quality` chains Black, Ruff, MyPy, and Bandit. For ad-hoc dashboards, `make dashboard-monitoring PORT=8090` exposes the monitoring UI.
+Use `make dev-setup` to bootstrap a Python virtualenv (requires Python 3.9+, 3.11+ recommended) and install editable dependencies. `make install` upgrades `pip` and installs the CLI (`atb`) locally. `make deps` and `make deps-server` pull dev and runtime requirements. Run `make backtest STRATEGY=ml_basic DAYS=30` to replay a strategy, or `make optimizer STRATEGY=ml_basic` to sweep parameters. `make test` executes `pytest -n 4`, while `make code-quality` chains Black, Ruff, MyPy, and Bandit. For ad-hoc dashboards, `make dashboard-monitoring PORT=8090` exposes the monitoring UI.
 
 # ExecPlans
 

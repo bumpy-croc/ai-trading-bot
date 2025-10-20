@@ -1,5 +1,8 @@
 # Backtesting
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: [Live trading](live_trading.md), [Data pipeline](data_pipeline.md)
+
 The vectorised backtesting engine in `src/backtesting/engine.py` replays historical candles, applies the strategy lifecycle, and
 records trades, risk metrics, and optional database logs. It mirrors the live engine behaviour: partial exits, trailing stops,
 regime-aware strategy switching, and dynamic risk controls all share the same helpers.

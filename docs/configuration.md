@@ -1,5 +1,8 @@
 # Configuration
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: [Development workflow](development.md), [Database](database.md)
+
 The configuration system centralises access to environment settings so that every service (CLI commands, backtesting, live
 engine, dashboards) reads values in a consistent order. The entry point is the `ConfigManager` defined in
 `src/config/config_manager.py`.
@@ -70,9 +73,18 @@ initial balance and risk per trade via command-line flags.
 
 ## Local configuration workflow
 
-1. Copy `.env.example` to `.env` if available and fill in secrets (API keys, database URL, webhook endpoints).
+1. Copy `.env.example` to `.env` and fill in secrets (API keys, database URL, webhook endpoints):
+   ```bash
+   cp .env.example .env
+   # Edit .env with your values
+   ```
 2. Export sensitive overrides in the shell for automation: `export DATABASE_URL=postgresql://...`.
-3. In a Python shell, call `get_config().get_all_config()` to review the resolved values and confirm the expected source order.
+3. In a Python shell, call `get_config().get_all()` to review the resolved values and confirm the expected source order:
+   ```python
+   from src.config.config_manager import get_config
+   config = get_config()
+   print(config.get_all())
+   ```
 
 Because `ConfigManager` is thread-safe, long-running components such as the live trading engine can call `refresh()` to reload
 providers after secrets rotate without restarting the process.

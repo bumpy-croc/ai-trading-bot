@@ -1,5 +1,8 @@
 # Database
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: [Configuration](configuration.md), [Development workflow](development.md#railway-deployment-quick-start)
+
 All persistent state flows through the PostgreSQL manager in `src/database/manager.py`. It enforces a PostgreSQL URL (SQLite is
 only allowed for unit tests) and creates the full schema on startup using SQLAlchemy models from `src/database/models.py`.
 

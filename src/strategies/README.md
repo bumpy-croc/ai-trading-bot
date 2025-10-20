@@ -1,5 +1,8 @@
 # Strategies
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: See [docs/backtesting.md](../../docs/backtesting.md#built-in-strategies) and [docs/prediction.md](../../docs/prediction.md)
+
 Built-in strategies using indicators and/or ML predictions.
 
 ## Included

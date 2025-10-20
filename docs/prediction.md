@@ -1,5 +1,8 @@
 # Prediction & models
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: [Backtesting](backtesting.md), [Live trading](live_trading.md)
+
 Machine-learning inference and model lifecycle management live under `src/prediction` and `src/ml`. The goal is to keep training
 isolated from live execution while still exposing predictions to strategies in a consistent way.
 
@@ -35,7 +38,22 @@ print(result.price, result.confidence, result.model_name)
 ## Model registry
 
 The registry (`src/prediction/models/registry.py`) loads model bundles from the path declared in `PredictionConfig.model_registry_path`.
-Each bundle stores weights, metadata, and optional metrics. Helper commands under `atb models` provide operational visibility:
+Each bundle stores weights, metadata, and optional metrics.
+
+### Model Storage Locations
+
+Models are stored in two locations:
+- **Legacy location**: `src/ml/*.onnx` (root level) - Currently used by strategies
+- **Structured registry**: `src/ml/models/SYMBOL/TYPE/VERSION/model.onnx` - New versioned model structure
+
+Available models include:
+- `btcusdt_price.onnx`, `btcusdt_price_v2.onnx` - BTC price prediction
+- `btcusdt_sentiment.onnx` - BTC with sentiment analysis
+- `ethusdt_sentiment.onnx` - ETH with sentiment analysis
+
+### Model Management Commands
+
+Helper commands under `atb models` provide operational visibility:
 
 - `atb models list` – list all discovered bundles grouped by symbol/timeframe/model type.
 - `atb models compare BTCUSDT 1h price` – print the metrics metadata for the selected bundle.

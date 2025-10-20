@@ -1,5 +1,8 @@
 # Data pipeline
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: [Backtesting](backtesting.md), [Configuration](configuration.md)
+
 Market, sentiment, and cached data access lives under `src/data_providers`. The system exposes a consistent `DataProvider`
 interface so engines and CLI commands can swap sources without changing call sites.
 
