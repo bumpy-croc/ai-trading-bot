@@ -40,8 +40,12 @@ def load_strategy(strategy_name: str):
         sys.exit(1)
 
     try:
-        strategy_class = strategies[strategy_name]
-        strategy = strategy_class() if callable(strategy_class) else strategy_class
+        strategy_factory = strategies[strategy_name]
+        if not callable(strategy_factory):
+            msg = f"Strategy factory for {strategy_name} must be callable"
+            logger.error(msg)
+            raise TypeError(msg)
+        strategy = strategy_factory()
         logger.info(f"Loaded strategy: {strategy.name}")
         return strategy
     except Exception as e:
