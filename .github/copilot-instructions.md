@@ -6,7 +6,7 @@ This is a modular cryptocurrency trading bot focused on long-term, risk-balanced
 
 **Size & Tech Stack:**
 - Medium-large Python project (~50+ modules)
-- Python 3.9+ required, primarily Python 3.11/3.12 tested
+- Python 3.11+ required, primarily Python 3.11/3.12 tested
 - Key dependencies: Flask, SQLAlchemy, TensorFlow/ONNX, pandas, scikit-learn, python-binance, ccxt
 - Database: PostgreSQL only (no SQLite fallback)
 - Runtime: CLI tool (`atb`) with web dashboards

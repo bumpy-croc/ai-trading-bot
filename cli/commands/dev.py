@@ -66,7 +66,7 @@ def _check_requirements() -> bool:
 
     requirements = {
         "python3": {
-            "description": "Python 3.9+ required",
+            "description": "Python 3.11+ required",
             "required": True,
         },
         "docker": {

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 
 try:
-    # Python 3.9+
+    # Python 3.11+ standard library
     from zoneinfo import ZoneInfo
 except (ImportError, ModuleNotFoundError):  # pragma: no cover
     # Fallback for environments without zoneinfo; will behave as naive UTC
