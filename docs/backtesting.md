@@ -34,7 +34,6 @@ Important flags:
 | `--provider {binance,coinbase}` | Switches the market data source. |
 | `--no-cache` / `--cache-ttl` | Control the `CachedDataProvider` wrapper. |
 | `--use-sentiment` | Adds `FearGreedProvider` data to the candle frame. |
-| `--regime-aware` | Enables automatic switching via `RegimeStrategySwitcher`. |
 | `--risk-per-trade` / `--max-risk-per-trade` | Override `RiskParameters` for the run. |
 | `--log-to-db` | Persist the session to PostgreSQL for later inspection. |
 | `--start` / `--end` | Explicit date boundaries (override `--days`). |
@@ -64,8 +63,8 @@ candle index so you can inspect the raw data or adjust risk parameters (`--risk-
 
 ## Regime detection
 
-- Enable regime-aware switching via `--regime-aware` to let `RegimeStrategySwitcher` choose between compatible component
-  strategies (for example `ml_basic` versus `ml_sentiment`) based on the current market state.
+- Regime-aware behaviour is handled inside each strategy configuration. When a strategy supports multiple regimes it will
+  manage component switching automatically without additional CLI flags.
 - Regime detectors live under `src/regime/` and expose reusable analyzers such as `VolatilityRegimeDetector` and
   `TrendRegimeDetector`. Combine them with the prediction engine or ML features to feed richer context into switching logic.
 - Use the CLI under `atb regime ...` to profile historical regime labels, export summaries, or validate detector thresholds before
