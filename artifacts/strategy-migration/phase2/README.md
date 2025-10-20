@@ -1,5 +1,9 @@
 # Phase 2 Benchmark Results
 
+> **Status (2025-10)**: The component runtime has since replaced the legacy adapter in
+> production. This report is archived to document the pre-cutover regression analysis and
+> retains legacy references for historical context.
+
 **Date**: 2025-10-11  
 **Branch**: Current Phase 2 implementation  
 **Status**: ❌ **BEHAVIORAL PARITY NOT ACHIEVED**
@@ -46,7 +50,7 @@ We ran benchmarks on the current Phase 2 implementation and compared with the ba
 
 ## Root Cause
 
-The `LegacyStrategyAdapter` (in `src/strategies/adapters/legacy_adapter.py`) is not correctly translating component-based strategy signals into legacy-compatible behavior.
+The `LegacyStrategyAdapter` (historical path `src/strategies/adapters/legacy_adapter.py`) is not correctly translating component-based strategy signals into legacy-compatible behavior.
 
 **Likely bugs**:
 1. Not tracking position state (enters even when already in position)

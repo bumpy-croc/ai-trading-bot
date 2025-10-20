@@ -22,7 +22,9 @@ pytest tests/performance/test_component_performance_regression.py -v -m performa
 pytest tests/strategies/components/ tests/integration/test_component_trading_workflows.py -v
 ```
 
-### Legacy System Tests
+### Legacy Compatibility Tests (archived)
+These commands exercise the archived `BaseStrategy` pipeline to ensure historical parity while the
+component-based runtime remains the production path.
 ```bash
 python tests/run_tests.py smoke
 python tests/run_tests.py unit
@@ -71,7 +73,7 @@ pytest tests/unit/strategies/migration/ -v
 - `migration` - Migration and compatibility tests
 - `regression` - Regression detection tests
 
-### Legacy System Markers
+### Legacy Compatibility Markers (archived)
 - `live_trading` - Live trading system tests
 - `risk_management` - Risk management tests
 - `strategy` - Strategy-specific tests
@@ -131,7 +133,7 @@ pytest tests/performance/ -v -m performance
 pytest tests/unit/strategies/ -v -m migration
 ```
 
-### Legacy Commands
+### Legacy Commands (compatibility harness)
 ```bash
 python tests/run_tests.py --file tests/test_strategies.py
 python tests/run_tests.py -m "strategy and not slow"
@@ -160,7 +162,7 @@ pytest tests/integration/ --cov=src/strategies/components --cov-report=html
 pytest tests/strategies/components/ tests/integration/ --cov=src/strategies/components --cov-report=html
 ```
 
-### Legacy System Coverage
+### Legacy Coverage (compatibility)
 ```bash
 python tests/run_tests.py --coverage
 # HTML at htmlcov/index.html

@@ -1,5 +1,8 @@
 # Baseline vs Phase 2: Complete Metrics Comparison
 
+> **Status (2025-10)**: Archived comparison between the retired legacy adapter and the
+> component runtime prior to the production cutover.
+
 ## ml_basic Strategy - Backtest Mode
 
 | Metric | Baseline (Sep 10) | Phase 2 (Oct 11) | Δ Absolute | Δ % | Pass? |
@@ -182,4 +185,3 @@ Phase 2 shows **identical behavioral issues** to previous analysis:
 **Baseline Date**: 2025-09-10  
 **Phase 2 Date**: 2025-10-11  
 **Comparison**: 31 days apart
-

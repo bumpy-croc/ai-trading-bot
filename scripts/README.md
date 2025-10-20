@@ -3,7 +3,7 @@
 All operational Python utilities have been migrated into the unified `atb` CLI.
 Use `atb --help` to discover the available commands, for example:
 
-- `atb migration baseline` – legacy strategy benchmarking
+- `atb migration baseline` – component strategy regression benchmarking (archives legacy baselines)
 - `atb docs validate` – documentation health checks
 - `atb strategies version` – strategy manifest updates
 - `atb tests parse-junit` – parse JUnit XML failure reports

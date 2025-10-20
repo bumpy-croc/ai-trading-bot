@@ -516,7 +516,11 @@ detector = EnhancedRegimeDetector()
 
 ## Migration Issues
 
-### 1. Legacy Compatibility Failures
+### 1. Legacy Compatibility Baseline Divergence (archived)
+
+These checks compare current component strategies against the archived `BaseStrategy`
+baselines. Failures here do not block the production runtime but help surface
+regressions against historical behaviour.
 
 **Symptoms**:
 ```

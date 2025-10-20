@@ -4,7 +4,8 @@ This guide explains how to migrate existing unit tests to work with the new comp
 
 ## Overview
 
-The new component-based strategy system requires updating existing tests to work with the new architecture while maintaining backward compatibility during the migration period.
+The component-based strategy system is now the default runtime, and this guide captures how we
+updated existing tests while preserving archived compatibility checks from the migration period.
 
 ## Migration Strategy
 
@@ -28,7 +29,7 @@ The new component-based strategy system requires updating existing tests to work
 Located in: `tests/unit/strategies/test_component_migration.py`
 
 These tests ensure that:
-- Component strategies produce equivalent results to legacy strategies
+- Component strategies stay aligned with archived legacy baselines
 - Existing test fixtures work with component strategies
 - Error handling is consistent between old and new systems
 - Performance metrics maintain the same structure
@@ -48,7 +49,7 @@ Located in: `tests/unit/strategies/migration/`
 Tests for migration utilities:
 - `test_strategy_converter.py` - Strategy conversion utilities
 - Parameter mapping validation
-- Component creation from legacy parameters
+- Component creation from archived legacy parameter snapshots
 
 ## Migration Checklist
 
@@ -183,7 +184,7 @@ result = component.some_method()  # Always returns valid result
    - Check that mock behavior is consistent
 
 3. **Assertion Failures**
-   - Component results may differ slightly from legacy
+   - Component results may differ slightly from archived legacy outputs
    - Use appropriate tolerance for floating-point comparisons
    - Focus on behavioral equivalence, not exact matches
 

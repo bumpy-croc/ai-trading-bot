@@ -1,16 +1,23 @@
 # Strategy Migration Completion Proposal
 
+> **Status (2025-10)**: The component-based runtime is now the production default. This
+> proposal is retained for historical context and for maintaining archived compatibility
+> tests; references to the `LegacyStrategyAdapter` describe the retired migration bridge.
+
 ## Background
 
-Recent work introduced a component-oriented `Strategy` class that produces a `TradingDecision` per candle by orchestrating signal generation, risk management, position sizing, and regime analysis components.【F:src/strategies/components/strategy.py†L1-L200】 The interim `LegacyStrategyAdapter` currently wraps these components behind the old `BaseStrategy` interface so that backtesting and live trading engines can continue to call `calculate_indicators`, `check_entry_conditions`, and related hooks.【F:src/strategies/adapters/legacy_adapter.py†L1-L200】 The long-term design documented in the strategy system redesign specification expects all runtime engines and tests to consume the component API directly.【F:.kiro/specs/strategy-system-redesign/design.md†L1-L200】 This proposal describes the remaining changes required to finish that migration while preserving existing behaviour and runtime performance.
+Recent work introduced a component-oriented `Strategy` class that produces a `TradingDecision` per candle by orchestrating signal generation, risk management, position sizing, and regime analysis components.【F:src/strategies/components/strategy.py†L1-L200】 At the time, the interim `LegacyStrategyAdapter` wrapped these components behind the old `BaseStrategy` interface so that backtesting and live trading engines could continue to call `calculate_indicators`, `check_entry_conditions`, and related hooks.【F:src/strategies/adapters/legacy_adapter.py†L1-L200】 The long-term design documented in the strategy system redesign specification expects all runtime engines and tests to consume the component API directly.【F:.kiro/specs/strategy-system-redesign/design.md†L1-L200】 This proposal describes the remaining changes required to finish that migration while preserving existing behaviour and runtime performance.
 
 ## Current State and Contracts
 
 * **Legacy strategy contract** – `BaseStrategy` implementations expose lifecycle hooks such as `calculate_indicators`, `check_entry_conditions`, `check_exit_conditions`, and `update_position` that assume pre-computed indicator columns on a shared `DataFrame`. Engines drive the lifecycle and translate hook outputs into orders.【F:src/strategies/MIGRATION.md†L1-L200】
 * **Component strategy contract** – Component strategies encapsulate signal, sizing, and risk components and expose a single `process_candle` that returns a `TradingDecision`. Feature calculation and state management are delegated to the components themselves.【F:src/strategies/components/strategy.py†L1-L200】
-* **Bridge layer** – `LegacyStrategyAdapter` adapts component strategies back onto the legacy contract so engines and tests can continue to work while the migration completes.【F:src/strategies/adapters/legacy_adapter.py†L1-L200】
+* **Bridge layer** – `LegacyStrategyAdapter` adapted component strategies back onto the legacy contract so engines and tests could continue to work while the migration completed.【F:src/strategies/adapters/legacy_adapter.py†L1-L200】
 
-Today, engines, tests, and most tooling still rely on the legacy contract. Completing the migration requires inverting that relationship so the component contract becomes the runtime default and legacy strategies are the only ones using adapters.
+When this proposal was original authored, engines, tests, and most tooling still relied on
+the legacy contract. Completing the migration required inverting that relationship so the
+component contract became the runtime default and legacy strategies were the only ones using
+adapters.
 
 ## Goals and Constraints
 
@@ -51,7 +58,7 @@ This approach reproduces the "precompute all indicators" performance profile dur
   2. Iterate through the dataset using the warmup offset, requesting `TradingDecision`s and translating them into trade operations (entries/exits, stop loss, trailing stop checks) mirroring the legacy logic.
   3. Use runtime-provided metadata to maintain behaviour (e.g., risk metrics, stop-loss suggestions) so that PnL calculations and logging remain unchanged.
 * **Live Trading** – Mirror the same runtime contract in the live engine: maintain a `RuntimeContext` containing the rolling feature cache, open positions, and balance; request decisions per new candle; translate them into exchange orders using the existing execution stack. The adapter layer should continue to expose the old interface temporarily for any remaining legacy strategies.
-* **Adapter Simplification** – Once engines use the runtime, `LegacyStrategyAdapter` can be simplified to forward `BaseStrategy` hooks into the runtime for backwards compatibility. Eventually, when no code requires the old hooks, the adapter can be removed entirely.
+* **Adapter Simplification** – Once engines use the runtime, `LegacyStrategyAdapter` could be simplified to forward `BaseStrategy` hooks into the runtime for backwards compatibility. Eventually, when no code required the old hooks, the adapter could be removed entirely (this has now occurred).
 
 ### 4. Testing Strategy Alignment
 
@@ -77,7 +84,7 @@ Each phase below includes context, architectural focus, and concrete deliverable
 
 ### Phase 0 – Baseline Benchmarking
 
-* **Context** – Engines currently depend on legacy hooks; we need hard data on performance and behaviour before refactoring.
+* **Context (historical)** – Engines at that stage depended on legacy hooks; baseline performance and behaviour needed to be captured before refactoring.
 * **Architecture Notes** – Exercise both backtester and live-simulation pathways using the legacy contract to capture current throughput and trade sequences.
 * **Deliverables**
   * Benchmark scripts and documented commands for replaying representative datasets.
@@ -86,7 +93,7 @@ Each phase below includes context, architectural focus, and concrete deliverable
 
 ### Phase 1 – Runtime Foundations
 
-* **Context** – Establish the `StrategyRuntime` orchestration layer and feature pipeline while keeping existing strategies functional.
+* **Context (historical)** – Establish the `StrategyRuntime` orchestration layer and feature pipeline while keeping existing strategies functional.
 * **Architecture Notes** – Implement runtime scaffolding, feature generator contracts, and dataset abstractions that sit between engines and component strategies without altering trade semantics.
 * **Deliverables**
   * `StrategyRuntime` class with `prepare_data`, `process`, and `finalize` methods plus default behaviours.
@@ -96,7 +103,7 @@ Each phase below includes context, architectural focus, and concrete deliverable
 
 ### Phase 2 – Engine Integration
 
-* **Context** – Backtesting and live engines must consume `TradingDecision`s directly while retaining parity with legacy behaviour.
+* **Context (historical)** – Backtesting and live engines needed to consume `TradingDecision`s directly while retaining parity with legacy behaviour.
 * **Architecture Notes** – Introduce runtime-aware execution paths in both engines, keeping the legacy adapter available for un-migrated strategies.
 * **Deliverables**
   * Backtester changes invoking `StrategyRuntime` when supplied with component strategies, including translation of decisions into orders, fills, and portfolio updates mirroring legacy logic.
@@ -107,7 +114,7 @@ Each phase below includes context, architectural focus, and concrete deliverable
 
 ### Phase 3 – Test Suite Migration
 
-* **Context** – Unit, integration, and regression tests still target legacy hooks; they must validate `TradingDecision` semantics instead.
+* **Context (historical)** – Unit, integration, and regression tests still targeted legacy hooks; they needed to validate `TradingDecision` semantics instead.
 * **Architecture Notes** – Provide shared fixtures and helpers that exercise strategies through `StrategyRuntime`, enabling consistent assertions across suites.
 * **Deliverables**
   * Updated unit and integration tests asserting on decision payloads, component interactions, and risk instructions.
@@ -117,11 +124,11 @@ Each phase below includes context, architectural focus, and concrete deliverable
 
 ### Phase 4 – Cleanup and Decommissioning
 
-* **Context** – After engines and tests fully adopt the runtime, remaining legacy-only pathways can be retired.
+* **Context (historical)** – After engines and tests fully adopted the runtime, remaining legacy-only pathways could be retired.
 * **Architecture Notes** – Simplify the codebase so the component contract is the sole public strategy interface.
 * **Deliverables**
   * Removal of redundant compatibility layers and deprecation of `BaseStrategy` hooks.
-  * Simplified `LegacyStrategyAdapter` (or its removal) with clear upgrade guidance for any downstream consumers.
+  * Simplified `LegacyStrategyAdapter` (or its removal) with clear upgrade guidance for any downstream consumers. ✅ Completed – the adapter has been retired.
   * Documentation updates in `src/strategies/README.md` and `MIGRATION.md` describing the final architecture and onboarding flow for new strategies.
   * Final benchmark artefacts demonstrating parity or improvement relative to the baseline.
 
