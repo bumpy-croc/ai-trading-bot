@@ -591,12 +591,13 @@ class Strategy:
             },
         }
 
-        # Runtime engines only honour sell signals as short entries when
-        # strategies explicitly opt in through this metadata flag. Leave the
-        # flag unset unless strategies provide an explicit value so engines can
-        # default to allowing shorts.
+        # Runtime engines honour sell signals as short entries when metadata sets
+        # ``enter_short`` to ``True``. Treat a missing flag as allowed so SELL
+        # decisions continue to open shorts unless strategies explicitly disable it.
         enter_short_flag = signal.metadata.get('enter_short') if signal.metadata else None
-        if enter_short_flag is not None:
+        if signal.direction == SignalDirection.SELL:
+            metadata['enter_short'] = bool(enter_short_flag) if enter_short_flag is not None else True
+        elif enter_short_flag is not None:
             metadata['enter_short'] = bool(enter_short_flag)
         
         # Add regime information if available

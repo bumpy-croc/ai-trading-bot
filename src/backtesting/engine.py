@@ -1014,8 +1014,22 @@ class Backtester:
                                 if new_strategy:
                                     logger.info(f"Strategy switch at {current_time} (candle {i}): {old_strategy_name} -> {new_strategy_name} (regime: {switch_decision['new_regime']})")
                                     self._configure_strategy(new_strategy)
-                                    self._runtime_dataset = None
-                                    self._runtime_warmup = 0
+                                    # Rebuild runtime dataset for the newly selected strategy.
+                                    try:
+                                        prepared_dataset = self._prepare_strategy_dataframe(df)
+                                        df = prepared_dataset
+                                        logger.debug(
+                                            "Prepared runtime dataset for switched strategy %s",
+                                            new_strategy_name,
+                                        )
+                                    except Exception as prep_error:
+                                        logger.warning(
+                                            "Failed to prepare runtime dataset for %s: %s",
+                                            new_strategy_name,
+                                            prep_error,
+                                        )
+                                        self._runtime_dataset = None
+                                        self._runtime_warmup = 0
                                     
                                     # Update regime switcher state properly
                                     try:
