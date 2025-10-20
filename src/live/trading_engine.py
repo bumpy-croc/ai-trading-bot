@@ -613,7 +613,7 @@ class LiveTradingEngine:
         positions: list[ComponentPosition] = []
         for position in self.positions.values():
             try:
-                quantity = self._compute_component_quantity(position, balance)
+                quantity = self._compute_component_quantity(position)
                 component_position = ComponentPosition(
                     symbol=position.symbol,
                     side=position.side.value,
