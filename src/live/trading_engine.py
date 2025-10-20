@@ -478,7 +478,7 @@ class LiveTradingEngine:
                 volatility_risk_multipliers=dynamic_overrides.get('volatility_risk_multipliers', base_config.volatility_risk_multipliers)
             )
             
-            logger.info(f"Merged strategy dynamic risk overrides from {self.strategy.__class__.__name__}")
+            logger.info(f"Merged strategy dynamic risk overrides from {self._strategy_name()}")
             return merged_config
             
         except Exception as e:
@@ -587,6 +587,13 @@ class LiveTradingEngine:
 
     def _is_runtime_strategy(self) -> bool:
         return self._runtime is not None
+
+    def _strategy_name(self) -> str:
+        """Return the configured strategy name for logging/reporting."""
+        strategy = getattr(self, "strategy", None)
+        if strategy is None:
+            return "UnknownStrategy"
+        return getattr(strategy, "name", strategy.__class__.__name__)
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Prepare dataframe for strategy processing.
@@ -801,7 +808,7 @@ class LiveTradingEngine:
                 }
 
             self.trading_session_id = self.db_manager.create_trading_session(
-                strategy_name=self.strategy.__class__.__name__,
+                strategy_name=self._strategy_name(),
                 symbol=symbol,
                 timeframe=timeframe,
                 mode=mode,
@@ -1588,7 +1595,7 @@ class LiveTradingEngine:
                     confidence_score = runtime_decision.signal.confidence
 
                 self.db_manager.log_strategy_execution(
-                    strategy_name=self.strategy.__class__.__name__,
+                    strategy_name=self._strategy_name(),
                     symbol=position.symbol,
                     signal_type="exit",
                     action_taken="closed_position" if should_exit else "hold_position",
@@ -1720,7 +1727,7 @@ class LiveTradingEngine:
                         log_reasons.append(f"risk_{key}_{value:.4f}")
             
             self.db_manager.log_strategy_execution(
-                strategy_name=self.strategy.__class__.__name__,
+                strategy_name=self._strategy_name(),
                 symbol=symbol,
                 signal_type="entry",
                 action_taken=(
@@ -1896,7 +1903,7 @@ class LiveTradingEngine:
                     side=side.value,
                     entry_price=entry_price,
                     size=size,
-                    strategy_name=self.strategy.__class__.__name__,
+                    strategy_name=self._strategy_name(),
                     entry_order_id=order_id,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
@@ -2054,7 +2061,7 @@ class LiveTradingEngine:
                     exit_price=current_price,
                     size=fraction,
                     pnl=realized_pnl,
-                    strategy_name=self.strategy.__class__.__name__,
+                    strategy_name=self._strategy_name(),
                     exit_reason=reason,
                     entry_time=position.entry_time,
                     exit_time=datetime.now(),
@@ -2680,7 +2687,7 @@ class LiveTradingEngine:
 
         if success:
             logger.info("✅ Hot-swap initiated successfully - will apply on next cycle")
-            strategy_name = getattr(self.strategy, "name", self.strategy.__class__.__name__)
+            strategy_name = self._strategy_name()
             self._send_alert(f"Strategy hot-swap initiated: {strategy_name} → {new_strategy_name}")
         else:
             logger.error("❌ Hot-swap initiation failed")
@@ -2702,7 +2709,7 @@ class LiveTradingEngine:
             logger.error("Strategy manager not initialized - model updates disabled")
             return False
 
-        strategy_name = getattr(self.strategy, "name", self.strategy.__class__.__name__).lower()
+        strategy_name = self._strategy_name().lower()
 
         logger.info(f"🤖 Initiating model update for strategy: {strategy_name}")
 
