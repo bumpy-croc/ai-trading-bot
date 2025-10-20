@@ -120,8 +120,8 @@ make install && make deps
 make code-quality  # ruff + black + mypy + bandit
 
 # Or run individually:
+black .
 ruff check . --fix
-ruff format .
 python bin/run_mypy.py
 bandit -c pyproject.toml -r src
 ```

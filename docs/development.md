@@ -34,7 +34,7 @@ Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) us
 ## Code quality
 
 - `make code-quality` – run Black formatting, Ruff linting, MyPy type checks, and Bandit security scans.
-- `ruff check .` and `ruff format .` – apply lint fixes manually.
+- `black .` and `ruff check . --fix` – apply formatting and lint fixes manually.
 - `python bin/run_mypy.py` – strict type checking without formatting.
 - `bandit -c pyproject.toml -r src` – security audit focusing on runtime code.
 
