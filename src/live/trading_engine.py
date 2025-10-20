@@ -1639,16 +1639,21 @@ class LiveTradingEngine:
             try:
                 decision = self.strategy.process_candle(df, current_index, self.current_balance, None)
                 
-                if decision.signal.direction == SignalDirection.BUY:
+                notional_size = float(decision.position_size or 0.0)
+                balance = float(self.current_balance or 0.0)
+                size_fraction = 0.0 if balance <= 0 else max(0.0, notional_size / balance)
+                bounded_fraction = min(size_fraction, self.max_position_size)
+
+                if decision.signal.direction == SignalDirection.BUY and bounded_fraction > 0:
                     entry_signal = True
                     entry_side = PositionSide.LONG
-                    position_size = min(decision.position_size, self.max_position_size)
+                    position_size = bounded_fraction
                     runtime_strength = decision.signal.strength
                     runtime_confidence = decision.signal.confidence
-                elif decision.signal.direction == SignalDirection.SELL:
+                elif decision.signal.direction == SignalDirection.SELL and bounded_fraction > 0:
                     entry_signal = True
                     entry_side = PositionSide.SHORT
-                    position_size = min(decision.position_size, self.max_position_size)
+                    position_size = bounded_fraction
                     runtime_strength = decision.signal.strength
                     runtime_confidence = decision.signal.confidence
             except Exception as e:
