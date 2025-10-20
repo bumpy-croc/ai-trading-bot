@@ -85,10 +85,10 @@ The control surface lives under `atb live-control`:
 from src.live.trading_engine import LiveTradingEngine
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 engine = LiveTradingEngine(
-    strategy=MlBasic(),
+    strategy=create_ml_basic_strategy(),
     data_provider=CachedDataProvider(BinanceProvider(), cache_ttl_hours=1),
     check_interval=60,
     max_position_size=0.1,

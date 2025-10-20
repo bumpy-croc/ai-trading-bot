@@ -81,9 +81,9 @@ from datetime import datetime, timedelta
 from src.backtesting.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
-strategy = MlBasic()
+strategy = create_ml_basic_strategy()
 provider = CachedDataProvider(BinanceProvider(), cache_ttl_hours=24)
 backtester = Backtester(strategy=strategy, data_provider=provider, initial_balance=10_000)
 start = datetime.utcnow() - timedelta(days=120)

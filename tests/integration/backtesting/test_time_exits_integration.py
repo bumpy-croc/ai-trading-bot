@@ -36,8 +36,7 @@ def test_backtester_time_exit_max_holding(mock_data_provider):
     # Should not accumulate a very long open trade due to time exit
     # We can't assert exact counts because strategy logic drives entries, but ensure it runs
     assert "final_balance" in results
-    # Validate component-based strategy was used
-    assert strategy.name in ["ml_basic", "MlBasic"]
+    assert strategy.name == "MlBasic"
 
 
 def test_backtester_time_exit_end_of_day(mock_data_provider):
@@ -72,5 +71,4 @@ def test_backtester_time_exit_end_of_day(mock_data_provider):
 
     results = bt.run("BTCUSDT", "1h", start=idx[0].to_pydatetime(), end=idx[-1].to_pydatetime())
     assert isinstance(results, dict)
-    # Validate component-based strategy was used
-    assert strategy.name in ["ml_basic", "MlBasic"]
+    assert strategy.name == "MlBasic"

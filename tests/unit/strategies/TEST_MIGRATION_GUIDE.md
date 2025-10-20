@@ -9,9 +9,8 @@ The new component-based strategy system requires updating existing tests to work
 ## Migration Strategy
 
 ### Phase 1: Compatibility Tests
-- Create tests that verify both old and new systems produce equivalent results
-- Test that component strategies can be used where BaseStrategy is expected
-- Validate error handling compatibility
+- Create tests that verify component strategies integrate with existing backtesting and live engine fixtures
+- Validate error handling compatibility across component boundaries
 
 ### Phase 2: Component-Level Tests
 - Convert strategy-level tests to component-level tests
@@ -65,12 +64,7 @@ Tests for migration utilities:
    - [ ] Create equivalent test for appropriate component
    - [ ] Ensure test covers edge cases from original test
 
-3. **Add Compatibility Test**
-   - [ ] Create test that compares old vs new behavior
-   - [ ] Verify results are equivalent (within tolerance)
-   - [ ] Test error handling compatibility
-
-4. **Update Test Fixtures**
+3. **Update Test Fixtures**
    - [ ] Ensure fixtures work with component interfaces
    - [ ] Add any new fixtures needed for components
    - [ ] Update mock objects for new interfaces
@@ -80,7 +74,7 @@ Tests for migration utilities:
 **Original Test:**
 ```python
 def test_ml_basic_entry_conditions(self):
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
     df = create_test_data()
     decision = strategy.process_candle(df, 50, balance=10_000.0)
     
@@ -97,23 +91,6 @@ def test_ml_basic_signal_generation(self):
     signal = signal_generator.generate_signal(df, 50)
     assert signal.direction in [SignalDirection.BUY, SignalDirection.SELL, SignalDirection.HOLD]
     assert 0 <= signal.confidence <= 1
-```
-
-**Compatibility Test:**
-```python
-def test_ml_basic_compatibility(self):
-    # Legacy
-    legacy_strategy = MlBasic()
-    df = create_test_data()
-    legacy_decision = legacy_strategy.process_candle(df, 50, 10_000.0)
-
-    # Component
-    component_strategy = create_ml_basic_component_strategy()
-    decision = component_strategy.process_candle(df, 50, 10_000.0)
-    
-    # Compare
-    assert decision.signal.direction == legacy_decision.signal.direction
-    assert abs(decision.position_size - legacy_decision.position_size) < 1e-6
 ```
 
 ## Test Data Management
@@ -145,7 +122,7 @@ def test_ml_basic_compatibility(self):
 ### 1. Strategy Method → Component Method
 ```python
 # Old
-strategy.check_entry_conditions(df, index) → bool
+strategy.process_candle(df, index, balance) → TradingDecision
 
 # New  
 signal_generator.generate_signal(df, index) → Signal

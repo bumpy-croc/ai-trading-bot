@@ -3,7 +3,7 @@ from datetime import datetime
 import pandas as pd
 
 from src.backtesting.engine import Backtester
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class DummyProvider:
@@ -22,7 +22,7 @@ class DummyProvider:
 
 
 def test_backtester_reports_prediction_metrics(monkeypatch):
-    strategy = MlBasic(use_prediction_engine=False)
+    strategy = create_ml_basic_strategy(use_prediction_engine=False)
     provider = DummyProvider()
     bt = Backtester(
         strategy=strategy, data_provider=provider, initial_balance=1000, log_to_database=False

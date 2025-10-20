@@ -404,14 +404,14 @@ def run_quick_smoke_test():
     # Test basic imports
     try:
         from risk.risk_manager import RiskManager
-        from strategies.ml_basic import MlBasic
+        from strategies.ml_basic import create_ml_basic_strategy
 
         # Removed deprecated MlAdaptive strategy
 
         print_success("All core modules import successfully")
 
         # Test basic functionality
-        MlBasic()
+        create_ml_basic_strategy()
         RiskManager()
         print_success("Core objects can be instantiated")
 

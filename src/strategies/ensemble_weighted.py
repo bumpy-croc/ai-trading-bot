@@ -132,28 +132,3 @@ def create_ensemble_weighted_strategy(
     }
     
     return strategy
-
-
-# Backward compatibility wrapper
-class EnsembleWeighted:
-    """
-    Legacy class wrapper for backward compatibility.
-    
-    Deprecated: Use create_ensemble_weighted_strategy() instead.
-    """
-    
-    def __new__(
-        cls,
-        name: str = "EnsembleWeighted",
-        use_ml_basic: bool = True,
-        use_ml_adaptive: bool = True,
-        use_ml_sentiment: bool = False,
-        **kwargs: Any
-    ) -> Strategy:
-        """Create strategy instance using factory function."""
-        return create_ensemble_weighted_strategy(
-            name=name,
-            use_ml_basic=use_ml_basic,
-            use_ml_adaptive=use_ml_adaptive,
-            use_ml_sentiment=use_ml_sentiment,
-        )

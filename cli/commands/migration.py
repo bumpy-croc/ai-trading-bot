@@ -25,8 +25,8 @@ from src.backtesting.engine import Backtester  # noqa: E402
 from src.data_providers.mock_data_provider import MockDataProvider  # noqa: E402
 from src.live.trading_engine import LiveTradingEngine  # noqa: E402
 from src.risk import RiskParameters  # noqa: E402
-from src.strategies.ml_adaptive import MlAdaptive  # noqa: E402
-from src.strategies.ml_basic import MlBasic  # noqa: E402
+from src.strategies.ml_adaptive import create_ml_adaptive_strategy  # noqa: E402
+from src.strategies.ml_basic import create_ml_basic_strategy  # noqa: E402
 
 DEFAULT_INITIAL_BALANCE = 10_000.0
 DEFAULT_TIMEFRAME = "1h"
@@ -49,9 +49,9 @@ def _baseline_dir() -> Path:
 def _load_strategy(name: str):
     normalized = name.lower()
     if normalized == "ml_basic":
-        return MlBasic()
+        return create_ml_basic_strategy()
     if normalized == "ml_adaptive":
-        return MlAdaptive()
+        return create_ml_adaptive_strategy()
     raise ValueError("Supported strategies: ml_basic, ml_adaptive")
 
 

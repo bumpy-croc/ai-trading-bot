@@ -44,5 +44,4 @@ def test_backtester_partial_ops_flow():
     res = bt.run("BTCUSDT", "1m", start=datetime.utcnow() - timedelta(minutes=10))
     # Basic sanity: produces results without error
     assert "total_trades" in res
-    # Validate that component-based strategy was used
-    assert strategy.name in ["ml_adaptive", "MlAdaptive"]
+    assert strategy.name == "MlAdaptive"

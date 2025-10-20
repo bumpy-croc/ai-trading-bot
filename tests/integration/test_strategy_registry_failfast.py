@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from src.prediction.config import PredictionConfig
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 pytestmark = pytest.mark.integration
 
@@ -47,7 +47,11 @@ def test_strategy_uses_registry_predictions(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(cfg, "model_registry_path", str(root))
 
     # Initialize strategy with registry-enabled engine
-    strategy = MlBasic(use_prediction_engine=True, model_type="basic", timeframe="1h")
+    strategy = create_ml_basic_strategy(
+        use_prediction_engine=True,
+        model_type="basic",
+        timeframe="1h",
+    )
 
     # Patch prediction lookup so the test stays deterministic
     generator = strategy.signal_generator

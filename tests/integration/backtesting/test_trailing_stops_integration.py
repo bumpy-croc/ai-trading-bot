@@ -51,5 +51,4 @@ def test_backtester_applies_trailing_stops():
     assert isinstance(results, dict)
     # There should be at least one trade executed under simple upward drift, and trailing logic should not error
     assert "total_trades" in results
-    # Validate component-based strategy was used
-    assert strategy.name in ["ml_adaptive", "MlAdaptive"]
+    assert strategy.name == "MlAdaptive"

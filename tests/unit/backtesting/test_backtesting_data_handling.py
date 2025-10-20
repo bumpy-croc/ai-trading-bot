@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from src.backtesting.engine import Backtester
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class TestDataHandling:
@@ -15,7 +15,7 @@ class TestDataHandling:
     def test_empty_data_handling(self, mock_data_provider):
         """Empty datasets should not produce trades."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         empty_data = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         mock_data_provider.get_historical_data.return_value = empty_data
 
@@ -31,7 +31,7 @@ class TestDataHandling:
     def test_missing_columns_handling(self, mock_data_provider):
         """Missing OHLCV columns should raise clear errors."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         incomplete_data = pd.DataFrame({"open": [100, 101, 102], "close": [101, 102, 103]})
         mock_data_provider.get_historical_data.return_value = incomplete_data
 
@@ -45,7 +45,7 @@ class TestDataHandling:
     def test_data_validation(self, mock_data_provider):
         """Invalid numeric values should be surfaced or handled gracefully."""
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         invalid_data = pd.DataFrame(
             {
                 "open": [100, -50, 102],

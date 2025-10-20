@@ -22,16 +22,21 @@ STRATEGIES_DIR.mkdir(exist_ok=True, parents=True)
 
 
 def _lazy_import_strategies():
-    from src.strategies import EnsembleWeighted, MlAdaptive, MlBasic, MlSentiment
+    from src.strategies import (
+        create_ensemble_weighted_strategy,
+        create_ml_adaptive_strategy,
+        create_ml_basic_strategy,
+        create_ml_sentiment_strategy,
+    )
     from src.strategies.components import Strategy, StrategyRegistry
 
     return {
         "StrategyRegistry": StrategyRegistry,
         "Strategy": Strategy,
-        "MlBasic": MlBasic,
-        "MlAdaptive": MlAdaptive,
-        "MlSentiment": MlSentiment,
-        "EnsembleWeighted": EnsembleWeighted,
+        "MlBasic": create_ml_basic_strategy,
+        "MlAdaptive": create_ml_adaptive_strategy,
+        "MlSentiment": create_ml_sentiment_strategy,
+        "EnsembleWeighted": create_ensemble_weighted_strategy,
     }
 
 
@@ -91,26 +96,6 @@ def _prompt_for_changes(default_message: str = "Updated strategy implementation"
     return changes, is_major
 
 
-def _build_component_strategy(strategy_instance, strategy_cls):
-    missing_attrs = [
-        attr
-        for attr in ("signal_generator", "risk_manager", "position_sizer")
-        if not hasattr(strategy_instance, attr)
-    ]
-    if missing_attrs:
-        raise AttributeError(
-            "Strategy instance is missing required component attributes: "
-            + ", ".join(missing_attrs)
-        )
-    return strategy_cls(
-        name=getattr(strategy_instance, "name", strategy_instance.__class__.__name__),
-        signal_generator=strategy_instance.signal_generator,
-        risk_manager=strategy_instance.risk_manager,
-        position_sizer=strategy_instance.position_sizer,
-        regime_detector=getattr(strategy_instance, "regime_detector", None),
-    )
-
-
 def _process_strategy_file(strategy_file: Path, auto_confirm: bool = False) -> bool:
     try:
         imports = _lazy_import_strategies()
@@ -135,16 +120,18 @@ def _process_strategy_file(strategy_file: Path, auto_confirm: bool = False) -> b
     print(f"Processing: {strategy_file.relative_to(PROJECT_ROOT)}")
     print(f"{'=' * 60}")
     try:
-        strategy_class = strategy_classes[class_name]
-        strategy_instance = strategy_class()
+        strategy_builder = strategy_classes[class_name]
+        strategy_instance = strategy_builder()
     except Exception as exc:  # noqa: BLE001
         print(f"✗ Failed to instantiate {class_name}: {exc}")
         return False
     try:
-        component_strategy = _build_component_strategy(strategy_instance, Strategy)
+        component_strategy = strategy_instance
+        if not isinstance(component_strategy, Strategy):
+            raise TypeError("Strategy builder did not return a Strategy instance")
     except Exception as exc:  # noqa: BLE001
         print(
-            "✗ Failed to build component strategy from legacy adapter: "
+            "✗ Failed to initialize component strategy: "
             f"{exc}"
         )
         return False
