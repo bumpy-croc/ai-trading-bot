@@ -1,5 +1,8 @@
 # Prediction Engine
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: See [docs/prediction.md](../../docs/prediction.md) for comprehensive guide
+
 Centralized ONNX model loading, inference, and caching for all ML strategies.
 
 ## Components
@@ -26,19 +29,10 @@ print(pred.price, pred.confidence, pred.direction)
 
 ## Model Storage
 
-Models are stored in two locations:
-- **Legacy location**: `src/ml/*.onnx` (root level) - Used by current strategies
-- **Structured registry**: `src/ml/models/SYMBOL/type/version/model.onnx` - New model registry structure
+Models are available in two structures:
+- **Flat (legacy)**: `src/ml/*.onnx` (e.g., `btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`) along with legacy artifacts (`.h5`, `.keras`, and `*_metadata.json` such as `btcusdt_price_metadata.json`)
+- **Nested (current)**: `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`) with colocated `metadata.json`
 
-Available models:
-- `btcusdt_price.onnx`, `btcusdt_price_v2.onnx` - BTC price prediction models
-- `btcusdt_sentiment.onnx` - BTC price with sentiment analysis
-- `ethusdt_sentiment.onnx` - ETH price with sentiment analysis
-
-Metadata files:
-- `btcusdt_price_metadata.json`
-- `btcusdt_sentiment_metadata.json`
-- `ethusdt_sentiment_metadata.json`
-
-## Migration Status
-Strategies currently load ONNX models directly from the legacy location. Migration to use `PredictionModelRegistry` exclusively for all model loading is planned.
+## Status
+- Strategies currently load ONNX directly from the legacy location; migration to exclusive use of `PredictionModelRegistry` is planned.
+- Metadata lives alongside each model—legacy files keep the `*_metadata.json` naming, while the registry uses a single `metadata.json` per versioned directory.

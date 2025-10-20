@@ -1,5 +1,8 @@
 # Configuration
 
+> **Last Updated**: 2025-10-17  
+> **Related Documentation**: [Development workflow](development.md), [Database](database.md)
+
 The configuration system centralises access to environment settings so that every service (CLI commands, backtesting, live
 engine, dashboards) reads values in a consistent order. The entry point is the `ConfigManager` defined in
 `src/config/config_manager.py`.
