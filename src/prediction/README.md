@@ -26,5 +26,7 @@ print(pred.price, pred.confidence, pred.direction)
 
 ## Status
 - Strategies currently load ONNX directly; migration to `PredictionModelRegistry` is planned.
-- Models available: `btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`.
-- Metadata files: `btcusdt_price_metadata.json`, `btcusdt_sentiment_metadata.json`, `ethusdt_sentiment_metadata.json`.
+- Models are organized in two structures:
+  - Flat structure (legacy): `src/ml/btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`
+  - Nested structure (current): `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`)
+- Metadata files are included in each versioned model directory.

@@ -133,6 +133,7 @@ Abstract base class for generating trading signals based on market data.
 from src.strategies.components import MLSignalGenerator, TechnicalSignalGenerator
 
 # ML-based signal generator
+# Note: Supports both flat (src/ml/*.onnx) and nested (src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx) paths
 ml_gen = MLSignalGenerator(
     model_path="src/ml/btcusdt_price.onnx",
     sequence_length=120
