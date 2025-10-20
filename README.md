@@ -2,7 +2,7 @@
 
 A modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live), ML-driven models (price and sentiment), PostgreSQL logging, and optional Railway deployment.
 
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
 > **Requirements**: Python 3.9+ (Python 3.11+ recommended for development)
 
@@ -206,7 +206,7 @@ TRADING_MODE=paper
 INITIAL_BALANCE=1000
 ```
 
-See `docs/configuration.md`.
+Copy `.env.example` to `.env` and fill in your values. See `docs/configuration.md` for detailed configuration options.
 
 ---
 
