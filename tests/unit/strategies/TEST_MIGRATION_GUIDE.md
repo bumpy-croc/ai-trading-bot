@@ -82,10 +82,10 @@ Tests for migration utilities:
 def test_ml_basic_entry_conditions(self):
     strategy = MlBasic()
     df = create_test_data()
-    df_with_indicators = strategy.calculate_indicators(df)
+    decision = strategy.process_candle(df, 50, balance=10_000.0)
     
-    entry = strategy.check_entry_conditions(df_with_indicators, 50)
-    assert isinstance(entry, bool)
+    assert decision.signal.direction is not None
+    assert decision.position_size >= 0
 ```
 
 **Migrated Component Test:**
@@ -105,16 +105,15 @@ def test_ml_basic_compatibility(self):
     # Legacy
     legacy_strategy = MlBasic()
     df = create_test_data()
-    df_with_indicators = legacy_strategy.calculate_indicators(df)
-    legacy_entry = legacy_strategy.check_entry_conditions(df_with_indicators, 50)
-    
+    legacy_decision = legacy_strategy.process_candle(df, 50, 10_000.0)
+
     # Component
     component_strategy = create_ml_basic_component_strategy()
-    decision = component_strategy.process_candle(df_with_indicators, 50, 10000.0)
+    decision = component_strategy.process_candle(df, 50, 10_000.0)
     
     # Compare
-    if legacy_entry:
-        assert decision.signal.direction != SignalDirection.HOLD
+    assert decision.signal.direction == legacy_decision.signal.direction
+    assert abs(decision.position_size - legacy_decision.position_size) < 1e-6
 ```
 
 ## Test Data Management

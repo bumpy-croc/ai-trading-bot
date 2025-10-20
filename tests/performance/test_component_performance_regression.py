@@ -399,7 +399,11 @@ class TestLegacyCompatibilityPerformance:
         return pd.DataFrame(data, index=dates)
     
     def measure_legacy_performance(self, strategy, df, iterations=20):
-        """Measure legacy strategy performance"""
+        """Measure strategy performance using legacy interface fallback if needed."""
+        # Component strategies expose process_candle; use that when available
+        if hasattr(strategy, "process_candle"):
+            return self.measure_component_performance(strategy, df, iterations)
+
         balance = 10000.0
         times = []
         
