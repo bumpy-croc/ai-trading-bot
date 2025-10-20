@@ -20,7 +20,7 @@ name = "ai-trading-bot"
 version = "0.1.0"
 description = "AI Trading Bot CLI and tools"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "python-binance>=1.0.19",
     "pandas>=2.1.4",
