@@ -4,6 +4,8 @@ A modular cryptocurrency trading system focused on long-term, risk-balanced tren
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
+> **Requirements**: Python 3.9+ (Python 3.11+ recommended for development)
+
 ---
 
 ## What's inside
@@ -120,8 +122,8 @@ make install && make deps
 make code-quality  # ruff + black + mypy + bandit
 
 # Or run individually:
+black .
 ruff check . --fix
-ruff format .
 python bin/run_mypy.py
 bandit -c pyproject.toml -r src
 ```
