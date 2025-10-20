@@ -708,10 +708,10 @@ class LiveTradingEngine:
             return None, 0.0
 
         metadata = getattr(decision, "metadata", {}) or {}
-        if decision.signal.direction == SignalDirection.SELL and not bool(
-            metadata.get("enter_short")
-        ):
-            return None, 0.0
+        if decision.signal.direction == SignalDirection.SELL:
+            enter_short_flag = metadata.get("enter_short")
+            if enter_short_flag is False:
+                return None, 0.0
 
         side = "long" if decision.signal.direction == SignalDirection.BUY else "short"
         fraction = float(decision.position_size) / float(balance)

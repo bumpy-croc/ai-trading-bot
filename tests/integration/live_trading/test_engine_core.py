@@ -18,6 +18,7 @@ try:
         MLBasicSignalGenerator,
         FixedRiskManager,
         ConfidenceWeightedSizer,
+        SignalGenerator,
     )
     from src.strategies.components.strategy import TradingDecision
 
@@ -360,8 +361,25 @@ def test_position_sizing_from_trading_decision(mock_data_provider):
     if not LIVE_TRADING_AVAILABLE or Strategy is None:
         pytest.skip("Component strategy not available")
     
+    class _DeterministicSignalGenerator(SignalGenerator):
+        def __init__(self) -> None:
+            super().__init__("deterministic_signal")
+
+        def generate_signal(self, df, index, regime=None):  # type: ignore[override]
+            self.validate_inputs(df, index)
+            return Signal(
+                direction=SignalDirection.BUY,
+                strength=0.8,
+                confidence=0.9,
+                metadata={"reason": "deterministic_test"},
+            )
+
+        def get_confidence(self, df, index):  # type: ignore[override]
+            self.validate_inputs(df, index)
+            return 0.9
+
     # Create component strategy with specific position sizer
-    signal_generator = MLBasicSignalGenerator(name="test_sizing_sg")
+    signal_generator = _DeterministicSignalGenerator()
     risk_manager = FixedRiskManager(risk_per_trade=0.02)
     position_sizer = ConfidenceWeightedSizer(base_fraction=0.03)  # 3% base
     

@@ -610,10 +610,11 @@ class Backtester:
             return None, 0.0
 
         metadata = getattr(decision, "metadata", {}) or {}
-        if decision.signal.direction == SignalDirection.SELL and not bool(
-            metadata.get("enter_short")
-        ):
-            return None, 0.0
+        if decision.signal.direction == SignalDirection.SELL:
+            enter_short_flag = metadata.get("enter_short")
+            # Default to allowing shorts unless strategies explicitly opt out
+            if enter_short_flag is False:
+                return None, 0.0
 
         side = "long" if decision.signal.direction == SignalDirection.BUY else "short"
         size_fraction = float(decision.position_size) / float(balance)
