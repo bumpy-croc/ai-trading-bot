@@ -94,6 +94,7 @@ class Position:
     size: float
     entry_price: float
     entry_time: datetime
+    entry_balance: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
     unrealized_pnl: float = 0.0
@@ -612,11 +613,11 @@ class LiveTradingEngine:
         positions: list[ComponentPosition] = []
         for position in self.positions.values():
             try:
-                notional = float(position.size) * float(balance)
+                quantity = self._compute_component_quantity(position, balance)
                 component_position = ComponentPosition(
                     symbol=position.symbol,
                     side=position.side.value,
-                    size=float(notional),
+                    size=quantity,
                     entry_price=float(position.entry_price),
                     current_price=float(current_price),
                     entry_time=position.entry_time,
@@ -626,6 +627,19 @@ class LiveTradingEngine:
                 logger.debug("Failed to translate live position for runtime: %s", exc)
 
         return RuntimeContext(balance=float(balance), current_positions=positions or None)
+
+    def _compute_component_quantity(self, position: Position, balance_basis: float | None = None) -> float:
+        """Translate a position's fractional size into asset quantity for component strategies."""
+        entry_price = float(position.entry_price)
+        if entry_price <= 0:
+            return 0.0
+
+        basis = balance_basis if balance_basis is not None else getattr(position, "entry_balance", None)
+        if basis is None or basis <= 0:
+            basis = self.current_balance
+
+        size_fraction = float(position.current_size if position.current_size is not None else position.size)
+        return (size_fraction * float(basis)) / entry_price
 
     def _runtime_process_decision(
         self,
@@ -666,10 +680,11 @@ class LiveTradingEngine:
             return True, "Signal reversal"
 
         try:
+            quantity = self._compute_component_quantity(position)
             component_position = ComponentPosition(
                 symbol=position.symbol,
                 side=position.side.value,
-                size=float(position.size) * float(self.current_balance),
+                size=quantity,
                 entry_price=float(position.entry_price),
                 current_price=float(current_price),
                 entry_time=position.entry_time,
@@ -1485,10 +1500,11 @@ class LiveTradingEngine:
             elif isinstance(self.strategy, ComponentStrategy):
                 # Component-based strategy: use should_exit_position()
                 try:
+                    quantity = self._compute_component_quantity(position)
                     component_position = ComponentPosition(
                         symbol=position.symbol,
                         side=position.side.value,
-                        size=float(position.size) * float(self.current_balance),
+                        size=quantity,
                         entry_price=float(position.entry_price),
                         current_price=float(current_price),
                         entry_time=position.entry_time,
@@ -1838,11 +1854,14 @@ class LiveTradingEngine:
                 )
                 size = self.max_position_size
 
-            position_value = size * self.current_balance
+            entry_balance = float(self.current_balance)
+            entry_price = float(price)
+            position_value = size * entry_balance
+            quantity = position_value / entry_price if entry_price else 0.0
 
             if self.enable_live_trading:
                 # Execute real order
-                order_id = self._execute_order(symbol, side, position_value, price)
+                order_id = self._execute_order(symbol, side, position_value, entry_price)
                 if not order_id:
                     logger.error("Failed to execute order")
                     return
@@ -1855,8 +1874,9 @@ class LiveTradingEngine:
                 symbol=symbol,
                 side=side,
                 size=size,
-                entry_price=price,
+                entry_price=entry_price,
                 entry_time=datetime.utcnow(),
+                entry_balance=entry_balance,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 order_id=order_id,
@@ -1874,13 +1894,13 @@ class LiveTradingEngine:
                 position_db_id = self.db_manager.log_position(
                     symbol=symbol,
                     side=side.value,
-                    entry_price=price,
+                    entry_price=entry_price,
                     size=size,
                     strategy_name=self.strategy.__class__.__name__,
                     entry_order_id=order_id,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
-                    quantity=position_value / price,  # Calculate actual quantity
+                    quantity=quantity,
                     session_id=self.trading_session_id,
                     trailing_stop_activated=False,
                     trailing_stop_price=None,
@@ -1905,25 +1925,25 @@ class LiveTradingEngine:
                 self.position_db_ids[order_id] = None
 
             logger.info(
-                f"🚀 Opened {side.value} position: {symbol} @ ${price:.2f} (Size: ${position_value:.2f})"
+                f"🚀 Opened {side.value} position: {symbol} @ ${entry_price:.2f} (Size: ${position_value:.2f})"
             )
             log_order_event(
                 "open_position",
                 order_id=order_id,
                 symbol=symbol,
                 side=side.value,
-                entry_price=price,
+                entry_price=entry_price,
                 size=size,
             )
 
             # Send alert if configured
-            self._send_alert(f"Position Opened: {symbol} {side.value} @ ${price:.2f}")
+            self._send_alert(f"Position Opened: {symbol} {side.value} @ ${entry_price:.2f}")
 
             # Update risk manager with the newly opened position so daily risk is tracked
             if self.risk_manager:
                 try:
                     self.risk_manager.update_position(
-                        symbol=symbol, side=side.value, size=size, entry_price=price
+                        symbol=symbol, side=side.value, size=size, entry_price=entry_price
                     )
                 except Exception as e:
                     logger.warning(
@@ -2579,6 +2599,7 @@ class LiveTradingEngine:
                     size=pos_data["size"],
                     entry_price=pos_data["entry_price"],
                     entry_time=pos_data["entry_time"],
+                    entry_balance=pos_data.get("entry_balance") or float(self.current_balance),
                     stop_loss=pos_data.get("stop_loss"),
                     take_profit=pos_data.get("take_profit"),
                     unrealized_pnl=pos_data.get("unrealized_pnl", 0.0),
