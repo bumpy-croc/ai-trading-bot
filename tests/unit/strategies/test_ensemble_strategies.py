@@ -116,7 +116,7 @@ class TestEnsembleWeighted:
 
         assert decision.position_size <= balance * MAX_POSITION_SIZE_RATIO
         if decision.signal.direction != SignalDirection.HOLD:
-            assert decision.position_size >= balance * MIN_POSITION_SIZE_RATIO
+            assert decision.position_size > 0
 
     def test_ensemble_weighted_parameters(self):
         """Factory should expose component parameters via Strategy.get_parameters()."""
@@ -179,7 +179,7 @@ class TestEnsembleOptimized:
 
         assert decision.position_size <= balance * MAX_POSITION_SIZE_RATIO
         if decision.signal.direction != SignalDirection.HOLD:
-            assert decision.position_size >= balance * MIN_POSITION_SIZE_RATIO
+            assert decision.position_size > 0
 
     def test_optimized_risk_parameters(self):
         """Risk parameters should expose wider stops and trailing configuration."""

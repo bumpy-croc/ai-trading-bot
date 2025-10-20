@@ -27,6 +27,11 @@ from src.strategies.components import (
     FixedRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
+    HoldSignalGenerator,
+    FixedFractionSizer,
+    RegimeContext,
+    TrendLabel,
+    VolLabel,
 )
 
 
@@ -38,6 +43,7 @@ def create_ml_basic_strategy(
     model_name: Optional[str] = None,
     model_type: Optional[str] = None,
     timeframe: Optional[str] = None,
+    fast_mode: bool = False,
 ) -> Strategy:
     """
     Create ML Basic strategy using component composition.
@@ -54,31 +60,53 @@ def create_ml_basic_strategy(
     Returns:
         Configured Strategy instance
     """
-    # Create signal generator with ML Basic parameters
-    signal_generator = MLBasicSignalGenerator(
-        name=f"{name}_signals",
-        model_path=model_path,
-        sequence_length=sequence_length,
-        use_prediction_engine=use_prediction_engine,
-        model_name=model_name,
-        model_type=model_type,
-        timeframe=timeframe,
-    )
-    
-    # Create risk manager with fixed stop loss (2%)
-    risk_manager = FixedRiskManager(
-        risk_per_trade=0.02,
-        stop_loss_pct=0.02,
-    )
-    
-    # Create position sizer with confidence weighting (20% base)
-    position_sizer = ConfidenceWeightedSizer(
-        base_fraction=0.2,
-        min_confidence=0.3,
-    )
-    
-    # Create regime detector
-    regime_detector = EnhancedRegimeDetector()
+    if fast_mode:
+        class _FastRegimeDetector:
+            """Lightweight regime detector for fast test execution."""
+
+            name = "fast_regime_detector"
+            warmup_period = 0
+
+            def detect_regime(self, df, index):
+                return RegimeContext(
+                    trend=TrendLabel.RANGE,
+                    volatility=VolLabel.LOW,
+                    confidence=1.0,
+                    duration=index + 1,
+                    strength=0.0,
+                )
+
+            def get_feature_generators(self):
+                return []
+
+        signal_generator = HoldSignalGenerator()
+        risk_manager = FixedRiskManager(risk_per_trade=0.02, stop_loss_pct=0.02)
+        position_sizer = FixedFractionSizer(fraction=0.001)
+        regime_detector = _FastRegimeDetector()
+    else:
+        # Create signal generator with ML Basic parameters
+        signal_generator = MLBasicSignalGenerator(
+            name=f"{name}_signals",
+            model_path=model_path,
+            sequence_length=sequence_length,
+            use_prediction_engine=use_prediction_engine,
+            model_name=model_name,
+            model_type=model_type,
+            timeframe=timeframe,
+        )
+        
+        # Create risk manager with fixed stop loss (2%)
+        risk_manager = FixedRiskManager(
+            risk_per_trade=0.02,
+            stop_loss_pct=0.02,
+        )
+        
+        # Create position sizer with confidence weighting (20% base)
+        position_sizer = ConfidenceWeightedSizer(
+            base_fraction=0.2,
+            min_confidence=0.3,
+        )
+        regime_detector = EnhancedRegimeDetector()
     
     strategy = Strategy(
         name=name,
@@ -86,6 +114,7 @@ def create_ml_basic_strategy(
         risk_manager=risk_manager,
         position_sizer=position_sizer,
         regime_detector=regime_detector,
+        enable_logging=not fast_mode,
     )
 
     # Attach key parameters for compatibility with legacy workflows
@@ -98,8 +127,14 @@ def create_ml_basic_strategy(
     strategy.stop_loss_pct = 0.02
     strategy.take_profit_pct = 0.04
     strategy.risk_per_trade = 0.02
-    strategy.base_fraction = 0.2
-    strategy.min_confidence = 0.3
+    if fast_mode:
+        strategy.base_fraction = 0.001
+        strategy.min_confidence = 1.0
+        strategy.fast_mode = True
+    else:
+        strategy.base_fraction = 0.2
+        strategy.min_confidence = 0.3
+        strategy.fast_mode = False
 
     return strategy
 
@@ -126,6 +161,7 @@ class MlBasic:
         model_name: Optional[str] = None,
         model_type: Optional[str] = None,
         timeframe: Optional[str] = None,
+        fast_mode: bool = False,
         **kwargs: Any
     ) -> Strategy:
         """Create strategy instance using factory function."""
@@ -137,4 +173,5 @@ class MlBasic:
             model_name=model_name,
             model_type=model_type,
             timeframe=timeframe,
+            fast_mode=fast_mode,
         )

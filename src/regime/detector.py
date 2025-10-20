@@ -4,6 +4,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
 
 class TrendLabel(str, Enum):
@@ -161,15 +162,40 @@ class RegimeDetector:
     @staticmethod
     def _percentile_rank(series: pd.Series, lookback: int) -> pd.Series:
         """Optimized percentile rank calculation"""
-        def rank_last(window: pd.Series) -> float:
-            if window.isna().any():
+        def rank_last(window: pd.Series | np.ndarray) -> float:
+            arr = np.asarray(window)
+            if np.isnan(arr).any():
                 return np.nan
-            last = window.iloc[-1]
-            return (window <= last).mean()
+            last = arr[-1]
+            return np.mean(arr <= last)
+
+        # Fast path: vectorised percentile rank using sliding window view
+        values = series.to_numpy()
+        n = len(values)
+        if lookback <= 0 or n == 0 or n < lookback:
+            return pd.Series(np.nan, index=series.index, dtype=float)
+
+        try:
+            windows = sliding_window_view(values, lookback)
+            last_vals = windows[:, -1]
+            nan_mask = np.isnan(windows).any(axis=1) | np.isnan(last_vals)
+            ranks = np.where(
+                nan_mask,
+                np.nan,
+                (windows <= last_vals[:, None]).mean(axis=1),
+            )
+            result = np.full(n, np.nan, dtype=float)
+            result[lookback - 1 :] = ranks
+            return pd.Series(result, index=series.index, dtype=float)
+        except Exception:
+            # Fall back to rolling apply paths when sliding window is unavailable (e.g., older numpy)
+            pass
 
         # Use engine='numba' for better performance if available
         try:
-            return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False, engine='numba')
+            return series.rolling(window=lookback, min_periods=lookback).apply(
+                rank_last, raw=True, engine='numba'
+            )
         except Exception:
             # Fallback to default engine
             return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False)
