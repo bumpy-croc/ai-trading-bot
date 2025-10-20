@@ -42,21 +42,21 @@ class FixtureDataProvider(DataProvider):
 
 
 class DeterministicSignalGenerator(SignalGenerator):
-    """Deterministic signal generator for regression testing"""
-    
-    def __init__(self, entry_period: int, hold_period: int):
+    """Deterministic signal generator for regression testing."""
+
+    def __init__(self, entry_period: int, hold_period: int, max_entries: int | None = None):
         super().__init__(name="deterministic_signal")
         self.entry_period = entry_period
         self.hold_period = hold_period
+        self.max_entries = max_entries
         self._active_entry_index: int | None = None
         self.entry_events: list[int] = []
         self.exit_events: list[int] = []
         self.entry_checks: list[int] = []
-    
+
     def generate_signal(self, df: pd.DataFrame, index: int, regime=None) -> Signal:
         self.entry_checks.append(index)
-        
-        # Check if we should exit current position
+
         if self._active_entry_index is not None and index - self._active_entry_index >= self.hold_period:
             self._active_entry_index = None
             self.exit_events.append(index)
@@ -64,27 +64,33 @@ class DeterministicSignalGenerator(SignalGenerator):
                 direction=SignalDirection.SELL,
                 confidence=0.8,
                 strength=1.0,
-                metadata={"timestamp": df.index[index]}
+                metadata={"timestamp": df.index[index]},
             )
-        
-        # Don't enter if already in position
+
         if self._active_entry_index is not None:
             return Signal(
                 direction=SignalDirection.HOLD,
                 confidence=0.0,
                 strength=0.0,
-                metadata={"timestamp": df.index[index]}
+                metadata={"timestamp": df.index[index]},
             )
-        
-        # Check entry conditions
+
         if index == 0:
             return Signal(
                 direction=SignalDirection.HOLD,
                 confidence=0.0,
                 strength=0.0,
-                metadata={"timestamp": df.index[index]}
+                metadata={"timestamp": df.index[index]},
             )
-        
+
+        if self.max_entries is not None and len(self.entry_events) >= self.max_entries:
+            return Signal(
+                direction=SignalDirection.HOLD,
+                confidence=0.0,
+                strength=0.0,
+                metadata={"timestamp": df.index[index]},
+            )
+
         if index % self.entry_period == 0:
             self._active_entry_index = index
             self.entry_events.append(index)
@@ -92,16 +98,16 @@ class DeterministicSignalGenerator(SignalGenerator):
                 direction=SignalDirection.BUY,
                 confidence=0.8,
                 strength=1.0,
-                metadata={"timestamp": df.index[index]}
+                metadata={"timestamp": df.index[index]},
             )
-        
+
         return Signal(
             direction=SignalDirection.HOLD,
             confidence=0.0,
             strength=0.0,
-            metadata={"timestamp": df.index[index]}
+            metadata={"timestamp": df.index[index]},
         )
-    
+
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
         if self._active_entry_index is not None and index - self._active_entry_index >= self.hold_period:
             return 0.8
@@ -138,9 +144,15 @@ class DeterministicPositionSizer(PositionSizer):
         return self.size
 
 
-def create_deterministic_strategy(name: str, entry_period: int, hold_period: int, size: float) -> Strategy:
+def create_deterministic_strategy(
+    name: str,
+    entry_period: int,
+    hold_period: int,
+    size: float,
+    max_entries: int | None = None,
+) -> Strategy:
     """Create a deterministic component-based strategy for regression testing"""
-    signal_gen = DeterministicSignalGenerator(entry_period, hold_period)
+    signal_gen = DeterministicSignalGenerator(entry_period, hold_period, max_entries=max_entries)
     return Strategy(
         name=name,
         signal_generator=signal_gen,
@@ -303,20 +315,20 @@ def test_regime_backtester_regression(monkeypatch):
     provider = FixtureDataProvider(frame)
 
     primary_strategy = create_deterministic_strategy(
-        name="MlBasicStrategy", entry_period=30, hold_period=5, size=0.2
+        name="MlBasicStrategy", entry_period=30, hold_period=5, size=0.2, max_entries=5
     )
 
     def strategy_factory(key: str) -> Strategy:
         if key in {"ml_basic", "mlbasic"}:
             return create_deterministic_strategy(
-                name="MlBasicStrategy", entry_period=30, hold_period=5, size=0.2
+                name="MlBasicStrategy", entry_period=30, hold_period=5, size=0.2, max_entries=5
             )
         if key == "alternate":
             return create_deterministic_strategy(
-                name="AlternateStrategy", entry_period=24, hold_period=4, size=0.15
+                name="AlternateStrategy", entry_period=24, hold_period=4, size=0.15, max_entries=0
             )
         return create_deterministic_strategy(
-            name="FallbackStrategy", entry_period=28, hold_period=4, size=0.18
+            name="FallbackStrategy", entry_period=28, hold_period=4, size=0.18, max_entries=0
         )
 
     strategy_manager = StubStrategyManager(strategy_factory)
@@ -392,4 +404,3 @@ def test_regime_backtester_regression(monkeypatch):
         assert obs["regime"] == exp["regime"]
         assert obs["confidence"] == pytest.approx(exp["confidence"], rel=1e-6, abs=1e-6)
         assert obs["agreement"] == pytest.approx(exp["agreement"], rel=1e-6, abs=1e-6)
-
