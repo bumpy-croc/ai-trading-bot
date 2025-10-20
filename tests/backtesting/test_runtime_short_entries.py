@@ -160,7 +160,7 @@ def test_runtime_short_entry_honors_metadata():
     assert backtester.trades[0].side == "short"
 
 
-def test_runtime_short_entry_blocks_without_metadata():
+def test_runtime_short_entry_blocks_when_metadata_missing():
     frame = _build_dataset()
     provider = _FrameProvider(frame)
     strategy = _build_strategy(enable_short=None)
