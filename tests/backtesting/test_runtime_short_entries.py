@@ -160,7 +160,7 @@ def test_runtime_short_entry_honors_metadata():
     assert backtester.trades[0].side == "short"
 
 
-def test_runtime_short_entry_defaults_to_allowed_without_metadata():
+def test_runtime_short_entry_blocks_without_metadata():
     frame = _build_dataset()
     provider = _FrameProvider(frame)
     strategy = _build_strategy(enable_short=None)
@@ -180,6 +180,5 @@ def test_runtime_short_entry_defaults_to_allowed_without_metadata():
         end=frame.index[-1],
     )
 
-    assert result["total_trades"] == 1
-    assert backtester.trades
-    assert backtester.trades[0].side == "short"
+    assert result["total_trades"] == 0
+    assert backtester.trades == []
