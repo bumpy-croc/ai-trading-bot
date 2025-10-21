@@ -5,14 +5,18 @@ This module defines the StrategyManager class that orchestrates the component-ba
 strategy architecture with versioning capabilities for A/B testing and rollbacks.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 import pandas as pd
+
+from src.strategies.versioning import StrategyVersionRecord
 
 from .position_sizer import PositionSizer
 from .regime_context import EnhancedRegimeDetector, RegimeContext
@@ -70,9 +74,9 @@ class PromotionRequest:
     to_status: str
     reason: str
     status: PromotionStatus = PromotionStatus.PENDING
-    approved_by: Optional[str] = None
-    approved_at: Optional[datetime] = None
-    deployed_at: Optional[datetime] = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    deployed_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -106,41 +110,8 @@ class RollbackRecord:
         return data
 
 
-@dataclass
-class StrategyVersion:
-    """
-    Strategy version information
-    
-    Attributes:
-        version_id: Unique identifier for this version
-        name: Human-readable version name
-        description: Description of changes in this version
-        created_at: When this version was created
-        components: Dictionary of component configurations
-        parameters: Strategy-level parameters
-        is_active: Whether this version is currently active
-        performance_metrics: Performance data for this version
-    """
-    version_id: str
-    name: str
-    description: str
-    created_at: datetime
-    components: dict[str, dict[str, Any]]
-    parameters: dict[str, Any]
-    is_active: bool = False
-    performance_metrics: Optional[dict[str, float]] = None
-    
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization"""
-        data = asdict(self)
-        data['created_at'] = self.created_at.isoformat()
-        return data
-    
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'StrategyVersion':
-        """Create from dictionary"""
-        data['created_at'] = datetime.fromisoformat(data['created_at'])
-        return cls(**data)
+# Backwards compatibility alias for callers that import from this module.
+StrategyVersion = StrategyVersionRecord
 
 
 @dataclass
@@ -159,7 +130,7 @@ class StrategyExecution:
     """
     timestamp: datetime
     signal: Signal
-    regime: Optional[RegimeContext]
+    regime: RegimeContext | None
     position_size: float
     risk_metrics: dict[str, float]
     execution_time_ms: float
@@ -174,9 +145,14 @@ class StrategyManager:
     components while maintaining version history for A/B testing and rollbacks.
     """
     
-    def __init__(self, name: str, signal_generator: SignalGenerator,
-                 risk_manager: RiskManager, position_sizer: PositionSizer,
-                 regime_detector: Optional[EnhancedRegimeDetector] = None):
+    def __init__(
+        self,
+        name: str,
+        signal_generator: SignalGenerator,
+        risk_manager: RiskManager,
+        position_sizer: PositionSizer,
+        regime_detector: EnhancedRegimeDetector | None = None,
+    ):
         """
         Initialize strategy manager
         
@@ -198,7 +174,7 @@ class StrategyManager:
         
         # Version management
         self.versions: dict[str, StrategyVersion] = {}
-        self.current_version_id: Optional[str] = None
+        self.current_version_id: str | None = None
         self.execution_history: list[StrategyExecution] = []
         
         # Performance tracking
@@ -207,8 +183,13 @@ class StrategyManager:
         # Create initial version
         self._create_initial_version()
     
-    def execute_strategy(self, df: pd.DataFrame, index: int, balance: float,
-                        current_positions: Optional[list[Position]] = None) -> tuple[Signal, float, dict[str, Any]]:
+    def execute_strategy(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        balance: float,
+        current_positions: list[Position] | None = None,
+    ) -> tuple[Signal, float, dict[str, Any]]:
         """
         Execute complete strategy pipeline
         
@@ -291,11 +272,15 @@ class StrategyManager:
             )
             return safe_signal, 0.0, {'error': str(e)}
     
-    def create_version(self, name: str, description: str, 
-                      signal_generator: Optional[SignalGenerator] = None,
-                      risk_manager: Optional[RiskManager] = None,
-                      position_sizer: Optional[PositionSizer] = None,
-                      parameters: Optional[dict[str, Any]] = None) -> str:
+    def create_version(
+        self,
+        name: str,
+        description: str,
+        signal_generator: SignalGenerator | None = None,
+        risk_manager: RiskManager | None = None,
+        position_sizer: PositionSizer | None = None,
+        parameters: dict[str, Any] | None = None,
+    ) -> str:
         """
         Create a new strategy version
         
@@ -336,10 +321,13 @@ class StrategyManager:
         
         return version_id
     
-    def activate_version(self, version_id: str, 
-                        signal_generator: Optional[SignalGenerator] = None,
-                        risk_manager: Optional[RiskManager] = None,
-                        position_sizer: Optional[PositionSizer] = None) -> bool:
+    def activate_version(
+        self,
+        version_id: str,
+        signal_generator: SignalGenerator | None = None,
+        risk_manager: RiskManager | None = None,
+        position_sizer: PositionSizer | None = None,
+    ) -> bool:
         """
         Activate a specific strategy version
         
@@ -536,8 +524,9 @@ class StrategyManager:
         )
         self.activate_version(version_id)
     
-    def _calculate_risk_amount(self, balance: float, signal: Signal, 
-                             regime: Optional[RegimeContext]) -> float:
+    def _calculate_risk_amount(
+        self, balance: float, signal: Signal, regime: RegimeContext | None
+    ) -> float:
         """
         Calculate risk amount based on signal and regime
         
@@ -560,8 +549,13 @@ class StrategyManager:
         
         return max(balance * 0.001, min(balance * 0.1, risk_amount))  # 0.1% to 10%
     
-    def _validate_position_size(self, position_size: float, signal: Signal, 
-                              balance: float, regime: Optional[RegimeContext]) -> float:
+    def _validate_position_size(
+        self,
+        position_size: float,
+        signal: Signal,
+        balance: float,
+        regime: RegimeContext | None,
+    ) -> float:
         """Validate and adjust position size using risk manager"""
         # For now, just ensure position size is reasonable
         max_position = balance * 0.2  # Maximum 20% of balance
@@ -577,7 +571,7 @@ class StrategyManager:
         # Only apply minimum bound when position sizer produced a positive size
         return max(min_position, min(max_position, position_size))
     
-    def get_current_version(self) -> Optional[StrategyVersion]:
+    def get_current_version(self) -> StrategyVersion | None:
         """Get currently active version"""
         if self.current_version_id:
             return self.versions.get(self.current_version_id)
@@ -587,14 +581,14 @@ class StrategyManager:
         """Get list of all versions"""
         return list(self.versions.values())
     
-    def export_version(self, version_id: str) -> Optional[dict[str, Any]]:
+    def export_version(self, version_id: str) -> dict[str, Any] | None:
         """Export version configuration for backup/sharing"""
         if version_id not in self.versions:
             return None
         
         return self.versions[version_id].to_dict()
     
-    def import_version(self, version_data: dict[str, Any]) -> Optional[str]:
+    def import_version(self, version_data: dict[str, Any]) -> str | None:
         """Import version configuration from backup"""
         try:
             version = StrategyVersion.from_dict(version_data)
