@@ -40,14 +40,14 @@ def _ensure_secret_key() -> str:
     if secret_key:
         return secret_key
     
-    # Allow fallback only in development
-    env = os.getenv("ENV", "development").lower()
-    if env in ("development", "test", "testing"):
+    # Allow fallback only in development-style environments
+    env = (os.getenv("ENV") or os.getenv("FLASK_ENV") or "development").lower()
+    if env in ("development", "dev", "test", "testing"):
         logger.warning(
             "⚠️  Using default SECRET_KEY - set DB_MANAGER_SECRET_KEY in production"
         )
         return "dev-key-change-in-production"
-    
+
     logger.error("❌ DB_MANAGER_SECRET_KEY required in production environment")
     raise SystemExit(1)
 
