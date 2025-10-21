@@ -223,10 +223,20 @@ Abstract base class for final position size calculation and adjustment.
 - `ConfidenceWeightedSizer` - Size based on signal confidence
 - `KellySizer` - Kelly criterion-based sizing
 - `RegimeAdaptiveSizer` - Regime-aware sizing adjustments
+- `PolicyDrivenPositionSizer` - Wraps any base sizer with dynamic risk, partial exits,
+  trailing stops, time exits, and MFE/MAE tracking powered by
+  `src.position_management`
 
 **Usage**:
 ```python
-from src.strategies.components import ConfidenceWeightedSizer, KellySizer
+from src.strategies.components import (
+    ConfidenceWeightedSizer,
+    FixedFractionSizer,
+    KellySizer,
+    PolicyDrivenPositionSizer,
+    PositionManagementSuite,
+)
+from src.risk.risk_manager import RiskParameters
 
 # Confidence-weighted position sizer
 conf_sizer = ConfidenceWeightedSizer(
@@ -242,8 +252,17 @@ kelly_sizer = KellySizer(
     kelly_fraction=0.3      # Kelly fraction multiplier
 )
 
+# Policy-driven wrapper that reuses legacy position_management policies
+suite = PositionManagementSuite.from_risk_parameters(RiskParameters())
+advanced_sizer = PolicyDrivenPositionSizer(FixedFractionSizer(fraction=0.03), suite)
+
 # Calculate final position size
-final_size = conf_sizer.calculate_size(signal, balance=10000, risk_amount=200, regime=regime)
+final_size = advanced_sizer.calculate_size(
+    signal,
+    balance=10000,
+    risk_amount=200,
+    regime=regime,
+)
 print(f"Final position size: {final_size}")
 ```
 

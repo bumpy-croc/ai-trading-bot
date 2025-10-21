@@ -1,15 +1,31 @@
-"""
-Position Sizer Components
+"""Position Sizer Components.
 
-This module defines the abstract PositionSizer interface and implementations
-for calculating position sizes based on various factors in the component-based
-strategy architecture.
+This module defines the abstract :class:`PositionSizer` interface alongside
+several concrete implementations that operate inside the component-based
+strategy architecture.  It also provides an adapter that bridges the historical
+``src.position_management`` policies (dynamic risk, trailing stops, partial
+exits, time exits, and MFE/MAE tracking) into the component world.
 """
+
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.position_management.partial_manager import PartialExitPolicy, PositionState
+from src.position_management.time_exits import (
+    MarketSessionDef,
+    TimeExitPolicy,
+    TimeRestrictions,
+)
+from src.position_management.trailing_stops import TrailingStopPolicy
+from src.risk.risk_manager import RiskParameters
 
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
@@ -36,8 +52,8 @@ class PositionSizer(ABC):
         self.name = name
     
     @abstractmethod
-    def calculate_size(self, signal: 'Signal', balance: float, risk_amount: float,
-                      regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_size(self, signal: Signal, balance: float, risk_amount: float,
+                      regime: RegimeContext | None = None) -> float:
         """
         Calculate optimal position size
         
@@ -112,10 +128,274 @@ class PositionSizer(ABC):
 
         return 0
 
-    def get_feature_generators(self) -> Sequence['FeatureGeneratorSpec']:
+    def get_feature_generators(self) -> Sequence[FeatureGeneratorSpec]:
         """Return feature generators required by the position sizer."""
 
         return []
+
+
+@dataclass
+class PositionPerformanceState:
+    """State container used by policy-aware sizers to evaluate drawdowns."""
+
+    current_balance: float = 0.0
+    peak_balance: float = 0.0
+    previous_peak_balance: float | None = None
+    session_id: int | None = None
+
+    def update(
+        self,
+        *,
+        current_balance: float,
+        peak_balance: float | None = None,
+        previous_peak_balance: float | None = None,
+        session_id: int | None = None,
+    ) -> None:
+        self.current_balance = current_balance
+        if peak_balance is not None:
+            self.peak_balance = peak_balance
+        else:
+            self.peak_balance = max(self.peak_balance, current_balance)
+        if previous_peak_balance is not None:
+            self.previous_peak_balance = previous_peak_balance
+        if session_id is not None:
+            self.session_id = session_id
+
+
+@dataclass
+class PositionManagementSuite:
+    """Bundle of policies originating from ``src.position_management``."""
+
+    risk_parameters: RiskParameters = field(default_factory=RiskParameters)
+    dynamic_risk_manager: DynamicRiskManager | None = None
+    partial_exit_policy: PartialExitPolicy | None = None
+    trailing_stop_policy: TrailingStopPolicy | None = None
+    time_exit_policy: TimeExitPolicy | None = None
+    mfe_mae_tracker: MFEMAETracker | None = None
+
+    @classmethod
+    def from_risk_parameters(
+        cls,
+        risk_parameters: RiskParameters | None = None,
+        *,
+        dynamic_risk_config: DynamicRiskConfig | None = None,
+        db_manager: Any | None = None,
+        include_mfe_mae: bool = True,
+    ) -> PositionManagementSuite:
+        """Create a suite using :class:`RiskParameters` defaults."""
+
+        params = risk_parameters or RiskParameters()
+        dynamic_risk = DynamicRiskManager(
+            dynamic_risk_config or DynamicRiskConfig(),
+            db_manager=db_manager,
+        )
+
+        partial_policy = PartialExitPolicy(
+            exit_targets=list(params.partial_exit_targets),
+            exit_sizes=list(params.partial_exit_sizes),
+            scale_in_thresholds=list(params.scale_in_thresholds),
+            scale_in_sizes=list(params.scale_in_sizes),
+            max_scale_ins=params.max_scale_ins,
+        )
+
+        trailing_policy = TrailingStopPolicy(
+            activation_threshold=params.trailing_activation_threshold,
+            trailing_distance_pct=params.trailing_distance_pct,
+            atr_multiplier=params.trailing_atr_multiplier,
+            breakeven_threshold=params.breakeven_threshold,
+            breakeven_buffer=params.breakeven_buffer,
+        )
+
+        time_policy: TimeExitPolicy | None = None
+        if params.time_exits:
+            session_cfg = params.time_exits.get("market_session")
+            session = None
+            if session_cfg:
+                session = MarketSessionDef(**session_cfg)
+            restrictions_cfg = params.time_exits.get("time_restrictions") or {}
+            time_policy = TimeExitPolicy(
+                max_holding_hours=params.time_exits.get("max_holding_hours"),
+                end_of_day_flat=params.time_exits.get("end_of_day_flat", False),
+                weekend_flat=params.time_exits.get("weekend_flat", False),
+                market_timezone=params.time_exits.get("market_timezone", "UTC"),
+                time_restrictions=TimeRestrictions(**restrictions_cfg),
+                market_session=session,
+            )
+
+        mfe_tracker = MFEMAETracker() if include_mfe_mae else None
+
+        return cls(
+            risk_parameters=params,
+            dynamic_risk_manager=dynamic_risk,
+            partial_exit_policy=partial_policy,
+            trailing_stop_policy=trailing_policy,
+            time_exit_policy=time_policy,
+            mfe_mae_tracker=mfe_tracker,
+        )
+
+
+class PolicyDrivenPositionSizer(PositionSizer):
+    """Wrap another :class:`PositionSizer` with advanced management policies."""
+
+    def __init__(
+        self,
+        base_sizer: PositionSizer,
+        suite: PositionManagementSuite,
+        *,
+        name: str | None = None,
+        min_fraction: float = 0.001,
+        max_fraction: float = 0.5,
+    ) -> None:
+        super().__init__(name or f"{base_sizer.name}_policy_wrapper")
+        self.base_sizer = base_sizer
+        self.suite = suite
+        self.min_fraction = min_fraction
+        self.max_fraction = max_fraction
+        self.performance_state = PositionPerformanceState()
+        self._last_adjustments = None
+
+    @property
+    def last_adjustments(self):
+        """Return the last :class:`RiskAdjustments` applied, if any."""
+
+        return self._last_adjustments
+
+    def update_performance_state(
+        self,
+        *,
+        current_balance: float,
+        peak_balance: float | None = None,
+        previous_peak_balance: float | None = None,
+        session_id: int | None = None,
+    ) -> None:
+        """Update cached performance metrics used by dynamic risk."""
+
+        self.performance_state.update(
+            current_balance=current_balance,
+            peak_balance=peak_balance,
+            previous_peak_balance=previous_peak_balance,
+            session_id=session_id,
+        )
+
+    def calculate_size(
+        self,
+        signal: Signal,
+        balance: float,
+        risk_amount: float,
+        regime: RegimeContext | None = None,
+    ) -> float:
+        """Calculate size with dynamic risk adjustments and bounds."""
+
+        self.validate_inputs(balance, risk_amount)
+
+        adjusted_balance = balance
+        if balance > 0:
+            self.update_performance_state(current_balance=balance)
+            adjusted_balance = balance
+
+        adjustments = None
+        if self.suite.dynamic_risk_manager and balance > 0:
+            peak_balance = self.performance_state.peak_balance or balance
+            adjustments = self.suite.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
+                current_balance=balance,
+                peak_balance=peak_balance,
+                session_id=self.performance_state.session_id,
+                previous_peak_balance=self.performance_state.previous_peak_balance,
+            )
+            self._last_adjustments = adjustments
+        else:
+            self._last_adjustments = None
+
+        base_size = self.base_sizer.calculate_size(signal, adjusted_balance, risk_amount, regime)
+
+        if adjustments:
+            # Scale position size by dynamic factor and respect the reduced risk amount
+            dynamic_factor = float(adjustments.position_size_factor)
+            risk_cap = risk_amount * dynamic_factor if risk_amount > 0 else None
+            scaled_size = base_size * dynamic_factor
+            if risk_cap is not None and risk_cap > 0:
+                scaled_size = min(scaled_size, risk_cap)
+        else:
+            scaled_size = base_size
+
+        return self.apply_bounds_checking(scaled_size, adjusted_balance, self.min_fraction, self.max_fraction)
+
+    # -- Legacy policy helpers -------------------------------------------------
+    def evaluate_partial_exits(self, position: PositionState, current_price: float) -> list[dict[str, Any]]:
+        """Delegate to :class:`PartialExitPolicy` if configured."""
+
+        if not self.suite.partial_exit_policy:
+            return []
+        return self.suite.partial_exit_policy.check_partial_exits(position, current_price)
+
+    def evaluate_scale_in(
+        self,
+        position: PositionState,
+        current_price: float,
+        market_data: dict | None = None,
+    ) -> dict | None:
+        if not self.suite.partial_exit_policy:
+            return None
+        return self.suite.partial_exit_policy.check_scale_in_opportunity(
+            position,
+            current_price,
+            market_data,
+        )
+
+    def update_trailing_stop(
+        self,
+        *,
+        side: str,
+        entry_price: float,
+        current_price: float,
+        existing_stop: float | None,
+        position_fraction: float,
+        atr: float | None = None,
+        trailing_activated: bool = False,
+        breakeven_triggered: bool = False,
+    ) -> tuple[float | None, bool, bool]:
+        if not self.suite.trailing_stop_policy:
+            return existing_stop, trailing_activated, breakeven_triggered
+        return self.suite.trailing_stop_policy.update_trailing_stop(
+            side=side,
+            entry_price=entry_price,
+            current_price=current_price,
+            existing_stop=existing_stop,
+            position_fraction=position_fraction,
+            atr=atr,
+            trailing_activated=trailing_activated,
+            breakeven_triggered=breakeven_triggered,
+        )
+
+    def check_time_exit(self, entry_time, now_time) -> tuple[bool, str | None]:
+        if not self.suite.time_exit_policy:
+            return False, None
+        return self.suite.time_exit_policy.check_time_exit_conditions(entry_time, now_time)
+
+    def next_scheduled_exit(self, entry_time, now_time):
+        if not self.suite.time_exit_policy:
+            return None
+        return self.suite.time_exit_policy.get_next_exit_time(entry_time, now_time)
+
+    def update_mfe_mae(
+        self,
+        position_key: str | int,
+        entry_price: float,
+        current_price: float,
+        side: str,
+        position_fraction: float,
+        current_time,
+    ):
+        if not self.suite.mfe_mae_tracker:
+            return None
+        return self.suite.mfe_mae_tracker.update_position_metrics(
+            position_key=position_key,
+            entry_price=entry_price,
+            current_price=current_price,
+            side=side,
+            position_fraction=position_fraction,
+            current_time=current_time,
+        )
 
 
 class FixedFractionSizer(PositionSizer):
@@ -145,8 +425,8 @@ class FixedFractionSizer(PositionSizer):
         self.adjust_for_confidence = adjust_for_confidence
         self.adjust_for_strength = adjust_for_strength
     
-    def calculate_size(self, signal: 'Signal', balance: float, risk_amount: float,
-                      regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_size(self, signal: Signal, balance: float, risk_amount: float,
+                      regime: RegimeContext | None = None) -> float:
         """Calculate position size as fixed fraction of balance"""
         self.validate_inputs(balance, risk_amount)
         
@@ -188,7 +468,7 @@ class FixedFractionSizer(PositionSizer):
         # Apply bounds checking
         return self.apply_bounds_checking(final_size, balance)
     
-    def _get_regime_multiplier(self, regime: 'RegimeContext') -> float:
+    def _get_regime_multiplier(self, regime: RegimeContext) -> float:
         """Get position size multiplier based on regime"""
         multiplier = 1.0
         
@@ -248,8 +528,8 @@ class ConfidenceWeightedSizer(PositionSizer):
         self.base_fraction = base_fraction
         self.min_confidence = min_confidence
     
-    def calculate_size(self, signal: 'Signal', balance: float, risk_amount: float,
-                      regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_size(self, signal: Signal, balance: float, risk_amount: float,
+                      regime: RegimeContext | None = None) -> float:
         """Calculate position size weighted by signal confidence"""
         self.validate_inputs(balance, risk_amount)
         
@@ -284,7 +564,7 @@ class ConfidenceWeightedSizer(PositionSizer):
         # Apply bounds checking
         return self.apply_bounds_checking(adjusted_size, balance)
     
-    def _get_regime_multiplier(self, regime: 'RegimeContext') -> float:
+    def _get_regime_multiplier(self, regime: RegimeContext) -> float:
         """Get position size multiplier based on regime"""
         multiplier = 1.0
         
@@ -361,8 +641,8 @@ class KellySizer(PositionSizer):
         # Trade history for updating statistics
         self.trade_history = []
     
-    def calculate_size(self, signal: 'Signal', balance: float, risk_amount: float,
-                      regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_size(self, signal: Signal, balance: float, risk_amount: float,
+                      regime: RegimeContext | None = None) -> float:
         """Calculate position size using Kelly Criterion"""
         self.validate_inputs(balance, risk_amount)
         
@@ -454,7 +734,7 @@ class KellySizer(PositionSizer):
         if losses:
             self.avg_loss = np.mean([trade['pnl_pct'] for trade in losses])
     
-    def _get_regime_multiplier(self, regime: 'RegimeContext') -> float:
+    def _get_regime_multiplier(self, regime: RegimeContext) -> float:
         """Get position size multiplier based on regime"""
         multiplier = 1.0
         
@@ -496,7 +776,7 @@ class RegimeAdaptiveSizer(PositionSizer):
     """
     
     def __init__(self, base_fraction: float = 0.03,
-                 regime_multipliers: Optional[dict[str, float]] = None,
+                 regime_multipliers: dict[str, float] | None = None,
                  volatility_adjustment: bool = True):
         """
         Initialize regime-adaptive sizer
@@ -535,8 +815,8 @@ class RegimeAdaptiveSizer(PositionSizer):
             if not 0.1 <= multiplier <= 3.0:
                 raise ValueError(f"regime multiplier for {regime} must be between 0.1 and 3.0, got {multiplier}")
     
-    def calculate_size(self, signal: 'Signal', balance: float, risk_amount: float,
-                      regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_size(self, signal: Signal, balance: float, risk_amount: float,
+                      regime: RegimeContext | None = None) -> float:
         """Calculate position size based on regime-specific parameters"""
         self.validate_inputs(balance, risk_amount)
         
@@ -573,7 +853,7 @@ class RegimeAdaptiveSizer(PositionSizer):
         max_fraction = self._get_max_fraction_for_regime(regime)
         return self.apply_bounds_checking(adjusted_size, balance, max_fraction=max_fraction)
     
-    def _get_regime_multiplier(self, regime: Optional['RegimeContext']) -> float:
+    def _get_regime_multiplier(self, regime: RegimeContext | None) -> float:
         """Get position size multiplier based on current regime"""
         if regime is None:
             return self.regime_multipliers['unknown']
@@ -596,7 +876,7 @@ class RegimeAdaptiveSizer(PositionSizer):
         
         return self.regime_multipliers.get(regime_key, self.regime_multipliers['unknown'])
     
-    def _get_volatility_adjustment(self, regime: 'RegimeContext') -> float:
+    def _get_volatility_adjustment(self, regime: RegimeContext) -> float:
         """Get additional volatility adjustment within regime"""
         if not hasattr(regime, 'strength'):
             return 1.0
@@ -614,7 +894,7 @@ class RegimeAdaptiveSizer(PositionSizer):
         else:
             return 0.7  # Significant reduction in unstable regimes
     
-    def _get_max_fraction_for_regime(self, regime: Optional['RegimeContext']) -> float:
+    def _get_max_fraction_for_regime(self, regime: RegimeContext | None) -> float:
         """Get maximum position fraction based on regime"""
         if regime is None:
             return 0.1  # 10% max for unknown regime
@@ -644,7 +924,7 @@ class RegimeAdaptiveSizer(PositionSizer):
         
         self.regime_multipliers.update(new_multipliers)
 
-    def get_regime_allocation(self, regime: Optional['RegimeContext']) -> dict[str, float]:
+    def get_regime_allocation(self, regime: RegimeContext | None) -> dict[str, float]:
         """
         Get detailed allocation breakdown for a regime
         
