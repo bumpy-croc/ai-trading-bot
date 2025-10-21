@@ -1914,6 +1914,7 @@ class LiveTradingEngine:
                     side=side.value,
                     entry_price=entry_price,
                     size=size,
+                    entry_balance=entry_balance,
                     strategy_name=self._strategy_name(),
                     entry_order_id=order_id,
                     stop_loss=stop_loss,
@@ -2628,14 +2629,29 @@ class LiveTradingEngine:
                 side_value = pos_data["side"]
                 if isinstance(side_value, str):
                     side_value = side_value.lower()
-                
+
+                stored_entry_balance = pos_data.get("entry_balance")
+                try:
+                    entry_balance = (
+                        float(stored_entry_balance)
+                        if stored_entry_balance is not None
+                        else float(self.current_balance)
+                    )
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Recovered position %s has invalid entry balance %s; falling back to current balance",
+                        pos_data.get("symbol"),
+                        stored_entry_balance,
+                    )
+                    entry_balance = float(self.current_balance)
+
                 position = Position(
                     symbol=pos_data["symbol"],
                     side=PositionSide(side_value),
                     size=pos_data["size"],
                     entry_price=pos_data["entry_price"],
                     entry_time=pos_data["entry_time"],
-                    entry_balance=pos_data.get("entry_balance") or float(self.current_balance),
+                    entry_balance=entry_balance,
                     stop_loss=pos_data.get("stop_loss"),
                     take_profit=pos_data.get("take_profit"),
                     unrealized_pnl=float(pos_data.get("unrealized_pnl", 0.0) or 0.0),
