@@ -245,7 +245,12 @@ class FeaturePipeline:
         """
         all_features = []
         for extractor in self.extractors.values():
-            if extractor.enabled:
+            # Check if extractor has enabled attribute, otherwise assume it's enabled
+            if hasattr(extractor, 'enabled'):
+                if extractor.enabled:
+                    all_features.extend(extractor.get_feature_names())
+            else:
+                # Extractors without enabled attribute are always enabled
                 all_features.extend(extractor.get_feature_names())
 
         # Remove duplicates while preserving order

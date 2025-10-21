@@ -16,10 +16,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config.constants import DEFAULT_INITIAL_BALANCE, DEFAULT_PERFORMANCE_MONITOR_INTERVAL
 from src.data_providers.binance_provider import BinanceProvider
-from src.data_providers.senticrypt_provider import SentiCryptProvider
 from src.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
-from src.strategies.ml_basic import MlBasic
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 def setup_paper_trading():
@@ -27,7 +26,7 @@ def setup_paper_trading():
     print("🚀 Setting up PAPER TRADING (Safe Mode)")
 
     # Load strategy
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
     print(f"Strategy loaded: {strategy.name}")
 
     # Setup data provider
@@ -36,12 +35,11 @@ def setup_paper_trading():
 
     # Setup sentiment provider (optional)
     try:
-        sentiment_provider = SentiCryptProvider(
-            csv_path="data/senticrypt_sentiment_data.csv", live_mode=True, cache_duration_minutes=15
-        )
+        from src.data_providers.sentiment_provider import SentimentProvider
+        sentiment_provider = SentimentProvider()
         print("Sentiment provider initialized")
-    except Exception as e:
-        print(f"Sentiment provider failed: {e}")
+    except ImportError:
+        print("Sentiment provider not available - continuing without sentiment analysis")
         sentiment_provider = None
 
     # Risk parameters
@@ -67,7 +65,7 @@ def setup_paper_trading():
     print("\n" + "=" * 60)
     print("📄 PAPER TRADING MODE CONFIGURED")
     print("=" * 60)
-    print("- Strategy: MlBasic")
+    print(f"- Strategy: {strategy.name}")
     print("- Symbol: BTC-USD")
     print(f"- Balance: ${DEFAULT_INITIAL_BALANCE:,.0f} (virtual)")
     print("- Risk per trade: 1%")
@@ -99,7 +97,7 @@ def setup_live_trading():
         return None
 
     # Load strategy
-    strategy = MlBasic()
+    strategy = create_ml_basic_strategy()
 
     # Setup data provider
     data_provider = BinanceProvider()
@@ -127,7 +125,7 @@ def setup_live_trading():
     print("\n" + "=" * 60)
     print("🔴 LIVE TRADING MODE CONFIGURED")
     print("=" * 60)
-    print("- Strategy: MlBasic")
+    print(f"- Strategy: {strategy.name}")
     print("- Symbol: BTC-USD")
     print(f"- Balance: ${DEFAULT_INITIAL_BALANCE:,.0f} (REAL MONEY)")
     print("- Risk per trade: 0.5%")

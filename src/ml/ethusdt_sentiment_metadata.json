@@ -1,0 +1,62 @@
+{
+  "symbol": "ETHUSDT",
+  "model_type": "sentiment",
+  "training_date": "2025-09-16T22:54:32.459385",
+  "feature_names": [
+    "open_scaled",
+    "high_scaled",
+    "low_scaled",
+    "close_scaled",
+    "volume_scaled",
+    "sma_7_scaled",
+    "sma_14_scaled",
+    "sma_30_scaled",
+    "rsi_scaled",
+    "sentiment_momentum_scaled"
+  ],
+  "sequence_length": 120,
+  "has_sentiment": true,
+  "sentiment_assessment": {
+    "total_sentiment_points": 2781,
+    "total_price_points": 2785,
+    "coverage_ratio": 1.0,
+    "data_freshness_days": 0,
+    "missing_periods": [
+      [
+        "2018-04-14 00:00:00+00:00",
+        "2018-04-16 00:00:00+00:00"
+      ],
+      [
+        "2024-10-26 00:00:00+00:00",
+        "2024-10-26 00:00:00+00:00"
+      ]
+    ],
+    "quality_score": 1.0,
+    "recommendation": "full_sentiment"
+  },
+  "robustness_results": {
+    "base_performance": {
+      "mse": 51337.90813793016,
+      "rmse": 226.57870186301747
+    },
+    "no_sentiment_performance": {
+      "mse": 141838.53564131013,
+      "rmse": 376.614571732574,
+      "degradation_pct": 176.2842133345809
+    }
+  },
+  "training_params": {
+    "epochs": 300,
+    "batch_size": 32,
+    "timeframe": "1d",
+    "start_date": "2018-02-01",
+    "end_date": "2025-09-16"
+  },
+  "evaluation_results": {
+    "train_loss": 18665.619140625,
+    "test_loss": 51337.91015625,
+    "train_rmse": 136.62217712402344,
+    "test_rmse": 226.57870483398438,
+    "mape": 5.764521816622227
+  }
+}

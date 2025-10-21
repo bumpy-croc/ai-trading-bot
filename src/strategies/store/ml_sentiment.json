@@ -1,0 +1,132 @@
+{
+  "lineage": {
+    "ancestors": [],
+    "branch_name": null,
+    "descendants": [],
+    "lineage_path": [],
+    "merge_source": null,
+    "strategy_id": "ml_sentiment_6572c589"
+  },
+  "metadata": {
+    "branch_name": null,
+    "component_hash": "6b7d69a958f6b545b1d3441fa5573a44a566d2766a4ffa4b8584a85ac6e2e3a1",
+    "config_hash": "6a6b73c632c257ddc80e4a2debf3a18bcd41bbe64fc320220307eb411293da1a",
+    "created_at": "2025-10-10T12:16:37.282022",
+    "created_by": "bootstrap",
+    "description": "ML strategy with sentiment analysis integration",
+    "id": "ml_sentiment_6572c589",
+    "lineage_path": [],
+    "merge_source": null,
+    "name": "ml_sentiment",
+    "parameters": {},
+    "parent_id": null,
+    "performance_summary": null,
+    "position_sizer_config": {
+      "class_name": "ConfidenceWeightedSizer",
+      "parameters": {
+        "base_fraction": 0.2,
+        "min_confidence": 0.3,
+        "name": "confidence_weighted_sizer",
+        "type": "ConfidenceWeightedSizer"
+      },
+      "type": "position_sizer",
+      "version": "1.0.0"
+    },
+    "regime_detector_config": {
+      "class_name": "EnhancedRegimeDetector",
+      "parameters": {},
+      "type": "regime_detector",
+      "version": "1.0.0"
+    },
+    "risk_manager_config": {
+      "class_name": "FixedRiskManager",
+      "parameters": {
+        "name": "fixed_risk_manager",
+        "risk_per_trade": 0.02,
+        "stop_loss_pct": 0.02,
+        "type": "FixedRiskManager"
+      },
+      "type": "risk_manager",
+      "version": "1.0.0"
+    },
+    "signal_generator_config": {
+      "class_name": "MLSignalGenerator",
+      "parameters": {
+        "confidence_multiplier": 12,
+        "model_name": "btcusdt_sentiment",
+        "model_path": "src/ml/btcusdt_sentiment.onnx",
+        "name": "MlSentiment_signals",
+        "sequence_length": 120,
+        "short_entry_threshold": -0.0005,
+        "type": "MLSignalGenerator",
+        "use_prediction_engine": true
+      },
+      "type": "signal_generator",
+      "version": "1.0.0"
+    },
+    "status": "EXPERIMENTAL",
+    "tags": [
+      "ml"
+    ],
+    "validation_results": null,
+    "version": "1.0.0"
+  },
+  "versions": [
+    {
+      "changes": [
+        "Initial version"
+      ],
+      "component_hash": "6b7d69a958f6b545b1d3441fa5573a44a566d2766a4ffa4b8584a85ac6e2e3a1",
+      "config_hash": "6a6b73c632c257ddc80e4a2debf3a18bcd41bbe64fc320220307eb411293da1a",
+      "created_at": "2025-10-10T12:16:37.282030",
+      "is_major": true,
+      "parameters": {},
+      "performance_delta": null,
+      "position_sizer_config": {
+        "class_name": "ConfidenceWeightedSizer",
+        "parameters": {
+          "base_fraction": 0.2,
+          "min_confidence": 0.3,
+          "name": "confidence_weighted_sizer",
+          "type": "ConfidenceWeightedSizer"
+        },
+        "type": "position_sizer",
+        "version": "1.0.0"
+      },
+      "regime_detector_config": {
+        "class_name": "EnhancedRegimeDetector",
+        "parameters": {},
+        "type": "regime_detector",
+        "version": "1.0.0"
+      },
+      "risk_manager_config": {
+        "class_name": "FixedRiskManager",
+        "parameters": {
+          "name": "fixed_risk_manager",
+          "risk_per_trade": 0.02,
+          "stop_loss_pct": 0.02,
+          "type": "FixedRiskManager"
+        },
+        "type": "risk_manager",
+        "version": "1.0.0"
+      },
+      "signal_generator_config": {
+        "class_name": "MLSignalGenerator",
+        "parameters": {
+          "confidence_multiplier": 12,
+          "model_name": "btcusdt_sentiment",
+          "model_path": "src/ml/btcusdt_sentiment.onnx",
+          "name": "MlSentiment_signals",
+          "sequence_length": 120,
+          "short_entry_threshold": -0.0005,
+          "type": "MLSignalGenerator",
+          "use_prediction_engine": true
+        },
+        "type": "signal_generator",
+        "version": "1.0.0"
+      },
+      "strategy_id": "ml_sentiment_6572c589",
+      "version": "1.0.0"
+    }
+  ]
+}

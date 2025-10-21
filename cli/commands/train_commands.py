@@ -27,7 +27,6 @@ from tensorflow.keras.layers import (
 )
 from tensorflow.keras.models import Model
 
-from src.data_providers.senticrypt_provider import SentiCryptProvider
 from src.utils.symbol_factory import SymbolFactory
 
 
@@ -50,9 +49,17 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
         assessment["reason"] = "No sentiment data available"
         return assessment
 
-    # Calculate coverage
+    # Calculate coverage - ensure timezone consistency
     price_start, price_end = price_df.index.min(), price_df.index.max()
     sentiment_start, sentiment_end = sentiment_df.index.min(), sentiment_df.index.max()
+    
+    # Convert to timezone-naive for comparison if needed
+    if price_start.tzinfo is not None and sentiment_start.tzinfo is None:
+        price_start = price_start.tz_localize(None)
+        price_end = price_end.tz_localize(None)
+    elif price_start.tzinfo is None and sentiment_start.tzinfo is not None:
+        sentiment_start = sentiment_start.tz_localize(None)
+        sentiment_end = sentiment_end.tz_localize(None)
 
     # Check overlap
     overlap_start = max(price_start, sentiment_start)
@@ -69,8 +76,13 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
     overlap_period = (overlap_end - overlap_start).total_seconds()
     assessment["coverage_ratio"] = overlap_period / total_period if total_period > 0 else 0
 
-    # Check data freshness
+    # Check data freshness - ensure timezone consistency
     current_time = pd.Timestamp.now()
+    # Make current_time timezone-aware if sentiment_end is timezone-aware
+    if sentiment_end.tzinfo is not None and current_time.tzinfo is None:
+        current_time = current_time.tz_localize('UTC')
+    elif sentiment_end.tzinfo is None and current_time.tzinfo is not None:
+        current_time = current_time.tz_localize(None)
     assessment["data_freshness_days"] = (current_time - sentiment_end).days
 
     # Find missing periods (gaps > 7 days)
@@ -367,9 +379,11 @@ def convert_to_onnx(model, onnx_path):
         model.export(saved_model_path)
 
         # Convert SavedModel to ONNX
+        import sys
+        python_executable = sys.executable
         result = subprocess.run(
             [
-                "python",
+                python_executable,
                 "-m",
                 "tf2onnx.convert",
                 "--saved-model",
@@ -402,20 +416,37 @@ def get_price_data(
     symbol, timeframe="1d", start_date="2000-01-01T00:00:00Z", end_date="2024-12-01T00:00:00Z"
 ):
     """Get price data using download script"""
-    from cli.commands.data_commands import download_binance_data_wrapper
-    
+    from argparse import Namespace
+
+    from cli.commands import data as data_commands
+
     project_root = Path(__file__).parent.parent.parent
     data_dir = project_root / "data"
     symbol = SymbolFactory.to_exchange_symbol(symbol, "binance")
-    csv_file = download_binance_data_wrapper(
+    ns = Namespace(
         symbol=symbol,
         timeframe=timeframe,
         start_date=start_date,
         end_date=end_date,
         output_dir=str(data_dir),
+        format="csv",
     )
+    status = data_commands._download(ns)
+    if status != 0:
+        raise RuntimeError("Failed to download price data")
 
-    df = pd.read_csv(csv_file, index_col="timestamp", parse_dates=True)
+    csv_file = max(data_dir.glob(f"{symbol}_{timeframe}_{start_date}_{end_date}.*"))
+
+    # Handle both CSV and feather files
+    csv_file_str = str(csv_file)
+    if csv_file_str.endswith('.feather'):
+        df = pd.read_feather(csv_file)
+    else:
+        df = pd.read_csv(csv_file, encoding='utf-8')
+    
+    # Set timestamp as index and parse dates
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = df.set_index('timestamp')
     return df
 
 
@@ -470,30 +501,23 @@ def train_model_main(args):
         sentiment_assessment = None
 
         if not args.force_price_only:
-            print("\n📈 Loading and assessing sentiment data...")
-            sentiment_csv_path = project_root / "data" / "senticrypt_sentiment_data.csv"
-
+            print("\n📈 Loading sentiment data...")
             try:
-                sentiment_provider = SentiCryptProvider(csv_path=str(sentiment_csv_path))
-                sentiment_df = sentiment_provider.get_historical_sentiment(
-                    symbol=args.symbol, start=start_date, end=end_date
-                )
-
-                # Assess sentiment data quality
+                from src.data_providers.feargreed_provider import FearGreedProvider
+                sentiment_provider = FearGreedProvider()
+                sentiment_df = sentiment_provider.get_historical_sentiment(args.symbol, start_date, end_date)
+                print(f"Downloaded {len(sentiment_df)} sentiment data points")
+                
+                # Fix timezone mismatch: make price data timezone-aware (UTC) to match sentiment data
+                if not sentiment_df.empty and price_df.index.tz is None:
+                    price_df.index = price_df.index.tz_localize('UTC')
+                    print("✅ Fixed timezone mismatch: price data now UTC-aware")
+                
                 sentiment_assessment = assess_sentiment_data_quality(sentiment_df, price_df)
-
-                print("\n🔍 Sentiment Data Assessment:")
-                print(f"  - Coverage ratio: {sentiment_assessment['coverage_ratio']:.2f}")
-                print(f"  - Data freshness: {sentiment_assessment['data_freshness_days']} days old")
-                print(f"  - Quality score: {sentiment_assessment['quality_score']:.2f}")
-                print(f"  - Recommendation: {sentiment_assessment['recommendation']}")
-                print(f"  - Reason: {sentiment_assessment['reason']}")
-
-                if sentiment_assessment["missing_periods"]:
-                    print(f"  - Missing periods: {len(sentiment_assessment['missing_periods'])}")
-
+                print(f"Sentiment quality score: {sentiment_assessment['quality_score']:.3f}")
+                print(f"Recommendation: {sentiment_assessment['recommendation']}")
             except Exception as e:
-                print(f"⚠️ Could not load sentiment data: {e}")
+                print(f"⚠️ Sentiment data loading failed: {e}")
                 sentiment_assessment = {
                     "recommendation": "price_only",
                     "quality_score": 0.0,

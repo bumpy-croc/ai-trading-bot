@@ -54,16 +54,6 @@ def get_database_path(*_args, **_kwargs):  # type: ignore[override]
     )
 
 
-def get_sentiment_data_path() -> Path:
-    """
-    Get the sentiment data CSV path.
-
-    Returns:
-        Path: The sentiment data CSV path
-    """
-    return get_data_dir() / "senticrypt_sentiment_data.csv"
-
-
 def resolve_data_path(relative_path: str) -> Path:
     """
     Resolve a path relative to the data directory.

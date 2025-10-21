@@ -1,80 +1,91 @@
-"""
-Prediction Engine Package
+"""Prediction engine public API.
 
-This package provides a modular prediction engine for the AI Trading Bot,
-separating prediction logic from trading strategy logic.
-
-Key Components:
-- Configuration management
-- features: Feature extraction and engineering pipeline
-- models: Model loading and inference management
-- ensemble: Model ensemble and aggregation (Post-MVP)
-- utils: Shared utilities and caching
+This module keeps imports lightweight so that configuration helpers can be
+used without eagerly importing heavy numerical dependencies during module
+import (important for environments where numpy linked against Accelerate may
+segfault during initialization).
 """
+
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING, Any
 
 from .config import PredictionConfig
-from .engine import PredictionEngine, PredictionResult
-from .exceptions import (
-    FeatureExtractionError,
-    InvalidInputError,
-    ModelNotFoundError,
-    PredictionEngineError,
-    PredictionTimeoutError,
-)
+
+if TYPE_CHECKING:  # pragma: no cover - type checkers only
+    from .engine import PredictionEngine, PredictionResult
+    from .exceptions import (
+        FeatureExtractionError,
+        InvalidInputError,
+        ModelNotFoundError,
+        PredictionEngineError,
+        PredictionTimeoutError,
+    )
 
 
-# Factory functions for common configurations
+def _load_engine() -> Any:
+    """Import the prediction engine module lazily."""
+    return importlib.import_module("src.prediction.engine")
+
+
+def _load_exceptions() -> Any:
+    """Import the exception module lazily."""
+    return importlib.import_module("src.prediction.exceptions")
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"PredictionEngine", "PredictionResult"}:
+        engine_mod = _load_engine()
+        return getattr(engine_mod, name)
+
+    exception_names = {
+        "PredictionEngineError",
+        "InvalidInputError",
+        "ModelNotFoundError",
+        "FeatureExtractionError",
+        "PredictionTimeoutError",
+    }
+    if name in exception_names:
+        exc_mod = _load_exceptions()
+        return getattr(exc_mod, name)
+
+    raise AttributeError(f"module 'src.prediction' has no attribute '{name}'")
+
+
 def create_engine(
     enable_sentiment: bool = False, enable_market_microstructure: bool = False
 ) -> PredictionEngine:
-    """
-    Create a prediction engine with common configuration.
+    """Create a lazily imported prediction engine with common configuration."""
 
-    Args:
-        enable_sentiment: Whether to enable sentiment features
-        enable_market_microstructure: Whether to enable market microstructure features
+    from .engine import PredictionEngine
 
-    Returns:
-        PredictionEngine: Configured prediction engine
-    """
     config = PredictionConfig.from_config_manager()
     config.enable_sentiment = enable_sentiment
     config.enable_market_microstructure = enable_market_microstructure
-
     return PredictionEngine(config)
 
 
 def create_minimal_engine() -> PredictionEngine:
-    """
-    Create a minimal prediction engine with basic configuration.
+    """Create a minimal prediction engine with basic configuration."""
 
-    Returns:
-        PredictionEngine: Minimal prediction engine for basic use cases
-    """
-    return create_engine(enable_sentiment=False, enable_market_microstructure=False)
+    return create_engine(
+        enable_sentiment=False, enable_market_microstructure=False
+    )
 
 
-# Convenience function for quick predictions
 def predict(data, model_name=None) -> PredictionResult:
-    """
-    Quick prediction using default engine configuration.
+    """Quick prediction helper using the minimal engine configuration."""
 
-    Args:
-        data: Market data DataFrame
-        model_name: Optional model name
-
-    Returns:
-        PredictionResult: Prediction result
-    """
     engine = create_minimal_engine()
     return engine.predict(data, model_name)
 
 
 __version__ = "1.0.0"
 __all__ = [
+    "PredictionConfig",
     "PredictionEngine",
     "PredictionResult",
-    "PredictionConfig",
     "PredictionEngineError",
     "InvalidInputError",
     "ModelNotFoundError",

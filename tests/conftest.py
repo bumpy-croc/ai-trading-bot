@@ -6,20 +6,98 @@ especially for setting up mock data, test environments, and common objects.
 """
 
 import os
+import random
+import sys
 import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
+if sys.version_info < (3, 10) and "src.prediction" not in sys.modules:
+    stub_prediction = ModuleType("src.prediction")
+
+    class _StubPredictionConfig:
+        """Minimal stub for PredictionConfig used in unit tests."""
+
+        enable_sentiment: bool
+        enable_market_microstructure: bool
+
+        def __init__(self):
+            self.enable_sentiment = False
+            self.enable_market_microstructure = False
+
+        @classmethod
+        def from_config_manager(cls):
+            return cls()
+
+    class _StubRegistry:
+        def select_bundle(self, **_):
+            raise RuntimeError("registry unavailable in unit tests")
+
+    class _StubPredictionEngine:
+        """Minimal stub for PredictionEngine used in unit tests."""
+
+        def __init__(self, config):
+            self.config = config
+            self.feature_pipeline = None
+            self.model_registry = _StubRegistry()
+
+        def health_check(self):
+            return {"status": "healthy"}
+
+        def predict(self, window_df, model_name=None):
+            return SimpleNamespace(price=float(window_df["close"].iloc[-1]))
+
+    stub_prediction.PredictionConfig = _StubPredictionConfig
+    stub_prediction.PredictionEngine = _StubPredictionEngine
+    sys.modules["src.prediction"] = stub_prediction
+
+if "onnxruntime" not in sys.modules:
+    stub_onnx = ModuleType("onnxruntime")
+
+    class _StubInferenceSession:
+        """Minimal stub for onnxruntime session to satisfy unit tests."""
+
+        def __init__(self, *args, **kwargs):
+            self._inputs = [SimpleNamespace(name="input")]
+
+        def get_inputs(self):
+            return self._inputs
+
+        def run(self, *args, **kwargs):
+            return [[[0.0]]]
+
+    stub_onnx.InferenceSession = _StubInferenceSession
+    sys.modules["onnxruntime"] = stub_onnx
+
+# Import core components for fixture creation
 import numpy as np
 import pandas as pd
 import pytest
 
-# Import core components for fixture creation
 from src.data_providers.data_provider import DataProvider
 from src.risk.risk_manager import RiskParameters
-from src.strategies.base import BaseStrategy
+
+REGIME_TEST_SEED = 1337
+
+
+def _is_regime_test(item: pytest.Item) -> bool:
+    try:
+        path = Path(str(item.fspath))
+    except Exception:
+        return False
+    return "tests/unit/regime" in str(path)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Ensure deterministic randomness for regime detector tests."""
+
+    if _is_regime_test(item):
+        random.seed(REGIME_TEST_SEED)
+        np.random.seed(REGIME_TEST_SEED)
+
 
 # Import account sync dependencies
 try:
@@ -49,15 +127,17 @@ def maybe_setup_database(pytestconfig):
       otherwise start a Postgres testcontainer, export its URL, and stop it at teardown.
       Also run schema reset before tests.
     """
+    # Check TEST_TYPE environment variable first
+    test_type = os.getenv("TEST_TYPE", "").lower()
+    
     # Decide DB based on whether integration tests are selected this session
     try:
-        has_integration = bool(
-            pytestconfig.stash.get(("integration", "selected"), False)
-        )
+        has_integration = bool(pytestconfig.stash.get(("integration", "selected"), False))
     except Exception:
         has_integration = bool(getattr(pytestconfig, "_has_integration_selected", False))
 
-    if not has_integration:
+    # If TEST_TYPE is explicitly set to unit, or no integration tests are selected
+    if test_type == "unit" or not has_integration:
         # * Unit/default path: fast, in-memory SQLite and no heavy setup
         os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
         yield
@@ -67,32 +147,31 @@ def maybe_setup_database(pytestconfig):
     is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
     started_container = None
-    if not os.getenv("DATABASE_URL"):
-        # In GitHub Actions, the PostgreSQL service should be available
-        if is_github_actions:
-            # Set the DATABASE_URL for GitHub Actions PostgreSQL service
-            os.environ["DATABASE_URL"] = (
-                "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
-            )
-            print("[Database Setup] Using GitHub Actions PostgreSQL service")
-        else:
-            # Local development - try to start a container, fallback to SQLite if not available
-            try:
-                from testcontainers.postgres import PostgresContainer  # type: ignore
 
-                print(
-                    f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}"
-                )
-                container = PostgresContainer("postgres:15-alpine")
-                container.start()
-                os.environ["DATABASE_URL"] = container.get_connection_url()
-                started_container = container
-                print("[Database Setup] ✅ Postgres container ready")
-            except Exception as exc:  # pragma: no cover
-                print(f"[Database Setup] ⚠️  Could not start Postgres container: {exc}")
-                print("[Database Setup] Falling back to SQLite for local testing")
-                os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-                print("[Database Setup] ✅ Using SQLite in-memory database")
+    # In GitHub Actions, always use the configured PostgreSQL service
+    if is_github_actions:
+        os.environ["DATABASE_URL"] = (
+            "postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot"
+        )
+        print("[Database Setup] Using GitHub Actions PostgreSQL service")
+    elif not os.getenv("DATABASE_URL"):
+        # Local development - try to start a container, fallback to SQLite if not available
+        try:
+            from testcontainers.postgres import PostgresContainer  # type: ignore
+
+            print(
+                f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}"
+            )
+            container = PostgresContainer("postgres:15-alpine")
+            container.start()
+            os.environ["DATABASE_URL"] = container.get_connection_url()
+            started_container = container
+            print("[Database Setup] ✅ Postgres container ready")
+        except Exception as exc:  # pragma: no cover
+            print(f"[Database Setup] ⚠️  Could not start Postgres container: {exc}")
+            print("[Database Setup] Falling back to SQLite for local testing")
+            os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+            print("[Database Setup] ✅ Using SQLite in-memory database")
     else:
         # DATABASE_URL is already set, use it
         print("[Database Setup] Using existing DATABASE_URL")
@@ -168,11 +247,12 @@ def sample_ohlcv_data():
     """Generate realistic OHLCV data for testing"""
     np.random.seed(42)  # For reproducible tests
 
-    dates = pd.date_range("2024-01-01", periods=100, freq="1h")
+    num_rows = 200
+    dates = pd.date_range("2024-01-01", periods=num_rows, freq="1h")
 
     # Generate realistic price data with some trends and volatility
     base_price = 50000
-    price_changes = np.random.normal(0, 0.02, 100)  # 2% volatility
+    price_changes = np.random.normal(0, 0.02, num_rows)  # 2% volatility
 
     closes = [base_price]
     for change in price_changes[1:]:
@@ -232,7 +312,7 @@ def mock_data_provider():
 def btcusdt_1h_2023_2024():
     """Load cached BTCUSDT 1-hour candles for 2023-01-01 → 2024-12-31.
 
-    The data must be generated with ``scripts/download_binance_data.py`` and
+    The data must be generated with ``atb data download`` and
     committed to the repository (preferably via Git LFS) under
     ``tests/data``.  If the file is missing, tests that depend on this
     fixture will be skipped automatically.
@@ -264,19 +344,15 @@ def risk_parameters():
 @pytest.fixture
 def mock_strategy():
     """Create a mock strategy for testing"""
-    mock_strategy = Mock(spec=BaseStrategy)
+    from src.strategies.components import Strategy
+    
+    mock_strategy = Mock(spec=Strategy)
     mock_strategy.name = "TestStrategy"
     mock_strategy.trading_pair = "BTCUSDT"
 
-    # Setup default behaviors
-    mock_strategy.calculate_indicators.return_value = pd.DataFrame(
-        {"open": [50000, 50100], "close": [50100, 50200], "rsi": [45, 55], "atr": [500, 510]}
-    )
-
-    mock_strategy.check_entry_conditions.return_value = True
-    mock_strategy.check_exit_conditions.return_value = False
-    mock_strategy.calculate_position_size.return_value = 0.1
-    mock_strategy.calculate_stop_loss.return_value = 49500
+    # Setup default behaviors for component-based strategy
+    # Note: Component strategies don't have calculate_indicators, check_entry_conditions, etc.
+    # They use process_candle() instead
     mock_strategy.get_parameters.return_value = {"test": "params"}
 
     return mock_strategy

@@ -28,9 +28,9 @@ class TestStrategyManager:
     def test_strategy_loading(self, temp_directory):
         manager = StrategyManager(staging_dir=str(temp_directory))
         strategy = manager.load_strategy("ml_basic", version="test_v1")
-        from src.strategies.ml_basic import MlBasic
+        from src.strategies.components import Strategy as ComponentStrategy
 
-        assert isinstance(strategy, MlBasic)
+        assert isinstance(strategy, ComponentStrategy)
         assert manager.current_strategy == strategy
         assert manager.current_version.strategy_name == "ml_basic"
         assert manager.current_version.version == "test_v1"
@@ -139,15 +139,16 @@ class TestStrategyManagerThreadSafety:
 class TestStrategyVersioning:
     def test_strategy_version_creation(self, temp_directory):
         version = StrategyVersion(
+            version_id="ml_basic_v1.0",
             strategy_name="ml_basic",
             version="v1.0",
-            timestamp=datetime.now(),
+            created_at=datetime.now(),
             config={"sequence_length": 120},
         )
         assert version.strategy_name == "ml_basic"
         assert version.version == "v1.0"
         assert version.config["sequence_length"] == 120
-        assert isinstance(version.timestamp, datetime)
+        assert isinstance(version.created_at, datetime)
 
     def test_version_comparison_capability(self, temp_directory):
         manager = StrategyManager(staging_dir=str(temp_directory))

@@ -1531,7 +1531,7 @@ class MonitoringDashboard:
                     PositionDict(
                         **{
                             "symbol": symbol,
-                            "side": pos.get("side", ""),
+                            "side": side,  # Use the lowercase side we already converted
                             "entry_price": entry_price,
                             "current_price": current_price,
                             "quantity": quantity,

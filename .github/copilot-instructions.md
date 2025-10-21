@@ -6,7 +6,7 @@ This is a modular cryptocurrency trading bot focused on long-term, risk-balanced
 
 **Size & Tech Stack:**
 - Medium-large Python project (~50+ modules)
-- Python 3.9+ required, primarily Python 3.11/3.12 tested
+- Python 3.11+ required, primarily Python 3.11/3.12 tested
 - Key dependencies: Flask, SQLAlchemy, TensorFlow/ONNX, pandas, scikit-learn, python-binance, ccxt
 - Database: PostgreSQL only (no SQLite fallback)
 - Runtime: CLI tool (`atb`) with web dashboards
@@ -19,9 +19,10 @@ This is a modular cryptocurrency trading bot focused on long-term, risk-balanced
 
 ```bash
 # 1. Bootstrap environment
-make venv                    # Create .venv (required first)
-make install                 # Install CLI (atb) + upgrade pip
-make deps                    # Install dev dependencies (can timeout - see workarounds)
+python -m venv .venv            # Create .venv (or use make dev-setup)
+source .venv/bin/activate       # Activate virtual environment
+make install                    # Install CLI (atb) + upgrade pip
+make deps                       # Install dev dependencies (can timeout - see workarounds)
 
 # 2. Database setup (PostgreSQL required for most functionality)
 docker compose up -d postgres  # Start local PostgreSQL (note: 'docker compose', not 'docker-compose')
@@ -35,7 +36,7 @@ make test                    # Run test suite (requires DB)
 
 ### Build System Details
 
-- **Virtual Environment**: Always use `.venv` via `make venv` first
+- **Virtual Environment**: Always create `.venv` via `python -m venv .venv` first
 - **Editable Install**: CLI installed via `pip install -e .` in Makefile
 - **Dependencies**: Two requirement files:
   - `requirements.txt`: Full dev environment (includes TensorFlow - can timeout)
@@ -166,9 +167,15 @@ atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30  # Test function
 
 ### Railway Deployment
 ```bash
-./bin/railway-setup.sh       # Initial setup (requires Railway CLI)
+# Install Railway CLI
+npm install -g @railway/cli
+
+# Initialize and deploy
+railway init
+railway add postgresql  # Add database
+railway up              # Deploy
+
 # Set environment variables in Railway dashboard
-./bin/railway-deploy.sh      # Deploy
 ```
 
 ### Performance & Monitoring
@@ -200,7 +207,7 @@ LOG_LEVEL=INFO
 2. **PostgreSQL is mandatory** - no fallback database, verify connection early
 3. **Use server requirements for faster builds** when possible
 4. **Test in paper mode first** - live trading requires explicit confirmation
-5. **Check Railway docs** for deployment (`docs/RAILWAY_QUICKSTART.md`)
+5. **Check Railway docs** for deployment (see `docs/development.md#railway-deployment-quick-start`)
 6. **Use existing test infrastructure** - comprehensive markers and parallel testing
 7. **Follow existing patterns** - well-established module structure and conventions
 

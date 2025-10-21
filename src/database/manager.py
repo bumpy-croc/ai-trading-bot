@@ -86,6 +86,17 @@ class DatabaseManager:
         # Create tables if they don't exist
         self._create_tables()
 
+    @staticmethod
+    def _to_optional_float(value: Any, default: float | None = None) -> float | None:
+        """Safely convert numeric-like values to floats when possible."""
+        if value is None:
+            return default
+
+        try:
+            return float(value)
+        except (TypeError, ValueError, InvalidOperation):
+            return default
+
     def _is_running_unit_tests(self) -> bool:
         """Determine whether the current pytest run executes unit tests.
 
@@ -667,6 +678,7 @@ class DatabaseManager:
         take_profit: float | None = None,
         confidence_score: float | None = None,
         quantity: float | None = None,
+        entry_balance: float | None = None,
         session_id: int | None = None,
         trailing_stop_activated: bool | None = None,
         trailing_stop_price: float | None = None,
@@ -699,6 +711,7 @@ class DatabaseManager:
                 entry_price=entry_price,
                 size=size,
                 quantity=quantity,
+                entry_balance=Decimal(str(entry_balance)) if entry_balance is not None else None,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 entry_time=datetime.utcnow(),
@@ -1232,6 +1245,7 @@ class DatabaseManager:
                     "current_price": p.current_price,
                     "size": p.size,
                     "quantity": p.quantity,
+                    "entry_balance": self._to_optional_float(getattr(p, "entry_balance", None)),
                     "unrealized_pnl": p.unrealized_pnl,
                     "unrealized_pnl_percent": p.unrealized_pnl_percent,
                     "stop_loss": p.stop_loss,

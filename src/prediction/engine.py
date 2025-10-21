@@ -25,7 +25,8 @@ from .exceptions import (
     ModelNotFoundError,
 )
 from .features.pipeline import FeaturePipeline
-from .models.registry import PredictionModelRegistry
+from .features.selector import FeatureSelector
+from .models.registry import PredictionModelRegistry, StrategyModel
 from .utils.caching import PredictionCacheManager
 
 
@@ -103,6 +104,8 @@ class PredictionEngine:
         self._total_feature_extraction_time = 0.0
         self._feature_extraction_count = 0
 
+        # No cached structured selection helpers (avoid hidden state)
+
     def predict(self, data: pd.DataFrame, model_name: Optional[str] = None) -> PredictionResult:
         """
         Main prediction method - unified interface for all predictions
@@ -120,40 +123,82 @@ class PredictionEngine:
             # Validate input data
             self._validate_input_data(data)
 
-            # Extract features
+            # Extract features once; if FeatureSelector is used below we will reuse the
+            # DataFrame from the pipeline to avoid duplicate work.
             feature_start_time = time.time()
-            features = self._extract_features(data)
+            try:
+                features_df_or_arr = self.feature_pipeline.transform(data, use_cache=True)
+            except Exception as exc:
+                raise FeatureExtractionError(f"Feature extraction failed: {exc}") from exc
+            if isinstance(features_df_or_arr, np.ndarray):
+                features = features_df_or_arr
+                features_df = None
+            else:
+                features_df = features_df_or_arr
+                original_columns = ["open", "high", "low", "close", "volume"]
+                feature_columns = [
+                    col for col in features_df.columns if col not in original_columns
+                ]
+                if not feature_columns:
+                    raise FeatureExtractionError("No feature columns found in pipeline output")
+                features = features_df[feature_columns].values
             feature_time = time.time() - feature_start_time
             self._feature_extraction_time = feature_time
             # Track for averaging
             self._total_feature_extraction_time += feature_time
             self._feature_extraction_count += 1
 
-            # Get model for prediction
-            model = self._get_model(model_name)
+            # Resolve bundle for prediction and align features to its schema
+            bundle = self._resolve_bundle(model_name)
+            model = bundle.runner
+            prepared_features = self._prepare_features_for_bundle(
+                bundle, features, features_df
+            )
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
-                prediction = model.predict(features)
+                prediction = model.predict(prepared_features)
                 final_price = prediction.price
                 final_conf = prediction.confidence
                 final_dir = prediction.direction
                 final_model_name = prediction.model_name
                 member_preds = None
+                features_used = self._count_features_used(prepared_features)
             else:
-                # Run all available models for ensemble
+                # Run all available structured runners for ensemble
                 preds = []
-                for mname in self.model_registry.list_models():
-                    m = self.model_registry.get_model(mname)
-                    if m is None:
-                        continue
-                    preds.append(m.predict(features))
+                features_used = 0
+
+                target_symbol = bundle.symbol
+                target_timeframe = bundle.timeframe
+                target_model_type = bundle.model_type
+
+                ensemble_bundles = [
+                    b
+                    for b in self.model_registry.list_bundles()
+                    if b.symbol == target_symbol
+                    and b.timeframe == target_timeframe
+                    and b.model_type == target_model_type
+                ]
+
+                if not ensemble_bundles:
+                    ensemble_bundles = [bundle]
+
+                for ensemble_bundle in ensemble_bundles:
+                    ensemble_features = self._prepare_features_for_bundle(
+                        ensemble_bundle, features, features_df
+                    )
+                    if not features_used:
+                        features_used = self._count_features_used(ensemble_features)
+                    preds.append(ensemble_bundle.runner.predict(ensemble_features))
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence
                 final_dir = ens.direction
                 final_model_name = f"ensemble:{self.config.ensemble_method}"
                 member_preds = ens.member_predictions
+                if not features_used:
+                    features_used = self._count_features_used(features)
 
             # Calculate total inference time
             inference_time = time.time() - start_time
@@ -172,7 +217,7 @@ class PredictionEngine:
                     model_name=final_model_name,
                     timestamp=datetime.now(timezone.utc),
                     inference_time=inference_time,
-                    features_used=features.shape[1] if hasattr(features, "shape") else 0,
+                    features_used=features_used,
                     error=f"Prediction timeout after {inference_time:.3f}s (max: {self.config.max_prediction_latency}s)",
                     metadata={
                         "error_type": "PredictionTimeoutError",
@@ -205,7 +250,7 @@ class PredictionEngine:
                 model_name=final_model_name,
                 timestamp=datetime.now(timezone.utc),
                 inference_time=inference_time,
-                features_used=features.shape[1] if hasattr(features, "shape") else 0,
+                features_used=features_used,
                 cache_hit=cache_hit,
                 metadata={
                     "data_length": len(data),
@@ -268,18 +313,61 @@ class PredictionEngine:
         If return_denormalized is True, applies rolling-window denormalization of close based on previous window.
         """
         self._validate_input_data(data)
-        # Extract features once
-        features_df = self.feature_pipeline.transform(data, use_cache=True)
-        original_columns = ["open", "high", "low", "close", "volume"]
-        feature_columns = [c for c in features_df.columns if c not in original_columns]
-        if not feature_columns:
-            raise FeatureExtractionError("No feature columns found for series prediction")
-        feat = features_df[feature_columns].values.astype(np.float32)
-        total = len(features_df)
+        # Extract features once and align to the target bundle's schema when available
+        try:
+            features_df_or_arr = self.feature_pipeline.transform(data, use_cache=True)
+        except Exception as exc:
+            raise FeatureExtractionError(f"Feature extraction failed: {exc}") from exc
+
+        bundle = self._resolve_bundle(model_name)
+        model = bundle.runner
+
+        features_df: Optional[pd.DataFrame]
+        if isinstance(features_df_or_arr, pd.DataFrame):
+            features_df = features_df_or_arr
+        else:
+            features_df = None
+
+        base_features: np.ndarray
+        if features_df is not None:
+            original_columns = ["open", "high", "low", "close", "volume"]
+            feature_columns = [
+                c for c in features_df.columns if c not in original_columns
+            ]
+            if not feature_columns and not bundle.feature_schema:
+                raise FeatureExtractionError(
+                    "No feature columns found for series prediction"
+                )
+            base_features = (
+                features_df[feature_columns].to_numpy(dtype=np.float32)
+                if feature_columns
+                else features_df.to_numpy(dtype=np.float32)
+            )
+        else:
+            base_features = np.asarray(features_df_or_arr, dtype=np.float32)
+
+        feat = base_features
+        schema_sequence_length: Optional[int] = None
+        if features_df is not None and bundle.feature_schema:
+            try:
+                aligned_matrix, schema_sequence_length = self._select_schema_features(
+                    bundle, features_df
+                )
+                feat = aligned_matrix.astype(np.float32, copy=False)
+            except Exception:
+                feat = base_features.astype(np.float32, copy=False)
+        else:
+            feat = base_features.astype(np.float32, copy=False)
+
+        total = int(feat.shape[0])
         seq = (
-            sequence_length_override or self.config.prediction_horizons[0]
-            if hasattr(self.config, "prediction_horizons")
-            else 120
+            sequence_length_override
+            or schema_sequence_length
+            or (
+                self.config.prediction_horizons[0]
+                if hasattr(self.config, "prediction_horizons")
+                else 120
+            )
         )
         # Fallback to 120 if missing
         if not isinstance(seq, int) or seq <= 0:
@@ -291,7 +379,6 @@ class PredictionEngine:
                 "normalized": not return_denormalized,
             }
 
-        model = self._get_model(model_name)
         session = model.session
         input_name = session.get_inputs()[0].name
 
@@ -321,6 +408,10 @@ class PredictionEngine:
             return {"indices": indices, "preds": preds_norm, "normalized": True}
 
         # Denormalize using rolling window on close based on previous seq bars
+        if features_df is None:
+            raise FeatureExtractionError(
+                "Denormalization requires feature pipeline to return a DataFrame"
+            )
         close = features_df["close"]
         min_prev = close.shift(1).rolling(window=seq).min().values
         max_prev = close.shift(1).rolling(window=seq).max().values
@@ -349,7 +440,8 @@ class PredictionEngine:
 
         # Get model once for efficiency
         try:
-            model = self._get_model(model_name)
+            bundle = self._resolve_bundle(model_name)
+            model = bundle.runner
         except Exception as e:
             # If model loading fails, return error results for all batches
             # Create individual PredictionResult objects to avoid shared mutable state
@@ -382,14 +474,44 @@ class PredictionEngine:
 
                 # Extract features
                 feature_start_time = time.time()
-                features = self._extract_features(data)
+                try:
+                    features_df_or_arr = self.feature_pipeline.transform(
+                        data, use_cache=True
+                    )
+                except Exception as exc:
+                    raise FeatureExtractionError(
+                        f"Feature extraction failed: {exc}"
+                    ) from exc
+
+                if isinstance(features_df_or_arr, pd.DataFrame):
+                    features_df = features_df_or_arr
+                    original_columns = ["open", "high", "low", "close", "volume"]
+                    feature_columns = [
+                        col for col in features_df.columns if col not in original_columns
+                    ]
+                    if not feature_columns and not bundle.feature_schema:
+                        raise FeatureExtractionError(
+                            "No feature columns found in pipeline output"
+                        )
+                    base_features = (
+                        features_df[feature_columns].to_numpy(dtype=np.float32)
+                        if feature_columns
+                        else features_df.to_numpy(dtype=np.float32)
+                    )
+                else:
+                    features_df = None
+                    base_features = np.asarray(features_df_or_arr, dtype=np.float32)
+
+                prepared_features = self._prepare_features_for_bundle(
+                    bundle, base_features, features_df
+                )
                 feature_time = time.time() - feature_start_time
                 # Track for averaging
                 self._total_feature_extraction_time += feature_time
                 self._feature_extraction_count += 1
 
                 # Make prediction with pre-loaded model
-                prediction = model.predict(features)
+                prediction = model.predict(prepared_features)
 
                 # Calculate total inference time
                 inference_time = time.time() - start_time
@@ -402,7 +524,7 @@ class PredictionEngine:
                     model_name=prediction.model_name,
                     timestamp=datetime.now(timezone.utc),
                     inference_time=inference_time,
-                    features_used=features.shape[1] if hasattr(features, "shape") else 0,
+                    features_used=self._count_features_used(prepared_features),
                     cache_hit=self._was_cache_hit(),
                     metadata={
                         "data_length": len(data),
@@ -441,8 +563,9 @@ class PredictionEngine:
         return results
 
     def get_available_models(self) -> list[str]:
-        """Get list of available models"""
-        return self.model_registry.list_models()
+        """Get list of available model bundle keys."""
+
+        return [bundle.key for bundle in self.model_registry.list_bundles()]
 
     def get_model_info(self, model_name: str) -> dict[str, Any]:
         """
@@ -454,17 +577,16 @@ class PredictionEngine:
         Returns:
             Dict containing model information
         """
-        model = self.model_registry.get_model(model_name)
-        if not model:
-            return {}
-
-        return {
-            "name": model_name,
-            "path": model.model_path,
-            "metadata": model.model_metadata,
-            "loaded": True,
-            "inference_time_avg": self._get_model_avg_inference_time(model_name),
-        }
+        for bundle in self.model_registry.list_bundles():
+            if bundle.key == model_name:
+                return {
+                    "name": bundle.key,
+                    "path": getattr(bundle.runner, "model_path", None),
+                    "metadata": bundle.metadata,
+                    "loaded": True,
+                    "inference_time_avg": self._get_model_avg_inference_time(bundle.key),
+                }
+        return {}
 
     def get_performance_stats(self) -> dict[str, Any]:
         """Get engine performance statistics"""
@@ -589,13 +711,14 @@ class PredictionEngine:
 
         # Check model registry
         try:
-            models = self.model_registry.list_models()
-            default_model = self.model_registry.get_default_model()
+            bundles = list(self.model_registry.list_bundles())
+            default_bundle = self.model_registry.get_default_bundle() if bundles else None
             health["components"]["model_registry"] = {
                 "status": "healthy",
-                "available_models": len(models),
-                "model_names": models,
-                "default_model": default_model.model_path if default_model else None,
+                "available_models": len(bundles),
+                "default_model": getattr(default_bundle.runner, "model_path", None)
+                if default_bundle is not None
+                else None,
             }
         except Exception as e:
             health["components"]["model_registry"] = {"status": "error", "error": str(e)}
@@ -666,20 +789,100 @@ class PredictionEngine:
         except Exception as e:
             raise FeatureExtractionError(f"Feature extraction failed: {str(e)}") from e
 
-    def _get_model(self, model_name: Optional[str]):
-        """Get model for prediction"""
+    def _select_schema_features(
+        self, bundle: StrategyModel, features_df: pd.DataFrame
+    ) -> tuple[np.ndarray, int]:
+        """Return all rows aligned to a bundle's schema with normalization applied."""
+
+        selector = FeatureSelector(
+            bundle.feature_schema,
+            sequence_length=bundle.feature_schema.get("sequence_length"),
+        )
+        columns: list[str] = []
+        normalizers: list[dict[str, float] | None] = []
+        for feature_cfg in selector.ordered_features:
+            name = feature_cfg.get("name")
+            if not name:
+                raise ValueError("Feature schema entry missing 'name'")
+            required = bool(feature_cfg.get("required", True))
+            if required and name not in features_df.columns:
+                raise ValueError(f"Required feature '{name}' missing in pipeline output")
+            if name in features_df.columns:
+                columns.append(name)
+                normalizers.append(feature_cfg.get("normalization"))
+
+        if not columns:
+            raise ValueError("No matching features found for selection")
+
+        matrix = features_df[columns].to_numpy(dtype=np.float32, copy=True)
+        for idx, norm in enumerate(normalizers):
+            if not norm:
+                continue
+            mean = float(norm.get("mean", 0.0))
+            std = float(norm.get("std", 1.0))
+            if std == 0.0:
+                std = 1e-8
+            matrix[:, idx] = (matrix[:, idx] - mean) / std
+
+        return matrix, selector.sequence_length
+
+    def _prepare_features_for_bundle(
+        self,
+        bundle: StrategyModel,
+        raw_features: np.ndarray,
+        features_df: Optional[pd.DataFrame],
+    ) -> np.ndarray:
+        """Align feature matrix to a bundle's schema when available."""
+
+        if bundle.feature_schema and features_df is not None:
+            try:
+                selected, sequence_length = self._select_schema_features(
+                    bundle, features_df
+                )
+                window = selected[-sequence_length:, :]
+                if window.ndim == 2:
+                    return window[None, :, :]
+                return window
+            except Exception:
+                # Fall back to raw features if selection fails
+                pass
+
+        if isinstance(raw_features, np.ndarray):
+            return raw_features.astype(np.float32, copy=False)
+
+        return np.asarray(raw_features, dtype=np.float32)
+
+    def _count_features_used(self, features: Any) -> int:
+        """Return the feature dimension from an input array if possible."""
+
+        if isinstance(features, np.ndarray) and features.ndim >= 1:
+            return int(features.shape[-1])
+        return 0
+
+    def _resolve_bundle(self, model_name: Optional[str]) -> StrategyModel:
+        """Resolve the model bundle to use for an inference request."""
+
+        bundles = list(self.model_registry.list_bundles())
+
         if model_name:
-            model = self.model_registry.get_model(model_name)
-            if not model:
-                raise ModelNotFoundError(f"Model '{model_name}' not found")
-            return model
+            for bundle in bundles:
+                if bundle.key == model_name:
+                    return bundle
+            raise ModelNotFoundError(f"Model '{model_name}' not found")
 
-        # Use default model
-        default_model = self.model_registry.get_default_model()
-        if not default_model:
-            raise ModelNotFoundError("No models available for prediction")
+        if bundles:
+            try:
+                return self.model_registry.get_default_bundle()
+            except Exception:
+                pass
+            return bundles[0]
 
-        return default_model
+        raise ModelNotFoundError("No prediction models available")
+
+    def _get_model(self, model_name: Optional[str]):
+        """Get model runner for prediction (structured-only)."""
+        bundle = self._resolve_bundle(model_name)
+        return bundle.runner
 
     def _was_cache_hit(self) -> bool:
         """Check if last operation was a cache hit"""

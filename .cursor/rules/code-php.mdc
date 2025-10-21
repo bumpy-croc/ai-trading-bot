@@ -1,0 +1,11 @@
+---
+globs: *.php
+alwaysApply: false
+---
+
+# PHP Code Quality 
+
+- Wrap array filtering results with array_values()
+- Avoid dynamic variable names
+- Use named arguments for clarity
+- Don't place assignments inside conditionals

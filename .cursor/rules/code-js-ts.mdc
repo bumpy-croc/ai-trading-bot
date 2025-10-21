@@ -1,0 +1,12 @@
+---
+globs: *.js,*.ts,*.tsx,*.jsx
+alwaysApply: false
+---
+
+# Javascript and Typescript Code Quality
+
+- Avoid unintended global variable caching because in Node.js servers, global variables persist across requests, causing data leaks and race conditions.
+- Use named arguments for clarity
+- Don't place assignments inside conditionals
+
+

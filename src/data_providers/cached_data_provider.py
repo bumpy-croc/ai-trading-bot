@@ -173,7 +173,7 @@ class CachedDataProvider(DataProvider):
         ranges = []
         current = start
 
-        while current < end:
+        while current <= end:
             year = current.year
             year_start = max(current, datetime(year, 1, 1))
             year_end = min(end, datetime(year + 1, 1, 1) - timedelta(seconds=1))
@@ -213,13 +213,27 @@ class CachedDataProvider(DataProvider):
         # Try to load from cache first
         if cache_path and self._is_cache_valid(cache_path, year):
             cached_data = self._load_from_cache(cache_path)
-            if cached_data is not None:
+            if cached_data is not None and not cached_data.empty:
                 logger.debug(f"Loaded {year} data from cache for {symbol} {timeframe}")
-                # Filter to the exact range needed
+                
+                # Check if cached data covers the requested range
                 if hasattr(cached_data.index, "to_pydatetime"):
-                    mask = (cached_data.index >= year_start) & (cached_data.index <= year_end)
-                    return cached_data[mask]
-                return cached_data
+                    cache_start = cached_data.index.min()
+                    cache_end = cached_data.index.max()
+                    
+                    # Check if cached data covers the requested range
+                    if cache_start <= year_start and cache_end >= year_end:
+                        # Cached data fully covers the requested range
+                        mask = (cached_data.index >= year_start) & (cached_data.index <= year_end)
+                        filtered_data = cached_data[mask]
+                        logger.debug(f"Cache covers requested range: {year_start} to {year_end}")
+                        return filtered_data
+                    else:
+                        # Cached data doesn't cover the requested range - need to fetch
+                        logger.info(f"Cache doesn't cover requested range. Cache: {cache_start} to {cache_end}, Requested: {year_start} to {year_end}")
+                else:
+                    # Fallback for non-datetime index
+                    return cached_data
 
         # Cache miss - need to fetch this year's data
         logger.info(f"Fetching {year} data for {symbol} {timeframe}")

@@ -7,7 +7,15 @@ import pytest
 
 from src.backtesting.engine import Backtester
 from src.data_providers.data_provider import DataProvider
-from src.strategies.base import BaseStrategy
+from src.strategies.components import (
+    Signal,
+    SignalDirection,
+    SignalGenerator,
+    Strategy,
+    EnhancedRegimeDetector,
+)
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.position_sizer import PositionSizer
 
 pytestmark = pytest.mark.unit
 
@@ -32,42 +40,79 @@ class DummyDataProvider(DataProvider):
         return float(self._df["close"].iloc[-1])
 
 
-class BuyEveryYearStrategy(BaseStrategy):
+class YearlyCycleSignalGenerator(SignalGenerator):
     def __init__(self):
-        super().__init__("BuyEveryYearStrategy")
-        self.in_position = False
-        self.current_year = None
+        super().__init__("yearly_cycle_generator")
 
-    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        return df
+    def generate_signal(self, df: pd.DataFrame, index: int, regime=None) -> Signal:
+        self.validate_inputs(df, index)
+        current_year = df.index[index].year
 
-    def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
-        ts_year = df.index[index].year
-        if (not self.in_position) and (self.current_year is None or ts_year != self.current_year):
-            self.current_year = ts_year
-            return True
-        return False
+        if index == 0 or df.index[index - 1].year != current_year:
+            return Signal(SignalDirection.BUY, strength=1.0, confidence=1.0, metadata={})
 
-    def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
-        ts_year = df.index[index].year
-        last_index = len(df) - 1
-        next_year_change = (index < last_index) and (df.index[index + 1].year != ts_year)
-        if self.in_position and (index == last_index or next_year_change):
-            self.in_position = False
-            return True
-        return False
+        is_last_in_year = index == len(df) - 1 or df.index[index + 1].year != current_year
+        if is_last_in_year:
+            return Signal(SignalDirection.SELL, strength=1.0, confidence=1.0, metadata={})
 
-    def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
-        if balance <= 0:
+        return Signal(SignalDirection.HOLD, strength=0.0, confidence=0.0, metadata={})
+
+    def get_confidence(self, df: pd.DataFrame, index: int) -> float:
+        self.validate_inputs(df, index)
+        return 1.0
+
+
+class FullAllocationRiskManager(RiskManager):
+    def __init__(self):
+        super().__init__("full_allocation_risk")
+
+    def calculate_position_size(self, signal: Signal, balance: float, regime=None) -> float:
+        if balance <= 0 or signal.direction == SignalDirection.HOLD:
             return 0.0
-        self.in_position = True
         return balance
 
-    def calculate_stop_loss(self, df, index, price, side: str = "long") -> float:
-        return price * 0.5
+    def should_exit(self, position, current_data, regime=None) -> bool:
+        return False
 
-    def get_parameters(self) -> dict:
-        return {}
+    def get_parameters(self) -> dict[str, float]:
+        params = super().get_parameters()
+        params.update({"allocation": 1.0})
+        return params
+
+    def get_stop_loss(self, entry_price: float, signal: Signal, regime=None) -> float:
+        if entry_price <= 0:
+            return entry_price
+        if signal.direction == SignalDirection.BUY:
+            return entry_price * 0.9
+        if signal.direction == SignalDirection.SELL:
+            return entry_price * 1.1
+        return entry_price
+
+
+class PassThroughSizer(PositionSizer):
+    def __init__(self):
+        super().__init__("pass_through_sizer")
+
+    def calculate_size(self, signal: Signal, balance: float, risk_amount: float, regime=None) -> float:
+        self.validate_inputs(balance, risk_amount)
+        if signal.direction == SignalDirection.HOLD:
+            return 0.0
+        return self.apply_bounds_checking(risk_amount, balance, min_fraction=0.0, max_fraction=1.0)
+
+    def get_parameters(self) -> dict[str, str]:
+        params = super().get_parameters()
+        params.update({"mode": "pass_through"})
+        return params
+
+
+def create_yearly_cycle_strategy() -> Strategy:
+    return Strategy(
+        name="YearlyCycleStrategy",
+        signal_generator=YearlyCycleSignalGenerator(),
+        risk_manager=FullAllocationRiskManager(),
+        position_sizer=PassThroughSizer(),
+        regime_detector=EnhancedRegimeDetector(),
+    )
 
 
 def generate_test_dataframe():
@@ -94,7 +139,7 @@ def generate_test_dataframe():
 def test_yearly_returns_positive_and_negative():
     df = generate_test_dataframe()
     provider = DummyDataProvider(df)
-    strategy = BuyEveryYearStrategy()
+    strategy = create_yearly_cycle_strategy()
     backtester = Backtester(
         strategy=strategy,
         data_provider=provider,

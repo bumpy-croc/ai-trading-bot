@@ -1,29 +1,81 @@
+# =============================================================================
+# Python & Development Environment
+# =============================================================================
+
+# Environment variables and virtual environments
 .env
 .venv
-__pycache__
+__pycache__/
+
+# Testing and coverage
 .coverage
-.pytest_cache
-logs/
+.pytest_cache/
+
+# IDE and editor files
+.vscode/
+.claude/
 .cursor/mcp.json
-bandit-report.json
+
+# OS generated files
+.DS_Store
+
+# =============================================================================
+# Project Specific Files & Directories
+# =============================================================================
+
+# Logs and runtime data
+logs/
 backups/
 todo.txt
 
-.DS_Store
+# Data and artifacts
+data/
+artifacts/*
+!artifacts/strategy-migration/
+artifacts/strategy-migration/*
+!artifacts/strategy-migration/baseline/
+artifacts/strategy-migration/baseline/*
+!artifacts/strategy-migration/baseline/**
+!artifacts/strategy-migration/phase2/
+!artifacts/strategy-migration/phase2/**
 
-# database
+# Security and audit reports
+bandit-report.json
+
+# =============================================================================
+# Database & Storage
+# =============================================================================
+
+# Local SQLite database
 src/data/trading_bot.db
+
+# Ephemeral SQLite shared memory files created during unit tests
+file:unit_test_db_*
+
 # Staging directories (now using /tmp but keeping this for safety)
 staging/
 /tmp/ai-trading-bot-staging/
 
-# Ephemeral SQLite shared memory files created during unit tests
-file:unit_test_db_*
+# =============================================================================
+# Configuration & Secrets
+# =============================================================================
+
 # Local MCP config (contains secrets); use mcp.example.json as template
 mcp.json
 
-# Distribution / packaging
+# =============================================================================
+# Distribution & Packaging
+# =============================================================================
+
+# Python packaging
 *.egg-info/
 
-# Cache directory (market data cache files)
-cache/
+# =============================================================================
+# Cache Management
+# =============================================================================
+
+# Cache directory - only allow market_data subdirectory
+.ruff_cache/
+cache/*
+!cache/market_data/
+!cache/market_data/*.pkl

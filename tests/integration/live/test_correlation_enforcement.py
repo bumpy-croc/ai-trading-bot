@@ -6,36 +6,9 @@ import pytest
 
 from src.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
-from src.strategies.base import BaseStrategy
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 pytestmark = pytest.mark.integration
-
-
-class DummyStrategy(BaseStrategy):
-	def __init__(self):
-		super().__init__(name="Dummy")
-		self.take_profit_pct = 0.04
-
-	def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-		return df
-
-	def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
-		return True
-
-	def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
-		return False
-
-	def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
-		return 0.0
-
-	def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = "long") -> float:
-		return price * 0.98
-
-	def get_parameters(self) -> dict:
-		return {}
-
-	def get_risk_overrides(self) -> dict:
-		return {"position_sizer": "fixed_fraction", "base_fraction": 0.08, "correlation_control": {"max_correlated_exposure": 0.1}}
 
 
 def _df(prices):
@@ -59,7 +32,7 @@ def test_live_engine_correlation_reduces_size(monkeypatch):
 	risk_params = RiskParameters(base_risk_per_trade=0.2, max_risk_per_trade=0.2, max_position_size=0.5, max_daily_risk=1.0)
 
 	# Engine
-	engine = LiveTradingEngine(strategy=DummyStrategy(), data_provider=provider, risk_parameters=risk_params, enable_live_trading=False)
+	engine = LiveTradingEngine(strategy=create_ml_basic_strategy(), data_provider=provider, risk_parameters=risk_params, enable_live_trading=False)
 	engine.current_balance = 10_000
 
 	# Simulate we have an existing open position in a correlated symbol
