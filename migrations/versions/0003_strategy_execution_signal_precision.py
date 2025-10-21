@@ -1,7 +1,7 @@
 """Promote strategy execution precision to float
 
 Revision ID: 0003_strategy_execution_signal_precision
-Revises: 0002_add_strategy_management_tables
+Revises: 0002_strategy_management
 Create Date: 2025-10-20 15:12:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "0003_strategy_execution_signal_precision"
-down_revision = "0002_add_strategy_management_tables"
+down_revision = "0002_strategy_management"
 branch_labels = None
 depends_on = None
 
