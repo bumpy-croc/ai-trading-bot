@@ -6,7 +6,7 @@ This module provides a comprehensive backtesting framework.
 
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd  # type: ignore
 from pandas import DataFrame  # type: ignore
@@ -51,11 +51,17 @@ from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager
 from src.strategies.components import (
     MarketData as ComponentMarketData,
+)
+from src.strategies.components import (
     Position as ComponentPosition,
+)
+from src.strategies.components import (
     RuntimeContext,
     SignalDirection,
-    Strategy as ComponentStrategy,
     StrategyRuntime,
+)
+from src.strategies.components import (
+    Strategy as ComponentStrategy,
 )
 from src.utils.logging_context import set_context, update_context
 from src.utils.logging_events import log_engine_event
@@ -107,7 +113,8 @@ class ActiveTrade:
         entry_time: datetime,
         size: float,
         stop_loss: float,
-        take_profit: Optional[float] = None,
+        take_profit: float | None = None,
+        entry_balance: float | None = None,
     ):
         self.symbol = symbol
         self.side = side
@@ -116,9 +123,10 @@ class ActiveTrade:
         self.size = min(size, 1.0)  # Limit position size to 100% of balance (fraction)
         self.stop_loss = stop_loss
         self.take_profit = take_profit
-        self.exit_price: Optional[float] = None
-        self.exit_time: Optional[datetime] = None
-        self.exit_reason: Optional[str] = None
+        self.exit_price: float | None = None
+        self.exit_time: datetime | None = None
+        self.exit_reason: str | None = None
+        self.entry_balance: float | None = entry_balance
         # Partial operations runtime state
         self.original_size: float = self.size
         self.current_size: float = self.size
@@ -127,8 +135,8 @@ class ActiveTrade:
         # Trailing state
         self.trailing_stop_activated: bool = False
         self.breakeven_triggered: bool = False
-        self.trailing_stop_price: Optional[float] = None
-        self.component_notional: Optional[float] = None
+        self.trailing_stop_price: float | None = None
+        self.component_notional: float | None = None
 
 
 class Backtester:
@@ -138,27 +146,27 @@ class Backtester:
         self,
         strategy: ComponentStrategy | StrategyRuntime,
         data_provider: DataProvider,
-        sentiment_provider: Optional[SentimentDataProvider] = None,
-        risk_parameters: Optional[Any] = None,
+        sentiment_provider: SentimentDataProvider | None = None,
+        risk_parameters: Any | None = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
-        database_url: Optional[str] = None,
-        log_to_database: Optional[bool] = None,
-        default_take_profit_pct: Optional[float] = None,
+        database_url: str | None = None,
+        log_to_database: bool | None = None,
+        default_take_profit_pct: float | None = None,
         legacy_stop_loss_indexing: bool = True,  # Preserve historical behavior by default
         enable_engine_risk_exits: bool = True,  # Mirror live engine protective exits
         time_exit_policy: TimeExitPolicy | None = None,
         # Dynamic risk management
         enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
-        dynamic_risk_config: Optional[DynamicRiskConfig] = None,
+        dynamic_risk_config: DynamicRiskConfig | None = None,
         # Trailing stops
-        trailing_stop_policy: Optional[TrailingStopPolicy] = None,
+        trailing_stop_policy: TrailingStopPolicy | None = None,
         # Partial operations
-        partial_manager: Optional[Any] = None,
+        partial_manager: Any | None = None,
         # Regime-aware strategy switching
         enable_regime_switching: bool = False,
-        regime_config: Optional[Any] = None,
-        strategy_mapping: Optional[Any] = None,
-        switching_config: Optional[Any] = None,
+        regime_config: Any | None = None,
+        strategy_mapping: Any | None = None,
+        switching_config: Any | None = None,
     ):
         self._runtime_dataset = None
         self._runtime_warmup = 0
@@ -177,7 +185,7 @@ class Backtester:
         self.balance = initial_balance
         self.peak_balance = initial_balance
         self.trades: list[dict] = []
-        self.current_trade: Optional[ActiveTrade] = None
+        self.current_trade: ActiveTrade | None = None
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
         self._custom_trailing_stop_policy = trailing_stop_policy is not None
         self.trailing_stop_policy = trailing_stop_policy
@@ -265,9 +273,9 @@ class Backtester:
             self.regime_detector = None
 
         # Early stop tracking
-        self.early_stop_reason: Optional[str] = None
-        self.early_stop_date: Optional[datetime] = None
-        self.early_stop_candle_index: Optional[int] = None
+        self.early_stop_reason: str | None = None
+        self.early_stop_date: datetime | None = None
+        self.early_stop_candle_index: int | None = None
         # Use legacy 50% drawdown threshold unless explicit risk params provided, to preserve historical parity
         self._early_stop_max_drawdown = (
             self.risk_manager.params.max_drawdown if risk_parameters is not None else 0.5
@@ -818,7 +826,7 @@ class Backtester:
             self.peak_balance = self.balance
 
     def run(
-        self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> dict:
         """Run backtest with sentiment data if available"""
         try:
@@ -1145,7 +1153,13 @@ class Backtester:
                                 / self.current_trade.entry_price
                             )
                             pnl_pct = move * exec_frac
-                            pnl_cash = cash_pnl(pnl_pct, self.balance)
+                            entry_balance = getattr(self.current_trade, "entry_balance", None)
+                            basis_balance = (
+                                float(entry_balance)
+                                if entry_balance is not None and entry_balance > 0
+                                else float(self.balance)
+                            )
+                            pnl_cash = cash_pnl(pnl_pct, basis_balance)
                             self.balance += pnl_cash
                             # Update state
                             state.current_size = max(0.0, state.current_size - exec_frac)
@@ -1287,7 +1301,13 @@ class Backtester:
                                 (self.current_trade.entry_price - exit_price)
                                 / self.current_trade.entry_price
                             ) * fraction
-                        trade_pnl_cash = cash_pnl(trade_pnl_pct, self.balance)
+                        entry_balance = getattr(self.current_trade, "entry_balance", None)
+                        basis_balance = (
+                            float(entry_balance)
+                            if entry_balance is not None and entry_balance > 0
+                            else float(self.balance)
+                        )
+                        trade_pnl_cash = cash_pnl(trade_pnl_pct, basis_balance)
 
                         # Snapshot MFE/MAE
                         metrics = self.mfe_mae_tracker.get_position_metrics("active")
@@ -1349,6 +1369,7 @@ class Backtester:
                                 exit_time=exit_time,
                                 size=fraction,
                                 pnl=trade_pnl_cash,
+                                pnl_percent=trade_pnl_pct,
                                 exit_reason=exit_reason,
                                 stop_loss=self.current_trade.stop_loss,
                                 take_profit=self.current_trade.take_profit,
@@ -1470,6 +1491,7 @@ class Backtester:
                         size=size_fraction,
                         stop_loss=stop_loss,
                         take_profit=take_profit,
+                        entry_balance=float(self.balance),
                     )
                     self.current_trade.component_notional = float(
                         runtime_decision.position_size if runtime_decision else size_fraction * self.balance
@@ -1675,6 +1697,7 @@ class Backtester:
                             size=size_fraction,
                             stop_loss=stop_loss,
                             take_profit=take_profit,
+                            entry_balance=float(self.balance),
                         )
                         logger.info(f"Entered long position at {current_price}")
 
@@ -1787,6 +1810,7 @@ class Backtester:
                             size=size_fraction,
                             stop_loss=stop_loss,
                             take_profit=take_profit,
+                            entry_balance=float(self.balance),
                         )
                         logger.info(f"Entered short position at {current_price}")
 
@@ -2007,7 +2031,7 @@ class Backtester:
     # --------------------
     # Modularized helpers
     # --------------------
-    def _load_strategy_by_name(self, strategy_name: str) -> Optional[ComponentStrategy]:
+    def _load_strategy_by_name(self, strategy_name: str) -> ComponentStrategy | None:
         """Load strategy by name for regime switching"""
         try:
             strategy_factories = {
@@ -2038,7 +2062,7 @@ class Backtester:
         symbol: str,
         timeframe: str,
         start: datetime,
-        end: Optional[datetime],
+        end: datetime | None,
     ) -> pd.DataFrame:
         if not self.sentiment_provider:
             return df

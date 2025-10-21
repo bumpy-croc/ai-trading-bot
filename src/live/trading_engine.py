@@ -50,15 +50,10 @@ from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
-from src.strategies.components import (
-    MarketData as ComponentMarketData,
-    Position as ComponentPosition,
-    RuntimeContext,
-    Signal,
-    SignalDirection,
-    Strategy as ComponentStrategy,
-    StrategyRuntime,
-)
+from src.strategies.components import MarketData as ComponentMarketData
+from src.strategies.components import Position as ComponentPosition
+from src.strategies.components import RuntimeContext, Signal, SignalDirection, StrategyRuntime
+from src.strategies.components import Strategy as ComponentStrategy
 from src.utils.logging_context import set_context, update_context
 from src.utils.logging_events import (
     log_data_event,
@@ -98,6 +93,7 @@ class Position:
     stop_loss: float | None = None
     take_profit: float | None = None
     unrealized_pnl: float = 0.0
+    unrealized_pnl_percent: float = 0.0
     order_id: str | None = None
     # Partial operations runtime state
     original_size: float | None = None
@@ -1419,14 +1415,27 @@ class LiveTradingEngine:
     def _update_position_pnl(self, current_price: float):
         """Update unrealized PnL for all positions"""
         for position in self.positions.values():
+            fraction = float(
+                position.current_size if position.current_size is not None else position.size
+            )
+            if fraction <= 0:
+                position.unrealized_pnl = 0.0
+                position.unrealized_pnl_percent = 0.0
+                continue
+
+            basis_balance = (
+                float(position.entry_balance)
+                if position.entry_balance is not None and position.entry_balance > 0
+                else float(self.current_balance)
+            )
+
             if position.side == PositionSide.LONG:
-                position.unrealized_pnl = pnl_percent(
-                    position.entry_price, current_price, Side.LONG, position.size
-                )
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
             else:  # SHORT
-                position.unrealized_pnl = pnl_percent(
-                    position.entry_price, current_price, Side.SHORT, position.size
-                )
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
+
+            position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
+            position.unrealized_pnl_percent = pnl_pct * 100.0
 
     def _update_positions_mfe_mae(self, current_price: float):
         """Compute and persist rolling MFE/MAE for active positions."""
@@ -1461,6 +1470,8 @@ class LiveTradingEngine:
                     self.db_manager.update_position(
                         position_id=db_id,
                         current_price=float(current_price),
+                        unrealized_pnl=float(position.unrealized_pnl),
+                        unrealized_pnl_percent=float(position.unrealized_pnl_percent),
                         mfe=float(m.mfe),
                         mae=float(m.mae),
                         mfe_price=float(m.mfe_price) if m.mfe_price is not None else None,
@@ -1586,7 +1597,7 @@ class LiveTradingEngine:
                 # Add risk metrics if available from TradingDecision
                 if runtime_decision and hasattr(runtime_decision, 'risk_metrics') and runtime_decision.risk_metrics:
                     for key, value in runtime_decision.risk_metrics.items():
-                        if isinstance(value, (int, float)):
+                        if isinstance(value, int | float):
                             log_reasons.append(f"risk_{key}_{value:.4f}")
                 
                 # Extract signal confidence from TradingDecision if available
@@ -1723,7 +1734,7 @@ class LiveTradingEngine:
             # Add risk metrics if available from TradingDecision
             if runtime_decision and hasattr(runtime_decision, 'risk_metrics') and runtime_decision.risk_metrics:
                 for key, value in runtime_decision.risk_metrics.items():
-                    if isinstance(value, (int, float)):
+                    if isinstance(value, int | float):
                         log_reasons.append(f"risk_{key}_{value:.4f}")
             
             self.db_manager.log_strategy_execution(
@@ -1903,6 +1914,7 @@ class LiveTradingEngine:
                     side=side.value,
                     entry_price=entry_price,
                     size=size,
+                    entry_balance=entry_balance,
                     strategy_name=self._strategy_name(),
                     entry_order_id=order_id,
                     stop_loss=stop_loss,
@@ -2017,7 +2029,12 @@ class LiveTradingEngine:
 
             # Update balance using sized percentage P&L (parity with backtester)
             balance_before = self.current_balance
-            realized_pnl = cash_pnl(pnl_pct, balance_before)
+            basis_balance = (
+                float(position.entry_balance)
+                if position.entry_balance is not None and position.entry_balance > 0
+                else balance_before
+            )
+            realized_pnl = cash_pnl(pnl_pct, basis_balance)
             self.current_balance = balance_before + realized_pnl
             self.total_pnl += realized_pnl
 
@@ -2180,7 +2197,12 @@ class LiveTradingEngine:
         else:
             pnl_frac = pnl_percent(position.entry_price, price, Side.SHORT, delta_fraction)
         balance_before = self.current_balance
-        realized_cash = cash_pnl(pnl_frac, balance_before)
+        basis_balance = (
+            float(position.entry_balance)
+            if position.entry_balance is not None and position.entry_balance > 0
+            else balance_before
+        )
+        realized_cash = cash_pnl(pnl_frac, basis_balance)
         self.current_balance = balance_before + realized_cash
         self.total_pnl += realized_cash
 
@@ -2353,12 +2375,20 @@ class LiveTradingEngine:
     def _log_account_snapshot(self):
         """Log current account state to database"""
         try:
-            # Calculate total exposure
-            total_exposure = sum(pos.size * self.current_balance for pos in self.positions.values())
+            # Calculate total exposure using the active fraction per position
+            total_exposure = sum(
+                float(pos.current_size if pos.current_size is not None else pos.size)
+                * (
+                    float(pos.entry_balance)
+                    if pos.entry_balance is not None and pos.entry_balance > 0
+                    else float(self.current_balance)
+                )
+                for pos in self.positions.values()
+            )
 
             # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(pos.unrealized_pnl for pos in self.positions.values())
-            equity = self.current_balance + unrealized_pnl
+            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in self.positions.values())
+            equity = float(self.current_balance) + unrealized_pnl
 
             # Calculate current drawdown percentage
             current_drawdown = 0
@@ -2393,7 +2423,7 @@ class LiveTradingEngine:
     def _log_status(self, symbol: str, current_price: float):
         """Log current trading status"""
         total_unrealized = sum(
-            pos.unrealized_pnl * self.current_balance for pos in self.positions.values()
+            float(pos.unrealized_pnl) for pos in self.positions.values()
         )
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
 
@@ -2599,17 +2629,35 @@ class LiveTradingEngine:
                 side_value = pos_data["side"]
                 if isinstance(side_value, str):
                     side_value = side_value.lower()
-                
+
+                stored_entry_balance = pos_data.get("entry_balance")
+                try:
+                    entry_balance = (
+                        float(stored_entry_balance)
+                        if stored_entry_balance is not None
+                        else float(self.current_balance)
+                    )
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Recovered position %s has invalid entry balance %s; falling back to current balance",
+                        pos_data.get("symbol"),
+                        stored_entry_balance,
+                    )
+                    entry_balance = float(self.current_balance)
+
                 position = Position(
                     symbol=pos_data["symbol"],
                     side=PositionSide(side_value),
                     size=pos_data["size"],
                     entry_price=pos_data["entry_price"],
                     entry_time=pos_data["entry_time"],
-                    entry_balance=pos_data.get("entry_balance") or float(self.current_balance),
+                    entry_balance=entry_balance,
                     stop_loss=pos_data.get("stop_loss"),
                     take_profit=pos_data.get("take_profit"),
-                    unrealized_pnl=pos_data.get("unrealized_pnl", 0.0),
+                    unrealized_pnl=float(pos_data.get("unrealized_pnl", 0.0) or 0.0),
+                    unrealized_pnl_percent=float(
+                        pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
+                    ),
                     order_id=str(pos_data["id"]),  # Use database ID as order_id
                 )
 

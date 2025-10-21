@@ -12,7 +12,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 # Ensure we can import from the project
 project_root = Path(__file__).parent.parent
@@ -24,7 +23,7 @@ sys.path.insert(0, str(project_root))
 def _resolve_python_executable() -> str:
     """Return the preferred python interpreter for subprocess calls."""
 
-    def _candidate_from(venv_path: Path) -> Optional[Path]:
+    def _candidate_from(venv_path: Path) -> Path | None:
         if not venv_path.exists():
             return None
         bin_dir = "Scripts" if os.name == "nt" else "bin"
@@ -451,6 +450,7 @@ def run_quick_smoke_test():
             exit_time=now,
             size=fraction,
             pnl=expected_cash,
+            pnl_percent=pnl_pct,
             exit_reason="smoke_validation",
         )
 

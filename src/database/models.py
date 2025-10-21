@@ -179,6 +179,7 @@ class Position(Base):
     entry_price = Column(Numeric(18, 8), nullable=False)
     size = Column(Numeric(18, 8), nullable=False)
     quantity = Column(Numeric(18, 8))
+    entry_balance = Column(Numeric(18, 8))
     # Partial operations tracking
     original_size = Column(Numeric(18, 8))  # initial position size fraction
     current_size = Column(Numeric(18, 8))   # remaining size fraction

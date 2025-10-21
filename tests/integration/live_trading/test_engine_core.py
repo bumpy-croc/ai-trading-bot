@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 try:
     from live.trading_engine import LiveTradingEngine, Position, PositionSide
+    from src.performance.metrics import cash_pnl
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.strategies.components import (
         Signal,
@@ -72,6 +73,8 @@ except ImportError:
     MLBasicSignalGenerator = None
     FixedRiskManager = None
     ConfidenceWeightedSizer = None
+    def cash_pnl(pnl_pct, balance_before):
+        return float(pnl_pct) * float(balance_before)
 
 
 
@@ -201,8 +204,10 @@ class TestLiveTradingEngine:
         engine.positions["long_001"] = long_position
         if hasattr(engine, "_update_position_pnl"):
             engine._update_position_pnl(51000)
-            expected_long_pnl = (51000 - 50000) / 50000 * 0.1
+            sized_return = (51000 - 50000) / 50000 * 0.1
+            expected_long_pnl = cash_pnl(sized_return, engine.current_balance)
             assert long_position.unrealized_pnl == expected_long_pnl
+            assert long_position.unrealized_pnl_percent == pytest.approx(sized_return * 100.0)
 
     @pytest.mark.live_trading
     def test_maximum_position_limits(self, mock_strategy, mock_data_provider):
