@@ -1,6 +1,6 @@
 # Backtesting
 
-> **Last Updated**: 2025-10-17  
+> **Last Updated**: 2025-10-21  
 > **Related Documentation**: [Live trading](live_trading.md), [Data pipeline](data_pipeline.md)
 
 The vectorised backtesting engine in `src/backtesting/engine.py` replays historical candles, applies the strategy lifecycle, and
