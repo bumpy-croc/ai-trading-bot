@@ -197,7 +197,36 @@ class TestStrategyManager:
         assert position_size >= 0
         assert isinstance(metadata, dict)
         assert len(manager.execution_history) > 0
-    
+
+    def test_execute_strategy_passes_risk_context(self, sample_ohlcv_data):
+        """Risk managers receive contextual information for sizing."""
+
+        class CapturingRiskManager(FixedRiskManager):
+            def __init__(self) -> None:
+                super().__init__(risk_per_trade=0.02)
+                self.context: dict[str, object] | None = None
+
+            def calculate_position_size(self, signal, balance, regime=None, **context):  # type: ignore[override]
+                self.context = context
+                return super().calculate_position_size(signal, balance, regime, **context)
+
+        risk_manager = CapturingRiskManager()
+        manager = ComponentStrategyManager(
+            name="Context Manager",
+            signal_generator=HoldSignalGenerator(),
+            risk_manager=risk_manager,
+            position_sizer=FixedFractionSizer(fraction=0.05),
+        )
+
+        df = sample_ohlcv_data.head(50)
+        manager.execute_strategy(df, 10, 5000.0)
+
+        assert risk_manager.context is not None
+        assert risk_manager.context.get('df') is df
+        assert risk_manager.context.get('index') == 10
+        assert risk_manager.context.get('price') == pytest.approx(float(df['close'].iloc[10]))
+        assert 'indicators' in risk_manager.context
+
     def test_execute_strategy_nonexistent_version(self, manager):
         """Test executing strategy with non-existent version"""
         import pandas as pd

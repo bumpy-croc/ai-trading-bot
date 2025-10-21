@@ -94,15 +94,9 @@ def create_momentum_leverage_strategy(
         regime_detector=regime_detector,
     )
 
-    # Surface key parameters for compatibility with legacy engine hooks
+    # Expose configuration for test validation
     strategy.base_position_size = base_fraction
-    strategy.base_fraction = effective_base_fraction
-    strategy.min_position_size_ratio = min_position_size_ratio
-    strategy.max_position_size_ratio = max_position_size_ratio
-    strategy.stop_loss_pct = base_risk
     strategy.take_profit_pct = take_profit_pct
-    strategy.min_confidence = position_sizer.min_confidence
-    strategy.trading_pair = "BTCUSDT"
 
     # Restore aggressive runtime overrides consumed by backtesting/live engines
     strategy._risk_overrides = {

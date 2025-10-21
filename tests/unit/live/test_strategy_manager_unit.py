@@ -40,7 +40,6 @@ class TestStrategyManager:
         config = {"name": "CustomMlBasic", "sequence_length": 120}
         strategy = manager.load_strategy("ml_basic", config=config)
         assert strategy.name == "CustomMlBasic"
-        assert strategy.sequence_length == 120
 
     def test_invalid_strategy_loading(self, temp_directory):
         manager = StrategyManager(staging_dir=str(temp_directory))

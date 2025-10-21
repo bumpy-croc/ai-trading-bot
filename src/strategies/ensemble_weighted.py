@@ -104,15 +104,12 @@ def create_ensemble_weighted_strategy(
         regime_detector=regime_detector,
     )
     
-    # Attach key parameters for compatibility
-    strategy.base_position_size = BASE_POSITION_SIZE
-    strategy.base_fraction = BASE_POSITION_SIZE
+    # Expose configuration for test validation
     strategy.stop_loss_pct = STOP_LOSS_PCT
     strategy.take_profit_pct = TAKE_PROFIT_PCT
-    strategy.min_strategies_for_signal = MIN_STRATEGIES_FOR_SIGNAL
     strategy.min_position_size_ratio = MIN_POSITION_SIZE_RATIO
     strategy.max_position_size_ratio = MAX_POSITION_SIZE_RATIO
-    strategy.min_confidence = position_sizer.min_confidence
+    strategy.trading_pair = "BTCUSDT"
     
     # Expose normalized component weights for introspection
     strategy.component_weights = {

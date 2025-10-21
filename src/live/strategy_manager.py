@@ -345,19 +345,9 @@ class StrategyManager:
         """Apply model update"""
         try:
             strategy_name = update_data["strategy_name"]
-            new_model_path = update_data["new_model_path"]
 
-            # Update model path in current strategy
-            if hasattr(self.current_strategy, "_load_model"):
-                old_path = self.current_strategy.model_path
-                self.current_strategy.model_path = new_model_path
-                self.current_strategy._load_model()
-
-                logger.info(f"✅ Model updated for {strategy_name}: {old_path} → {new_model_path}")
-                return True
-            else:
-                logger.warning(f"Strategy {strategy_name} doesn't support model updates")
-                return False
+            logger.warning(f"Strategy {strategy_name} doesn't support model updates in component-based architecture")
+            return False
 
         except Exception as e:
             logger.error(f"Model update failed: {e}")

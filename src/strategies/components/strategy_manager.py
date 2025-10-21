@@ -213,7 +213,13 @@ class ComponentStrategyManager:
             signal = self.signal_generator.generate_signal(df, index, regime)
             
             # Calculate position size using risk manager
-            risk_position_size = self.risk_manager.calculate_position_size(signal, balance, regime)
+            risk_context = self._build_risk_context(df, index, signal)
+            risk_position_size = self.risk_manager.calculate_position_size(
+                signal,
+                balance,
+                regime,
+                **risk_context,
+            )
             
             # Allow position sizer to further adjust the risk manager's position size
             # Position sizer gets the risk manager's position as the "risk amount"
@@ -272,6 +278,57 @@ class ComponentStrategyManager:
                 metadata={'error': str(e)}
             )
             return safe_signal, 0.0, {'error': str(e)}
+
+    def _build_risk_context(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        signal: Signal,
+    ) -> dict[str, Any]:
+        """Build contextual kwargs for risk manager delegation."""
+
+        price = float(df['close'].iloc[index]) if 'close' in df.columns else 0.0
+        context: dict[str, Any] = {
+            'df': df,
+            'index': index,
+            'price': price,
+            'indicators': self._collect_indicator_snapshot(df, index, signal),
+        }
+
+        # Surface strategy overrides when exposed by composed Strategy instances.
+        overrides = getattr(self, 'risk_overrides', None)
+        if overrides is None:
+            overrides = getattr(self, '_risk_overrides', None)
+        if overrides is not None:
+            context['strategy_overrides'] = overrides
+
+        return context
+
+    def _collect_indicator_snapshot(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        signal: Signal,
+    ) -> dict[str, Any]:
+        """Return a dictionary of indicator values for the current row."""
+
+        try:
+            row = df.iloc[index]
+        except Exception:
+            return {}
+
+        snapshot: dict[str, Any] = {}
+        for column in df.columns:
+            try:
+                snapshot[column] = row[column]
+            except Exception:
+                continue
+
+        metadata = getattr(signal, 'metadata', None) or {}
+        if metadata:
+            snapshot.update({f"signal_{k}": v for k, v in metadata.items()})
+
+        return snapshot
     
     def create_version(
         self,
