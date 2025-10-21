@@ -1,6 +1,6 @@
 """add_strategy_management_tables
 
-Revision ID: 0002_add_strategy_management_tables
+Revision ID: 0002_add_strategy_management
 Revises: 0001_initial_schema
 Create Date: 2025-10-02 00:00:00.000000
 
@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers, used by Alembic.
-revision = '0002_add_strategy_management_tables'
+revision = '0002_add_strategy_management'
 down_revision = '0001_initial_schema'
 branch_labels = None
 depends_on = None
