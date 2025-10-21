@@ -13,6 +13,8 @@ Components:
 - Technical Signal Generators: Technical indicator-based signal generation components
 """
 
+# ruff: noqa: I001
+
 from .strategy import Strategy
 from .runtime import (
     FeatureGeneratorSpec,
@@ -31,12 +33,19 @@ from .risk_manager import (
     RiskManager, Position, MarketData,
     FixedRiskManager, VolatilityRiskManager, RegimeAdaptiveRiskManager
 )
+from .risk_adapter import CoreRiskAdapter
+from .policies import (
+    PolicyBundle,
+    PartialExitPolicyDescriptor,
+    TrailingStopPolicyDescriptor,
+    DynamicRiskDescriptor,
+)
 from .position_sizer import (
     PositionSizer, FixedFractionSizer, ConfidenceWeightedSizer,
     KellySizer, RegimeAdaptiveSizer
 )
 from .regime_context import RegimeContext, TrendLabel, VolLabel, EnhancedRegimeDetector
-from .strategy_manager import StrategyManager
+from .strategy_manager import ComponentStrategyManager
 from .strategy_factory import StrategyFactory, StrategyBuilder
 from .strategy_registry import StrategyRegistry, StrategyVersion
 from .performance_tracker import PerformanceTracker
@@ -75,7 +84,7 @@ __all__ = [
     "StrategyRuntime",
     
     # Management classes
-    "StrategyManager",
+    "ComponentStrategyManager",
     "StrategyFactory",
     "StrategyBuilder",
     "StrategyRegistry",
@@ -101,6 +110,11 @@ __all__ = [
     "FixedRiskManager",
     "VolatilityRiskManager",
     "RegimeAdaptiveRiskManager",
+    "CoreRiskAdapter",
+    "PolicyBundle",
+    "PartialExitPolicyDescriptor",
+    "TrailingStopPolicyDescriptor",
+    "DynamicRiskDescriptor",
     
     # Position sizers
     "FixedFractionSizer",

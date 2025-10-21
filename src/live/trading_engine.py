@@ -213,7 +213,26 @@ class LiveTradingEngine:
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
         self.risk_manager = RiskManager(risk_parameters)
-        
+
+        # Share the canonical risk manager with component strategies via the adapter.
+        if isinstance(self.strategy, ComponentStrategy):
+            component_risk = getattr(self.strategy, "risk_manager", None)
+            if hasattr(component_risk, "bind_core_manager"):
+                try:
+                    component_risk.bind_core_manager(self.risk_manager)
+                except Exception as bind_error:
+                    logger.debug("Failed to bind core risk manager to component: %s", bind_error)
+            if hasattr(component_risk, "set_strategy_overrides"):
+                overrides = getattr(self.strategy, "_risk_overrides", None)
+                if overrides:
+                    try:
+                        component_risk.set_strategy_overrides(overrides)
+                    except Exception as override_error:
+                        logger.debug(
+                            "Failed to propagate risk overrides to component manager: %s",
+                            override_error,
+                        )
+
         # Trailing stop policy
         self.trailing_stop_policy = trailing_stop_policy or self._build_trailing_policy()
         
@@ -579,6 +598,44 @@ class LiveTradingEngine:
         else:
             self._runtime = None
 
+    def _apply_policies_from_decision(self, decision) -> None:
+        """Hydrate engine-level policies from component strategy output."""
+
+        if decision is None:
+            return
+
+        bundle = getattr(decision, "policies", None)
+        if not bundle:
+            return
+
+        try:
+            partial_descriptor = getattr(bundle, "partial_exit", None)
+            if partial_descriptor is not None:
+                self.partial_manager = partial_descriptor.to_policy()
+        except Exception as exc:
+            logger.debug("Failed to hydrate partial-exit policy from component decision: %s", exc)
+
+        try:
+            trailing_descriptor = getattr(bundle, "trailing_stop", None)
+            if trailing_descriptor is not None:
+                self.trailing_stop_policy = trailing_descriptor.to_policy()
+        except Exception as exc:
+            logger.debug("Failed to hydrate trailing-stop policy from component decision: %s", exc)
+
+        try:
+            dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
+            if dynamic_descriptor is not None:
+                config = dynamic_descriptor.to_config()
+                if not getattr(self, "enable_dynamic_risk", False):
+                    self.enable_dynamic_risk = True
+                if self.db_manager is not None:
+                    self.dynamic_risk_manager = DynamicRiskManager(
+                        config=config,
+                        db_manager=self.db_manager,
+                    )
+        except Exception as exc:
+            logger.debug("Failed to hydrate dynamic risk manager from component decision: %s", exc)
+
     # Runtime integration helpers -------------------------------------------------
 
     def _is_runtime_strategy(self) -> bool:
@@ -662,6 +719,7 @@ class LiveTradingEngine:
         context = self._build_runtime_context(balance, current_price, current_time)
         try:
             decision = self._runtime.process(index, context)
+            self._apply_policies_from_decision(decision)
             return decision
         except Exception as exc:
             logger.warning("Runtime decision failed in live engine at index %s: %s", index, exc)
@@ -1671,7 +1729,8 @@ class LiveTradingEngine:
             # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper
             try:
                 decision = self.strategy.process_candle(df, current_index, self.current_balance, None)
-                
+                self._apply_policies_from_decision(decision)
+
                 notional_size = float(decision.position_size or 0.0)
                 balance = float(self.current_balance or 0.0)
                 size_fraction = 0.0 if balance <= 0 else max(0.0, notional_size / balance)

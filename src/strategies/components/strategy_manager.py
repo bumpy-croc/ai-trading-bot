@@ -1,8 +1,9 @@
 """
-Strategy Manager with Versioning
+Component Strategy Manager with Versioning
 
-This module defines the StrategyManager class that orchestrates the component-based
-strategy architecture with versioning capabilities for A/B testing and rollbacks.
+This module defines the ComponentStrategyManager class that orchestrates the
+component-based strategy architecture with versioning capabilities for A/B
+testing and rollbacks.
 """
 
 from __future__ import annotations
@@ -137,7 +138,7 @@ class StrategyExecution:
     version_id: str
 
 
-class StrategyManager:
+class ComponentStrategyManager:
     """
     Component-based strategy manager with versioning
     
@@ -164,7 +165,7 @@ class StrategyManager:
             regime_detector: Optional regime detection component
         """
         self.name = name
-        self.logger = logging.getLogger(f"StrategyManager.{name}")
+        self.logger = logging.getLogger(f"ComponentStrategyManager.{name}")
         
         # Core components
         self.signal_generator = signal_generator
@@ -520,7 +521,7 @@ class StrategyManager:
         version_id = self.create_version(
             name="Initial Version",
             description="Initial strategy configuration",
-            parameters={'created_by': 'StrategyManager'}
+            parameters={'created_by': 'ComponentStrategyManager'}
         )
         self.activate_version(version_id)
     
@@ -595,13 +596,13 @@ class StrategyManager:
             # Generate new ID to avoid conflicts
             version.version_id = str(uuid4())
             version.is_active = False
-            
+
             self.versions[version.version_id] = version
-            
+
             self.logger.info(f"Imported strategy version {version.name} ({version.version_id})")
-            
+
             return version.version_id
-            
+
         except Exception as e:
             self.logger.error(f"Failed to import version: {e}")
             return None

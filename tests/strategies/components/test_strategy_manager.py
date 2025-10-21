@@ -1,7 +1,7 @@
 """
 Tests for Strategy Manager with Versioning and Performance Tracking
 
-This module tests the StrategyManager implementation including strategy promotion,
+This module tests the ComponentStrategyManager implementation including strategy promotion,
 rollback capabilities, validation gates, and comprehensive management features.
 """
 
@@ -15,9 +15,9 @@ from src.strategies.components.risk_manager import FixedRiskManager
 from src.strategies.components.signal_generator import HoldSignalGenerator
 from src.strategies.components.strategy import Strategy
 from src.strategies.components.strategy_manager import (
+    ComponentStrategyManager,
     PromotionRequest,
     PromotionStatus,
-    StrategyManager,
     ValidationGate,
     ValidationResult,
 )
@@ -105,12 +105,12 @@ class TestPromotionRequest:
 
 
 class TestStrategyManager:
-    """Test StrategyManager functionality"""
-    
+    """Test ComponentStrategyManager functionality"""
+
     @pytest.fixture
     def manager(self):
         """Create a test strategy manager"""
-        return StrategyManager(
+        return ComponentStrategyManager(
             name="Test Manager",
             signal_generator=HoldSignalGenerator(),
             risk_manager=FixedRiskManager(risk_per_trade=0.02),
@@ -156,7 +156,7 @@ class TestStrategyManager:
     
     def test_manager_initialization(self, manager):
         """Test manager initialization"""
-        assert isinstance(manager, StrategyManager)
+        assert isinstance(manager, ComponentStrategyManager)
         assert len(manager.versions) == 1  # Initial version is created
         assert manager.current_version_id is not None
         assert len(manager.execution_history) == 0
@@ -358,8 +358,8 @@ class TestStrategyManager:
         assert version2 in comparison
         
         # Check that values are numeric (performance metrics)
-        assert isinstance(comparison[version1], (int, float))
-        assert isinstance(comparison[version2], (int, float))
+        assert isinstance(comparison[version1], int | float)
+        assert isinstance(comparison[version2], int | float)
     
     def test_compare_strategies_insufficient_data(self, manager):
         """Test comparing strategies with insufficient data"""
@@ -437,7 +437,7 @@ class TestStrategyManager:
         risk_manager = FixedRiskManager()
         position_sizer = FixedFractionSizer()
         
-        manager = StrategyManager(
+        manager = ComponentStrategyManager(
             name="TestManager",
             signal_generator=signal_generator,
             risk_manager=risk_manager,
