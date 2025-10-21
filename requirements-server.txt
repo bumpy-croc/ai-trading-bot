@@ -22,8 +22,11 @@ onnx==1.14.0
 
 # Web framework
 Flask==2.3.3
-Flask-SocketIO==5.3.6
 Flask-Admin==1.6.1
+Flask-Limiter==3.7.0
+Flask-Login==0.6.3
+Flask-SocketIO==5.3.6
+Flask-WTF==1.2.1
 gevent>=25.8.2
 gevent-websocket>=0.10.1
 

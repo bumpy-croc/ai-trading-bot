@@ -101,7 +101,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.api_key = api_key
             self.api_secret = api_secret
             self.testnet = testnet
+            self._client = None
             logger.info("Binance provider initialized in read-only mode (no credentials)")
+            self._initialize_client()
 
     @staticmethod
     def _validate_credentials(api_key: Optional[str], api_secret: Optional[str]) -> tuple[str, str]:
