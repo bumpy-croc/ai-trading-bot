@@ -22,11 +22,15 @@ class SensitiveDataFilter(logging.Filter):
 
     # Matches key=value or key: value pairs (case-insensitive) for common sensitive keys
     _KV_PATTERN = re.compile(
-        r"(?i)\b(api[_-]?key|api[_-]?secret|secret|token|password|pass|auth|bearer|session)[^=:\s]*\s*([=:])\s*([^\s,;]+)"
+        r"(?i)\b(api[_-]?key|api[_-]?secret|secret|token|password|pass|auth|bearer|session"
+        r"|refresh[_-]?token|access[_-]?token|hmac[_-]?secret|private[_-]?key|client[_-]?secret"
+        r"|signing[_-]?key|credential)[^=:\s]*\s*([=:])\s*([^\s,;]+)"
     )
     # Matches JSON-style "key": "value" for the same keys
     _JSON_PATTERN = re.compile(
-        r"(?i)\"(api[_-]?key|api[_-]?secret|secret|token|password|pass|auth|bearer|session)\"\s*:\s*\"([^\"]+)\""
+        r"(?i)\"(api[_-]?key|api[_-]?secret|secret|token|password|pass|auth|bearer|session"
+        r"|refresh[_-]?token|access[_-]?token|hmac[_-]?secret|private[_-]?key|client[_-]?secret"
+        r"|signing[_-]?key|credential)\"\s*:\s*\"([^\"]+)\""
     )
 
     _SENSITIVE_KEYS = {
@@ -41,6 +45,20 @@ class SensitiveDataFilter(logging.Filter):
         "auth",
         "bearer",
         "session",
+        "refresh_token",
+        "refresh-token",
+        "access_token",
+        "access-token",
+        "hmac_secret",
+        "hmac-secret",
+        "private_key",
+        "private-key",
+        "client_secret",
+        "client-secret",
+        "signing_key",
+        "signing-key",
+        "credential",
+        "credentials",
     }
 
     @classmethod

@@ -249,7 +249,23 @@ class DatabaseManager:
                 raise
 
     def _get_engine_config(self) -> dict[str, Any]:
-        """Get PostgreSQL engine configuration"""
+        """Get PostgreSQL engine configuration with SSL enforcement.
+        
+        SEC-005 Fix: Enforce SSL for database connections in production.
+        """
+        # Determine SSL mode based on environment
+        env = os.getenv("ENV", "development").lower()
+        db_ssl_mode = os.getenv("DATABASE_SSL_MODE")
+        
+        # Default based on environment
+        if db_ssl_mode:
+            ssl_mode = db_ssl_mode
+        elif env == "production":
+            ssl_mode = "require"  # Enforce SSL in production
+            logger.info("Database SSL mode: require (production)")
+        else:
+            ssl_mode = "prefer"  # Allow fallback in development
+            logger.info(f"Database SSL mode: {ssl_mode} ({env})")
 
         return {
             "poolclass": QueuePool,
@@ -259,7 +275,7 @@ class DatabaseManager:
             "pool_recycle": 3600,  # 1 hour
             "echo": False,  # Set to True for SQL debugging
             "connect_args": {
-                "sslmode": "prefer",
+                "sslmode": ssl_mode,
                 "connect_timeout": 10,
                 "application_name": "ai-trading-bot",
             },

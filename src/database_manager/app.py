@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from typing import Optional
 
 import sqlalchemy.exc
@@ -10,10 +11,13 @@ from flask import (  # type: ignore
     redirect,
     render_template_string,
     request,
+    session,
     url_for,
 )
 from flask_admin import Admin  # type: ignore
 from flask_admin.contrib.sqla import ModelView  # type: ignore
+from flask_limiter import Limiter  # type: ignore
+from flask_limiter.util import get_remote_address  # type: ignore
 from flask_login import (  # type: ignore
     LoginManager,
     UserMixin,
@@ -21,6 +25,7 @@ from flask_login import (  # type: ignore
     login_user,
     logout_user,
 )
+from flask_wtf.csrf import CSRFProtect  # type: ignore
 from sqlalchemy.orm import scoped_session  # type: ignore
 
 # Re-use existing database layer
@@ -57,6 +62,13 @@ class CustomModelView(ModelView):
 class AdminUser(UserMixin):
     def __init__(self, id):
         self.id = id
+
+
+# SEC-008: CSRF Protection
+csrf = CSRFProtect()
+
+# SEC-009: Rate Limiting
+limiter = Limiter(key_func=get_remote_address)
 
 
 def create_app() -> Flask:

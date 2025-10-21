@@ -67,9 +67,57 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             api_secret = api_secret or config.get("COINBASE_API_SECRET")
             passphrase = passphrase or config.get("COINBASE_API_PASSPHRASE")
 
+        # SEC-004 Fix: Validate credentials are properly formatted
+        api_key, api_secret, passphrase = self._validate_credentials(api_key, api_secret, passphrase)
+
         # Initialize ExchangeInterface (will handle _initialize_client)
         ExchangeInterface.__init__(self, api_key or "", api_secret or "", testnet)
         self.passphrase = passphrase
+
+    @staticmethod
+    def _validate_credentials(
+        api_key: Optional[str], api_secret: Optional[str], passphrase: Optional[str]
+    ) -> tuple[str, str, str]:
+        """
+        Validate and normalize Coinbase API credentials.
+        
+        SEC-004 Fix: Ensure credentials are properly formatted or explicitly missing.
+        
+        Args:
+            api_key: API key to validate
+            api_secret: API secret to validate
+            passphrase: API passphrase to validate
+            
+        Returns:
+            Tuple of (api_key, api_secret, passphrase) - empty strings if not provided
+            
+        Raises:
+            ValueError: If credentials are provided but malformed
+        """
+        # If all are missing/None, return empty strings for public mode
+        if not api_key and not api_secret and not passphrase:
+            return "", "", ""
+        
+        # If not all are provided together, that's an error
+        if not all([api_key, api_secret, passphrase]) and any([api_key, api_secret, passphrase]):
+            raise ValueError(
+                "Coinbase credentials must be provided together. "
+                "Either provide COINBASE_API_KEY, COINBASE_API_SECRET, and COINBASE_API_PASSPHRASE, or none."
+            )
+        
+        # Validate credential format (reasonable minimum length)
+        if api_key and len(str(api_key).strip()) < 20:
+            raise ValueError(f"Invalid COINBASE_API_KEY format (too short: {len(str(api_key))} chars)")
+        if api_secret and len(str(api_secret).strip()) < 20:
+            raise ValueError(f"Invalid COINBASE_API_SECRET format (too short: {len(str(api_secret))} chars)")
+        if passphrase and len(str(passphrase).strip()) < 5:
+            raise ValueError(f"Invalid COINBASE_API_PASSPHRASE format (too short: {len(str(passphrase))} chars)")
+        
+        return (
+            str(api_key).strip() if api_key else "",
+            str(api_secret).strip() if api_secret else "",
+            str(passphrase).strip() if passphrase else "",
+        )
 
     # ---------------------- ExchangeInterface ---------------------
     def _initialize_client(self):
