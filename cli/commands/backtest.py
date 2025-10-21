@@ -16,15 +16,15 @@ SRC_PATH = PROJECT_ROOT / "src"
 if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
-from src.utils.logging_config import configure_logging
-from src.utils.symbol_factory import SymbolFactory
 from src.strategies import (
+    create_ensemble_weighted_strategy,
+    create_ml_adaptive_strategy,
     create_ml_basic_strategy,
     create_ml_sentiment_strategy,
-    create_ml_adaptive_strategy,
-    create_ensemble_weighted_strategy,
     create_momentum_leverage_strategy,
 )
+from src.utils.logging_config import configure_logging
+from src.utils.symbol_factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")
 
@@ -78,9 +78,6 @@ def _handle(ns: argparse.Namespace) -> int:
 
         start_date, end_date = _get_date_range(ns)
         
-        # Check if regime-aware backtesting is requested
-        enable_regime_switching = hasattr(ns, 'regime_aware') and ns.regime_aware
-        
         strategy = _load_strategy(ns.strategy)
         logger.info(f"Loaded strategy: {strategy.name}")
 
@@ -124,20 +121,6 @@ def _handle(ns: argparse.Namespace) -> int:
         # Default to no database logging for performance, unless explicitly enabled
         enable_db_logging = ns.log_to_db
         
-        # Setup regime switching parameters if enabled
-        regime_config = None
-        strategy_mapping = None
-        switching_config = None
-        
-        if enable_regime_switching:
-            from src.live.regime_strategy_switcher import RegimeStrategyMapping, SwitchingConfig
-            from src.regime.detector import RegimeConfig
-            
-            regime_config = RegimeConfig()
-            strategy_mapping = RegimeStrategyMapping()
-            switching_config = SwitchingConfig()
-            logger.info("Regime-aware backtesting enabled")
-        
         backtester = Backtester(
             strategy=strategy,
             data_provider=data_provider,
@@ -145,10 +128,6 @@ def _handle(ns: argparse.Namespace) -> int:
             risk_parameters=risk_params,
             initial_balance=ns.initial_balance,
             log_to_database=enable_db_logging,
-            enable_regime_switching=enable_regime_switching,
-            regime_config=regime_config,
-            strategy_mapping=strategy_mapping,
-            switching_config=switching_config,
         )
 
         trading_symbol = (
@@ -161,26 +140,16 @@ def _handle(ns: argparse.Namespace) -> int:
             symbol=trading_symbol, timeframe=ns.timeframe, start=start_date, end=end_date
         )
 
-        # Display results based on whether regime switching was enabled
-        if enable_regime_switching:
-            print("\nRegime-Aware Backtest Results:")
-            print("=" * 60)
-            print(f"Initial Strategy: {strategy.name}")
-            print(f"Final Strategy: {results.get('final_strategy', 'N/A')}")
-            print(f"Total Strategy Switches: {results.get('total_strategy_switches', 0)}")
-        else:
-            print("\nBacktest Results:")
-            print("=" * 50)
-            print(f"Strategy: {strategy.name}")
-            
+        print("\nBacktest Results:")
+        print("=" * 50)
+        print(f"Strategy: {strategy.name}")
         print(f"Symbol: {trading_symbol}")
         print(f"Period: {start_date.date()} to {end_date.date()}")
         print(f"Timeframe: {ns.timeframe}")
         print(f"Using Sentiment: {ns.use_sentiment}")
         print(f"Using Cache: {not ns.no_cache}")
         print(f"Database Logging: {enable_db_logging}")
-        print(f"Regime Switching: {enable_regime_switching}")
-        print("-" * (60 if enable_regime_switching else 50))
+        print("-" * 50)
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
         print(f"Total Return: {results['total_return']:.2f}%")
@@ -190,16 +159,7 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Final Balance: ${results['final_balance']:.2f}")
         print(f"Hold Return: {results['hold_return']:.2f}%")
         print(f"Trading vs Hold: {results['trading_vs_hold_difference']:+.2f}%")
-        print("=" * (60 if enable_regime_switching else 50))
-
-        # Show strategy switches if any occurred
-        if enable_regime_switching and results.get('strategy_switches'):
-            print("\nStrategy Switches:")
-            print("-" * 60)
-            for switch in results['strategy_switches']:
-                print(f"{switch['timestamp']}: {switch['old_strategy']} -> {switch['new_strategy']} "
-                      f"(regime: {switch['regime']}, confidence: {switch['confidence']:.2f})")
-            print("=" * 60)
+        print("=" * 50)
 
         if enable_db_logging and results.get("session_id"):
             print(f"Database Session ID: {results['session_id']}")
@@ -316,10 +276,5 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=0.5,
         help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
-    )
-    p.add_argument(
-        "--regime-aware",
-        action="store_true",
-        help="Enable regime-aware backtesting with automatic strategy switching",
     )
     p.set_defaults(func=_handle)

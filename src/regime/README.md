@@ -83,8 +83,8 @@ print(df_enhanced.columns)
 
 ### Regime-Aware Backtesting
 ```bash
-# Enable regime-aware strategy switching in backtests
-atb backtest ml_basic --regime-aware --symbol BTCUSDT --days 365
+# Strategies handle regime awareness internally during backtests
+atb backtest ml_basic --symbol BTCUSDT --days 365
 ```
 
 ### Live Trading with Regime Switching
