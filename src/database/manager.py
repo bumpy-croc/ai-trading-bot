@@ -86,6 +86,17 @@ class DatabaseManager:
         # Create tables if they don't exist
         self._create_tables()
 
+    @staticmethod
+    def _to_optional_float(value: Any, default: float | None = None) -> float | None:
+        """Safely convert numeric-like values to floats when possible."""
+        if value is None:
+            return default
+
+        try:
+            return float(value)
+        except (TypeError, ValueError, InvalidOperation):
+            return default
+
     def _is_running_unit_tests(self) -> bool:
         """Determine whether the current pytest run executes unit tests.
 
@@ -1234,7 +1245,7 @@ class DatabaseManager:
                     "current_price": p.current_price,
                     "size": p.size,
                     "quantity": p.quantity,
-                    "entry_balance": float(p.entry_balance) if p.entry_balance is not None else None,
+                    "entry_balance": self._to_optional_float(getattr(p, "entry_balance", None)),
                     "unrealized_pnl": p.unrealized_pnl,
                     "unrealized_pnl_percent": p.unrealized_pnl_percent,
                     "stop_loss": p.stop_loss,
