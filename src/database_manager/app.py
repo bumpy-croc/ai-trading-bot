@@ -21,6 +21,7 @@ from flask_login import (  # type: ignore
     login_user,
     logout_user,
 )
+from werkzeug.security import check_password_hash, generate_password_hash  # type: ignore
 from sqlalchemy.orm import scoped_session  # type: ignore
 
 # Re-use existing database layer
@@ -28,6 +29,49 @@ from src.database.manager import DatabaseManager  # type: ignore
 from src.database.models import Base  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_secret_key() -> str:
+    """Ensure SECRET_KEY is set, exit if not in production.
+    
+    SEC-003 Fix: Consolidate SECRET_KEY handling for consistent security logic.
+    """
+    secret_key = os.environ.get("DB_MANAGER_SECRET_KEY")
+    if secret_key:
+        return secret_key
+    
+    # Allow fallback only in development
+    env = os.getenv("ENV", "development").lower()
+    if env in ("development", "test", "testing"):
+        logger.warning(
+            "⚠️  Using default SECRET_KEY - set DB_MANAGER_SECRET_KEY in production"
+        )
+        return "dev-key-change-in-production"
+    
+    logger.error("❌ DB_MANAGER_SECRET_KEY required in production environment")
+    raise SystemExit(1)
+
+
+def _get_admin_credentials() -> tuple[str, str]:
+    """Get and validate admin credentials from environment.
+    
+    SEC-001 Fix: Require DB_MANAGER_ADMIN_PASS environment variable (no fallback).
+    """
+    admin_username = os.environ.get("DB_MANAGER_ADMIN_USER")
+    admin_password = os.environ.get("DB_MANAGER_ADMIN_PASS")
+    
+    if not admin_username:
+        admin_username = "admin"
+        logger.info("Using default admin username: 'admin'")
+    
+    if not admin_password:
+        logger.error(
+            "❌ DB_MANAGER_ADMIN_PASS environment variable must be set. "
+            "Please set a strong password to secure the database manager."
+        )
+        raise SystemExit(1)
+    
+    return admin_username, admin_password
 
 
 class CustomModelView(ModelView):
@@ -69,11 +113,8 @@ def create_app() -> Flask:
     500 status to callers.
     """
 
-    # Enforce SECRET_KEY from env
-    secret_key = os.environ.get("DB_MANAGER_SECRET_KEY")
-    if not secret_key:
-        logger.error("❌ Environment variable 'DB_MANAGER_SECRET_KEY' is not set. Exiting.")
-        raise SystemExit(1)
+    # Consolidated SECRET_KEY handling (SEC-003 Fix)
+    app_secret_key = _ensure_secret_key()
 
     # Initialise database manager (re-uses existing connection settings)
     try:
@@ -85,9 +126,7 @@ def create_app() -> Flask:
             "❌ Failed to initialise DatabaseManager due to a database connection error: %s", exc
         )
         app = Flask(__name__)
-        from src.utils.secrets import get_secret_key
-
-        app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
+        app.config["SECRET_KEY"] = app_secret_key
 
         @app.route("/db_error")
         def db_error() -> tuple[dict[str, str], int]:
@@ -105,17 +144,19 @@ def create_app() -> Flask:
 
     # Create Flask app
     app = Flask(__name__)
-    from src.utils.secrets import get_secret_key
-
-    app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
+    app.config["SECRET_KEY"] = app_secret_key
 
     # --- Flask-Login setup for admin authentication ---
     login_manager = LoginManager()
     login_manager.init_app(app)
     login_manager.login_view = "login"
 
-    ADMIN_USERNAME = os.environ.get("DB_MANAGER_ADMIN_USER", "admin")
-    ADMIN_PASSWORD = os.environ.get("DB_MANAGER_ADMIN_PASS", "password")
+    # Get and validate admin credentials (SEC-001 Fix)
+    ADMIN_USERNAME, ADMIN_PASSWORD = _get_admin_credentials()
+    
+    # Hash password for secure storage (SEC-002 Fix)
+    ADMIN_PASSWORD_HASH = generate_password_hash(ADMIN_PASSWORD, method="pbkdf2:sha256")
+    logger.info(f"✅ Database manager admin authentication configured for user: {ADMIN_USERNAME}")
 
     @login_manager.user_loader
     def load_user(user_id):
@@ -128,10 +169,14 @@ def create_app() -> Flask:
         if request.method == "POST":
             username = request.form.get("username")
             password = request.form.get("password")
-            if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            # SEC-002 Fix: Use secure password hash comparison (timing-attack resistant)
+            if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
                 user = AdminUser(username)
                 login_user(user)
+                logger.info(f"✅ Admin login successful for user: {username}")
                 return redirect(request.args.get("next") or url_for("admin.index"))
+            
+            logger.warning(f"⚠️  Failed admin login attempt for user: {username}")
             return render_template_string(
                 """
                 <h3>Login Failed</h3>
