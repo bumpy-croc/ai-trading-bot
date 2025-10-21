@@ -308,6 +308,10 @@ class PolicyDrivenPositionSizer(PositionSizer):
 
         base_size = self.base_sizer.calculate_size(signal, adjusted_balance, risk_amount, regime)
 
+        # Respect the base sizer's intent to skip a trade before enforcing bounds.
+        if base_size == 0 or risk_amount <= 0:
+            return 0.0
+
         if adjustments:
             # Scale position size by dynamic factor and respect the reduced risk amount
             dynamic_factor = float(adjustments.position_size_factor)

@@ -12,6 +12,7 @@ from src.strategies.components.position_sizer import (
     FixedFractionSizer,
     PolicyDrivenPositionSizer,
     PositionManagementSuite,
+    PositionSizer,
 )
 
 
@@ -29,6 +30,20 @@ class DummySignal:
     @classmethod
     def long(cls, *, confidence: float = 1.0, strength: float = 1.0) -> DummySignal:
         return cls(direction=DummyDirection("buy"), confidence=confidence, strength=strength)
+
+
+class ZeroSizer(PositionSizer):
+    def __init__(self) -> None:
+        super().__init__("zero_sizer")
+
+    def calculate_size(
+        self,
+        signal: DummySignal,
+        balance: float,
+        risk_amount: float,
+        regime=None,
+    ) -> float:
+        return 0.0
 
 
 def test_policy_driven_sizer_applies_dynamic_risk_reduction():
@@ -49,6 +64,18 @@ def test_policy_driven_sizer_applies_dynamic_risk_reduction():
     assert adjusted_size < base_size
     assert sizer.last_adjustments is not None
     assert sizer.last_adjustments.position_size_factor < 1.0
+
+
+def test_policy_driven_sizer_respects_zero_base_size():
+    base = ZeroSizer()
+    suite = PositionManagementSuite.from_risk_parameters()
+    sizer = PolicyDrivenPositionSizer(base, suite)
+
+    signal = DummySignal.long()
+    balance = 1_000.0
+    risk_amount = 500.0
+
+    assert sizer.calculate_size(signal, balance, risk_amount) == 0.0
 
 
 def test_policy_driven_sizer_exposes_partial_and_scale_in_policies():
