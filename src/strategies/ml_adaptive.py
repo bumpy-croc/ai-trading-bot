@@ -85,14 +85,6 @@ def create_ml_adaptive_strategy(
         regime_detector=regime_detector,
     )
 
-    strategy.model_path = model_path
-    strategy.sequence_length = sequence_length
-    strategy.use_prediction_engine = use_prediction_engine
-    strategy.model_name = model_name
-    strategy.stop_loss_pct = 0.05  # regime manager adapts but expose baseline
-    strategy.risk_per_trade = 0.02
-    strategy.base_fraction = 0.2
-    strategy.min_confidence = 0.3
     strategy._risk_overrides = {
         "partial_operations": {
             "exit_targets": [0.03, 0.06, 0.10],
