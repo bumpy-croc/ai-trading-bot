@@ -65,7 +65,7 @@ class TestOrderLifecycle:
             position_id = position.id
 
         # * Create a PENDING entry order for this position
-        order_id = db_manager.create_order(
+        db_manager.create_order(
             position_id=position_id,
             order_type=OrderType.ENTRY,
             symbol="BTCUSDT",
@@ -183,7 +183,7 @@ class TestOrderLifecycle:
         )
 
         # Create a pending order for this position
-        order_id = db_manager.create_order(
+        db_manager.create_order(
             position_id=position_id,
             order_type=OrderType.PARTIAL_EXIT,
             symbol="BTCUSDT",
@@ -325,7 +325,7 @@ class TestOrderLifecycle:
         )
 
         # * Create a pending order for this position
-        order_id = db_manager.create_order(
+        db_manager.create_order(
             position_id=position_id,
             order_type=OrderType.PARTIAL_EXIT,
             symbol="BTCUSDT",

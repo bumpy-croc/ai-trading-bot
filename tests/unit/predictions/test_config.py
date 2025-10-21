@@ -69,7 +69,7 @@ class TestPredictionConfig:
             assert config.prediction_horizons == [1]
             assert config.min_confidence_threshold == 0.6
             assert config.max_prediction_latency == 0.1
-            assert config.model_registry_path == "src/ml"
+            assert config.model_registry_path == "src/ml/models"
             assert config.enable_sentiment is False
             assert config.enable_market_microstructure is False
             assert config.feature_cache_ttl == 3600
@@ -81,7 +81,7 @@ class TestPredictionConfig:
             prediction_horizons=[1, 5, 20],
             min_confidence_threshold=0.7,
             max_prediction_latency=0.1,
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
@@ -97,7 +97,7 @@ class TestPredictionConfig:
             prediction_horizons=[],  # Empty horizons
             min_confidence_threshold=0.7,
             max_prediction_latency=0.1,
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
@@ -113,7 +113,7 @@ class TestPredictionConfig:
             prediction_horizons=[1, -5, 20],  # Negative horizon
             min_confidence_threshold=0.7,
             max_prediction_latency=0.1,
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
@@ -130,7 +130,7 @@ class TestPredictionConfig:
             prediction_horizons=[1],
             min_confidence_threshold=1.5,  # > 1
             max_prediction_latency=0.1,
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
@@ -145,7 +145,7 @@ class TestPredictionConfig:
             prediction_horizons=[1],
             min_confidence_threshold=-0.1,  # < 0
             max_prediction_latency=0.1,
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
@@ -161,7 +161,7 @@ class TestPredictionConfig:
             prediction_horizons=[1],
             min_confidence_threshold=0.7,
             max_prediction_latency=-0.1,  # Negative latency
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
@@ -178,7 +178,7 @@ class TestPredictionConfig:
             prediction_horizons=[1],
             min_confidence_threshold=0.7,
             max_prediction_latency=0.1,
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=-300,  # Negative TTL
@@ -193,7 +193,7 @@ class TestPredictionConfig:
             prediction_horizons=[1],
             min_confidence_threshold=0.7,
             max_prediction_latency=0.1,
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=False,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,
@@ -209,7 +209,7 @@ class TestPredictionConfig:
             prediction_horizons=[1, 5],
             min_confidence_threshold=0.8,
             max_prediction_latency=0.05,
-            model_registry_path="src/ml",
+            model_registry_path="src/ml/models",
             enable_sentiment=True,
             enable_market_microstructure=False,
             feature_cache_ttl=3600,

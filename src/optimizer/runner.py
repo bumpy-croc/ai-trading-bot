@@ -14,7 +14,8 @@ from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
 from src.optimizer.schemas import ExperimentConfig, ExperimentResult
 from src.risk.risk_manager import RiskParameters
-from src.strategies.ml_basic import MlBasic
+from src.strategies.components import Strategy
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 
 class _FixtureProvider(DataProvider):
@@ -157,23 +158,87 @@ class ExperimentRunner:
             return CachedDataProvider(provider, cache_ttl_hours=cache_ttl_hours)
         return provider
 
-    def _load_strategy(self, strategy_name: str) -> MlBasic:
+    def _load_strategy(self, strategy_name: str) -> Strategy:
         if strategy_name == "ml_basic":
-            return MlBasic()
+            return create_ml_basic_strategy()
         raise ValueError(f"Unknown strategy: {strategy_name}")
 
-    def _apply_parameter_overrides(self, strategy: MlBasic, config: ExperimentConfig) -> None:
-        if config.parameters and config.parameters.values:
-            for key, value in config.parameters.values.items():
-                if key.startswith("MlBasic."):
-                    attr = key.split(".", 1)[1]
-                    if hasattr(strategy, attr):
-                        try:
-                            setattr(strategy, attr, value)
-                        except Exception as e:
-                            # Ignore invalid attribute assignments to keep runner robust
-                            self.logger.debug(f"Failed to set attribute {attr}={value}: {e}")
-                            pass
+    def _apply_parameter_overrides(self, strategy: Strategy, config: ExperimentConfig) -> None:
+        if not (config.parameters and config.parameters.values):
+            return
+
+        strategy_key = config.strategy_name.replace("_", "").lower()
+
+        for key, value in config.parameters.values.items():
+            if "." not in key:
+                continue
+
+            namespace, attr = key.split(".", 1)
+            if namespace.replace("_", "").lower() != strategy_key:
+                continue
+
+            if not self._apply_strategy_attribute(strategy, attr, value):
+                self.logger.debug(
+                    "Failed to apply override %s for strategy %s", key, config.strategy_name
+                )
+
+    def _apply_strategy_attribute(self, strategy: Strategy, attr: str, value: object) -> bool:
+        """Apply overrides to the correct component on a component-based strategy."""
+
+        component_targets: dict[str, list[Strategy | object | None]] = {
+            # Risk manager attributes
+            "stop_loss_pct": [strategy, getattr(strategy, "risk_manager", None)],
+            "risk_per_trade": [getattr(strategy, "risk_manager", None)],
+            # Position sizer attributes
+            "base_fraction": [getattr(strategy, "position_sizer", None)],
+            "min_confidence": [getattr(strategy, "position_sizer", None)],
+            # Signal generator attributes
+            "sequence_length": [getattr(strategy, "signal_generator", None)],
+            "model_path": [strategy, getattr(strategy, "signal_generator", None)],
+            "use_prediction_engine": [
+                strategy,
+                getattr(strategy, "signal_generator", None),
+            ],
+            "model_name": [strategy, getattr(strategy, "signal_generator", None)],
+            "model_type": [strategy, getattr(strategy, "signal_generator", None)],
+            "timeframe": [strategy, getattr(strategy, "signal_generator", None)],
+            # Strategy level attributes
+            "take_profit_pct": [strategy],
+        }
+
+        targets = component_targets.get(attr, [strategy])
+        applied = False
+
+        for target in targets:
+            if target is None or not hasattr(target, attr):
+                continue
+            try:
+                current = getattr(target, attr)
+                coerced = self._coerce_value(current, value)
+                setattr(target, attr, coerced)
+                applied = True
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self.logger.debug("Failed to set %s on %s: %s", attr, target, exc)
+
+        if applied and attr in {"stop_loss_pct", "take_profit_pct"}:
+            overrides = getattr(strategy, "_risk_overrides", None) or {}
+            overrides[attr] = getattr(strategy, attr, value)
+            strategy._risk_overrides = overrides
+
+        return applied
+
+    @staticmethod
+    def _coerce_value(current: object, new_value: object) -> object:
+        """Coerce overrides to the same type as the existing attribute when possible."""
+
+        if current is None:
+            return new_value
+
+        target_type = type(current)
+        try:
+            return target_type(new_value)
+        except Exception:
+            return new_value
 
     def run(self, config: ExperimentConfig) -> ExperimentResult:
         strategy = self._load_strategy(config.strategy_name)

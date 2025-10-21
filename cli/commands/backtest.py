@@ -16,6 +16,13 @@ SRC_PATH = PROJECT_ROOT / "src"
 if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
+from src.strategies import (
+    create_ensemble_weighted_strategy,
+    create_ml_adaptive_strategy,
+    create_ml_basic_strategy,
+    create_ml_sentiment_strategy,
+    create_momentum_leverage_strategy,
+)
 from src.utils.logging_config import configure_logging
 from src.utils.symbol_factory import SymbolFactory
 
@@ -23,21 +30,22 @@ logger = logging.getLogger("atb.backtest")
 
 
 def _load_strategy(strategy_name: str):
+    # Define available strategies with their import paths and classes
+    available_strategies = {
+        "ml_basic": create_ml_basic_strategy,
+        "ml_sentiment": create_ml_sentiment_strategy,
+        "ml_adaptive": create_ml_adaptive_strategy,
+        "ensemble_weighted": create_ensemble_weighted_strategy,
+        "momentum_leverage": create_momentum_leverage_strategy,
+    }
+    
     try:
-        if strategy_name == "ml_basic":
-            from src.strategies.ml_basic import MlBasic
-
-            return MlBasic()
-        if strategy_name == "bear":
-            from src.strategies.bear import BearStrategy
-
-            return BearStrategy()
-        if strategy_name == "bull":
-            from src.strategies.bull import Bull
-
-            return Bull()
+        builder = available_strategies.get(strategy_name)
+        if builder is not None:
+            return builder()
+        
         print(f"Unknown strategy: {strategy_name}")
-        print("Available strategies: ml_basic, bear, bull")
+        print(f"Available strategies: {', '.join(available_strategies.keys())}")
         raise SystemExit(1)
     except Exception as exc:
         logger.error(f"Error loading strategy: {exc}")
@@ -69,6 +77,7 @@ def _handle(ns: argparse.Namespace) -> int:
         configure_logging()
 
         start_date, end_date = _get_date_range(ns)
+        
         strategy = _load_strategy(ns.strategy)
         logger.info(f"Loaded strategy: {strategy.name}")
 
@@ -87,8 +96,12 @@ def _handle(ns: argparse.Namespace) -> int:
         else:
             from src.data_providers.cached_data_provider import CachedDataProvider
 
-            data_provider = CachedDataProvider(provider, cache_ttl_hours=ns.cache_ttl)
-            logger.info(f"Using cached data provider (TTL: {ns.cache_ttl} hours)")
+            # Determine appropriate cache TTL based on provider state
+            from src.utils.cache_utils import get_cache_ttl_for_provider
+            
+            cache_ttl = get_cache_ttl_for_provider(provider, ns.cache_ttl)
+            data_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)
+            logger.info(f"Using cached data provider (TTL: {cache_ttl} hours)")
             cache_info = data_provider.get_cache_info()
             logger.info(
                 f"Cache info: {cache_info['total_files']} files, {cache_info['total_size_mb']} MB"
@@ -105,14 +118,16 @@ def _handle(ns: argparse.Namespace) -> int:
             max_drawdown=ns.max_drawdown,
         )
 
+        # Default to no database logging for performance, unless explicitly enabled
+        enable_db_logging = ns.log_to_db
+        
         backtester = Backtester(
             strategy=strategy,
             data_provider=data_provider,
             sentiment_provider=sentiment_provider,
             risk_parameters=risk_params,
             initial_balance=ns.initial_balance,
-            enable_short_trading=ns.enable_short_trading,
-            log_to_database=not ns.no_db,
+            log_to_database=enable_db_logging,
         )
 
         trading_symbol = (
@@ -133,7 +148,7 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Timeframe: {ns.timeframe}")
         print(f"Using Sentiment: {ns.use_sentiment}")
         print(f"Using Cache: {not ns.no_cache}")
-        print(f"Database Logging: {not ns.no_db}")
+        print(f"Database Logging: {enable_db_logging}")
         print("-" * 50)
         print(f"Total Trades: {results['total_trades']}")
         print(f"Win Rate: {results['win_rate']:.2f}%")
@@ -142,9 +157,11 @@ def _handle(ns: argparse.Namespace) -> int:
         print(f"Max Drawdown: {results['max_drawdown']:.2f}%")
         print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
         print(f"Final Balance: ${results['final_balance']:.2f}")
+        print(f"Hold Return: {results['hold_return']:.2f}%")
+        print(f"Trading vs Hold: {results['trading_vs_hold_difference']:+.2f}%")
         print("=" * 50)
 
-        if not ns.no_db and results.get("session_id"):
+        if enable_db_logging and results.get("session_id"):
             print(f"Database Session ID: {results['session_id']}")
             print("=" * 50)
 
@@ -184,7 +201,7 @@ def _handle(ns: argparse.Namespace) -> int:
                         "initial_balance": ns.initial_balance,
                         "use_sentiment": ns.use_sentiment,
                         "use_cache": not ns.no_cache,
-                        "database_logging": not ns.no_db,
+                        "database_logging": enable_db_logging,
                         "results": results,
                     },
                     _f,
@@ -223,44 +240,41 @@ def _handle(ns: argparse.Namespace) -> int:
         return 1
 
 
+
+
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("backtest", help="Run strategy backtest")
-    p.add_argument("strategy", help="Strategy name (e.g., ml_basic)")
+    p.add_argument("strategy", help="Strategy name - e.g., ml_basic")
     p.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol")
     p.add_argument("--timeframe", default="1h", help="Candle timeframe")
     p.add_argument("--days", type=int, default=30, help="Number of days to backtest")
-    p.add_argument("--start", help="Start date (YYYY-MM-DD)")
-    p.add_argument("--end", help="End date (YYYY-MM-DD)")
+    p.add_argument("--start", help="Start date - YYYY-MM-DD")
+    p.add_argument("--end", help="End date - YYYY-MM-DD")
     from src.config.constants import DEFAULT_INITIAL_BALANCE
 
     p.add_argument(
         "--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
     )
-    p.add_argument("--risk-per-trade", type=float, default=0.01, help="Risk per trade (1% = 0.01)")
+    p.add_argument("--risk-per-trade", type=float, default=0.01, help="Risk per trade - 1 percent equals 0.01")
     p.add_argument("--max-risk-per-trade", type=float, default=0.02, help="Maximum risk per trade")
     p.add_argument(
         "--use-sentiment", action="store_true", help="Use sentiment analysis in backtest"
     )
     p.add_argument("--no-cache", action="store_true", help="Disable data caching")
-    p.add_argument("--cache-ttl", type=int, default=24, help="Cache TTL in hours (default: 24)")
+    p.add_argument("--cache-ttl", type=int, default=24, help="Cache TTL in hours - default: 24")
     p.add_argument(
-        "--no-db", action="store_true", help="Disable database logging for this backtest"
+        "--log-to-db", action="store_true", help="Enable database logging for this backtest - slower but provides detailed logs"
     )
     p.add_argument(
         "--provider",
         choices=["coinbase", "binance"],
         default="binance",
-        help="Exchange provider to use (default: binance)",
-    )
-    p.add_argument(
-        "--enable-short-trading",
-        action="store_true",
-        help="Enable short entries (recommended for bear strategy)",
+        help="Exchange provider to use - default: binance",
     )
     p.add_argument(
         "--max-drawdown",
         type=float,
         default=0.5,
-        help="Maximum drawdown before stopping (default: 0.5 = 50%)",
+        help="Maximum drawdown before stopping - default: 0.5 (50 percent)",
     )
     p.set_defaults(func=_handle)

@@ -16,6 +16,7 @@ class Trade:
     exit_time: datetime
     size: float  # fraction of balance (0-1)
     pnl: float
+    pnl_percent: float
     exit_reason: str
     stop_loss: float | None = None
     take_profit: float | None = None

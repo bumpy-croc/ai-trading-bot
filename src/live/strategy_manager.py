@@ -4,28 +4,19 @@ import shutil
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
-from src.strategies.base import BaseStrategy
-from src.strategies.bull import Bull
-from src.strategies.ml_basic import MlBasic
+from src.strategies.components import Strategy
+from src.strategies.versioning import StrategyVersionRecord
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class StrategyVersion:
-    """Represents a version of a strategy"""
-
-    strategy_name: str
-    version: str
-    timestamp: datetime
-    model_path: Optional[str] = None
-    config: Optional[dict] = None
-    performance_metrics: Optional[dict] = None
+# Backwards compatibility alias so existing imports continue to work.
+StrategyVersion = StrategyVersionRecord
 
 
 class StrategyManager:
@@ -44,7 +35,7 @@ class StrategyManager:
         self,
         strategies_dir: str = "strategies",
         models_dir: str = "src/ml",
-        staging_dir: Optional[str] = None,
+        staging_dir: str | None = None,
     ):
         self.strategies_dir = Path(strategies_dir)
         self.models_dir = Path(models_dir)
@@ -58,68 +49,115 @@ class StrategyManager:
         # Create staging directory for safe updates in /tmp
         self.staging_dir.mkdir(exist_ok=True, parents=True)
 
-        # Current active strategy
-        self.current_strategy: Optional[BaseStrategy] = None
-        self.current_version: Optional[StrategyVersion] = None
+        # Current active strategy (component-based)
+        self.current_strategy: Strategy | None = None
+        self.current_version: StrategyVersion | None = None
 
-        # Strategy registry
-        self.strategy_registry = {
-            "ml_basic": MlBasic,
-            "bull": Bull,
-        }
+        # Strategy registry with factory functions
+        self.strategy_registry = {}
+            
+        # Register strategy factory functions
         try:
-            from src.strategies.bear import BearStrategy
-
-            self.strategy_registry["bear"] = BearStrategy
+            from src.strategies.ml_basic import create_ml_basic_strategy
+            self.strategy_registry["ml_basic"] = create_ml_basic_strategy
         except Exception as e:
-            logger.debug(f"Bear strategy not available: {e}")
+            logger.debug(f"ML Basic strategy not available: {e}")
+            
+        try:
+            from src.strategies.ml_adaptive import create_ml_adaptive_strategy
+            self.strategy_registry["ml_adaptive"] = create_ml_adaptive_strategy
+        except Exception as e:
+            logger.debug(f"ML Adaptive strategy not available: {e}")
+            
+        try:
+            from src.strategies.ensemble_weighted import create_ensemble_weighted_strategy
+            self.strategy_registry["ensemble_weighted"] = create_ensemble_weighted_strategy
+        except Exception as e:
+            logger.debug(f"Ensemble Weighted strategy not available: {e}")
+            
+        try:
+            from src.strategies.momentum_leverage import create_momentum_leverage_strategy
+            self.strategy_registry["momentum_leverage"] = create_momentum_leverage_strategy
+        except Exception as e:
+            logger.debug(f"Momentum Leverage strategy not available: {e}")
+            
+        try:
+            from src.strategies.ml_sentiment import create_ml_sentiment_strategy
+            self.strategy_registry["ml_sentiment"] = create_ml_sentiment_strategy
+        except Exception as e:
+            logger.debug(f"ML Sentiment strategy not available: {e}")
 
         # Version history
         self.version_history: dict[str, StrategyVersion] = {}
 
         # Threading for safe updates
         self.update_lock = threading.RLock()
-        self.pending_update: Optional[dict] = None
+        self.pending_update: dict[str, Any] | None = None
 
         # Callbacks for live trading engine
-        self.on_strategy_change: Optional[Callable] = None
-        self.on_model_update: Optional[Callable] = None
+        self.on_strategy_change: Callable[[dict[str, Any]], None] | None = None
+        self.on_model_update: Callable[[dict[str, Any]], None] | None = None
 
         logger.info("StrategyManager initialized")
 
+    @staticmethod
+    def _display_name(strategy: Strategy | None) -> str:
+        """Return a human readable name for a strategy instance."""
+
+        if strategy is None:
+            return "None"
+
+        return getattr(strategy, "name", strategy.__class__.__name__)
+
+    def _instantiate_strategy(
+        self, strategy_name: str, version: str, config: dict[str, Any] | None = None
+    ) -> tuple[Strategy, StrategyVersionRecord]:
+        """Create a strategy instance and version record without mutating state.
+        
+        Uses factory functions to create component-based Strategy instances.
+        """
+
+        if strategy_name not in self.strategy_registry:
+            raise ValueError(f"Unknown strategy: {strategy_name}")
+
+        factory_function = self.strategy_registry[strategy_name]
+
+        # Call factory function with config
+        if config:
+            strategy = factory_function(**config)
+        else:
+            strategy = factory_function()
+
+        version_id = f"{strategy_name}_{version}"
+        strategy_version = StrategyVersionRecord(
+            version_id=version_id,
+            strategy_name=strategy_name,
+            version=version,
+            created_at=datetime.now(),
+            config=config,
+        )
+
+        return strategy, strategy_version
+
     def load_strategy(
-        self, strategy_name: str, version: str = "latest", config: Optional[dict] = None
-    ) -> BaseStrategy:
-        """Load a strategy with version control"""
+        self, strategy_name: str, version: str = "latest", config: dict[str, Any] | None = None
+    ) -> Strategy:
+        """Load a strategy with version control.
+        
+        Uses factory functions to create component-based Strategy instances.
+        """
 
         with self.update_lock:
             try:
-                # Load strategy class
-                if strategy_name not in self.strategy_registry:
-                    raise ValueError(f"Unknown strategy: {strategy_name}")
-
-                strategy_class = self.strategy_registry[strategy_name]
-
-                # Create strategy instance with config
-                if config:
-                    strategy = strategy_class(**config)
-                else:
-                    strategy = strategy_class()
-
-                # Create version record
-                strategy_version = StrategyVersion(
-                    strategy_name=strategy_name,
-                    version=version,
-                    timestamp=datetime.now(),
-                    config=config,
+                strategy, strategy_version = self._instantiate_strategy(
+                    strategy_name, version, config
                 )
 
-                # Set as current
                 self.current_strategy = strategy
                 self.current_version = strategy_version
-                self.version_history[f"{strategy_name}_{version}"] = strategy_version
+                self.version_history[strategy_version.version_id] = strategy_version
 
-                logger.info(f"Loaded strategy: {strategy_name} v{version}")
+                logger.info(f"Loaded component-based strategy: {strategy_name} v{version}")
                 return strategy
 
             except Exception as e:
@@ -129,7 +167,7 @@ class StrategyManager:
     def hot_swap_strategy(
         self,
         new_strategy_name: str,
-        new_config: Optional[dict] = None,
+        new_config: dict[str, Any] | None = None,
         close_existing_positions: bool = False,
     ) -> bool:
         """
@@ -153,16 +191,19 @@ class StrategyManager:
 
                 logger.info(f"🔄 Starting hot-swap to strategy: {new_strategy_name}")
 
-                # Load new strategy in staging
+                # Load new strategy in staging without mutating current state
                 old_strategy = self.current_strategy
                 new_version = f"{int(time.time())}"
 
-                new_strategy = self.load_strategy(new_strategy_name, new_version, new_config)
+                new_strategy, staged_version = self._instantiate_strategy(
+                    new_strategy_name, new_version, new_config
+                )
 
                 # Prepare swap data
                 swap_data = {
                     "old_strategy": old_strategy,
                     "new_strategy": new_strategy,
+                    "new_version": staged_version,
                     "close_positions": close_existing_positions,
                     "timestamp": datetime.now(),
                 }
@@ -174,7 +215,10 @@ class StrategyManager:
                 if self.on_strategy_change:
                     self.on_strategy_change(swap_data)
 
-                logger.info(f"✅ Hot-swap prepared: {old_strategy.name} → {new_strategy.name}")
+                logger.info(
+                    f"✅ Hot-swap prepared: {self._display_name(old_strategy)} "
+                    f"→ {self._display_name(new_strategy)}"
+                )
                 return True
 
             except Exception as e:
@@ -278,11 +322,19 @@ class StrategyManager:
         try:
             old_strategy = swap_data["old_strategy"]
             new_strategy = swap_data["new_strategy"]
+            new_version = swap_data.get("new_version")
 
             # Update current strategy
             self.current_strategy = new_strategy
 
-            logger.info(f"✅ Strategy swapped: {old_strategy.name} → {new_strategy.name}")
+            if isinstance(new_version, StrategyVersionRecord):
+                self.current_version = new_version
+                self.version_history[new_version.version_id] = new_version
+
+            logger.info(
+                f"✅ Strategy swapped: {self._display_name(old_strategy)} "
+                f"→ {self._display_name(new_strategy)}"
+            )
             return True
 
         except Exception as e:
@@ -353,7 +405,7 @@ class StrategyManager:
                 k: {
                     "name": v.strategy_name,
                     "version": v.version,
-                    "timestamp": v.timestamp.isoformat(),
+                    "timestamp": v.created_at.isoformat(),
                 }
                 for k, v in self.version_history.items()
             },
@@ -363,6 +415,6 @@ class StrategyManager:
         """Check if there's a pending update"""
         return self.pending_update is not None
 
-    def get_pending_update_info(self) -> Optional[dict]:
+    def get_pending_update_info(self) -> dict[str, Any] | None:
         """Get information about pending update"""
         return self.pending_update

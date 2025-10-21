@@ -15,7 +15,8 @@ from src.backtesting.engine import Backtester
 from src.live.strategy_manager import StrategyManager
 from src.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskManager, RiskParameters
-from src.strategies.ml_basic import MlBasic
+from src.strategies.components import SignalDirection
+from src.strategies.ml_basic import create_ml_basic_strategy
 
 pytestmark = pytest.mark.integration
 
@@ -27,7 +28,7 @@ class TestEndToEndWorkflows:
     def test_complete_backtesting_workflow(self, mock_data_provider, sample_ohlcv_data):
         """Test complete backtesting from start to finish"""
         # Setup
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy(fast_mode=True)
         risk_params = RiskParameters()
         backtester = Backtester(
             strategy=strategy,
@@ -66,12 +67,12 @@ class TestEndToEndWorkflows:
     def test_strategy_to_live_trading_workflow(self, mock_data_provider, temp_directory):
         """Test strategy development to live trading deployment"""
         # 1. Strategy Development Phase
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy(fast_mode=True)
 
-        # Verify strategy has required methods
-        assert hasattr(strategy, "calculate_indicators")
-        assert hasattr(strategy, "check_entry_conditions")
-        assert hasattr(strategy, "check_exit_conditions")
+        # Verify strategy has required component-based interface
+        assert hasattr(strategy, "process_candle")
+        assert hasattr(strategy, "should_exit_position")
+        assert hasattr(strategy, "get_stop_loss_price")
 
         # 2. Backtesting Phase
         backtester = Backtester(
@@ -109,7 +110,7 @@ class TestEndToEndWorkflows:
     def test_data_flow_integration(self, mock_data_provider):
         """Test data flow from provider through strategy to trading decisions"""
         # Setup components
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy(fast_mode=True)
         engine = LiveTradingEngine(
             strategy=strategy,
             data_provider=mock_data_provider,
@@ -135,16 +136,15 @@ class TestEndToEndWorkflows:
         latest_data = engine._get_latest_data("BTCUSDT", "1h")
         assert latest_data is not None
 
-        # 2. Indicator calculation
-        df_with_indicators = strategy.calculate_indicators(market_data)
-        assert len(df_with_indicators.columns) > len(market_data.columns)
-
-        # 3. Signal generation
-        if len(df_with_indicators) > 1:
-            entry_signal = strategy.check_entry_conditions(
-                df_with_indicators, len(df_with_indicators) - 1
-            )
-            assert isinstance(entry_signal, bool)
+        # 2. Strategy decision pipeline via component interface
+        decision = strategy.process_candle(market_data, len(market_data) - 1, balance=10000.0)
+        assert decision.signal.direction in {
+            SignalDirection.BUY,
+            SignalDirection.SELL,
+            SignalDirection.HOLD,
+        }
+        assert decision.position_size >= 0.0
+        assert isinstance(decision.metadata, dict)
 
     @pytest.mark.live_trading
     def test_hot_swapping_integration(self, mock_data_provider, temp_directory):
@@ -192,7 +192,7 @@ class TestEndToEndWorkflows:
             max_daily_risk=0.05,  # 5% daily risk
         )
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         risk_manager = RiskManager(risk_params)
 
         LiveTradingEngine(
@@ -231,7 +231,7 @@ class TestComponentInteractions:
 
     def test_strategy_data_provider_interaction(self, mock_data_provider):
         """Test strategy working with different data providers"""
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
 
         # Test with mock provider
         market_data = pd.DataFrame(
@@ -247,18 +247,20 @@ class TestComponentInteractions:
 
         mock_data_provider.get_historical_data.return_value = market_data
 
-        # Strategy should process data successfully
-        df_with_indicators = strategy.calculate_indicators(market_data)
-        assert len(df_with_indicators) == len(market_data)
+        fetched_data = mock_data_provider.get_historical_data("BTCUSDT", "1h")
+        assert fetched_data.equals(market_data)
 
-        # Strategy should generate signals
-        if len(df_with_indicators) > 1:
-            signal = strategy.check_entry_conditions(df_with_indicators, 1)
-            assert isinstance(signal, bool)
+        decision = strategy.process_candle(fetched_data, len(fetched_data) - 1, balance=10000.0)
+        assert decision.signal.direction in {
+            SignalDirection.BUY,
+            SignalDirection.SELL,
+            SignalDirection.HOLD,
+        }
+        assert decision.position_size >= 0.0
 
     def test_backtester_strategy_integration(self, mock_data_provider, sample_ohlcv_data):
         """Test backtester working with different strategies"""
-        strategies = [MlBasic()]
+        strategies = [create_ml_basic_strategy()]
         for strategy in strategies:
             backtester = Backtester(
                 strategy=strategy, data_provider=mock_data_provider, initial_balance=10000
@@ -276,7 +278,7 @@ class TestComponentInteractions:
     def test_live_engine_component_integration(self, mock_data_provider):
         """Test live engine integrating all components"""
         # Setup all components
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         risk_params = RiskParameters()
 
         engine = LiveTradingEngine(
@@ -319,7 +321,7 @@ class TestRealTimeScenarios:
 
     def test_market_volatility_scenario(self, mock_data_provider):
         """Test system behavior during high volatility"""
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
         )
@@ -355,7 +357,7 @@ class TestRealTimeScenarios:
 
     def test_network_interruption_scenario(self, mock_data_provider):
         """Test system behavior during network issues"""
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         engine = LiveTradingEngine(
             strategy=strategy,
             data_provider=mock_data_provider,
@@ -395,7 +397,7 @@ class TestRealTimeScenarios:
 
     def test_memory_usage_during_extended_operation(self, mock_data_provider):
         """Test memory usage during extended operation"""
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
         )
@@ -459,7 +461,7 @@ class TestProductionReadiness:
 
     def test_graceful_shutdown_sequence(self, mock_data_provider):
         """Test graceful shutdown of all components"""
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy()
         engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
         )
@@ -507,7 +509,7 @@ class TestProductionReadiness:
         """Test that logging works correctly across components"""
         import logging
 
-        strategy = MlBasic()
+        strategy = create_ml_basic_strategy(fast_mode=True)
         engine = LiveTradingEngine(
             strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
         )

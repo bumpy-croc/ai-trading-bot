@@ -9,45 +9,37 @@ import pandas as pd
 from src.backtesting.engine import Backtester
 from src.live.trading_engine import LiveTradingEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig
-from src.strategies.base import BaseStrategy
+from src.strategies.components import (
+    Strategy,
+    MLBasicSignalGenerator,
+    FixedRiskManager,
+    ConfidenceWeightedSizer,
+)
 
 
-class MockStrategyForOverrides(BaseStrategy):
-    """Test strategy with dynamic risk overrides - not collected by pytest"""
+def create_mock_strategy_with_overrides(name="test_strategy", overrides=None):
+    """Create a mock strategy with risk overrides for testing"""
+    signal_generator = MLBasicSignalGenerator()
+    risk_manager = FixedRiskManager()
+    position_sizer = ConfidenceWeightedSizer()
     
-    def __init__(self, name="test_strategy", overrides=None):
-        super().__init__(name)
-        self._overrides = overrides or {}
-
-    def generate_signal(self, df, current_index, indicators=None):
-        return 0, {}
-
-    def calculate_indicators(self, df):
-        """Required abstract method implementation"""
-        return df
-
-    def check_entry_conditions(self, df: pd.DataFrame, index: int) -> bool:
-        """Check if entry conditions are met at the given index"""
-        return False
-
-    def check_exit_conditions(self, df: pd.DataFrame, index: int, entry_price: float) -> bool:
-        """Check if exit conditions are met at the given index"""
-        return False
-
-    def calculate_position_size(self, df: pd.DataFrame, index: int, balance: float) -> float:
-        """Calculate the position size for a new trade"""
-        return 0.0
-
-    def calculate_stop_loss(self, df: pd.DataFrame, index: int, price: float, side: str = "long") -> float:
-        """Calculate stop loss level for a position"""
-        return price * 0.95 if side == "long" else price * 1.05
-
-    def get_parameters(self) -> dict:
-        """Return strategy parameters for logging"""
-        return {"test_strategy": True}
-
-    def get_risk_overrides(self):
-        return self._overrides
+    strategy = Strategy(
+        name=name,
+        signal_generator=signal_generator,
+        risk_manager=risk_manager,
+        position_sizer=position_sizer,
+    )
+    
+    # Attach risk overrides
+    strategy._risk_overrides = overrides or {}
+    
+    # Add get_risk_overrides method
+    def get_risk_overrides():
+        return strategy._risk_overrides
+    
+    strategy.get_risk_overrides = get_risk_overrides
+    
+    return strategy
 
 
 class TestStrategyOverrides:
@@ -67,7 +59,7 @@ class TestStrategyOverrides:
             }
         }
         
-        strategy = MockStrategyForOverrides("aggressive_strategy", overrides)
+        strategy = create_mock_strategy_with_overrides("aggressive_strategy", overrides)
         
         # Test the override method
         risk_overrides = strategy.get_risk_overrides()
@@ -88,7 +80,7 @@ class TestStrategyOverrides:
                 'performance_window_days': 20
             }
         }
-        strategy = MockStrategyForOverrides("test_strategy", overrides)
+        strategy = create_mock_strategy_with_overrides("test_strategy", overrides)
         
         # Create base config
         base_config = DynamicRiskConfig(
@@ -122,7 +114,7 @@ class TestStrategyOverrides:
                 'high_volatility_threshold': 0.04  # Higher threshold
             }
         }
-        strategy = MockStrategyForOverrides("conservative_strategy", overrides)
+        strategy = create_mock_strategy_with_overrides("conservative_strategy", overrides)
         
         # Create base config
         base_config = DynamicRiskConfig(
@@ -152,7 +144,7 @@ class TestStrategyOverrides:
             'position_sizer': 'fixed_fraction',
             'base_fraction': 0.03
         }
-        strategy = MockStrategyForOverrides("normal_strategy", overrides)
+        strategy = create_mock_strategy_with_overrides("normal_strategy", overrides)
         
         base_config = DynamicRiskConfig()
         
@@ -169,7 +161,7 @@ class TestStrategyOverrides:
 
     def test_strategy_empty_risk_overrides(self):
         """Test strategy with empty risk overrides"""
-        strategy = MockStrategyForOverrides("empty_strategy", {})
+        strategy = create_mock_strategy_with_overrides("empty_strategy", {})
         
         base_config = DynamicRiskConfig(
             drawdown_thresholds=[0.05, 0.10],
@@ -196,7 +188,7 @@ class TestStrategyOverrides:
                 'invalid_field': True  # Unknown field
             }
         }
-        strategy = MockStrategyForOverrides("invalid_strategy", overrides)
+        strategy = create_mock_strategy_with_overrides("invalid_strategy", overrides)
         
         base_config = DynamicRiskConfig()
         
@@ -222,7 +214,7 @@ class TestStrategyOverrides:
                 'recovery_thresholds': [0.02]
             }
         }
-        MockStrategyForOverrides("validated_strategy", overrides)
+        create_mock_strategy_with_overrides("validated_strategy", overrides)
         
         # Extract the dynamic risk config
         dynamic_overrides = overrides['dynamic_risk']
@@ -257,7 +249,7 @@ class TestStrategyOverrides:
             }
         }
         
-        strategy = MockStrategyForOverrides("advanced_strategy", overrides)
+        strategy = create_mock_strategy_with_overrides("advanced_strategy", overrides)
         
         # Verify all overrides are accessible
         risk_config = strategy.get_risk_overrides()['dynamic_risk']
@@ -276,7 +268,7 @@ class TestStrategyOverrides:
                 'enabled': False
             }
         }
-        strategy = MockStrategyForOverrides("no_dynamic_risk_strategy", overrides)
+        strategy = create_mock_strategy_with_overrides("no_dynamic_risk_strategy", overrides)
         
         base_config = DynamicRiskConfig(enabled=True)  # Base has it enabled
         

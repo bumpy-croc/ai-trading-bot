@@ -4,6 +4,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
 
 class TrendLabel(str, Enum):
@@ -48,41 +49,89 @@ class RegimeDetector:
 
     @staticmethod
     def _rolling_ols_slope_and_r2(x: pd.Series, window: int) -> tuple[pd.Series, pd.Series]:
-        # Compute rolling OLS slope and R^2 for y = log(price) vs time index
-        y = np.log(x.clip(lower=1e-8))
-        idx = np.arange(len(y))
-        df = pd.DataFrame({"y": y.values, "t": idx}, index=y.index)
+        """Compute rolling OLS slope and R^2 for log-price vs time using vectorized sums."""
 
-        # Rolling OLS helper
-        def _ols(block: pd.DataFrame):
-            t = block["t"].values.astype(float)
-            yb = block["y"].values.astype(float)
-            t_mean = t.mean()
-            y_mean = yb.mean()
-            tt = t - t_mean
-            yy = yb - y_mean
-            denom = (tt**2).sum()
-            if denom == 0:
-                return pd.Series([np.nan, np.nan])
-            slope = (tt * yy).sum() / denom
-            y_hat = y_mean + slope * tt
-            ss_tot = (yy**2).sum()
-            ss_res = ((yb - y_hat) ** 2).sum()
-            r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
-            return pd.Series([slope, r2])
+        y = np.log(x.clip(lower=1e-8).astype(float))
+        n = len(y)
+        slopes = np.full(n, np.nan, dtype=float)
+        r2s = np.full(n, np.nan, dtype=float)
+        if window <= 0 or n == 0:
+            return pd.Series(slopes, index=x.index), pd.Series(r2s, index=x.index)
 
-        # Compute using a simple sliding window to avoid DataFrame.rolling apply quirks
-        slopes = []
-        r2s = []
-        for i in range(len(df)):
-            if i + 1 < window:
-                slopes.append(np.nan)
-                r2s.append(np.nan)
-                continue
-            block = df.iloc[i + 1 - window : i + 1]
-            vals = _ols(block)
-            slopes.append(vals.iloc[0])
-            r2s.append(vals.iloc[1])
+        if window > n:
+            return pd.Series(slopes, index=y.index), pd.Series(r2s, index=y.index)
+
+        t = np.arange(n, dtype=float)
+        y_vals = y.to_numpy(dtype=float)
+
+        # Prefix cumulative sums to efficiently compute rolling window sums
+        # Use nancumsum to avoid NaN propagation - windows without NaN will still be valid
+        def _nancumsum_with_zero(arr: np.ndarray) -> np.ndarray:
+            out = np.empty(arr.size + 1, dtype=float)
+            out[0] = 0.0
+            np.nancumsum(arr, out=out[1:])
+            return out
+
+        csum_t = _nancumsum_with_zero(t)
+        csum_y = _nancumsum_with_zero(y_vals)
+        csum_tt = _nancumsum_with_zero(t * t)
+        csum_yy = _nancumsum_with_zero(y_vals * y_vals)
+        csum_ty = _nancumsum_with_zero(t * y_vals)
+
+        # Track which windows contain NaN values to invalidate them
+        nan_mask = np.isnan(y_vals)
+        csum_nan_count = _nancumsum_with_zero(nan_mask.astype(float))
+
+        # Rolling window sums (length n - window + 1)
+        window_slice = slice(window, None)
+        sum_t = csum_t[window_slice] - csum_t[:-window]
+        sum_y = csum_y[window_slice] - csum_y[:-window]
+        sum_tt = csum_tt[window_slice] - csum_tt[:-window]
+        sum_yy = csum_yy[window_slice] - csum_yy[:-window]
+        sum_ty = csum_ty[window_slice] - csum_ty[:-window]
+
+        # Count of NaN values in each rolling window
+        nan_count_in_window = csum_nan_count[window_slice] - csum_nan_count[:-window]
+        windows_with_nan = nan_count_in_window > 0
+
+        window_float = float(window)
+        cov_ty = window_float * sum_ty - sum_t * sum_y
+        var_t = window_float * sum_tt - sum_t * sum_t
+        var_y_raw = window_float * sum_yy - sum_y * sum_y
+
+        # Guard against catastrophic cancellation in variance calculation
+        # For large windows, the subtraction can produce small negative numbers
+        # due to floating-point precision issues, even when variance should be positive
+        var_y = np.maximum(var_y_raw, 0.0)
+
+        # Detect cases where cancellation likely occurred (small negative values)
+        # These should be treated as effectively zero variance
+        cancellation_threshold = 1e-12 * window_float * np.maximum(np.abs(sum_yy), 1.0)
+        likely_cancellation = (var_y_raw < 0) & (np.abs(var_y_raw) <= cancellation_threshold)
+
+        # Valid slope calculation requires non-zero variance and no NaN in window
+        valid_slope = (var_t > 0) & (~windows_with_nan)
+        slope_vals = np.full_like(sum_ty, np.nan, dtype=float)
+        slope_vals[valid_slope] = cov_ty[valid_slope] / var_t[valid_slope]
+
+        # Valid R² calculation requires valid slope and non-zero y variance
+        # For backward compatibility, when var_y is very small (effectively zero),
+        # we set R² to 0 instead of NaN to match the naive implementation behavior
+        var_y_threshold = 1e-9  # Threshold for numerical precision
+        valid_r2 = valid_slope & (var_y > var_y_threshold) & (~likely_cancellation)
+        near_zero_var_y = valid_slope & ((var_y <= var_y_threshold) | likely_cancellation)
+
+        r2_vals = np.full_like(sum_ty, np.nan, dtype=float)
+        r2_vals[valid_r2] = (cov_ty[valid_r2] ** 2) / (var_t[valid_r2] * var_y[valid_r2])
+        r2_vals[valid_r2] = np.clip(r2_vals[valid_r2], 0.0, 1.0)
+
+        # Set R² to 0 for cases where var_y is effectively zero (constant y values)
+        r2_vals[near_zero_var_y] = 0.0
+
+        start_idx = window - 1
+        slopes[start_idx:] = slope_vals
+        r2s[start_idx:] = r2_vals
+
         return pd.Series(slopes, index=y.index), pd.Series(r2s, index=y.index)
 
     @staticmethod
@@ -112,13 +161,44 @@ class RegimeDetector:
 
     @staticmethod
     def _percentile_rank(series: pd.Series, lookback: int) -> pd.Series:
-        def rank_last(window: pd.Series) -> float:
-            if window.isna().any():
+        """Optimized percentile rank calculation"""
+        def rank_last(window: pd.Series | np.ndarray) -> float:
+            arr = np.asarray(window)
+            if np.isnan(arr).any():
                 return np.nan
-            last = window.iloc[-1]
-            return (window <= last).mean()
+            last = arr[-1]
+            return np.mean(arr <= last)
 
-        return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False)
+        # Fast path: vectorised percentile rank using sliding window view
+        values = series.to_numpy()
+        n = len(values)
+        if lookback <= 0 or n == 0 or n < lookback:
+            return pd.Series(np.nan, index=series.index, dtype=float)
+
+        try:
+            windows = sliding_window_view(values, lookback)
+            last_vals = windows[:, -1]
+            nan_mask = np.isnan(windows).any(axis=1) | np.isnan(last_vals)
+            ranks = np.where(
+                nan_mask,
+                np.nan,
+                (windows <= last_vals[:, None]).mean(axis=1),
+            )
+            result = np.full(n, np.nan, dtype=float)
+            result[lookback - 1 :] = ranks
+            return pd.Series(result, index=series.index, dtype=float)
+        except Exception:
+            # Fall back to rolling apply paths when sliding window is unavailable (e.g., older numpy)
+            pass
+
+        # Use engine='numba' for better performance if available
+        try:
+            return series.rolling(window=lookback, min_periods=lookback).apply(
+                rank_last, raw=True, engine='numba'
+            )
+        except Exception:
+            # Fallback to default engine
+            return series.rolling(window=lookback, min_periods=lookback).apply(rank_last, raw=False)
 
     def annotate(self, df: pd.DataFrame) -> pd.DataFrame:
         cfg = self.config

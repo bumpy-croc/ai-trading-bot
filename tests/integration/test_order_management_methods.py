@@ -83,7 +83,7 @@ class TestOrderManagementMethods:
         orders = db_manager.get_orders_for_position(test_position["position_id"])
         created_order = next(o for o in orders if o["id"] == order_id)
         assert created_order["order_type"] == "PARTIAL_EXIT"
-        assert created_order["side"] == "short"  # Enum values are lowercase in database
+        assert created_order["side"] == "SHORT"  # Enum values are uppercase in database
         assert created_order["target_level"] == 1
         assert created_order["size_fraction"] == 0.5
 

@@ -59,7 +59,7 @@ class TestPositionEntryOrder:
         assert entry_order["order_type"] == "ENTRY"
         assert entry_order["status"] == "FILLED"
         assert entry_order["symbol"] == "BTCUSDT"
-        assert entry_order["side"] == "long"
+        assert entry_order["side"] == "LONG"
         assert entry_order["quantity"] == 0.001
         assert entry_order["price"] == 50000.0
         assert entry_order["filled_quantity"] == 0.001
@@ -115,12 +115,12 @@ class TestPositionEntryOrder:
         
         # * Check LONG position entry order
         long_orders = db_manager.get_orders_for_position(long_position_id)
-        assert long_orders[0]["side"] == "long"
+        assert long_orders[0]["side"] == "LONG"
         assert long_orders[0]["price"] == 50000.0
         
         # * Check SHORT position entry order
         short_orders = db_manager.get_orders_for_position(short_position_id)
-        assert short_orders[0]["side"] == "short"
+        assert short_orders[0]["side"] == "SHORT"
         assert short_orders[0]["price"] == 49000.0
 
     def test_entry_order_failure_doesnt_break_position_creation(self, db_manager, test_session):
@@ -206,7 +206,7 @@ class TestPositionEntryOrder:
         
         # * Verify all inherited details
         assert entry_order["symbol"] == "ADAUSDT"
-        assert entry_order["side"] == "long"
+        assert entry_order["side"] == "LONG"
         assert entry_order["quantity"] == 2857.14
         assert entry_order["price"] == 0.35
         assert entry_order["filled_price"] == 0.35

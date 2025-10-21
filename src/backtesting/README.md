@@ -1,5 +1,8 @@
 # Backtesting Engine
 
+> **Last Updated**: 2025-10-21  
+> **Related Documentation**: See [docs/backtesting.md](../../docs/backtesting.md) for comprehensive guide
+
 Vectorized historical simulation engine for evaluating strategies.
 
 ## Highlights
@@ -14,7 +17,7 @@ atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90
 
 ## Programmatic
 ```python
-from backtesting.engine import Backtester
+from src.backtesting.engine import Backtester
 
 results = Backtester(...).run(symbol="BTCUSDT", timeframe="1h", start=..., end=...)
 print(results["session_id"])  # if logging enabled

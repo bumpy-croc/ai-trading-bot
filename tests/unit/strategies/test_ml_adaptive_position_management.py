@@ -1,99 +1,115 @@
 """
-Unit tests for MlAdaptive strategy position management integration.
+Unit tests for MlAdaptive strategy - Component-Based Implementation
 """
 
-from src.strategies.ml_adaptive import MlAdaptive
+from types import MethodType
+
+from src.strategies.components import SignalDirection, Strategy
+from src.strategies.ml_adaptive import create_ml_adaptive_strategy
 
 
-class TestMlAdaptivePositionManagement:
-    """Test position management features integration in MlAdaptive strategy."""
+def _process_with_fixture(strategy, sample_ohlcv_data, balance=10000.0):
+    """Run the adaptive strategy with adequate historical context for sequence models."""
+    index = strategy.signal_generator.sequence_length + 10
+    assert len(sample_ohlcv_data) > index, "sample_ohlcv_data must provide enough candles for ML tests"
+    strategy.signal_generator._get_ml_prediction = MethodType(
+        lambda self, df, idx: float(df["close"].iloc[idx - 1] * 1.01),
+        strategy.signal_generator,
+    )
+    return strategy.process_candle(sample_ohlcv_data, index=index, balance=balance)
 
-    def test_risk_overrides_include_all_position_management_features(self):
-        """Test that MlAdaptive includes all position management features in risk overrides."""
-        strategy = MlAdaptive()
-        overrides = strategy.get_risk_overrides()
-        
-        # Verify all position management features are present
-        assert overrides is not None
-        assert "dynamic_risk" in overrides
-        assert "partial_operations" in overrides
-        assert "trailing_stop" in overrides
-        assert "time_exits" in overrides
 
-    def test_dynamic_risk_configuration(self):
-        """Test dynamic risk configuration is properly set."""
-        strategy = MlAdaptive()
-        overrides = strategy.get_risk_overrides()
-        dynamic_risk = overrides["dynamic_risk"]
-        
-        # Verify dynamic risk is enabled
-        assert dynamic_risk["enabled"] is True
-        
-        # Verify drawdown thresholds
-        assert dynamic_risk["drawdown_thresholds"] == [0.05, 0.10, 0.15]
-        assert dynamic_risk["risk_reduction_factors"] == [0.8, 0.6, 0.4]
-        
-        # Verify recovery thresholds
-        assert dynamic_risk["recovery_thresholds"] == [0.02, 0.05]
-        
-        # Verify volatility settings
-        assert dynamic_risk["volatility_adjustment_enabled"] is True
-        assert dynamic_risk["high_volatility_threshold"] == 0.03
-        assert dynamic_risk["low_volatility_threshold"] == 0.01
-        assert dynamic_risk["volatility_risk_multipliers"] == (0.7, 1.3)
+class TestMlAdaptiveStrategy:
+    """Test ML Adaptive strategy component-based implementation."""
 
-    def test_partial_operations_configuration(self):
-        """Test partial operations configuration is properly set."""
-        strategy = MlAdaptive()
-        overrides = strategy.get_risk_overrides()
-        partial_ops = overrides["partial_operations"]
+    def test_create_ml_adaptive_strategy_factory(self):
+        """Test that create_ml_adaptive_strategy() factory function works"""
+        strategy = create_ml_adaptive_strategy()
         
-        # Verify exit targets and sizes
-        assert partial_ops["exit_targets"] == [0.03, 0.06, 0.10]
-        assert partial_ops["exit_sizes"] == [0.25, 0.25, 0.50]
-        
-        # Verify scale-in configuration
-        assert partial_ops["scale_in_thresholds"] == [0.02, 0.05]
-        assert partial_ops["scale_in_sizes"] == [0.25, 0.25]
-        assert partial_ops["max_scale_ins"] == 2
-
-    def test_trailing_stop_configuration(self):
-        """Test trailing stop configuration is properly set."""
-        strategy = MlAdaptive()
-        overrides = strategy.get_risk_overrides()
-        trailing_stop = overrides["trailing_stop"]
-        
-        # Verify trailing stop settings
-        assert trailing_stop["activation_threshold"] == 0.015
-        assert trailing_stop["trailing_distance_pct"] == 0.005
-        assert trailing_stop["breakeven_threshold"] == 0.02
-        assert trailing_stop["breakeven_buffer"] == 0.001
-
-    def test_time_exits_configuration(self):
-        """Test time-based exits configuration is properly set for crypto trading."""
-        strategy = MlAdaptive()
-        overrides = strategy.get_risk_overrides()
-        time_exits = overrides["time_exits"]
-        
-        # Verify crypto-appropriate time exit settings
-        assert time_exits["max_holding_hours"] == 24
-        assert time_exits["end_of_day_flat"] is False
-        assert time_exits["weekend_flat"] is False
-        assert time_exits["time_restrictions"]["no_overnight"] is False
-        assert time_exits["time_restrictions"]["trading_hours_only"] is False
-        assert time_exits["market_timezone"] == "UTC"
-
-    def test_strategy_initialization_with_position_management(self):
-        """Test that MlAdaptive initializes correctly with position management features."""
-        strategy = MlAdaptive()
-        
-        # Verify basic strategy properties
+        assert isinstance(strategy, Strategy)
         assert strategy.name == "MlAdaptive"
-        assert strategy.trading_pair == "BTCUSDT"
+        assert strategy.signal_generator is not None
+        assert strategy.risk_manager is not None
+        assert strategy.position_sizer is not None
+        assert strategy.regime_detector is not None
+
+    def test_ml_adaptive_strategy_initialization(self):
+        """Test ML Adaptive strategy initialization with custom parameters"""
+        strategy = create_ml_adaptive_strategy(
+            name="CustomMlAdaptive",
+            sequence_length=100,
+        )
         
-        # Verify position management doesn't interfere with core functionality
-        assert hasattr(strategy, "calculate_indicators")
-        assert hasattr(strategy, "check_entry_conditions")
-        assert hasattr(strategy, "check_exit_conditions")
-        assert hasattr(strategy, "calculate_position_size")
-        assert hasattr(strategy, "get_risk_overrides")
+        assert strategy.name == "CustomMlAdaptive"
+        assert strategy.signal_generator.sequence_length == 100
+
+    def test_ml_adaptive_process_candle_returns_valid_decision(self, sample_ohlcv_data):
+        """Test that process_candle() returns valid TradingDecision"""
+        strategy = create_ml_adaptive_strategy()
+        balance = 10000.0
+        
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
+        
+        # Validate TradingDecision structure
+        assert decision is not None
+        assert hasattr(decision, 'signal')
+        assert hasattr(decision, 'position_size')
+        assert hasattr(decision, 'regime')
+        assert hasattr(decision, 'risk_metrics')
+        assert hasattr(decision, 'metadata')
+        
+        # Validate signal
+        assert decision.signal.direction in [SignalDirection.BUY, SignalDirection.SELL, SignalDirection.HOLD]
+        assert 0 <= decision.signal.confidence <= 1
+        
+        # Validate position size
+        assert decision.position_size >= 0
+        assert decision.position_size <= balance
+
+    def test_ml_adaptive_regime_aware_behavior(self, sample_ohlcv_data):
+        """Test that ML Adaptive strategy is regime-aware"""
+        strategy = create_ml_adaptive_strategy()
+        balance = 10000.0
+        
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
+        
+        # Regime context should be present with trend/volatility annotations
+        assert decision.regime is not None
+        assert hasattr(decision.regime, 'trend')
+        assert hasattr(decision.regime, 'volatility')
+
+    def test_ml_adaptive_signal_generation(self, sample_ohlcv_data):
+        """Test ML Adaptive signal generation logic"""
+        strategy = create_ml_adaptive_strategy()
+        balance = 10000.0
+        
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
+        
+        # Signal should have confidence and strength
+        assert hasattr(decision.signal, 'confidence')
+        assert hasattr(decision.signal, 'strength')
+        assert decision.signal.confidence >= 0
+        assert decision.signal.confidence <= 1
+
+    def test_ml_adaptive_risk_management(self, sample_ohlcv_data):
+        """Test ML Adaptive regime-adaptive risk management"""
+        strategy = create_ml_adaptive_strategy()
+        balance = 10000.0
+        
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
+        
+        # Risk metrics should be present
+        assert decision.risk_metrics is not None
+        assert isinstance(decision.risk_metrics, dict)
+
+    def test_ml_adaptive_position_sizing(self, sample_ohlcv_data):
+        """Test ML Adaptive position sizing"""
+        strategy = create_ml_adaptive_strategy()
+        balance = 10000.0
+        
+        decision = _process_with_fixture(strategy, sample_ohlcv_data, balance)
+        
+        # Position size should be reasonable
+        if decision.signal.direction != SignalDirection.HOLD:
+            assert decision.position_size > 0
+            assert decision.position_size <= balance * 0.5  # Should not exceed 50% of balance

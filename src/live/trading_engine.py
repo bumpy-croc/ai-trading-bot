@@ -41,7 +41,7 @@ from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
 from src.live.strategy_manager import StrategyManager
-from src.performance.metrics import Side, pnl_percent
+from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
@@ -50,7 +50,10 @@ from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
 from src.risk.risk_manager import RiskManager, RiskParameters
-from src.strategies.base import BaseStrategy
+from src.strategies.components import MarketData as ComponentMarketData
+from src.strategies.components import Position as ComponentPosition
+from src.strategies.components import RuntimeContext, Signal, SignalDirection, StrategyRuntime
+from src.strategies.components import Strategy as ComponentStrategy
 from src.utils.logging_context import set_context, update_context
 from src.utils.logging_events import (
     log_data_event,
@@ -86,9 +89,11 @@ class Position:
     size: float
     entry_price: float
     entry_time: datetime
+    entry_balance: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
     unrealized_pnl: float = 0.0
+    unrealized_pnl_percent: float = 0.0
     order_id: str | None = None
     # Partial operations runtime state
     original_size: float | None = None
@@ -112,7 +117,8 @@ class Trade:
     entry_time: datetime
     exit_price: float | None = None
     exit_time: datetime | None = None
-    pnl: float | None = None
+    pnl: float | None = None  # Realized PnL in account currency
+    pnl_percent: float | None = None  # Sized percentage return (decimal, e.g. 0.02 = +2%)
     exit_reason: str | None = None
 
 
@@ -151,7 +157,7 @@ class LiveTradingEngine:
 
     def __init__(
         self,
-        strategy: BaseStrategy,
+        strategy: ComponentStrategy | StrategyRuntime,
         data_provider: DataProvider,
         sentiment_provider: SentimentDataProvider | None = None,
         risk_parameters: RiskParameters | None = None,
@@ -201,7 +207,9 @@ class LiveTradingEngine:
         if account_snapshot_interval < 0:
             raise ValueError("Account snapshot interval must be non-negative")
 
-        self.strategy = strategy
+        self._runtime_dataset = None
+        self._runtime_warmup = 0
+        self._configure_strategy(strategy)
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
         self.risk_manager = RiskManager(risk_parameters)
@@ -238,7 +246,11 @@ class LiveTradingEngine:
             self.partial_manager = partial_manager
         elif enable_partial_operations:
             # Check strategy overrides first, then fall back to risk parameters
-            strategy_overrides = self.strategy.get_risk_overrides()
+            strategy_overrides = (
+                self.strategy.get_risk_overrides()
+                if hasattr(self.strategy, "get_risk_overrides")
+                else None
+            )
             if strategy_overrides and 'partial_operations' in strategy_overrides:
                 partial_config = strategy_overrides['partial_operations']
                 self.partial_manager = PartialExitPolicy(
@@ -336,14 +348,27 @@ class LiveTradingEngine:
         # Initialize strategy manager for hot-swapping
         self.strategy_manager = None
         if enable_hot_swapping:
-            self.strategy_manager = StrategyManager()
-            self.strategy_manager.current_strategy = strategy
-            self.strategy_manager.on_strategy_change = self._handle_strategy_change
-            self.strategy_manager.on_model_update = self._handle_model_update
+            managed_strategy = (
+                strategy.strategy if isinstance(strategy, StrategyRuntime) else strategy
+            )
+            # Support component-based Strategy
+            if isinstance(managed_strategy, ComponentStrategy):
+                self.strategy_manager = StrategyManager()
+                self.strategy_manager.current_strategy = managed_strategy
+                self.strategy_manager.on_strategy_change = self._handle_strategy_change
+                self.strategy_manager.on_model_update = self._handle_model_update
+                logger.info(
+                    f"Hot swapping enabled for {managed_strategy.__class__.__name__}"
+                )
+            else:
+                logger.info(
+                    "Hot swapping disabled: provided strategy does not implement Strategy"
+                )
 
         # Set up strategy logging if database is available
         if self.db_manager:
-            self.strategy.set_database_manager(self.db_manager)
+            if hasattr(self.strategy, "set_database_manager"):
+                self.strategy.set_database_manager(self.db_manager)
 
         # Trading state
         self.is_running = False
@@ -425,7 +450,11 @@ class LiveTradingEngine:
         """Merge strategy risk overrides with base dynamic risk configuration"""
         try:
             # Get strategy risk overrides
-            strategy_overrides = self.strategy.get_risk_overrides() if self.strategy else None
+            strategy_overrides = (
+                self.strategy.get_risk_overrides()
+                if self.strategy and hasattr(self.strategy, "get_risk_overrides")
+                else None
+            )
             if not strategy_overrides or 'dynamic_risk' not in strategy_overrides:
                 return base_config
                 
@@ -445,7 +474,7 @@ class LiveTradingEngine:
                 volatility_risk_multipliers=dynamic_overrides.get('volatility_risk_multipliers', base_config.volatility_risk_multipliers)
             )
             
-            logger.info(f"Merged strategy dynamic risk overrides from {self.strategy.__class__.__name__}")
+            logger.info(f"Merged strategy dynamic risk overrides from {self._strategy_name()}")
             return merged_config
             
         except Exception as e:
@@ -509,7 +538,7 @@ class LiveTradingEngine:
         """Get risk parameters with dynamic adjustments applied"""
         if not self.dynamic_risk_manager:
             return self.risk_manager.params
-            
+
         try:
             # Calculate dynamic risk adjustments
             adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
@@ -517,18 +546,202 @@ class LiveTradingEngine:
                 peak_balance=self.peak_balance,
                 session_id=self.trading_session_id
             )
-            
+
             # Apply adjustments to risk parameters
             adjusted_params = self.dynamic_risk_manager.apply_risk_adjustments(
                 self.risk_manager.params,
                 adjustments
             )
-            
+
             return adjusted_params
-            
+
         except Exception as e:
             logger.warning(f"Failed to get dynamic risk adjusted parameters: {e}")
             return self.risk_manager.params
+
+    def _configure_strategy(
+        self, strategy: ComponentStrategy | StrategyRuntime
+    ) -> None:
+        """Normalise strategy inputs and configure runtime bookkeeping."""
+
+        runtime = strategy if isinstance(strategy, StrategyRuntime) else None
+        base_strategy = runtime.strategy if runtime is not None else strategy
+
+        self.strategy = base_strategy
+        self._component_strategy = (
+            base_strategy if isinstance(base_strategy, ComponentStrategy) else None
+        )
+
+        if runtime is not None:
+            self._runtime = runtime
+        elif self._component_strategy is not None:
+            self._runtime = StrategyRuntime(self._component_strategy)
+        else:
+            self._runtime = None
+
+    # Runtime integration helpers -------------------------------------------------
+
+    def _is_runtime_strategy(self) -> bool:
+        return self._runtime is not None
+
+    def _strategy_name(self) -> str:
+        """Return the configured strategy name for logging/reporting."""
+        strategy = getattr(self, "strategy", None)
+        if strategy is None:
+            return "UnknownStrategy"
+        return getattr(strategy, "name", strategy.__class__.__name__)
+
+    def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare dataframe for strategy processing.
+        
+        For component-based strategies, prepare the runtime dataset.
+        For legacy strategies, return the dataframe as-is (no indicator calculation).
+        """
+        if not self._is_runtime_strategy():
+            # Component-based strategies don't need upfront indicator calculation
+            # They compute indicators on-demand in process_candle()
+            return df
+
+        dataset = self._runtime.prepare_data(df)
+        self._runtime_dataset = dataset
+        self._runtime_warmup = max(0, int(dataset.warmup_period or 0))
+        return dataset.data
+
+    def _build_runtime_context(
+        self,
+        balance: float,
+        current_price: float,
+        current_time: datetime,
+    ) -> RuntimeContext:
+        positions: list[ComponentPosition] = []
+        for position in self.positions.values():
+            try:
+                quantity = self._compute_component_quantity(position)
+                component_position = ComponentPosition(
+                    symbol=position.symbol,
+                    side=position.side.value,
+                    size=quantity,
+                    entry_price=float(position.entry_price),
+                    current_price=float(current_price),
+                    entry_time=position.entry_time,
+                )
+                positions.append(component_position)
+            except Exception as exc:
+                logger.debug("Failed to translate live position for runtime: %s", exc)
+
+        return RuntimeContext(balance=float(balance), current_positions=positions or None)
+
+    def _compute_component_quantity(self, position: Position, balance_basis: float | None = None) -> float:
+        """Translate a position's fractional size into asset quantity for component strategies."""
+        entry_price = float(position.entry_price)
+        if entry_price <= 0:
+            return 0.0
+
+        basis = balance_basis if balance_basis is not None else getattr(position, "entry_balance", None)
+        if basis is None or basis <= 0:
+            basis = self.current_balance
+
+        size_fraction = float(position.current_size if position.current_size is not None else position.size)
+        return (size_fraction * float(basis)) / entry_price
+
+    def _runtime_process_decision(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        balance: float,
+        current_price: float,
+        current_time: datetime,
+    ):
+        if not self._is_runtime_strategy():
+            return None
+        if self._runtime_dataset is None:
+            return None
+        if index < self._runtime_warmup:
+            return None
+
+        context = self._build_runtime_context(balance, current_price, current_time)
+        try:
+            decision = self._runtime.process(index, context)
+            return decision
+        except Exception as exc:
+            logger.warning("Runtime decision failed in live engine at index %s: %s", index, exc)
+            return None
+
+    def _runtime_should_exit_live(
+        self,
+        decision,
+        position: Position,
+        candle,
+        current_price: float,
+    ) -> tuple[bool, str]:
+        if decision is None or self._component_strategy is None:
+            return False, "Hold"
+
+        if position.side == PositionSide.LONG and decision.signal.direction == SignalDirection.SELL:
+            return True, "Signal reversal"
+        if position.side == PositionSide.SHORT and decision.signal.direction == SignalDirection.BUY:
+            return True, "Signal reversal"
+
+        try:
+            quantity = self._compute_component_quantity(position)
+            component_position = ComponentPosition(
+                symbol=position.symbol,
+                side=position.side.value,
+                size=quantity,
+                entry_price=float(position.entry_price),
+                current_price=float(current_price),
+                entry_time=position.entry_time,
+            )
+        except Exception:
+            return False, "Hold"
+
+        try:
+            market_data = ComponentMarketData(
+                symbol=position.symbol,
+                price=float(current_price),
+                volume=float(candle.get("volume", 0.0) if hasattr(candle, "get") else 0.0),
+                timestamp=candle.name if hasattr(candle, "name") else None,
+            )
+        except Exception:
+            market_data = ComponentMarketData(symbol=position.symbol, price=float(current_price), volume=0.0)
+
+        try:
+            should_exit = self._component_strategy.should_exit_position(
+                component_position,
+                market_data,
+                decision.regime,
+            )
+        except Exception as exc:
+            logger.debug("Runtime exit evaluation failed in live engine: %s", exc)
+            return False, "Hold"
+
+        return bool(should_exit), "Strategy signal" if should_exit else "Hold"
+
+    def _runtime_entry_plan(self, decision, balance: float) -> tuple[str | None, float]:
+        if decision is None:
+            return None, 0.0
+        if balance <= 0:
+            return None, 0.0
+        if decision.signal.direction == SignalDirection.HOLD or decision.position_size <= 0:
+            return None, 0.0
+
+        metadata = getattr(decision, "metadata", {}) or {}
+        if decision.signal.direction == SignalDirection.SELL and not bool(
+            metadata.get("enter_short")
+        ):
+            return None, 0.0
+
+        side = "long" if decision.signal.direction == SignalDirection.BUY else "short"
+        fraction = float(decision.position_size) / float(balance)
+        return side, max(0.0, min(1.0, fraction))
+
+    def _finalize_runtime(self) -> None:
+        if self._is_runtime_strategy():
+            try:
+                self._runtime.finalize()
+            finally:
+                self._runtime_dataset = None
+                self._runtime_warmup = 0
 
     def start(self, symbol: str, timeframe: str = "1h", max_steps: int = None):
         """Start the live trading engine"""
@@ -591,7 +804,7 @@ class LiveTradingEngine:
                 }
 
             self.trading_session_id = self.db_manager.create_trading_session(
-                strategy_name=self.strategy.__class__.__name__,
+                strategy_name=self._strategy_name(),
                 symbol=symbol,
                 timeframe=timeframe,
                 mode=mode,
@@ -770,15 +983,19 @@ class LiveTradingEngine:
                     logger.info("🔄 Applying pending strategy/model update...")
                     success = self.strategy_manager.apply_pending_update()
                     if success:
-                        self.strategy = self.strategy_manager.current_strategy
+                        self._finalize_runtime()
+                        updated_strategy = self.strategy_manager.current_strategy
+                        self._configure_strategy(updated_strategy)
+                        self._runtime_dataset = None
+                        self._runtime_warmup = 0
                         logger.info("✅ Strategy/model update applied successfully")
                         self._send_alert("Strategy/Model updated in live trading")
                     else:
                         logger.error("❌ Failed to apply strategy/model update")
                 # Proceed to indicator calculation
 
-                # Calculate indicators
-                df = self.strategy.calculate_indicators(df)
+                # Calculate indicators or prepare runtime dataset
+                df = self._prepare_strategy_dataframe(df)
                 # Remove warmup period and ensure we have enough data
                 try:
                     essential_columns = ["open", "high", "low", "close", "volume"]
@@ -807,6 +1024,14 @@ class LiveTradingEngine:
                 current_index = len(df) - 1
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
+
+                runtime_decision = self._runtime_process_decision(
+                    df,
+                    current_index,
+                    self.current_balance,
+                    float(current_price),
+                    current_candle.name if hasattr(current_candle, "name") else datetime.utcnow(),
+                )
                 if steps % heartbeat_every == 0:
                     log_engine_event(
                         "heartbeat",
@@ -834,7 +1059,13 @@ class LiveTradingEngine:
                 if safety_mode:
                     self._check_protective_exits_only(df, current_index, current_price)
                 else:
-                    self._check_exit_conditions(df, current_index, current_price)
+                    self._check_exit_conditions(
+                        df,
+                        current_index,
+                        current_price,
+                        runtime_decision=runtime_decision,
+                        candle=current_candle,
+                    )
                 # Evaluate partial exits and scale-ins for open positions
                 if not safety_mode:
                     self._check_partial_and_scale_ops(df, current_index, current_price)
@@ -842,9 +1073,17 @@ class LiveTradingEngine:
                 if (not safety_mode) and (
                     len(self.positions) < self.risk_manager.get_max_concurrent_positions()
                 ):
-                    self._check_entry_conditions(df, current_index, symbol, current_price)
-                    # Check for short entry if strategy supports it
-                    if hasattr(self.strategy, "check_short_entry_conditions"):
+                    self._check_entry_conditions(
+                        df,
+                        current_index,
+                        symbol,
+                        current_price,
+                        runtime_decision=runtime_decision,
+                    )
+                    # Check for short entry via legacy hook when available
+                    if (not self._is_runtime_strategy()) and callable(
+                        getattr(self.strategy, "check_short_entry_conditions", None)
+                    ):
                         short_entry_signal = self.strategy.check_short_entry_conditions(
                             df, current_index
                         )
@@ -873,12 +1112,9 @@ class LiveTradingEngine:
                                 short_fraction = min(short_fraction, self.max_position_size)
                                 short_position_size = short_fraction
                             else:
-                                short_position_size = self.strategy.calculate_position_size(
-                                    df, current_index, self.current_balance
-                                )
-                                short_position_size = min(
-                                    short_position_size, self.max_position_size
-                                )
+                                # All strategies should be component-based
+                                self.logger.error(f"Strategy {self.strategy.name} does not support component-based position sizing")
+                                short_position_size = 0.0
                             
                             # Apply dynamic risk adjustments
                             short_position_size = self._get_dynamic_risk_adjusted_size(short_position_size)
@@ -901,9 +1137,9 @@ class LiveTradingEngine:
                                             1 - getattr(self.strategy, "take_profit_pct", 0.04)
                                         )
                                 else:
-                                    short_stop_loss = self.strategy.calculate_stop_loss(
-                                        df, current_index, current_price, PositionSide.SHORT
-                                    )
+                                    # All strategies should be component-based
+                                    self.logger.error(f"Strategy {self.strategy.name} does not support component-based stop loss calculation")
+                                    short_stop_loss = current_price * 1.05  # Default 5% stop for short
                                     short_take_profit = current_price * (
                                         1 - getattr(self.strategy, "take_profit_pct", 0.04)
                                     )
@@ -969,6 +1205,7 @@ class LiveTradingEngine:
             self._sleep_with_interrupt(self.check_interval)
 
         logger.info("Trading loop ended")
+        self._finalize_runtime()
 
     def _is_context_ready(self, df: pd.DataFrame) -> tuple[bool, str]:
         """Check if the current frame has enough context for strategy-driven decisions.
@@ -1178,14 +1415,27 @@ class LiveTradingEngine:
     def _update_position_pnl(self, current_price: float):
         """Update unrealized PnL for all positions"""
         for position in self.positions.values():
+            fraction = float(
+                position.current_size if position.current_size is not None else position.size
+            )
+            if fraction <= 0:
+                position.unrealized_pnl = 0.0
+                position.unrealized_pnl_percent = 0.0
+                continue
+
+            basis_balance = (
+                float(position.entry_balance)
+                if position.entry_balance is not None and position.entry_balance > 0
+                else float(self.current_balance)
+            )
+
             if position.side == PositionSide.LONG:
-                position.unrealized_pnl = pnl_percent(
-                    position.entry_price, current_price, Side.LONG, position.size
-                )
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
             else:  # SHORT
-                position.unrealized_pnl = pnl_percent(
-                    position.entry_price, current_price, Side.SHORT, position.size
-                )
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
+
+            position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
+            position.unrealized_pnl_percent = pnl_pct * 100.0
 
     def _update_positions_mfe_mae(self, current_price: float):
         """Compute and persist rolling MFE/MAE for active positions."""
@@ -1220,6 +1470,8 @@ class LiveTradingEngine:
                     self.db_manager.update_position(
                         position_id=db_id,
                         current_price=float(current_price),
+                        unrealized_pnl=float(position.unrealized_pnl),
+                        unrealized_pnl_percent=float(position.unrealized_pnl_percent),
                         mfe=float(m.mfe),
                         mae=float(m.mae),
                         mfe_price=float(m.mfe_price) if m.mfe_price is not None else None,
@@ -1230,7 +1482,14 @@ class LiveTradingEngine:
                 except Exception as e:
                     logger.debug(f"MFE/MAE DB update failed for {order_id}: {e}")
 
-    def _check_exit_conditions(self, df: pd.DataFrame, current_index: int, current_price: float):
+    def _check_exit_conditions(
+        self,
+        df: pd.DataFrame,
+        current_index: int,
+        current_price: float,
+        runtime_decision=None,
+        candle=None,
+    ):
         """Check if any positions should be closed"""
         positions_to_close = []
 
@@ -1239,27 +1498,64 @@ class LiveTradingEngine:
         sentiment_data = self._extract_sentiment_data(df, current_index)
         ml_predictions = self._extract_ml_predictions(df, current_index)
 
+        runtime_candle = candle if candle is not None else df.iloc[current_index]
+
         for position in self.positions.values():
             should_exit = False
             exit_reason = ""
 
-            # Check strategy exit conditions
-            if self.strategy.check_exit_conditions(df, current_index, position.entry_price):
-                should_exit = True
-                exit_reason = "Strategy signal"
+            # Check strategy exit conditions using component-based interface
+            if self._is_runtime_strategy():
+                exit_signal, runtime_reason = self._runtime_should_exit_live(
+                    runtime_decision,
+                    position,
+                    runtime_candle,
+                    float(current_price),
+                )
+                if exit_signal:
+                    should_exit = True
+                    exit_reason = runtime_reason
+            elif isinstance(self.strategy, ComponentStrategy):
+                # Component-based strategy: use should_exit_position()
+                try:
+                    quantity = self._compute_component_quantity(position)
+                    component_position = ComponentPosition(
+                        symbol=position.symbol,
+                        side=position.side.value,
+                        size=quantity,
+                        entry_price=float(position.entry_price),
+                        current_price=float(current_price),
+                        entry_time=position.entry_time,
+                    )
+                    market_data = ComponentMarketData(
+                        symbol=position.symbol,
+                        price=float(current_price),
+                        volume=float(runtime_candle.get("volume", 0.0) if hasattr(runtime_candle, "get") else 0.0),
+                        timestamp=runtime_candle.name if hasattr(runtime_candle, "name") else None,
+                    )
+                    regime = runtime_decision.regime if runtime_decision else None
+                    
+                    if self.strategy.should_exit_position(component_position, market_data, regime):
+                        should_exit = True
+                        exit_reason = "Strategy signal"
+                except Exception as e:
+                    self.logger.debug(f"Component exit check failed: {e}")
+            else:
+                # All strategies should be component-based
+                self.logger.warning(f"Strategy {self.strategy.name} does not support component-based exit checks")
 
             # Check stop loss
-            elif position.stop_loss and self._check_stop_loss(position, current_price):
+            if not should_exit and position.stop_loss and self._check_stop_loss(position, current_price):
                 should_exit = True
                 exit_reason = "Stop loss"
 
             # Check take profit
-            elif position.take_profit and self._check_take_profit(position, current_price):
+            elif not should_exit and position.take_profit and self._check_take_profit(position, current_price):
                 should_exit = True
                 exit_reason = "Take profit"
 
             # * Time-based exits only when policy is specified
-            else:
+            if not should_exit:
                 hit_time_exit = False
                 reason = None
                 if self.time_exit_policy is not None:
@@ -1283,25 +1579,46 @@ class LiveTradingEngine:
                         position.entry_price
                     )
 
+                # Prepare logging reasons with TradingDecision data if available
+                log_reasons = [
+                    exit_reason if should_exit else "holding_position",
+                    f"current_pnl_{current_pnl:.4f}",
+                    f"position_age_{(datetime.utcnow() - position.entry_time).total_seconds():.0f}s",
+                    f"entry_price_{position.entry_price:.2f}",
+                ]
+                
+                # Add regime context if available from TradingDecision
+                if runtime_decision and hasattr(runtime_decision, 'regime') and runtime_decision.regime:
+                    regime = runtime_decision.regime
+                    log_reasons.append(f"regime_trend_{regime.trend.value if hasattr(regime.trend, 'value') else regime.trend}")
+                    log_reasons.append(f"regime_volatility_{regime.volatility.value if hasattr(regime.volatility, 'value') else regime.volatility}")
+                    log_reasons.append(f"regime_confidence_{regime.confidence:.2f}")
+                
+                # Add risk metrics if available from TradingDecision
+                if runtime_decision and hasattr(runtime_decision, 'risk_metrics') and runtime_decision.risk_metrics:
+                    for key, value in runtime_decision.risk_metrics.items():
+                        if isinstance(value, int | float):
+                            log_reasons.append(f"risk_{key}_{value:.4f}")
+                
+                # Extract signal confidence from TradingDecision if available
+                confidence_score = indicators.get("prediction_confidence", 0.5)
+                if runtime_decision and hasattr(runtime_decision, 'signal') and runtime_decision.signal:
+                    confidence_score = runtime_decision.signal.confidence
+
                 self.db_manager.log_strategy_execution(
-                    strategy_name=self.strategy.__class__.__name__,
+                    strategy_name=self._strategy_name(),
                     symbol=position.symbol,
                     signal_type="exit",
                     action_taken="closed_position" if should_exit else "hold_position",
                     price=current_price,
                     timeframe="1m",
                     signal_strength=1.0 if should_exit else 0.0,
-                    confidence_score=indicators.get("prediction_confidence", 0.5),
+                    confidence_score=confidence_score,
                     indicators=indicators,
                     sentiment_data=sentiment_data if sentiment_data else None,
                     ml_predictions=ml_predictions if ml_predictions else None,
                     position_size=position.size,
-                    reasons=[
-                        exit_reason if should_exit else "holding_position",
-                        f"current_pnl_{current_pnl:.4f}",
-                        f"position_age_{(datetime.utcnow() - position.entry_time).total_seconds():.0f}s",
-                        f"entry_price_{position.entry_price:.2f}",
-                    ],
+                    reasons=log_reasons,
                     volume=indicators.get("volume"),
                     volatility=indicators.get("volatility"),
                     session_id=self.trading_session_id,
@@ -1315,21 +1632,193 @@ class LiveTradingEngine:
             self._close_position(position, reason)
 
     def _check_entry_conditions(
-        self, df: pd.DataFrame, current_index: int, symbol: str, current_price: float
+        self,
+        df: pd.DataFrame,
+        current_index: int,
+        symbol: str,
+        current_price: float,
+        runtime_decision=None,
     ):
         """Check if new positions should be opened"""
-        # Check strategy entry conditions
-        entry_signal = self.strategy.check_entry_conditions(df, current_index)
 
-        # Extract context for logging
+        use_runtime = self._is_runtime_strategy()
+        entry_signal = False
+        position_size = 0.0
+        entry_side = PositionSide.LONG
+        runtime_strength = 0.0
+        runtime_confidence = 0.0
+        overrides = None
+
         indicators = self._extract_indicators(df, current_index)
         sentiment_data = self._extract_sentiment_data(df, current_index)
         ml_predictions = self._extract_ml_predictions(df, current_index)
 
-        # Calculate position size if entry signal is present
-        position_size = 0.0
-        if entry_signal:
-            # Prefer strategy sizing by default; use risk manager only if overrides specify a sizer
+        if use_runtime:
+            side_label, runtime_fraction = self._runtime_entry_plan(
+                runtime_decision,
+                self.current_balance,
+            )
+            if side_label is not None and runtime_fraction > 0:
+                entry_signal = True
+                entry_side = PositionSide.LONG if side_label == "long" else PositionSide.SHORT
+                position_size = min(runtime_fraction, self.max_position_size)
+                if runtime_decision is not None:
+                    runtime_strength = runtime_decision.signal.strength
+                    runtime_confidence = runtime_decision.signal.confidence
+        elif isinstance(self.strategy, ComponentStrategy):
+            # Component-based strategy: use process_candle() for decision
+            # Note: runtime_decision should already be populated if this is a component strategy
+            # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper
+            try:
+                decision = self.strategy.process_candle(df, current_index, self.current_balance, None)
+                
+                notional_size = float(decision.position_size or 0.0)
+                balance = float(self.current_balance or 0.0)
+                size_fraction = 0.0 if balance <= 0 else max(0.0, notional_size / balance)
+                bounded_fraction = min(size_fraction, self.max_position_size)
+
+                if decision.signal.direction == SignalDirection.BUY and bounded_fraction > 0:
+                    entry_signal = True
+                    entry_side = PositionSide.LONG
+                    position_size = bounded_fraction
+                    runtime_strength = decision.signal.strength
+                    runtime_confidence = decision.signal.confidence
+                elif decision.signal.direction == SignalDirection.SELL and bounded_fraction > 0:
+                    entry_signal = True
+                    entry_side = PositionSide.SHORT
+                    position_size = bounded_fraction
+                    runtime_strength = decision.signal.strength
+                    runtime_confidence = decision.signal.confidence
+            except Exception as e:
+                self.logger.warning(f"Component strategy decision failed: {e}")
+                entry_signal = False
+        else:
+            # All strategies should be component-based
+            self.logger.error(f"Strategy {self.strategy.name} is not a component-based strategy")
+            entry_signal = False
+
+        if entry_signal and not use_runtime:
+            # Component strategies supply their own sizing. Retain correlation context computation
+            # for downstream consumers that expect it to be populated as part of the entry check.
+            self._build_correlation_context(symbol, df, None)
+
+        if position_size > 0:
+            position_size = self._get_dynamic_risk_adjusted_size(position_size)
+
+        if self.db_manager:
+            # Prepare logging data - include TradingDecision data if available
+            log_reasons = [
+                "runtime_entry"
+                if use_runtime
+                else "entry_conditions_met" if entry_signal else "entry_conditions_not_met",
+                (
+                    f"position_size_{position_size:.4f}"
+                    if position_size > 0
+                    else "no_position_size"
+                ),
+                f"max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}",
+                (
+                    f"enter_short_{bool(getattr(runtime_decision, 'metadata', {}).get('enter_short'))}"
+                    if use_runtime and runtime_decision is not None
+                    else "enter_short_n/a"
+                ),
+            ]
+            
+            # Add regime context if available from TradingDecision
+            if runtime_decision and hasattr(runtime_decision, 'regime') and runtime_decision.regime:
+                regime = runtime_decision.regime
+                log_reasons.append(f"regime_trend_{regime.trend.value if hasattr(regime.trend, 'value') else regime.trend}")
+                log_reasons.append(f"regime_volatility_{regime.volatility.value if hasattr(regime.volatility, 'value') else regime.volatility}")
+                log_reasons.append(f"regime_confidence_{regime.confidence:.2f}")
+            
+            # Add risk metrics if available from TradingDecision
+            if runtime_decision and hasattr(runtime_decision, 'risk_metrics') and runtime_decision.risk_metrics:
+                for key, value in runtime_decision.risk_metrics.items():
+                    if isinstance(value, int | float):
+                        log_reasons.append(f"risk_{key}_{value:.4f}")
+            
+            self.db_manager.log_strategy_execution(
+                strategy_name=self._strategy_name(),
+                symbol=symbol,
+                signal_type="entry",
+                action_taken=(
+                    "opened_long"
+                    if entry_signal and position_size > 0 and entry_side == PositionSide.LONG
+                    else "opened_short"
+                    if entry_signal and position_size > 0 and entry_side == PositionSide.SHORT
+                    else "no_action"
+                ),
+                price=current_price,
+                timeframe="1m",
+                signal_strength=runtime_strength if use_runtime else (1.0 if entry_signal else 0.0),
+                confidence_score=(
+                    runtime_confidence if use_runtime else indicators.get("prediction_confidence", 0.5)
+                ),
+                indicators=indicators,
+                sentiment_data=sentiment_data if sentiment_data else None,
+                ml_predictions=ml_predictions if ml_predictions else None,
+                position_size=position_size if position_size > 0 else None,
+                reasons=log_reasons,
+                volume=indicators.get("volume"),
+                volatility=indicators.get("volatility"),
+                session_id=self.trading_session_id,
+            )
+
+        if not entry_signal or position_size <= 0:
+            return
+
+        if use_runtime and self._component_strategy is not None:
+            try:
+                stop_loss = self._component_strategy.get_stop_loss_price(
+                    float(current_price),
+                    runtime_decision.signal if runtime_decision else None,
+                    runtime_decision.regime if runtime_decision else None,
+                )
+            except Exception:
+                stop_loss = float(current_price) * (
+                    0.95 if entry_side == PositionSide.LONG else 1.05
+                )
+            tp_pct = (
+                self.default_take_profit_pct
+                if self.default_take_profit_pct is not None
+                else getattr(self.strategy, "take_profit_pct", 0.04)
+            )
+            take_profit = (
+                float(current_price) * (1 + tp_pct)
+                if entry_side == PositionSide.LONG
+                else float(current_price) * (1 - tp_pct)
+            )
+        elif isinstance(self.strategy, ComponentStrategy):
+            # Component-based strategy: use get_stop_loss_price()
+            try:
+                # Create a signal from the decision
+                signal = Signal(
+                    direction=SignalDirection.BUY if entry_side == PositionSide.LONG else SignalDirection.SELL,
+                    strength=runtime_strength,
+                    confidence=runtime_confidence,
+                    metadata={}
+                )
+                stop_loss = self.strategy.get_stop_loss_price(
+                    float(current_price),
+                    signal,
+                    None  # regime context
+                )
+            except Exception as e:
+                self.logger.debug(f"Component stop loss calculation failed: {e}")
+                stop_loss = float(current_price) * (
+                    0.95 if entry_side == PositionSide.LONG else 1.05
+                )
+            tp_pct = (
+                self.default_take_profit_pct
+                if self.default_take_profit_pct is not None
+                else getattr(self.strategy, "take_profit_pct", 0.04)
+            )
+            take_profit = (
+                float(current_price) * (1 + tp_pct)
+                if entry_side == PositionSide.LONG
+                else float(current_price) * (1 - tp_pct)
+            )
+        else:
             try:
                 overrides = (
                     self.strategy.get_risk_overrides()
@@ -1338,90 +1827,31 @@ class LiveTradingEngine:
                 )
             except Exception:
                 overrides = None
-            # Build correlation context if engine available
-            correlation_ctx = self._build_correlation_context(symbol, df, overrides)
-            if overrides and overrides.get("position_sizer"):
-                fraction = self.risk_manager.calculate_position_fraction(
+
+            if overrides and ("stop_loss_pct" in overrides or "take_profit_pct" in overrides):
+                stop_loss, take_profit = self.risk_manager.compute_sl_tp(
                     df=df,
                     index=current_index,
-                    balance=self.current_balance,
-                    price=current_price,
-                    indicators=indicators,
+                    entry_price=current_price,
+                    side="long",
                     strategy_overrides=overrides,
-                    correlation_ctx=correlation_ctx,
                 )
-                # Enforce engine-level cap
-                fraction = min(fraction, self.max_position_size)
-                position_size = fraction
+                if take_profit is None:
+                    take_profit = current_price * (1 + overrides.get("take_profit_pct", 0.04))
             else:
-                position_size = self.strategy.calculate_position_size(
-                    df, current_index, self.current_balance
-                )
-                position_size = min(position_size, self.max_position_size)
+                # All strategies should be component-based
+                self.logger.error(f"Strategy {self.strategy.name} does not support component-based stop loss calculation")
+                stop_loss = current_price * 0.95  # Default 5% stop for long
+                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
+            entry_side = PositionSide.LONG
 
-        # Apply dynamic risk adjustments
-        if position_size > 0:
-            position_size = self._get_dynamic_risk_adjusted_size(position_size)
-
-        # Log strategy execution decision
-        if self.db_manager:
-            self.db_manager.log_strategy_execution(
-                strategy_name=self.strategy.__class__.__name__,
-                symbol=symbol,
-                signal_type="entry",
-                action_taken="opened_long" if entry_signal and position_size > 0 else "no_action",
-                price=current_price,
-                timeframe="1m",  # Could be made configurable
-                signal_strength=1.0 if entry_signal else 0.0,
-                confidence_score=indicators.get("prediction_confidence", 0.5),
-                indicators=indicators,
-                sentiment_data=sentiment_data if sentiment_data else None,
-                ml_predictions=ml_predictions if ml_predictions else None,
-                position_size=position_size if position_size > 0 else None,
-                reasons=[
-                    "entry_conditions_met" if entry_signal else "entry_conditions_not_met",
-                    (
-                        f"position_size_{position_size:.4f}"
-                        if position_size > 0
-                        else "no_position_size"
-                    ),
-                    f"max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}",
-                ],
-                volume=indicators.get("volume"),
-                volatility=indicators.get("volatility"),
-                session_id=self.trading_session_id,
-            )
-
-        # Only proceed if we have a valid entry signal and position size
-        if not entry_signal or position_size <= 0:
-            return
-
-        # Calculate risk management levels
-        try:
-            overrides = (
-                self.strategy.get_risk_overrides()
-                if hasattr(self.strategy, "get_risk_overrides")
-                else None
-            )
-        except Exception:
-            overrides = None
-        if overrides and (("stop_loss_pct" in overrides) or ("take_profit_pct" in overrides)):
-            stop_loss, take_profit = self.risk_manager.compute_sl_tp(
-                df=df,
-                index=current_index,
-                entry_price=current_price,
-                side="long",
-                strategy_overrides=overrides,
-            )
-            if take_profit is None:
-                take_profit = current_price * 1.04
-        else:
-            stop_loss = self.strategy.calculate_stop_loss(df, current_index, current_price, "long")
-            take_profit = current_price * 1.04
-
-        # Open new position
         self._open_position(
-            symbol, PositionSide.LONG, position_size, current_price, stop_loss, take_profit
+            symbol,
+            entry_side,
+            position_size,
+            current_price,
+            stop_loss,
+            take_profit,
         )
 
     def _open_position(
@@ -1442,11 +1872,14 @@ class LiveTradingEngine:
                 )
                 size = self.max_position_size
 
-            position_value = size * self.current_balance
+            entry_balance = float(self.current_balance)
+            entry_price = float(price)
+            position_value = size * entry_balance
+            quantity = position_value / entry_price if entry_price else 0.0
 
             if self.enable_live_trading:
                 # Execute real order
-                order_id = self._execute_order(symbol, side, position_value, price)
+                order_id = self._execute_order(symbol, side, position_value, entry_price)
                 if not order_id:
                     logger.error("Failed to execute order")
                     return
@@ -1459,8 +1892,9 @@ class LiveTradingEngine:
                 symbol=symbol,
                 side=side,
                 size=size,
-                entry_price=price,
+                entry_price=entry_price,
                 entry_time=datetime.utcnow(),
+                entry_balance=entry_balance,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 order_id=order_id,
@@ -1478,13 +1912,14 @@ class LiveTradingEngine:
                 position_db_id = self.db_manager.log_position(
                     symbol=symbol,
                     side=side.value,
-                    entry_price=price,
+                    entry_price=entry_price,
                     size=size,
-                    strategy_name=self.strategy.__class__.__name__,
+                    entry_balance=entry_balance,
+                    strategy_name=self._strategy_name(),
                     entry_order_id=order_id,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
-                    quantity=position_value / price,  # Calculate actual quantity
+                    quantity=quantity,
                     session_id=self.trading_session_id,
                     trailing_stop_activated=False,
                     trailing_stop_price=None,
@@ -1509,25 +1944,25 @@ class LiveTradingEngine:
                 self.position_db_ids[order_id] = None
 
             logger.info(
-                f"🚀 Opened {side.value} position: {symbol} @ ${price:.2f} (Size: ${position_value:.2f})"
+                f"🚀 Opened {side.value} position: {symbol} @ ${entry_price:.2f} (Size: ${position_value:.2f})"
             )
             log_order_event(
                 "open_position",
                 order_id=order_id,
                 symbol=symbol,
                 side=side.value,
-                entry_price=price,
+                entry_price=entry_price,
                 size=size,
             )
 
             # Send alert if configured
-            self._send_alert(f"Position Opened: {symbol} {side.value} @ ${price:.2f}")
+            self._send_alert(f"Position Opened: {symbol} {side.value} @ ${entry_price:.2f}")
 
             # Update risk manager with the newly opened position so daily risk is tracked
             if self.risk_manager:
                 try:
                     self.risk_manager.update_position(
-                        symbol=symbol, side=side.value, size=size, entry_price=price
+                        symbol=symbol, side=side.value, size=size, entry_price=entry_price
                     )
                 except Exception as e:
                     logger.warning(
@@ -1588,14 +2023,19 @@ class LiveTradingEngine:
             # Calculate P&L based on CURRENT remaining size
             fraction = float(position.current_size if position.current_size is not None else position.size)
             if position.side == PositionSide.LONG:
-                pnl = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
             else:
-                pnl = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
+                pnl_pct = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
 
-            # Update balance
-            position_value = fraction * self.current_balance
-            realized_pnl = position_value * pnl
-            self.current_balance += realized_pnl
+            # Update balance using sized percentage P&L (parity with backtester)
+            balance_before = self.current_balance
+            basis_balance = (
+                float(position.entry_balance)
+                if position.entry_balance is not None and position.entry_balance > 0
+                else balance_before
+            )
+            realized_pnl = cash_pnl(pnl_pct, basis_balance)
+            self.current_balance = balance_before + realized_pnl
             self.total_pnl += realized_pnl
 
             # Update peak balance for drawdown tracking
@@ -1614,13 +2054,14 @@ class LiveTradingEngine:
                 exit_price=current_price,
                 entry_time=position.entry_time,
                 exit_time=datetime.now(),
-                pnl=pnl,
+                pnl=realized_pnl,
+                pnl_percent=pnl_pct,
                 exit_reason=reason,
             )
 
             # Update statistics
             self.total_trades += 1
-            if pnl > 0:
+            if realized_pnl > 0:
                 self.winning_trades += 1
 
             # Log trade
@@ -1636,8 +2077,8 @@ class LiveTradingEngine:
                     entry_price=position.entry_price,
                     exit_price=current_price,
                     size=fraction,
-                    pnl=pnl,
-                    strategy_name=self.strategy.__class__.__name__,
+                    pnl=realized_pnl,
+                    strategy_name=self._strategy_name(),
                     exit_reason=reason,
                     entry_time=position.entry_time,
                     exit_time=datetime.now(),
@@ -1667,7 +2108,7 @@ class LiveTradingEngine:
 
             logger.info(
                 f"📈 Closed {position.side.value} position for {position.symbol}: "
-                f"P&L={pnl:.2%}, Reason={reason}, "
+                f"PnL=${realized_pnl:,.2f} ({pnl_pct:+.2%}), Reason={reason}, "
                 f"Balance=${self.current_balance:,.2f}"
             )
             log_order_event(
@@ -1676,7 +2117,8 @@ class LiveTradingEngine:
                 symbol=position.symbol,
                 side=position.side.value,
                 exit_price=current_price,
-                pnl=pnl,
+                pnl=realized_pnl,
+                pnl_percent=pnl_pct,
                 reason=reason,
             )
 
@@ -1754,9 +2196,15 @@ class LiveTradingEngine:
             pnl_frac = pnl_percent(position.entry_price, price, Side.LONG, delta_fraction)
         else:
             pnl_frac = pnl_percent(position.entry_price, price, Side.SHORT, delta_fraction)
-        cash_pnl = pnl_frac * self.current_balance
-        self.current_balance += cash_pnl
-        self.total_pnl += cash_pnl
+        balance_before = self.current_balance
+        basis_balance = (
+            float(position.entry_balance)
+            if position.entry_balance is not None and position.entry_balance > 0
+            else balance_before
+        )
+        realized_cash = cash_pnl(pnl_frac, basis_balance)
+        self.current_balance = balance_before + realized_cash
+        self.total_pnl += realized_cash
 
         # Risk manager: reduce exposure and daily risk
         if self.risk_manager:
@@ -1927,12 +2375,20 @@ class LiveTradingEngine:
     def _log_account_snapshot(self):
         """Log current account state to database"""
         try:
-            # Calculate total exposure
-            total_exposure = sum(pos.size * self.current_balance for pos in self.positions.values())
+            # Calculate total exposure using the active fraction per position
+            total_exposure = sum(
+                float(pos.current_size if pos.current_size is not None else pos.size)
+                * (
+                    float(pos.entry_balance)
+                    if pos.entry_balance is not None and pos.entry_balance > 0
+                    else float(self.current_balance)
+                )
+                for pos in self.positions.values()
+            )
 
             # Calculate equity (balance + unrealized P&L)
-            unrealized_pnl = sum(pos.unrealized_pnl for pos in self.positions.values())
-            equity = self.current_balance + unrealized_pnl
+            unrealized_pnl = sum(float(pos.unrealized_pnl) for pos in self.positions.values())
+            equity = float(self.current_balance) + unrealized_pnl
 
             # Calculate current drawdown percentage
             current_drawdown = 0
@@ -1967,7 +2423,7 @@ class LiveTradingEngine:
     def _log_status(self, symbol: str, current_price: float):
         """Log current trading status"""
         total_unrealized = sum(
-            pos.unrealized_pnl * self.current_balance for pos in self.positions.values()
+            float(pos.unrealized_pnl) for pos in self.positions.values()
         )
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
 
@@ -1994,6 +2450,7 @@ class LiveTradingEngine:
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
                 "pnl": trade.pnl,
+                "pnl_percent": trade.pnl_percent,
                 "exit_reason": trade.exit_reason,
                 "duration_minutes": (trade.exit_time - trade.entry_time).total_seconds() / 60,
             }
@@ -2168,15 +2625,39 @@ class LiveTradingEngine:
 
             for pos_data in db_positions:
                 # Convert database position to Position object
+                # Handle both uppercase and lowercase side values from database
+                side_value = pos_data["side"]
+                if isinstance(side_value, str):
+                    side_value = side_value.lower()
+
+                stored_entry_balance = pos_data.get("entry_balance")
+                try:
+                    entry_balance = (
+                        float(stored_entry_balance)
+                        if stored_entry_balance is not None
+                        else float(self.current_balance)
+                    )
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Recovered position %s has invalid entry balance %s; falling back to current balance",
+                        pos_data.get("symbol"),
+                        stored_entry_balance,
+                    )
+                    entry_balance = float(self.current_balance)
+
                 position = Position(
                     symbol=pos_data["symbol"],
-                    side=PositionSide(pos_data["side"]),
+                    side=PositionSide(side_value),
                     size=pos_data["size"],
                     entry_price=pos_data["entry_price"],
                     entry_time=pos_data["entry_time"],
+                    entry_balance=entry_balance,
                     stop_loss=pos_data.get("stop_loss"),
                     take_profit=pos_data.get("take_profit"),
-                    unrealized_pnl=pos_data.get("unrealized_pnl", 0.0),
+                    unrealized_pnl=float(pos_data.get("unrealized_pnl", 0.0) or 0.0),
+                    unrealized_pnl_percent=float(
+                        pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
+                    ),
                     order_id=str(pos_data["id"]),  # Use database ID as order_id
                 )
 
@@ -2254,7 +2735,7 @@ class LiveTradingEngine:
 
         if success:
             logger.info("✅ Hot-swap initiated successfully - will apply on next cycle")
-            strategy_name = getattr(self.strategy, "name", self.strategy.__class__.__name__)
+            strategy_name = self._strategy_name()
             self._send_alert(f"Strategy hot-swap initiated: {strategy_name} → {new_strategy_name}")
         else:
             logger.error("❌ Hot-swap initiation failed")
@@ -2276,7 +2757,7 @@ class LiveTradingEngine:
             logger.error("Strategy manager not initialized - model updates disabled")
             return False
 
-        strategy_name = getattr(self.strategy, "name", self.strategy.__class__.__name__).lower()
+        strategy_name = self._strategy_name().lower()
 
         logger.info(f"🤖 Initiating model update for strategy: {strategy_name}")
 

@@ -1,0 +1,4 @@
+# Strategy version files are stored in this directory
+# Each strategy gets its own JSON file with version history
+# These files are automatically managed by the pre-commit hook
+

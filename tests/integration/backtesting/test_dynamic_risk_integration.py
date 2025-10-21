@@ -7,27 +7,66 @@ import pytest
 
 from src.backtesting.engine import Backtester
 from src.position_management.dynamic_risk import DynamicRiskConfig
+from src.strategies.components.strategy import Strategy
+from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.position_sizer import PositionSizer
 
 pytestmark = pytest.mark.integration
 
 
-class MockStrategy:
-    """Mock strategy for testing"""
-    def check_entry_conditions(self, df, index):
+class MockSignalGenerator(SignalGenerator):
+    """Mock signal generator that never signals"""
+    
+    def __init__(self):
+        super().__init__(name="mock_signal")
+    
+    def generate_signal(self, df: pd.DataFrame, index: int, regime=None) -> Signal:
+        return Signal(
+            direction=SignalDirection.HOLD,
+            confidence=0.0,
+            strength=0.0,
+            metadata={"timestamp": df.index[index] if len(df) > index else datetime.now()}
+        )
+    
+    def get_confidence(self, df: pd.DataFrame, index: int) -> float:
+        return 0.0
+
+
+class MockRiskManager(RiskManager):
+    """Mock risk manager with fixed risk"""
+    
+    def __init__(self):
+        super().__init__(name="mock_risk")
+    
+    def calculate_position_size(self, signal: Signal, balance: float, regime=None) -> float:
+        return 0.05 * balance
+    
+    def should_exit(self, position, current_data, regime=None) -> bool:
         return False
     
-    def check_exit_conditions(self, df, index, entry_price):
-        return False
+    def get_stop_loss(self, entry_price: float, signal: Signal, regime=None) -> float:
+        return entry_price * 0.95
+
+
+class MockPositionSizer(PositionSizer):
+    """Mock position sizer with fixed fraction"""
     
-    def calculate_position_size(self, df, index, balance):
-        return 0.05  # 5% position size
+    def __init__(self):
+        super().__init__(name="mock_sizer")
     
-    def calculate_indicators(self, df):
-        return df
-    
-    def get_risk_overrides(self):
-        """Required for dynamic risk configuration"""
-        return {}
+    def calculate_size(self, signal: Signal, balance: float, risk_amount: float, regime=None) -> float:
+        return 0.05
+
+
+def create_mock_strategy() -> Strategy:
+    """Create a mock component-based strategy for testing"""
+    return Strategy(
+        name="MockStrategy",
+        signal_generator=MockSignalGenerator(),
+        risk_manager=MockRiskManager(),
+        position_sizer=MockPositionSizer()
+    )
 
 
 class MockDataProvider:
@@ -39,35 +78,46 @@ class MockDataProvider:
 
 class TestBacktestingDynamicRiskIntegration:
     """Integration tests for dynamic risk management in backtesting"""
-    
-    def test_backtester_with_dynamic_risk_disabled(self):
-        """Test backtester creation with dynamic risk disabled"""
+
+    def test_backtester_dynamic_risk_enabled_by_default(self):
+        """Dynamic risk should follow the live engine defaults."""
         backtester = Backtester(
-            strategy=MockStrategy(),
+            strategy=create_mock_strategy(),
+            data_provider=MockDataProvider(),
+            log_to_database=False
+        )
+
+        assert backtester.enable_dynamic_risk is True
+        assert backtester.dynamic_risk_manager is not None
+
+    def test_backtester_can_disable_dynamic_risk(self):
+        """Strategies can still opt out of dynamic risk sizing."""
+        backtester = Backtester(
+            strategy=create_mock_strategy(),
             data_provider=MockDataProvider(),
             enable_dynamic_risk=False,
             log_to_database=False
         )
-        
+
         assert backtester.enable_dynamic_risk is False
         assert backtester.dynamic_risk_manager is None
-    
+
     def test_backtester_with_dynamic_risk_enabled(self):
-        """Test backtester creation with dynamic risk enabled"""
+        """Test backtester creation with explicit dynamic risk configuration"""
         config = DynamicRiskConfig(
             enabled=True,
             drawdown_thresholds=[0.05, 0.10, 0.15],
             risk_reduction_factors=[0.8, 0.6, 0.4]
         )
-        
+
         backtester = Backtester(
-            strategy=MockStrategy(),
+            strategy=create_mock_strategy(),
             data_provider=MockDataProvider(),
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
             log_to_database=False
         )
-        
+
         assert backtester.enable_dynamic_risk is True
         assert backtester.dynamic_risk_manager is not None
         assert backtester.dynamic_risk_manager.config.enabled is True
@@ -81,7 +131,7 @@ class TestBacktestingDynamicRiskIntegration:
         )
         
         backtester = Backtester(
-            strategy=MockStrategy(),
+            strategy=create_mock_strategy(),
             data_provider=MockDataProvider(),
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
@@ -114,7 +164,7 @@ class TestBacktestingDynamicRiskIntegration:
     def test_peak_balance_tracking(self):
         """Test peak balance tracking functionality"""
         backtester = Backtester(
-            strategy=MockStrategy(),
+            strategy=create_mock_strategy(),
             data_provider=MockDataProvider(),
             initial_balance=10000,
             log_to_database=False
@@ -144,7 +194,7 @@ class TestBacktestingDynamicRiskIntegration:
         )
         
         backtester = Backtester(
-            strategy=MockStrategy(),
+            strategy=create_mock_strategy(),
             data_provider=MockDataProvider(),
             enable_dynamic_risk=True,
             dynamic_risk_config=config,
@@ -167,7 +217,7 @@ class TestBacktestingDynamicRiskIntegration:
         """Test that dynamic risk fails gracefully"""
         # Create backtester with broken dynamic risk manager
         backtester = Backtester(
-            strategy=MockStrategy(),
+            strategy=create_mock_strategy(),
             data_provider=MockDataProvider(),
             enable_dynamic_risk=True,
             log_to_database=False

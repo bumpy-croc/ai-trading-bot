@@ -52,28 +52,31 @@ def test_download_main(args):
     print("🔍 Testing data download...")
     
     try:
-        from cli.commands.data_commands import download_binance_data_wrapper
-        
-        # Test download for a small time period
+        from argparse import Namespace
+
+        from cli.commands import data as data_commands
+
         project_root = Path(__file__).parent.parent.parent
         data_dir = project_root / "data"
         data_dir.mkdir(exist_ok=True)
-        
+
         print("📊 Testing Binance data download...")
-        csv_file = download_binance_data_wrapper(
+        ns = Namespace(
             symbol="BTCUSDT",
             timeframe="1d",
             start_date="2024-01-01T00:00:00Z",
             end_date="2024-01-07T00:00:00Z",
-            output_dir=str(data_dir)
+            output_dir=str(data_dir),
+            format="csv",
         )
-        
-        if csv_file and os.path.exists(csv_file):
-            print(f"✅ Download successful: {csv_file}")
-            return 0
-        else:
-            print("❌ Download failed: file not created")
-            return 1
+        status = data_commands._download(ns)
+        if status == 0:
+            files = sorted(data_dir.glob("BTCUSDT_USDT_1d_2024-01-01T00:00:00Z_2024-01-07T00:00:00Z.*"))
+            if files:
+                print(f"✅ Download successful: {files[-1]}")
+                return 0
+        print("❌ Download failed: file not created")
+        return 1
             
     except Exception as e:
         print(f"❌ Download test failed: {e}")

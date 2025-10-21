@@ -1,0 +1,26 @@
+---
+globs: *.py
+alwaysApply: false
+---
+
+# Python Specific Code Quality
+
+
+- Avoid unintended global variable caching because in Python servers, global variables persist across requests, causing data leaks and race conditions.
+- Use named arguments for clarity
+- Don't place assignments inside conditionals
+- Adhere to the Google Python Style Guide.
+- Use Google Style Docstrings.
+- Use `tqdm` whenever I ask to add a progress bar.
+- Use vectorized operations where possible or `itertubles()` over `iterrows()` when loopiung through data frames.
+
+## Linting
+- Run linting checks with `ruff` on the files changed before finishing any job`
+
+## Security
+- Use parameterised queries instead of f string where possible to avoid SQL injection
+
+## Logging
+- Use Python logging module, not print
+- Levels: DEBUG (dev), INFO (events), WARNING (issues), ERROR (failures)
+- Include context in messages

@@ -6,7 +6,7 @@ import pytest
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.live.trading_engine import LiveTradingEngine, PositionSide
 from src.position_management.partial_manager import PartialExitPolicy
-from src.strategies.ml_adaptive import MlAdaptive
+from src.strategies.ml_adaptive import create_ml_adaptive_strategy
 
 pytestmark = pytest.mark.integration
 
@@ -40,7 +40,7 @@ def test_partial_exits_and_scale_ins_execution(monkeypatch):
     prices = [100, 101, 102, 103, 104, 105, 106, 107]
     provider = SimpleMockProvider(prices)
 
-    strategy = MlAdaptive()
+    strategy = create_ml_adaptive_strategy()
     pem = PartialExitPolicy(
         exit_targets=[0.03, 0.06],
         exit_sizes=[0.25, 0.25],

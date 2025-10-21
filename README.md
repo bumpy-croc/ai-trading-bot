@@ -2,16 +2,19 @@
 
 A modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live), ML-driven models (price and sentiment), PostgreSQL logging, and optional Railway deployment.
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/LOCAL_POSTGRESQL_SETUP.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
+
+> **Requirements**: Python 3.9+ (Python 3.11+ recommended for development)
 
 ---
 
-## What’s inside
+## What's inside
 
 - Pluggable components: data providers, indicators, strategies, ML prediction engine, risk, backtesting, live engine, monitoring
 - PostgreSQL-only database with connection pooling and Alembic migrations
 - ONNX-based ML models with a central prediction engine
 - Real-time monitoring dashboard and an admin UI for database inspection
+- **Offline backtesting support** with pre-loaded cache for air-gapped environments
 
 ---
 
@@ -45,7 +48,7 @@ export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_
 ```
 - Verify:
 ```bash
-python scripts/verify_database_connection.py
+atb db verify
 # optional migrations (tables are auto-created if missing)
 alembic upgrade head
 ```
@@ -54,6 +57,9 @@ alembic upgrade head
 
 ```bash
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 90
+
+# For offline/air-gapped environments, pre-load cache with historical data
+atb data preload-offline --years-back 10                        # Pre-load 10 years of data
 ```
 
 4) Monitoring dashboard
@@ -116,8 +122,8 @@ make install && make deps
 make code-quality  # ruff + black + mypy + bandit
 
 # Or run individually:
+black .
 ruff check . --fix
-ruff format .
 python bin/run_mypy.py
 bandit -c pyproject.toml -r src
 ```
@@ -129,18 +135,25 @@ bandit -c pyproject.toml -r src
 ```text
 src/
   backtesting/       # Vectorised simulation engine
-  config/            # Typed configuration loader + constants + feature flags
+  config/            # Typed configuration loader + constants + feature flags  
+  dashboards/        # Web-based monitoring and analysis dashboards
+  data/              # Data management and caching utilities
   data_providers/    # Market & sentiment providers (+ caching wrapper)
   database/          # SQLAlchemy models + DatabaseManager (PostgreSQL-only)
   database_manager/  # Flask-Admin UI for DB inspection
+  examples/          # Minimal runnable examples demonstrating core features
   indicators/        # Technical indicators (pure functions)
   live/              # Live trading engine
   ml/                # Trained models (.onnx/.keras) + metadata
   monitoring/        # Real-time monitoring dashboard (Flask + Socket.IO)
+  optimizer/         # Parameter optimization and strategy tuning
   performance/       # Performance metrics utilities
+  position_management/  # Position sizing and portfolio management
   prediction/        # Centralized model registry, ONNX runtime, caching
+  regime/            # Market regime detection and analysis
   risk/              # Risk parameters and position sizing utilities
-  strategies/        # Built-in strategies (ML basic only)
+  strategies/        # Built-in strategies (ML basic, sentiment, adaptive, bull/bear)
+  trading/           # Core trading interfaces and shared functionality
   utils/             # Shared utilities (paths, symbols, etc.)
 ```
 
@@ -148,7 +161,7 @@ src/
 
 ## Key components
 
-- Data providers: `data_providers.BinanceProvider`, `CoinbaseProvider`, `SentiCryptProvider`, `CachedDataProvider`
+- Data providers: `data_providers.BinanceProvider`, `CoinbaseProvider`, `CachedDataProvider`
 - ML prediction: `prediction.models.registry.PredictionModelRegistry` (ONNX), caching in `prediction.utils.caching`
 - Strategies: `strategies.ml_basic`
 - Backtesting: `backtesting.engine.Backtester` (CLI: `atb backtest`)
@@ -164,6 +177,16 @@ src/
 
 See `docs/README.md` for the full documentation index.
 
+**Key guides:**
+- [Backtesting](docs/backtesting.md) – engine internals, CLI usage, and optimisation loop tips
+- [Live trading](docs/live_trading.md) – safety controls, account synchronisation, and deployment helpers
+- [Data pipeline](docs/data_pipeline.md) – offline cache preloading, download utilities, and cache management
+- [Monitoring](docs/monitoring.md) – logging configuration, dashboards, and health endpoints
+- [Prediction & models](docs/prediction.md) – model registry, inference workflow, and training controls
+- [Configuration](docs/configuration.md) – provider chain, feature flags, and local workflow
+- [Database](docs/database.md) – migrations, backups, and Railway operations
+- [Development workflow](docs/development.md) – environment bootstrap, quality gates, and strategy versioning
+
 ---
 
 ## Configuration
@@ -172,8 +195,6 @@ Priority order:
 1. Railway environment variables (production/staging)
 2. Environment variables (Docker/CI/local)
 3. .env file (local development)
-
-For MCP tooling, use `mcp.example.json` as a template and create your own `mcp.json` locally with `RAILWAY_API_KEY` set in your environment. Do not commit secrets.
 
 Minimal variables:
 
@@ -185,22 +206,22 @@ TRADING_MODE=paper
 INITIAL_BALANCE=1000
 ```
 
-See `docs/CONFIGURATION_SYSTEM_SUMMARY.md`.
+Copy `.env.example` to `.env` and fill in your values. See `docs/configuration.md` for detailed configuration options.
 
 ---
 
 ## Deployment
 
-- Railway: see `docs/RAILWAY_QUICKSTART.md` and `docs/RAILWAY_DEPLOYMENT_GUIDE.md` (includes DB setup and app start commands)
-- Quick helper: `./bin/railway-setup.sh`
+- Railway: 
+  - Quick start: see [Railway deployment quick start](docs/development.md#railway-deployment-quick-start) for environment automation
+  - Database operations: see [Database](docs/database.md#railway-deployments)
 
 ---
 
 ## Sentiment & models
 
-Sentiment data (SentiCrypt) and ML training are supported. Pretrained models live in `src/ml`. For details and training examples, see:
-- `docs/LIVE_SENTIMENT_ANALYSIS.md`
-- `docs/MODEL_TRAINING_AND_INTEGRATION_GUIDE.md`
+Sentiment data and ML training are supported. Pretrained models live in `src/ml`. For details and training examples, see
+[docs/prediction.md](docs/prediction.md).
 
 ---
 
@@ -213,12 +234,11 @@ Sentiment data (SentiCrypt) and ML training are supported. Pretrained models liv
 
 ## Security
 - Do not commit secrets. Use `.env` (see `.env.example`) and environment variables.
-- MCP: use `mcp.example.json` and keep your local `mcp.json` untracked.
 
 ## Logging
-- Centralized logging via `utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
+- Centralized logging via `src.utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
 - JSON logs default to enabled in production-like environments (Railway or ENV/APP_ENV=production).
-- See `docs/LOGGING_GUIDE.md` for structured events, context, and operations guidance.
+- See `docs/monitoring.md` for structured events, context, and operations guidance.
 
 ---
 

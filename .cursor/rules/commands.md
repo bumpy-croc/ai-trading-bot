@@ -12,17 +12,15 @@ alwaysApply: false
 - Coverage: `python tests/run_tests.py --coverage`
 
 ### Backtesting
-- 30d dev run (no DB): `python scripts/run_backtest.py ml_basic --days 30 --no-db`
-- 1y run: `python scripts/run_backtest.py ml_with_sentiment --days 365`
+- 30d dev run: `atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30`
+- 1y run: `atb backtest ml_adaptive --symbol BTCUSDT --timeframe 1h --days 365`
 
 ### Live Trading
-- Paper: `python scripts/run_live_trading.py ml_basic --paper-trading`
-- Live (requires explicit ack): `python scripts/run_live_trading.py ml_basic --live-trading --i-understand-the-risks`
-- Health: `python scripts/health_check.py`
-- Stop: `python scripts/run_live_trading.py --stop`
+- Paper: `atb live ml_basic --symbol BTCUSDT --paper-trading`
+- Live (requires explicit ack): `atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks`
+- Health: `atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading`
 
 ### Monitoring & Utilities
-- Dashboard: `python scripts/start_dashboard.py`
-- Cache check: `python scripts/cache_manager.py --check`
-- DB test: `python scripts/test_database.py`
-- Backup DB: `python scripts/backup_database.py`
+- Dashboard: `atb dashboards run monitoring --port 8000`
+- Cache check: `atb data cache-manager info`
+- DB test: `atb db verify`

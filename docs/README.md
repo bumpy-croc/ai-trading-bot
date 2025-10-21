@@ -1,50 +1,29 @@
 # Documentation
 
-## Getting Started
-- [Trading Concepts Overview](TRADING_CONCEPTS_OVERVIEW.md) - Core trading concepts and terminology
-- [Paper Trading Quickstart](PAPER_TRADING_QUICKSTART.md) - Fast setup for safe trading
-- [Railway Quickstart](RAILWAY_QUICKSTART.md) - Quick deployment to Railway platform
-- [Local PostgreSQL Setup](LOCAL_POSTGRESQL_SETUP.md) - Database setup for local development
+> **Last Updated**: 2025-10-21  
+> **Maintained By**: AI Trading Bot Team
 
-## Core Functionality
-- [Backtesting Guide](BACKTEST_GUIDE.md) - Running historical simulations
-- [Backtest Knowledge Base](BACKTEST_KNOWLEDGE_BASE.md) - Advanced backtesting techniques
-- [Live Trading Guide](LIVE_TRADING_GUIDE.md) - Live trading operations and safety
-- [Risk & Position Management](RISK_AND_POSITION_MANAGEMENT.md) - Risk controls and position sizing
+This folder contains reference guides for the main subsystems that make up the AI trading platform. Each document focuses on how the runtime works today and includes links to relevant code and operational commands.
 
-## Configuration & Setup
-- [Configuration System](CONFIGURATION_SYSTEM_SUMMARY.md) - Environment and config management
-- [Feature Flags](FEATURE_FLAGS.md) - Feature toggles and experimental features
-- [Simplified Config](SIMPLIFIED_CONFIG.md) - Streamlined configuration approach
-- [Config Migration Guide](CONFIG_MIGRATION_GUIDE.md) - Migrating configuration changes
+## Table of Contents
 
-## Machine Learning & Models
-- [Model Training and Integration Guide](MODEL_TRAINING_AND_INTEGRATION_GUIDE.md) - Training and deploying ML models
-- [Model Deployment Guide](MODEL_DEPLOYMENT_GUIDE.md) - Production model deployment
-- [Live Sentiment Analysis](LIVE_SENTIMENT_ANALYSIS.md) - Sentiment data integration
-- [Regime Detection MVP](REGIME_DETECTION_MVP.md) - Market regime detection
+### Getting Started
+- [Development workflow](development.md) - Environment setup, quality checks, and Railway deployment
+- [Configuration](configuration.md) - Provider chain, feature flags, and local workflow
 
-## Database & Data Management
-- [Database Centralization Summary](DATABASE_CENTRALIZATION_SUMMARY.md) - Database architecture
-- [Database Logging Guide](DATABASE_LOGGING_GUIDE.md) - Logging system setup
-- [Database Migration Notes](DATABASE_MIGRATION_NOTES.md) - Migration procedures
-- [Database Backup Policy](DATABASE_BACKUP_POLICY.md) - Data backup strategies
-- [Persistent Balance Guide](PERSISTENT_BALANCE_GUIDE.md) - Balance state management
+### Core Systems
+- [Data pipeline](data_pipeline.md) - Market data providers, caching, and offline support
+- [Backtesting](backtesting.md) - Historical simulation engine and optimization
+- [Live trading](live_trading.md) - Real-time execution, risk controls, and safety features
+- [Prediction & models](prediction.md) - ML model registry, inference, and training
 
-## Deployment & Operations
-- [Railway Deployment Guide](RAILWAY_DEPLOYMENT_GUIDE.md) - Comprehensive Railway deployment
-- [Railway Database Centralization Guide](RAILWAY_DATABASE_CENTRALIZATION_GUIDE.md) - Database setup on Railway
-- [Monitoring Summary](MONITORING_SUMMARY.md) - System monitoring and dashboards
-- [Logging Guide](LOGGING_GUIDE.md) - Application logging configuration
+### Operations
+- [Database](database.md) - PostgreSQL setup, migrations, and backups
+- [Monitoring & observability](monitoring.md) - Logging, dashboards, and health endpoints
 
-## Development & Quality
-- [Testing Guide](TESTING_GUIDE.md) - Test suite organization and execution
-- [Code Quality](CODE_QUALITY.md) - Code standards and quality tools
-- [CI Setup](CI_SETUP.md) - Continuous integration configuration
-- [CPU Optimization Guide](CPU_OPTIMIZATION_GUIDE.md) - Performance optimization
+## Quick Links
 
-## Advanced Topics
-- [Account Synchronization Guide](ACCOUNT_SYNCHRONIZATION_GUIDE.md) - Multi-account management
-- [Engine Integration Status](ENGINE_INTEGRATION_STATUS.md) - System integration status
-- [Optimizer MVP](OPTIMIZER_MVP.md) - Parameter optimization features
-- [Lessons Learnt](lessons-learnt.md) - Development insights and retrospectives
+- **First time setup**: Start with [Development workflow](development.md#environment-setup)
+- **Running backtests**: See [Backtesting](backtesting.md#cli-usage)
+- **Live trading**: Review [Live trading](live_trading.md#safety-first) safety controls
+- **Troubleshooting**: Check [Database](database.md#cli-tooling) diagnostics

@@ -15,7 +15,7 @@ Typed configuration loader with provider priority and helpful accessors.
 
 ## Usage
 ```python
-from config import get_config
+from src.config import get_config
 config = get_config()
 api_key = config.get_required("BINANCE_API_KEY")
 balance = config.get_int("INITIAL_BALANCE", 1000)
