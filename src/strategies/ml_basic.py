@@ -117,23 +117,4 @@ def create_ml_basic_strategy(
         enable_logging=not fast_mode,
     )
 
-    # Attach key parameters for compatibility with legacy workflows
-    strategy.model_path = model_path
-    strategy.sequence_length = sequence_length
-    strategy.use_prediction_engine = use_prediction_engine
-    strategy.model_name = model_name
-    strategy.model_type = model_type
-    strategy.timeframe = timeframe
-    strategy.stop_loss_pct = 0.02
-    strategy.take_profit_pct = 0.04
-    strategy.risk_per_trade = 0.02
-    if fast_mode:
-        strategy.base_fraction = 0.001
-        strategy.min_confidence = 1.0
-        strategy.fast_mode = True
-    else:
-        strategy.base_fraction = 0.2
-        strategy.min_confidence = 0.3
-        strategy.fast_mode = False
-
     return strategy
