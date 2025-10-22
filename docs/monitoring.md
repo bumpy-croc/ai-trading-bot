@@ -1,6 +1,6 @@
 # Monitoring & observability
 
-> **Last Updated**: 2025-10-21  
+> **Last Updated**: 2025-10-22  
 > **Related Documentation**: [Live trading](live_trading.md), [Database](database.md)
 
 Instrumentation is delivered through structured logging, database events, and interactive dashboards. The goal is to provide the
