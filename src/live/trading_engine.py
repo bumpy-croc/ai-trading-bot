@@ -7,7 +7,7 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -212,11 +212,18 @@ class LiveTradingEngine:
         self._configure_strategy(strategy)
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
-        self.risk_manager = RiskManager(risk_parameters)
+
+        component_risk = None
+        component_risk_params = None
+        if isinstance(self.strategy, ComponentStrategy):
+            component_risk = getattr(self.strategy, "risk_manager", None)
+            component_risk_params = self._extract_component_risk_parameters(component_risk)
+
+        merged_risk_parameters = self._merge_risk_parameters(risk_parameters, component_risk_params)
+        self.risk_manager = RiskManager(merged_risk_parameters)
 
         # Share the canonical risk manager with component strategies via the adapter.
         if isinstance(self.strategy, ComponentStrategy):
-            component_risk = getattr(self.strategy, "risk_manager", None)
             if hasattr(component_risk, "bind_core_manager"):
                 try:
                     component_risk.bind_core_manager(self.risk_manager)
@@ -582,6 +589,68 @@ class LiveTradingEngine:
         except Exception as e:
             logger.warning(f"Failed to get dynamic risk adjusted parameters: {e}")
             return self.risk_manager.params
+
+    def _extract_component_risk_parameters(
+        self, component_risk_manager: Any
+    ) -> RiskParameters | None:
+        """Clone risk parameters from a component adapter, if available."""
+
+        if component_risk_manager is None:
+            return None
+
+        core_manager = getattr(component_risk_manager, "_core_manager", None)
+        if core_manager is None:
+            return None
+
+        params = getattr(core_manager, "params", None)
+        if not isinstance(params, RiskParameters):
+            return None
+
+        return self._clone_risk_parameters(params)
+
+    def _merge_risk_parameters(
+        self,
+        engine_params: RiskParameters | None,
+        component_params: RiskParameters | None,
+    ) -> RiskParameters | None:
+        """Merge engine-provided and component-provided risk parameters."""
+
+        if engine_params is None and component_params is None:
+            return None
+
+        if component_params is None:
+            return self._clone_risk_parameters(engine_params)
+
+        if engine_params is None:
+            return component_params
+
+        component_dict = asdict(component_params)
+        engine_dict = asdict(engine_params)
+        default_dict = asdict(RiskParameters())
+
+        merged = dict(component_dict)
+        for key, value in engine_dict.items():
+            default_value = default_dict.get(key)
+            component_value = component_dict.get(key)
+            if (
+                value is None
+                and default_value is None
+                and component_value is not None
+            ):
+                continue
+            if value != default_value or value != component_value:
+                merged[key] = value
+
+        return RiskParameters(**merged)
+
+    @staticmethod
+    def _clone_risk_parameters(params: RiskParameters | None) -> RiskParameters | None:
+        """Return a deep-cloned copy of risk parameters for safe reuse."""
+
+        if params is None:
+            return None
+
+        return RiskParameters(**asdict(params))
 
     def _configure_strategy(
         self, strategy: ComponentStrategy | StrategyRuntime
