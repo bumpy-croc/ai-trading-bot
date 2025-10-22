@@ -235,6 +235,7 @@ class LiveTradingEngine:
 
         # Trailing stop policy
         self.trailing_stop_policy = trailing_stop_policy or self._build_trailing_policy()
+        self._trailing_stop_opt_in = self.trailing_stop_policy is not None
         
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -261,6 +262,7 @@ class LiveTradingEngine:
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
         # Partial operations policy (disabled by default for parity)
+        self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager = partial_manager
         elif enable_partial_operations:
@@ -290,6 +292,9 @@ class LiveTradingEngine:
                 )
         else:
             self.partial_manager = None
+        self._partial_operations_opt_in = bool(
+            self.enable_partial_operations or self.partial_manager is not None
+        )
 
         # Correlation engine setup
         try:
@@ -611,14 +616,26 @@ class LiveTradingEngine:
         try:
             partial_descriptor = getattr(bundle, "partial_exit", None)
             if partial_descriptor is not None:
-                self.partial_manager = partial_descriptor.to_policy()
+                if self._partial_operations_opt_in or self.partial_manager is not None:
+                    self.partial_manager = partial_descriptor.to_policy()
+                    self._partial_operations_opt_in = True
+                else:
+                    logger.debug(
+                        "Skipping partial-exit policy from component decision: partial operations disabled"
+                    )
         except Exception as exc:
             logger.debug("Failed to hydrate partial-exit policy from component decision: %s", exc)
 
         try:
             trailing_descriptor = getattr(bundle, "trailing_stop", None)
             if trailing_descriptor is not None:
-                self.trailing_stop_policy = trailing_descriptor.to_policy()
+                if self._trailing_stop_opt_in or self.trailing_stop_policy is not None:
+                    self.trailing_stop_policy = trailing_descriptor.to_policy()
+                    self._trailing_stop_opt_in = True
+                else:
+                    logger.debug(
+                        "Skipping trailing-stop policy from component decision: trailing stops disabled"
+                    )
         except Exception as exc:
             logger.debug("Failed to hydrate trailing-stop policy from component decision: %s", exc)
 
