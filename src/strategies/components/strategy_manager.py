@@ -8,6 +8,7 @@ testing and rollbacks.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -214,11 +215,14 @@ class ComponentStrategyManager:
             
             # Calculate position size using risk manager
             risk_context = self._build_risk_context(df, index, signal)
+            filtered_context = self._filter_risk_kwargs(
+                self.risk_manager.calculate_position_size, risk_context
+            )
             risk_position_size = self.risk_manager.calculate_position_size(
                 signal,
                 balance,
                 regime,
-                **risk_context,
+                **filtered_context,
             )
             
             # Allow position sizer to further adjust the risk manager's position size
@@ -303,6 +307,25 @@ class ComponentStrategyManager:
             context['strategy_overrides'] = overrides
 
         return context
+
+    def _filter_risk_kwargs(
+        self, method: Any, context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return only keyword arguments accepted by the provided method."""
+
+        if not context:
+            return {}
+
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return dict(context)
+
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return dict(context)
+
+        allowed = {name for name in signature.parameters if name not in {'self'}}
+        return {key: value for key, value in context.items() if key in allowed}
 
     def _collect_indicator_snapshot(
         self,

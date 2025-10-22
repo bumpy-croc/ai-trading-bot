@@ -8,6 +8,7 @@ logging and decision tracking.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from collections.abc import Sequence
@@ -266,11 +267,14 @@ class Strategy:
 
             policies = None
             try:
+                policy_kwargs = self._prepare_risk_kwargs(
+                    self.risk_manager.get_position_policies, risk_context
+                )
                 policies = self.risk_manager.get_position_policies(
                     signal,
                     balance,
                     regime,
-                    **risk_context,
+                    **policy_kwargs,
                 )
             except Exception as policy_error:
                 self.logger.debug("Risk policy extraction failed: %s", policy_error)
@@ -591,6 +595,25 @@ class Strategy:
             snapshot.update({f"signal_{k}": v for k, v in signal.metadata.items()})
 
         return snapshot
+
+    def _prepare_risk_kwargs(
+        self, method: Any, context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Filter contextual kwargs to those accepted by ``method``."""
+
+        if not context:
+            return {}
+
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return dict(context)
+
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return dict(context)
+
+        allowed = {name for name in signature.parameters if name not in {'self'}}
+        return {key: value for key, value in context.items() if key in allowed}
     
     def _calculate_risk_position_size(
         self,
@@ -601,11 +624,14 @@ class Strategy:
     ) -> float:
         """Calculate risk-based position size"""
         try:
+            filtered_context = self._prepare_risk_kwargs(
+                self.risk_manager.calculate_position_size, context
+            )
             return self.risk_manager.calculate_position_size(
                 signal,
                 balance,
                 regime,
-                **context,
+                **filtered_context,
             )
         except Exception as e:
             self.logger.error(f"Risk position size calculation failed: {e}")

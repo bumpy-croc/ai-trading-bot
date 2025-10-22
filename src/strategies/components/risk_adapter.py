@@ -63,6 +63,59 @@ class CoreRiskAdapter(RiskManager):
         self._hooks = hooks
 
     # ------------------------------------------------------------------
+    # Compatibility properties for legacy integrations
+    # ------------------------------------------------------------------
+    @property
+    def risk_per_trade(self) -> float:
+        manager = self._require_core_manager()
+        params = getattr(manager, "params", None)
+        if params is None:
+            return 0.0
+        return float(getattr(params, "base_risk_per_trade", 0.0))
+
+    @risk_per_trade.setter
+    def risk_per_trade(self, value: float) -> None:
+        manager = self._require_core_manager()
+        params = getattr(manager, "params", None)
+        if params is not None:
+            params.base_risk_per_trade = float(value)
+
+    @property
+    def stop_loss_pct(self) -> float | None:
+        value = self._strategy_overrides.get("stop_loss_pct")
+        return float(value) if value is not None else None
+
+    @stop_loss_pct.setter
+    def stop_loss_pct(self, value: float | None) -> None:
+        if value is None:
+            self._strategy_overrides.pop("stop_loss_pct", None)
+            return
+        self._strategy_overrides["stop_loss_pct"] = float(value)
+
+    @property
+    def take_profit_pct(self) -> float | None:
+        override = self._strategy_overrides.get("take_profit_pct")
+        if override is not None:
+            return float(override)
+        params = getattr(self._require_core_manager(), "params", None)
+        if params is None or params.default_take_profit_pct is None:
+            return None
+        return float(params.default_take_profit_pct)
+
+    @take_profit_pct.setter
+    def take_profit_pct(self, value: float | None) -> None:
+        manager = self._require_core_manager()
+        params = getattr(manager, "params", None)
+        if value is None:
+            self._strategy_overrides.pop("take_profit_pct", None)
+            if params is not None:
+                params.default_take_profit_pct = None
+            return
+        self._strategy_overrides["take_profit_pct"] = float(value)
+        if params is not None:
+            params.default_take_profit_pct = float(value)
+
+    # ------------------------------------------------------------------
     # RiskManager interface
     # ------------------------------------------------------------------
     def calculate_position_size(
