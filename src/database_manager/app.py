@@ -121,6 +121,10 @@ def create_app() -> Flask:
 
     app.config["SECRET_KEY"] = get_secret_key(env_var="DB_MANAGER_SECRET_KEY")
 
+    # Register global security extensions
+    csrf.init_app(app)
+    limiter.init_app(app)
+
     # --- Flask-Login setup for admin authentication ---
     login_manager = LoginManager()
     login_manager.init_app(app)
