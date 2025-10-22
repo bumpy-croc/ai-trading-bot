@@ -8,9 +8,12 @@ Tests for:
 """
 
 import os
-import pytest
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
-from werkzeug.security import generate_password_hash, check_password_hash
+
+import pytest
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 def test_sec_001_admin_password_required_from_env():
@@ -123,8 +126,107 @@ def test_sec_003_secret_key_fallback_in_test():
     """SEC-003: Verify SECRET_KEY fallback works in test environment."""
     with patch.dict(os.environ, {"ENV": "test"}, clear=False):
         os.environ.pop("DB_MANAGER_SECRET_KEY", None)
-        
+
         from src.database_manager.app import _ensure_secret_key
-        
+
         key = _ensure_secret_key()
         assert key == "dev-key-change-in-production"
+
+
+def test_sec_002_login_missing_password_graceful_failure(monkeypatch):
+    """SEC-002: Missing password should not raise when validating credentials."""
+
+    class DummyDatabaseManager:
+        def __init__(self):
+            self.engine = object()
+            self.session_factory = lambda: None
+
+        def get_database_info(self):
+            return {"status": "ok"}
+
+    dummy_base = SimpleNamespace(
+        registry=SimpleNamespace(mappers=[]),
+        metadata=SimpleNamespace(create_all=lambda engine: None),
+    )
+
+    class DummyScopedSession:
+        def remove(self):
+            return None
+
+    flask_admin_module = ModuleType("flask_admin")
+    flask_admin_contrib = ModuleType("flask_admin.contrib")
+    flask_admin_sqla = ModuleType("flask_admin.contrib.sqla")
+
+    class DummyAdmin:
+        def __init__(self, *args, **kwargs):
+            self._views = []
+
+        def add_view(self, view):
+            self._views.append(view)
+
+    class DummyModelView:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    flask_admin_module.Admin = DummyAdmin
+    flask_admin_contrib.sqla = flask_admin_sqla
+    flask_admin_sqla.ModelView = DummyModelView
+
+    flask_login_module = ModuleType("flask_login")
+
+    class DummyLoginManager:
+        def __init__(self):
+            self.login_view = None
+
+        def init_app(self, app):
+            return None
+
+        def user_loader(self, callback):
+            return callback
+
+    class DummyUserMixin:
+        pass
+
+    def dummy_login_required(func):
+        return func
+
+    def dummy_login_user(user):
+        return None
+
+    def dummy_logout_user():
+        return None
+
+    with patch.dict(
+        os.environ,
+        {
+            "DB_MANAGER_ADMIN_USER": "admin",
+            "DB_MANAGER_ADMIN_PASS": "super-secure",
+            "DB_MANAGER_SECRET_KEY": "secret",
+            "ENV": "development",
+        },
+        clear=False,
+    ):
+        monkeypatch.setitem(sys.modules, "flask_admin", flask_admin_module)
+        monkeypatch.setitem(sys.modules, "flask_admin.contrib", flask_admin_contrib)
+        monkeypatch.setitem(sys.modules, "flask_admin.contrib.sqla", flask_admin_sqla)
+        monkeypatch.setitem(sys.modules, "flask_login", flask_login_module)
+
+        flask_login_module.LoginManager = DummyLoginManager
+        flask_login_module.UserMixin = DummyUserMixin
+        flask_login_module.login_required = dummy_login_required
+        flask_login_module.login_user = dummy_login_user
+        flask_login_module.logout_user = dummy_logout_user
+
+        import src.database_manager.app as app_module
+
+        monkeypatch.setattr(app_module, "DatabaseManager", DummyDatabaseManager)
+        monkeypatch.setattr(app_module, "scoped_session", lambda factory: DummyScopedSession())
+        monkeypatch.setattr(app_module, "Base", dummy_base)
+
+        app = app_module.create_app()
+
+        with app.test_client() as client:
+            response = client.post("/login", data={"username": "admin"})
+
+        assert response.status_code == 200
+        assert b"Login Failed" in response.data

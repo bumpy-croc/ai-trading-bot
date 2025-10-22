@@ -172,7 +172,11 @@ def create_app() -> "Flask":
             username = request.form.get("username")
             password = request.form.get("password")
             # SEC-002 Fix: Use secure password hash comparison (timing-attack resistant)
-            if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
+            if (
+                username == ADMIN_USERNAME
+                and password is not None
+                and check_password_hash(ADMIN_PASSWORD_HASH, password)
+            ):
                 user = AdminUser(username)
                 login_user(user)
                 logger.info(f"✅ Admin login successful for user: {username}")
