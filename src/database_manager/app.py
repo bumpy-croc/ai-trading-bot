@@ -1,32 +1,17 @@
 import logging
 import os
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import sqlalchemy.exc
-from flask import (  # type: ignore
-    Flask,
-    Response,
-    jsonify,
-    redirect,
-    render_template_string,
-    request,
-    url_for,
-)
-from flask_admin import Admin  # type: ignore
-from flask_admin.contrib.sqla import ModelView  # type: ignore
-from flask_login import (  # type: ignore
-    LoginManager,
-    UserMixin,
-    login_required,
-    login_user,
-    logout_user,
-)
 from werkzeug.security import check_password_hash, generate_password_hash  # type: ignore
 from sqlalchemy.orm import scoped_session  # type: ignore
 
 # Re-use existing database layer
 from src.database.manager import DatabaseManager  # type: ignore
 from src.database.models import Base  # type: ignore
+
+if TYPE_CHECKING:  # pragma: no cover - type checking only
+    from flask import Flask
 
 logger = logging.getLogger(__name__)
 
@@ -74,36 +59,7 @@ def _get_admin_credentials() -> tuple[str, str]:
     return admin_username, admin_password
 
 
-class CustomModelView(ModelView):
-    """Generic model view with sensible defaults and automatic search columns."""
-
-    can_create = True
-    can_edit = True
-    can_delete = True
-    can_view_details = True
-    page_size = 50
-
-    def __init__(self, model, session, **kwargs):
-        # Dynamically determine searchable string columns
-        searchable: list[str] = []
-        for column in model.__table__.columns:  # type: ignore[attr-defined]
-            # Some column types (e.g. JSON) do not expose python_type
-            try:
-                if hasattr(column.type, "python_type") and column.type.python_type is str:
-                    searchable.append(column.name)
-            except NotImplementedError:
-                # Skip columns that don't implement python_type
-                continue
-        kwargs.setdefault("column_searchable_list", searchable)
-        super().__init__(model, session, **kwargs)
-
-
-class AdminUser(UserMixin):
-    def __init__(self, id):
-        self.id = id
-
-
-def create_app() -> Flask:
+def create_app() -> "Flask":
     """Factory to create and configure the Flask application.
 
     The function attempts to establish a database connection via
@@ -112,6 +68,52 @@ def create_app() -> Flask:
     that deployment health checks can continue to function while signalling a
     500 status to callers.
     """
+
+    from flask import (
+        Flask,
+        Response,
+        jsonify,
+        redirect,
+        render_template_string,
+        request,
+        url_for,
+    )  # type: ignore
+    from flask_admin import Admin  # type: ignore
+    from flask_admin.contrib.sqla import ModelView  # type: ignore
+    from flask_login import (  # type: ignore
+        LoginManager,
+        UserMixin,
+        login_required,
+        login_user,
+        logout_user,
+    )
+
+    class CustomModelView(ModelView):
+        """Generic model view with sensible defaults and automatic search columns."""
+
+        can_create = True
+        can_edit = True
+        can_delete = True
+        can_view_details = True
+        page_size = 50
+
+        def __init__(self, model, session, **kwargs):
+            # Dynamically determine searchable string columns
+            searchable: list[str] = []
+            for column in model.__table__.columns:  # type: ignore[attr-defined]
+                # Some column types (e.g. JSON) do not expose python_type
+                try:
+                    if hasattr(column.type, "python_type") and column.type.python_type is str:
+                        searchable.append(column.name)
+                except NotImplementedError:
+                    # Skip columns that don't implement python_type
+                    continue
+            kwargs.setdefault("column_searchable_list", searchable)
+            super().__init__(model, session, **kwargs)
+
+    class AdminUser(UserMixin):
+        def __init__(self, id):
+            self.id = id
 
     # Consolidated SECRET_KEY handling (SEC-003 Fix)
     app_secret_key = _ensure_secret_key()
