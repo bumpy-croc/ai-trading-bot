@@ -24,13 +24,13 @@ class SensitiveDataFilter(logging.Filter):
     _KV_PATTERN = re.compile(
         r"(?i)\b(api[_-]?key|api[_-]?secret|secret|token|password|pass|auth|bearer|session"
         r"|refresh[_-]?token|access[_-]?token|hmac[_-]?secret|private[_-]?key|client[_-]?secret"
-        r"|signing[_-]?key|credential)[^=:\s]*\s*([=:])\s*([^\s,;]+)"
+        r"|signing[_-]?key|credential(?:s)?)[^=:\s]*\s*([=:])\s*([^\s,;]+)"
     )
     # Matches JSON-style "key": "value" for the same keys
     _JSON_PATTERN = re.compile(
         r"(?i)\"(api[_-]?key|api[_-]?secret|secret|token|password|pass|auth|bearer|session"
         r"|refresh[_-]?token|access[_-]?token|hmac[_-]?secret|private[_-]?key|client[_-]?secret"
-        r"|signing[_-]?key|credential)\"\s*:\s*\"([^\"]+)\""
+        r"|signing[_-]?key|credential(?:s)?)\"\s*:\s*\"([^\"]+)\""
     )
 
     _SENSITIVE_KEYS = {
