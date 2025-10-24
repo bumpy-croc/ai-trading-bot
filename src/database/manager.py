@@ -253,13 +253,16 @@ class DatabaseManager:
         
         SEC-005 Fix: Enforce SSL for database connections in production.
         """
-        # Determine SSL mode based on environment
-        env = os.getenv("ENV", "development").lower()
-        db_ssl_mode = os.getenv("DATABASE_SSL_MODE")
+        config = get_config()
+
+        # Determine SSL mode based on environment (config manager honors .env and env vars)
+        env = (config.get("ENV", "development") or "development").strip().lower()
+        db_ssl_mode = config.get("DATABASE_SSL_MODE")
         
         # Default based on environment
         if db_ssl_mode:
             ssl_mode = db_ssl_mode
+            logger.info(f"Database SSL mode: {ssl_mode} (configuration override)")
         elif env == "production":
             ssl_mode = "require"  # Enforce SSL in production
             logger.info("Database SSL mode: require (production)")
