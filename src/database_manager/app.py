@@ -140,6 +140,7 @@ def create_app() -> Flask:
         return None
 
     @app.route("/login", methods=["GET", "POST"])
+    @csrf.exempt
     def login():
         if request.method == "POST":
             username = request.form.get("username")
@@ -197,6 +198,7 @@ def create_app() -> Flask:
 
     # Simple schema "migration" route to ensure new tables are created
     @app.route("/migrate", methods=["POST", "GET"])
+    @csrf.exempt
     def migrate():
         """Synchronise database schema (creates any missing tables)."""
         try:
