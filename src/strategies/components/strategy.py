@@ -11,7 +11,7 @@ from __future__ import annotations
 import inspect
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -132,6 +132,9 @@ class Strategy:
         # Runtime configuration
         self._warmup_override: int | None = None
         self._last_signal: Signal | None = None
+        self._additional_risk_context_provider: (
+            Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None
+        ) = None
         
         self.logger.info(f"Strategy '{name}' initialized with components: "
                         f"SignalGen={signal_generator.name}, "
@@ -459,7 +462,15 @@ class Strategy:
             'last_updated': datetime.now()
         }
         self.logger.info("Strategy history and metrics cleared")
-    
+
+    def set_additional_risk_context_provider(
+        self,
+        provider: Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None,
+    ) -> None:
+        """Register a hook that can enrich the risk context before delegation."""
+
+        self._additional_risk_context_provider = provider
+
     def get_component_info(self) -> dict[str, dict[str, Any]]:
         """Get information about all components"""
         return {
@@ -562,13 +573,28 @@ class Strategy:
 
         price = float(df['close'].iloc[index]) if 'close' in df.columns else 0.0
         overrides = self.get_risk_overrides() or {}
-        return {
+        context: dict[str, Any] = {
             'df': df,
             'index': index,
             'price': price,
             'indicators': self._collect_indicator_snapshot(df, index, signal),
             'strategy_overrides': overrides,
         }
+
+        if self._additional_risk_context_provider is not None:
+            try:
+                extra_context = self._additional_risk_context_provider(df, index, signal)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self.logger.debug(
+                    "Additional risk context provider failed at index %s: %s",
+                    index,
+                    exc,
+                )
+            else:
+                if extra_context:
+                    context.update(dict(extra_context))
+
+        return context
 
     def _collect_indicator_snapshot(
         self,

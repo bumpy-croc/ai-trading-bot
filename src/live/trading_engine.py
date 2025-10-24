@@ -409,6 +409,7 @@ class LiveTradingEngine:
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
         self.timeframe: str | None = None  # Will be set when trading starts
+        self._active_symbol: str | None = None
 
         # Performance tracking
         self.total_trades = 0
@@ -660,10 +661,24 @@ class LiveTradingEngine:
         runtime = strategy if isinstance(strategy, StrategyRuntime) else None
         base_strategy = runtime.strategy if runtime is not None else strategy
 
+        previous_component = getattr(self, "_component_strategy", None)
+
         self.strategy = base_strategy
         self._component_strategy = (
             base_strategy if isinstance(base_strategy, ComponentStrategy) else None
         )
+
+        if (
+            previous_component is not None
+            and previous_component is not self._component_strategy
+            and hasattr(previous_component, "set_additional_risk_context_provider")
+        ):
+            try:
+                previous_component.set_additional_risk_context_provider(None)
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                logger.debug(
+                    "Failed to clear risk context provider on previous strategy: %s", exc
+                )
 
         if runtime is not None:
             self._runtime = runtime
@@ -671,6 +686,61 @@ class LiveTradingEngine:
             self._runtime = StrategyRuntime(self._component_strategy)
         else:
             self._runtime = None
+
+        self._register_component_context_provider()
+
+    def _register_component_context_provider(self) -> None:
+        """Attach the engine-provided risk context hook to component strategies."""
+
+        strategy = getattr(self, "_component_strategy", None)
+        if strategy is None:
+            return
+
+        setter = getattr(strategy, "set_additional_risk_context_provider", None)
+        if not callable(setter):
+            return
+
+        def provider(df: pd.DataFrame, index: int, signal) -> dict[str, Any] | None:
+            return self._component_risk_context(df, index, signal)
+
+        try:
+            setter(provider)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug(
+                "Failed to attach risk context provider to component strategy: %s", exc
+            )
+
+    def _component_risk_context(
+        self, df: pd.DataFrame, index: int, signal
+    ) -> dict[str, Any]:
+        """Build supplemental risk context (e.g., correlation data) for components."""
+
+        strategy = getattr(self, "_component_strategy", None)
+        if strategy is None:
+            return {}
+
+        if getattr(self, "correlation_engine", None) is None:
+            return {}
+
+        symbol = self._active_symbol or getattr(strategy, "trading_pair", None)
+        if not symbol:
+            return {}
+
+        overrides = None
+        if hasattr(strategy, "get_risk_overrides"):
+            try:
+                overrides = strategy.get_risk_overrides()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "Failed to fetch component risk overrides for correlation context: %s",
+                    exc,
+                )
+
+        correlation_ctx = self._build_correlation_context(symbol, df, overrides)
+        if not correlation_ctx:
+            return {}
+
+        return {"correlation_ctx": correlation_ctx}
 
     def _apply_policies_from_decision(self, decision) -> None:
         """Hydrate engine-level policies from component strategy output."""
@@ -894,6 +964,7 @@ class LiveTradingEngine:
             return
 
         self.is_running = True
+        self._active_symbol = symbol
         self.timeframe = timeframe  # Store the trading timeframe
         # Set base logging context for this engine run
         set_context(
@@ -1087,6 +1158,7 @@ class LiveTradingEngine:
         logger.info("Trading loop started")
         steps = 0
         cfg = get_config()
+        self._active_symbol = symbol
         try:
             heartbeat_every = int(cfg.get("ENGINE_HEARTBEAT_STEPS", "60"))
         except Exception:
