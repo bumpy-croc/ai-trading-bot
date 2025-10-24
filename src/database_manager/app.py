@@ -16,6 +16,7 @@ from flask import (  # type: ignore
 )
 from flask_admin import Admin  # type: ignore
 from flask_admin.contrib.sqla import ModelView  # type: ignore
+from flask_admin.form import SecureForm  # type: ignore
 from flask_limiter import Limiter  # type: ignore
 from flask_limiter.util import get_remote_address  # type: ignore
 from flask_login import (  # type: ignore
@@ -43,6 +44,7 @@ class CustomModelView(ModelView):
     can_delete = True
     can_view_details = True
     page_size = 50
+    form_base_class = SecureForm
 
     def __init__(self, model, session, **kwargs):
         # Dynamically determine searchable string columns
