@@ -1,13 +1,16 @@
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
 from src.live.trading_engine import LiveTradingEngine
+from src.position_management.dynamic_risk import DynamicRiskConfig
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components.policies import (
+    DynamicRiskDescriptor,
     PartialExitPolicyDescriptor,
     PolicyBundle,
     TrailingStopPolicyDescriptor,
@@ -23,6 +26,8 @@ def _build_engine(
     enable_partial_operations: bool,
     risk_parameters: RiskParameters,
     trailing_stop_policy: TrailingStopPolicy | None = None,
+    enable_dynamic_risk: bool = False,
+    dynamic_risk_config: DynamicRiskConfig | None = None,
 ) -> LiveTradingEngine:
     """Create a LiveTradingEngine instance with a mocked database manager."""
 
@@ -42,7 +47,8 @@ def _build_engine(
         resume_from_last_balance=False,
         enable_partial_operations=enable_partial_operations,
         trailing_stop_policy=trailing_stop_policy,
-        enable_dynamic_risk=False,
+        enable_dynamic_risk=enable_dynamic_risk,
+        dynamic_risk_config=dynamic_risk_config,
         risk_parameters=risk_parameters,
     )
 
@@ -129,3 +135,82 @@ def test_component_policy_hydration_updates_when_opted_in(monkeypatch: pytest.Mo
     assert engine.trailing_stop_policy.trailing_distance_pct == pytest.approx(0.01)
     assert engine.trailing_stop_policy.breakeven_threshold == pytest.approx(0.04)
     assert engine.trailing_stop_policy.breakeven_buffer == pytest.approx(0.002)
+
+
+def test_dynamic_risk_policy_reuses_existing_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    risk_params = RiskParameters()
+    created_configs: list[DynamicRiskConfig] = []
+
+    class StubDynamicRiskManager:
+        def __init__(self, *, config: DynamicRiskConfig, db_manager):
+            self.config = config
+            self.db_manager = db_manager
+            self._performance_cache: dict[str, Any] = {}
+            created_configs.append(config)
+
+    monkeypatch.setattr(
+        "src.live.trading_engine.DynamicRiskManager",
+        StubDynamicRiskManager,
+    )
+
+    engine = _build_engine(
+        monkeypatch,
+        enable_partial_operations=False,
+        risk_parameters=risk_params,
+        trailing_stop_policy=None,
+    )
+
+    dynamic_descriptor = DynamicRiskDescriptor(performance_window_days=45)
+    bundle = PolicyBundle(dynamic_risk=dynamic_descriptor)
+
+    engine._apply_policies_from_decision(SimpleNamespace(policies=bundle))
+
+    assert len(created_configs) == 1
+    first_manager = engine.dynamic_risk_manager
+    assert isinstance(first_manager, StubDynamicRiskManager)
+
+    engine._apply_policies_from_decision(SimpleNamespace(policies=bundle))
+
+    assert engine.dynamic_risk_manager is first_manager
+    assert len(created_configs) == 1
+
+
+def test_dynamic_risk_policy_recreates_when_config_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    risk_params = RiskParameters()
+    created_configs: list[DynamicRiskConfig] = []
+
+    class StubDynamicRiskManager:
+        def __init__(self, *, config: DynamicRiskConfig, db_manager):
+            self.config = config
+            self.db_manager = db_manager
+            self._performance_cache: dict[str, Any] = {}
+            created_configs.append(config)
+
+    monkeypatch.setattr(
+        "src.live.trading_engine.DynamicRiskManager",
+        StubDynamicRiskManager,
+    )
+
+    engine = _build_engine(
+        monkeypatch,
+        enable_partial_operations=False,
+        risk_parameters=risk_params,
+        trailing_stop_policy=None,
+    )
+
+    first_bundle = PolicyBundle(
+        dynamic_risk=DynamicRiskDescriptor(performance_window_days=30)
+    )
+    second_bundle = PolicyBundle(
+        dynamic_risk=DynamicRiskDescriptor(performance_window_days=60)
+    )
+
+    engine._apply_policies_from_decision(SimpleNamespace(policies=first_bundle))
+    first_manager = engine.dynamic_risk_manager
+
+    engine._apply_policies_from_decision(SimpleNamespace(policies=second_bundle))
+
+    assert len(created_configs) == 2
+    assert engine.dynamic_risk_manager is not first_manager

@@ -247,6 +247,7 @@ class LiveTradingEngine:
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
         self.dynamic_risk_manager = None
+        self._component_dynamic_risk_config: DynamicRiskConfig | None = None
         if enable_dynamic_risk:
             config = dynamic_risk_config or DynamicRiskConfig()
             # Will be initialized after db_manager is available
@@ -782,13 +783,25 @@ class LiveTradingEngine:
             dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
             if dynamic_descriptor is not None:
                 config = dynamic_descriptor.to_config()
+                self._component_dynamic_risk_config = config
                 if not getattr(self, "enable_dynamic_risk", False):
                     self.enable_dynamic_risk = True
                 if self.db_manager is not None:
-                    self.dynamic_risk_manager = DynamicRiskManager(
-                        config=config,
-                        db_manager=self.db_manager,
+                    manager = getattr(self, "dynamic_risk_manager", None)
+                    should_create = (
+                        manager is None or getattr(manager, "config", None) != config
                     )
+                    if should_create:
+                        self.dynamic_risk_manager = DynamicRiskManager(
+                            config=config,
+                            db_manager=self.db_manager,
+                        )
+                    else:
+                        try:
+                            self.dynamic_risk_manager.config = config
+                        except AttributeError:
+                            pass
+                        self.dynamic_risk_manager.db_manager = self.db_manager
         except Exception as exc:
             logger.debug("Failed to hydrate dynamic risk manager from component decision: %s", exc)
 
