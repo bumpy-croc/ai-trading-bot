@@ -4,31 +4,51 @@ import time
 from typing import Optional, TYPE_CHECKING
 
 import sqlalchemy.exc
-from flask import (  # type: ignore
-    Flask,
-    Response,
-    jsonify,
-    redirect,
-    render_template_string,
-    request,
-    session,
-    url_for,
-)
-from flask_admin import Admin  # type: ignore
-from flask_admin.contrib.sqla import ModelView  # type: ignore
-from flask_admin.form import SecureForm  # type: ignore
-from flask_limiter import Limiter  # type: ignore
-from flask_limiter.util import get_remote_address  # type: ignore
-from flask_login import (  # type: ignore
-    LoginManager,
-    UserMixin,
-    login_required,
-    login_user,
-    logout_user,
-)
-from flask_wtf.csrf import CSRFProtect  # type: ignore
 from werkzeug.security import check_password_hash, generate_password_hash  # type: ignore
 from sqlalchemy.orm import scoped_session  # type: ignore
+
+try:  # pragma: no cover - exercised indirectly in tests
+    from flask_wtf.csrf import CSRFProtect  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
+    class _CSRFProtectStub:  # type: ignore[too-many-ancestors]
+        """Fallback stub that keeps module importable without Flask-WTF."""
+
+        def init_app(self, app):  # type: ignore[no-untyped-def]
+            raise ModuleNotFoundError(
+                "Flask-WTF must be installed to enable CSRF protection"
+            )
+
+        def exempt(self, view):  # type: ignore[no-untyped-def]
+            return view
+
+    CSRFProtect = _CSRFProtectStub  # type: ignore[assignment]
+
+try:  # pragma: no cover - exercised indirectly in tests
+    from flask_limiter import Limiter  # type: ignore
+    from flask_limiter.util import get_remote_address  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
+    class _LimiterStub:  # type: ignore[too-many-ancestors]
+        """Fallback stub that keeps module importable without Flask-Limiter."""
+
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self._args = args
+            self._kwargs = kwargs
+
+        def init_app(self, app):  # type: ignore[no-untyped-def]
+            raise ModuleNotFoundError(
+                "Flask-Limiter must be installed to enable rate limiting"
+            )
+
+        def limit(self, *dargs, **dkwargs):  # type: ignore[no-untyped-def]
+            def decorator(func):  # type: ignore[no-untyped-def]
+                return func
+
+            return decorator
+
+    def get_remote_address(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise ModuleNotFoundError("Flask-Limiter must be installed to enable rate limiting")
+
+    Limiter = _LimiterStub  # type: ignore[assignment]
 
 # Re-use existing database layer
 from src.database.manager import DatabaseManager  # type: ignore
@@ -127,6 +147,7 @@ def create_app() -> "Flask":
     )  # type: ignore
     from flask_admin import Admin  # type: ignore
     from flask_admin.contrib.sqla import ModelView  # type: ignore
+    from flask_admin.form import SecureForm  # type: ignore
     from flask_login import (  # type: ignore
         LoginManager,
         UserMixin,
