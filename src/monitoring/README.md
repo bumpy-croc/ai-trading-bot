@@ -1,6 +1,6 @@
 # Monitoring
 
-> **Last Updated**: 2025-10-22  
+> **Last Updated**: 2025-10-24  
 > **Related Documentation**: See [docs/monitoring.md](../../docs/monitoring.md) for operational guidance
 
 Real-time web dashboard for tracking live trading performance, system health, and risk metrics.
