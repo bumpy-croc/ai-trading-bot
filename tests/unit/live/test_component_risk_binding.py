@@ -61,9 +61,8 @@ def test_engine_merges_engine_and_component_parameters():
         default_take_profit_pct=0.04,
     )
     engine_params = RiskParameters(
-        base_risk_per_trade=0.02,
-        max_position_size=0.25,
-        default_take_profit_pct=None,
+        base_risk_per_trade=0.025,
+        max_position_size=0.2,
     )
 
     strategy = _build_component_strategy(component_params)
@@ -77,6 +76,35 @@ def test_engine_merges_engine_and_component_parameters():
     )
 
     params = engine.risk_manager.params
-    assert params.base_risk_per_trade == pytest.approx(0.02)
-    assert params.max_position_size == pytest.approx(0.25)
+    assert params.base_risk_per_trade == pytest.approx(0.025)
+    assert params.max_position_size == pytest.approx(0.2)
     assert params.default_take_profit_pct == pytest.approx(0.04)
+
+
+def test_engine_preserves_component_overrides_for_default_engine_parameters():
+    component_params = RiskParameters(
+        trailing_activation_threshold=None,
+        trailing_distance_pct=None,
+        partial_exit_targets=[],
+        partial_exit_sizes=[],
+        scale_in_thresholds=[],
+        scale_in_sizes=[],
+    )
+
+    strategy = _build_component_strategy(component_params)
+
+    engine = LiveTradingEngine(
+        strategy=strategy,
+        data_provider=object(),
+        risk_parameters=RiskParameters(),
+        enable_live_trading=False,
+        log_trades=False,
+    )
+
+    params = engine.risk_manager.params
+    assert params.trailing_activation_threshold is None
+    assert params.trailing_distance_pct is None
+    assert params.partial_exit_targets == []
+    assert params.partial_exit_sizes == []
+    assert params.scale_in_thresholds == []
+    assert params.scale_in_sizes == []

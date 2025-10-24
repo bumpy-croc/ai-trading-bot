@@ -633,15 +633,12 @@ class LiveTradingEngine:
         merged = dict(component_dict)
         for key, value in engine_dict.items():
             default_value = default_dict.get(key)
-            component_value = component_dict.get(key)
-            if (
-                value is None
-                and default_value is None
-                and component_value is not None
-            ):
+
+            # Preserve component overrides when the engine sticks with defaults.
+            if value == default_value:
                 continue
-            if value != default_value or value != component_value:
-                merged[key] = value
+
+            merged[key] = value
 
         return RiskParameters(**merged)
 
