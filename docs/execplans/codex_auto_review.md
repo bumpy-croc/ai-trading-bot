@@ -73,7 +73,7 @@ Commands run or queued during implementation (repository root unless noted):
 
 - `black cli/core/codex_workflow.py cli/commands/codex.py cli/__main__.py tests/unit/cli/test_codex_workflow.py` → reformatted new helper module.
 - `ruff check cli/core/codex_workflow.py cli/commands/codex.py cli/__main__.py tests/unit/cli/test_codex_workflow.py` → all checks passed after import sorting.
-    - `pytest tests/unit/cli/test_codex_workflow.py` → 8 passed (Python 3.11).
+    - `pytest tests/unit/cli/test_codex_workflow.py` → 9 passed (Python 3.11).
     - `python3.11 -m cli codex auto-review --help` → verified CLI wiring and help text without contacting Codex.
     - `python3.11 -m cli codex auto-review --max-iterations 0 --check "echo noop" --python-bin $(which python3.11)` → exercised early-exit path and confirmed env injection works.
 - (Planned) `python3.11 -m cli codex auto-review --plan-path docs/execplans/codex_auto_review.md --check "make test" --check "make code-quality" --max-iterations 2` for an end-to-end dry run when Codex access is desired.
@@ -83,7 +83,7 @@ Commands run or queued during implementation (repository root unless noted):
 Current validation status:
 
 1. `python3.11 -m cli codex auto-review --help` prints the expected options, confirming the new subcommand is wired.
-2. `pytest tests/unit/cli/test_codex_workflow.py` exercises prompt helpers, diff injection, and guard-rails (8 passed).
+2. `pytest tests/unit/cli/test_codex_workflow.py` exercises prompt helpers, diff injection, shim handling, and guard-rails (9 passed).
 3. `python3.11 -m cli codex auto-review --max-iterations 0 --check "echo noop"` validates the CLI path that exits before invoking Codex.
 4. A future integrated dry run (with Codex credentials available) should demonstrate the full review/fix loop; document results once executed.
 
@@ -112,3 +112,5 @@ These artifacts make the run auditable.
 - 2025-10-23 18:40Z — Updated progress, decisions, concrete steps, and validation notes after implementing CLI workflow.
 - 2025-10-23 18:55Z — Recorded validation outcomes, surprises, and retrospective after smoke-testing the CLI.
 - 2025-10-23 19:20Z — Integrated diff context defaults and clarified ExecPlan optionality.
+- 2025-10-23 19:45Z — Injected Python interpreter handling, updated docs, and refined schema requirements to satisfy Codex.
+- 2025-10-23 20:05Z — Added python shim helper plus tests to ensure Makefile commands locate the interpreter.

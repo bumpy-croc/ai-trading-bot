@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -10,7 +11,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 DEFAULT_CHECKS: list[str] = ["make test", "make code-quality"]
 MAX_LOG_CHARS = 4000
@@ -48,6 +49,28 @@ def _slugify_command(command: str, limit: int = 40) -> str:
     return slug
 
 
+def _get_python_major_version(executable: str) -> int | None:
+    """Return the major version of the supplied python executable or None on failure."""
+    try:
+        proc = subprocess.run(
+            [executable, "-c", "import sys; print(sys.version_info[0])"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    if proc.returncode != 0:
+        return None
+
+    output = (proc.stdout or proc.stderr or "").strip()
+    try:
+        return int(output.splitlines()[-1])
+    except ValueError:
+        return None
+
+
 def _ensure_artifact_dir(base_dir: Path | None = None) -> Path:
     base = base_dir or Path(".codex/workflows")
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%SZ")
@@ -69,6 +92,43 @@ def _load_plan_text(plan_path: Path | None) -> str:
         return f"ExecPlan not found at {plan_path}."
     text = plan_path.read_text(encoding="utf-8")
     return _truncate(text, PLAN_MAX_CHARS)
+
+
+def _ensure_python_on_path(python_bin: str, env: dict[str, str]) -> TemporaryDirectory | None:
+    existing_python = shutil.which("python", path=env.get("PATH"))
+    python_path_str = shutil.which(python_bin) or python_bin
+    python_path = Path(python_path_str)
+
+    if not python_path.exists():
+        raise FileNotFoundError(f"Specified python interpreter not found: {python_bin}")
+
+    resolved_python = python_path.resolve()
+
+    need_shim = False
+    if not existing_python:
+        need_shim = True
+    else:
+        try:
+            resolved_existing = Path(existing_python).resolve()
+        except OSError:
+            resolved_existing = None
+
+        if resolved_existing != resolved_python:
+            need_shim = True
+        else:
+            major = _get_python_major_version(existing_python)
+            if major is not None and major < 3:
+                need_shim = True
+
+    if not need_shim:
+        return None
+
+    shim_dir = TemporaryDirectory(prefix="codex-python-shim-")
+    shim_path = Path(shim_dir.name) / "python"
+    shim_path.write_text(f'#!/bin/sh\n"{resolved_python}" "$@"\n', encoding="utf-8")
+    os.chmod(shim_path, 0o755)
+    env["PATH"] = f"{shim_dir.name}{os.pathsep}{env.get('PATH', '')}"
+    return shim_dir
 
 
 def _gather_diff_context(compare_branch: str | None, cwd: Path, limit: int = DIFF_MAX_CHARS) -> str:
@@ -363,89 +423,100 @@ def run_auto_review(
         raise ValueError("At least one validation command must be provided.")
 
     python_executable = python_bin or sys.executable or "python3"
+    resolved_python = shutil.which(python_executable) or python_executable
+    if not Path(resolved_python).exists():
+        raise FileNotFoundError(f"Python interpreter not found: {python_executable}")
+
     env = os.environ.copy()
-    env["PYTHON"] = python_executable
+    env["PYTHON"] = resolved_python
 
-    last_review_payload: dict | None = None
+    shim_dir: TemporaryDirectory | None = None
 
-    for iteration in range(1, max_iterations + 1):
-        print(f"\n=== Automated Codex Loop :: Iteration {iteration}/{max_iterations} ===")
-        diff_context = _gather_diff_context(compare_branch, workdir)
-        validation_results = run_validation_commands(
-            validation_commands, cwd=workdir, artifact_dir=artifact_dir, env=env
-        )
-        validation_summary, validations_ok = _summarise_validation_results(validation_results)
-        summary_log = _write_log(
-            artifact_dir, f"validation_summary_{iteration:02d}.log", validation_summary + "\n"
-        )
-        print(f"Validation summary recorded at {summary_log}")
+    try:
+        shim_dir = _ensure_python_on_path(resolved_python, env)
+        last_review_payload: dict | None = None
 
-        review_prompt = _build_review_prompt(
-            plan_text=plan_text,
-            validation_summary=validation_summary,
-            iteration=iteration,
-            diff_context=diff_context,
-        )
-        raw_review_output = _invoke_codex_exec(
-            review_prompt,
-            cwd=workdir,
-            profile=profile,
-            output_schema=review_schema_path,
-            additional_args=None,
-        )
+        for iteration in range(1, max_iterations + 1):
+            print(f"\n=== Automated Codex Loop :: Iteration {iteration}/{max_iterations} ===")
+            diff_context = _gather_diff_context(compare_branch, workdir)
+            validation_results = run_validation_commands(
+                validation_commands, cwd=workdir, artifact_dir=artifact_dir, env=env
+            )
+            validation_summary, validations_ok = _summarise_validation_results(validation_results)
+            summary_log = _write_log(
+                artifact_dir, f"validation_summary_{iteration:02d}.log", validation_summary + "\n"
+            )
+            print(f"Validation summary recorded at {summary_log}")
 
-        review_payload = _parse_review_output(raw_review_output, review_schema_path)
-        review_path = artifact_dir / f"review_{iteration:02d}.json"
-        review_path.write_text(json.dumps(review_payload, indent=2), encoding="utf-8")
-        print(f"Stored structured review at {review_path}")
+            review_prompt = _build_review_prompt(
+                plan_text=plan_text,
+                validation_summary=validation_summary,
+                iteration=iteration,
+                diff_context=diff_context,
+            )
+            raw_review_output = _invoke_codex_exec(
+                review_prompt,
+                cwd=workdir,
+                profile=profile,
+                output_schema=review_schema_path,
+                additional_args=None,
+            )
 
-        findings = review_payload.get("findings", [])
-        summary = review_payload.get("summary", "")
-        print(f"Review summary: {summary}")
-        print(f"Review findings count: {len(findings)}")
+            review_payload = _parse_review_output(raw_review_output, review_schema_path)
+            review_path = artifact_dir / f"review_{iteration:02d}.json"
+            review_path.write_text(json.dumps(review_payload, indent=2), encoding="utf-8")
+            print(f"Stored structured review at {review_path}")
 
-        if validations_ok and not findings:
-            print("✅ Validations pass and Codex reported no findings. Workflow complete.")
-            return 0
+            findings = review_payload.get("findings", [])
+            summary = review_payload.get("summary", "")
+            print(f"Review summary: {summary}")
+            print(f"Review findings count: {len(findings)}")
 
-        last_review_payload = review_payload
+            if validations_ok and not findings:
+                print("✅ Validations pass and Codex reported no findings. Workflow complete.")
+                return 0
 
-        if iteration == max_iterations:
-            print("Reached maximum iterations before achieving a clean review.")
-            break
+            last_review_payload = review_payload
 
-        fix_prompt = _build_fix_prompt(
-            plan_text=plan_text,
-            validation_summary=validation_summary,
-            findings=findings,
-            commands=validation_commands,
-            iteration=iteration + 1,
-            diff_context=diff_context,
-        )
+            if iteration == max_iterations:
+                print("Reached maximum iterations before achieving a clean review.")
+                break
 
-        fix_args: list[str] = []
-        if dangerous_fix:
-            fix_args.append("--dangerously-bypass-approvals-and-sandbox")
-        else:
-            fix_args.append("--full-auto")
+            fix_prompt = _build_fix_prompt(
+                plan_text=plan_text,
+                validation_summary=validation_summary,
+                findings=findings,
+                commands=validation_commands,
+                iteration=iteration + 1,
+                diff_context=diff_context,
+            )
 
-        raw_fix_output = _invoke_codex_exec(
-            fix_prompt,
-            cwd=workdir,
-            profile=profile,
-            output_schema=None,
-            additional_args=fix_args,
-        )
-        fix_path = artifact_dir / f"fix_{iteration:02d}.log"
-        fix_path.write_text(raw_fix_output + "\n", encoding="utf-8")
-        print(f"Stored Codex fix transcript at {fix_path}")
+            fix_args: list[str] = []
+            if dangerous_fix:
+                fix_args.append("--dangerously-bypass-approvals-and-sandbox")
+            else:
+                fix_args.append("--full-auto")
 
-    if last_review_payload is not None:
-        outstanding_path = artifact_dir / "outstanding_findings.json"
-        outstanding_path.write_text(json.dumps(last_review_payload, indent=2), encoding="utf-8")
-        print(f"Outstanding findings recorded at {outstanding_path}")
-    print("❌ Automated Codex loop finished without clearing all findings.")
-    return 1
+            raw_fix_output = _invoke_codex_exec(
+                fix_prompt,
+                cwd=workdir,
+                profile=profile,
+                output_schema=None,
+                additional_args=fix_args,
+            )
+            fix_path = artifact_dir / f"fix_{iteration:02d}.log"
+            fix_path.write_text(raw_fix_output + "\n", encoding="utf-8")
+            print(f"Stored Codex fix transcript at {fix_path}")
+
+        if last_review_payload is not None:
+            outstanding_path = artifact_dir / "outstanding_findings.json"
+            outstanding_path.write_text(json.dumps(last_review_payload, indent=2), encoding="utf-8")
+            print(f"Outstanding findings recorded at {outstanding_path}")
+        print("❌ Automated Codex loop finished without clearing all findings.")
+        return 1
+    finally:
+        if shim_dir is not None:
+            shim_dir.cleanup()
 
 
 __all__ = [

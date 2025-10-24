@@ -134,16 +134,21 @@ def _setup_environment_file() -> None:
         "DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot"
     )
 
-    lines = [ln for ln in content.split("\n") if ln.strip()]
-    # Remove any existing DATABASE_URL lines (commented or malformed)
-    lines = [ln for ln in lines if not ln.strip().startswith("DATABASE_URL")]
-    # Add the correct line
-    lines.append(postgres_url_line)
-    content = "\n".join(lines) + "\n"
-    print("✅ Configured for PostgreSQL")
+    has_database_url = any(
+        line.strip().startswith("DATABASE_URL=") for line in content.splitlines()
+    )
+    if has_database_url:
+        print("ℹ️ Existing DATABASE_URL detected; leaving .env unchanged.")
+        return
+
+    new_content = content
+    if new_content and not new_content.endswith("\n"):
+        new_content += "\n"
+    new_content += postgres_url_line + "\n"
+    print("✅ Added default PostgreSQL DATABASE_URL")
 
     with open(env_file, "w") as f:
-        f.write(content)
+        f.write(new_content)
 
 
 def _setup_postgresql() -> bool:

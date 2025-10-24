@@ -111,3 +111,18 @@ def test_run_auto_review_negative_iterations_raises(tmp_path: Path) -> None:
             cwd=tmp_path,
             python_bin=sys.executable,
         )
+
+
+def test_python_shim_created_when_python_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = {"PATH": str(tmp_path)}
+    shim = cw._ensure_python_on_path(sys.executable, env)
+    try:
+        assert shim is not None
+        shim_python = Path(shim.name) / "python"
+        assert shim_python.exists()
+        assert env["PATH"].startswith(shim.name)
+    finally:
+        if shim is not None:
+            shim.cleanup()
