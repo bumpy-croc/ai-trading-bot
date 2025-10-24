@@ -15,6 +15,9 @@ class TestCoinbaseProvider:
     def test_initialization_without_keys(self):
         # Test with no credentials - should work in test environment
         with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            # Ensure no Coinbase credentials are set
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
             provider = CoinbaseProvider()
             assert provider is not None
 
@@ -31,6 +34,9 @@ class TestCoinbaseProvider:
         mock_get.return_value = mock_response
         
         with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            # Ensure no Coinbase credentials are set
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
             provider = CoinbaseProvider()
             start_date = datetime.utcfromtimestamp(1640995200)
             end_date = datetime.utcfromtimestamp(1640998800)
@@ -51,6 +57,9 @@ class TestCoinbaseProvider:
         mock_get.return_value = mock_response
         
         with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            # Ensure no Coinbase credentials are set
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
             provider = CoinbaseProvider()
             price = provider.get_current_price("BTC-USD")
             assert price == 12345.67
