@@ -252,6 +252,10 @@ class LiveTradingEngine:
             config = dynamic_risk_config or DynamicRiskConfig()
             # Will be initialized after db_manager is available
             self._dynamic_risk_config = config
+
+        # Cache component-provided correlation context to avoid repeated lookups per bar.
+        self._component_risk_context_cache_key: tuple[str, int] | None = None
+        self._component_risk_context_cache: dict[str, Any] | None = None
         
         # Timing configuration
         self.base_check_interval = check_interval
@@ -722,7 +726,15 @@ class LiveTradingEngine:
 
         symbol = self._active_symbol or getattr(strategy, "trading_pair", None)
         if not symbol:
+            self._component_risk_context_cache_key = None
+            self._component_risk_context_cache = None
             return {}
+
+        cache_key = (str(symbol), int(index))
+        cached_key = getattr(self, "_component_risk_context_cache_key", None)
+        if cached_key != cache_key:
+            self._component_risk_context_cache_key = None
+            self._component_risk_context_cache = None
 
         overrides = None
         if hasattr(strategy, "get_risk_overrides"):
@@ -734,11 +746,54 @@ class LiveTradingEngine:
                     exc,
                 )
 
-        correlation_ctx = self._build_correlation_context(symbol, df, overrides)
+        # Only build correlation context when sizing a potential entry to avoid repeated
+        # historical price lookups on every candle. Reuse the cached value if the same bar
+        # has already triggered sizing.
+        try:
+            direction = getattr(signal, "direction", None)
+        except Exception:
+            direction = None
+
+        if direction == SignalDirection.HOLD:
+            return {}
+
+        correlation_ctx = self._get_correlation_context(
+            str(symbol),
+            df,
+            overrides,
+            index=index,
+        )
         if not correlation_ctx:
             return {}
 
         return {"correlation_ctx": correlation_ctx}
+
+    def _get_correlation_context(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        overrides: dict | None,
+        *,
+        index: int | None = None,
+    ) -> dict | None:
+        """Return cached correlation context for the given bar or build it on demand."""
+
+        cache_key = (symbol, index) if index is not None else None
+        cached_key = getattr(self, "_component_risk_context_cache_key", None)
+        cached_ctx = getattr(self, "_component_risk_context_cache", None)
+        if cache_key is not None and cache_key == cached_key and cached_ctx is not None:
+            return cached_ctx
+
+        context = self._build_correlation_context(symbol, df, overrides)
+        if cache_key is not None:
+            if context:
+                self._component_risk_context_cache_key = cache_key
+                self._component_risk_context_cache = context
+            else:
+                if cache_key == getattr(self, "_component_risk_context_cache_key", None):
+                    self._component_risk_context_cache_key = None
+                    self._component_risk_context_cache = None
+        return context
 
     def _apply_policies_from_decision(self, decision) -> None:
         """Hydrate engine-level policies from component strategy output."""
@@ -1324,7 +1379,12 @@ class LiveTradingEngine:
                                 overrides = None
                             indicators = self._extract_indicators(df, current_index)
                             # Correlation context for short entries
-                            short_correlation_ctx = self._build_correlation_context(symbol, df, overrides)
+                            short_correlation_ctx = self._get_correlation_context(
+                                symbol,
+                                df,
+                                overrides,
+                                index=current_index,
+                            )
                             if overrides and overrides.get("position_sizer"):
                                 short_fraction = self.risk_manager.calculate_position_fraction(
                                     df=df,
@@ -1927,7 +1987,7 @@ class LiveTradingEngine:
         if entry_signal and not use_runtime:
             # Component strategies supply their own sizing. Retain correlation context computation
             # for downstream consumers that expect it to be populated as part of the entry check.
-            self._build_correlation_context(symbol, df, None)
+            self._get_correlation_context(symbol, df, None, index=current_index)
 
         if position_size > 0:
             position_size = self._get_dynamic_risk_adjusted_size(position_size)
