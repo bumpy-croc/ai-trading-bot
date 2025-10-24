@@ -24,8 +24,7 @@ class TestDynamicRiskDatabase:
     def dynamic_risk_manager(self, mock_db_manager):
         """Create a DynamicRiskManager with mocked database"""
         config = DynamicRiskConfig(
-            drawdown_thresholds=[0.05, 0.10, 0.15],
-            risk_reduction_factors=[0.8, 0.6, 0.4]
+            drawdown_thresholds=[0.05, 0.10, 0.15], risk_reduction_factors=[0.8, 0.6, 0.4]
         )
         return DynamicRiskManager(config, db_manager=mock_db_manager)
 
@@ -40,14 +39,12 @@ class TestDynamicRiskDatabase:
             "expectancy": -0.05,
             "avg_trade_duration_hours": 4.0,
             "consecutive_losses": 5,
-            "consecutive_wins": 0
+            "consecutive_wins": 0,
         }
 
         # Calculate adjustments (should trigger significant adjustment)
         adjustments = dynamic_risk_manager.calculate_dynamic_risk_adjustments(
-            current_balance=8500,  # 15% drawdown from 10000
-            peak_balance=10000,
-            session_id=123
+            current_balance=8500, peak_balance=10000, session_id=123  # 15% drawdown from 10000
         )
 
         # Verify that a significant adjustment was calculated
@@ -60,42 +57,38 @@ class TestDynamicRiskDatabase:
         mock_db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 15,
             "win_rate": 0.6,
-            "profit_factor": 1.2
+            "profit_factor": 1.2,
         }
 
         # First call should query database
         adjustments1 = dynamic_risk_manager.calculate_dynamic_risk_adjustments(
-            current_balance=9500,
-            peak_balance=10000,
-            session_id=123
+            current_balance=9500, peak_balance=10000, session_id=123
         )
 
         # Second call within cache TTL should use cache (not call database again)
         adjustments2 = dynamic_risk_manager.calculate_dynamic_risk_adjustments(
-            current_balance=9500,
-            peak_balance=10000,
-            session_id=123
+            current_balance=9500, peak_balance=10000, session_id=123
         )
 
         # Database should only be called once
         assert mock_db_manager.get_dynamic_risk_performance_metrics.call_count == 1
-        
+
         # Results should be the same
         assert adjustments1.position_size_factor == adjustments2.position_size_factor
 
     def test_database_error_handling(self, mock_db_manager):
         """Test graceful handling of database errors"""
         # Setup database to raise an error
-        mock_db_manager.get_dynamic_risk_performance_metrics.side_effect = Exception("Database connection failed")
-        
+        mock_db_manager.get_dynamic_risk_performance_metrics.side_effect = Exception(
+            "Database connection failed"
+        )
+
         config = DynamicRiskConfig()
         manager = DynamicRiskManager(config, db_manager=mock_db_manager)
 
         # Should not raise exception, should return safe defaults
         adjustments = manager.calculate_dynamic_risk_adjustments(
-            current_balance=9000,
-            peak_balance=10000,
-            session_id=123
+            current_balance=9000, peak_balance=10000, session_id=123
         )
 
         # Should still calculate drawdown-based adjustments
@@ -109,20 +102,20 @@ class TestDynamicRiskDatabase:
             "total_trades": 25,
             "win_rate": 0.55,
             "profit_factor": 1.1,
-            "sharpe_ratio": 0.3
+            "sharpe_ratio": 0.3,
         }
 
         # Test recovery scenario
         adjustments = dynamic_risk_manager.calculate_dynamic_risk_adjustments(
             current_balance=10300,  # 3% above previous peak
             peak_balance=10000,
-            previous_peak_balance=9500  # Recovered from 9500 to 10300
+            previous_peak_balance=9500,  # Recovered from 9500 to 10300
         )
 
         # Should apply recovery logic
         recovery_return = (10300 - 9500) / 9500  # ~8.4% recovery
         assert recovery_return > 0.05  # Above 5% recovery threshold
-        
+
         # Should get some recovery benefit
         assert adjustments.position_size_factor >= 1.0  # At least normal or better
 
@@ -134,28 +127,28 @@ class TestDynamicRiskDatabase:
         mock_context.__enter__ = Mock(return_value=mock_session)
         mock_context.__exit__ = Mock(return_value=None)
         mock_db_manager.get_session.return_value = mock_context
-        
+
         # Create mock account history records
         mock_records = []
         for i in range(30):
             record = Mock()
-            record.equity = 10000 + (i * 50) + ((-1)**i * 100)  # Volatile equity curve
+            record.equity = 10000 + (i * 50) + ((-1) ** i * 100)  # Volatile equity curve
             mock_records.append(record)
-        
-        mock_session.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = mock_records
-        
+
+        mock_session.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = (
+            mock_records
+        )
+
         # Setup get_dynamic_risk_performance_metrics to return basic data
         mock_db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 20,
             "win_rate": 0.5,
-            "profit_factor": 1.0
+            "profit_factor": 1.0,
         }
 
         # Calculate adjustments
         adjustments = dynamic_risk_manager.calculate_dynamic_risk_adjustments(
-            current_balance=10000,
-            peak_balance=10000,
-            session_id=123
+            current_balance=10000, peak_balance=10000, session_id=123
         )
 
         # Should have estimated volatility in the metrics
@@ -166,15 +159,13 @@ class TestDynamicRiskDatabase:
         # Setup insufficient trade count
         mock_db_manager.get_dynamic_risk_performance_metrics.return_value = {
             "total_trades": 5,  # Below minimum of 10
-            "win_rate": 0.2,   # Poor performance
+            "win_rate": 0.2,  # Poor performance
             "profit_factor": 0.5,
-            "sharpe_ratio": -1.0
+            "sharpe_ratio": -1.0,
         }
 
         adjustments = dynamic_risk_manager.calculate_dynamic_risk_adjustments(
-            current_balance=10000,
-            peak_balance=10000,
-            session_id=123
+            current_balance=10000, peak_balance=10000, session_id=123
         )
 
         # Performance adjustment should not be applied due to insufficient data
@@ -189,8 +180,10 @@ class TestDatabaseManagerMethods:
     @pytest.fixture
     def db_manager(self):
         """Create a real DatabaseManager for testing (with mocked session)"""
-        with patch('src.database.manager.create_engine'), \
-             patch('src.database.manager.sessionmaker'):
+        with (
+            patch("src.database.manager.create_engine"),
+            patch("src.database.manager.sessionmaker"),
+        ):
             manager = DatabaseManager()
             manager.get_session = Mock()
             return manager
@@ -212,7 +205,7 @@ class TestDatabaseManagerMethods:
             consecutive_losses=0,
             consecutive_wins=3,
             risk_adjustment_factor=0.8,
-            profit_factor=1.3
+            profit_factor=1.3,
         )
 
         # Verify session operations
@@ -238,7 +231,7 @@ class TestDatabaseManagerMethods:
             adjustment_factor=0.4,
             current_drawdown=0.15,
             performance_score=0.3,
-            volatility_level=0.025
+            volatility_level=0.025,
         )
 
         # Verify session operations
@@ -258,8 +251,8 @@ class TestDatabaseManagerMethods:
         for i in range(20):
             trade = Mock()
             trade.pnl = 100 if i % 3 == 0 else -50  # Mixed results
-            trade.entry_time = datetime.utcnow() - timedelta(hours=i*2)
-            trade.exit_time = datetime.utcnow() - timedelta(hours=i*2-1)
+            trade.entry_time = datetime.utcnow() - timedelta(hours=i * 2)
+            trade.exit_time = datetime.utcnow() - timedelta(hours=i * 2 - 1)
             mock_trades.append(trade)
 
         # Set up proper mock chain
@@ -270,8 +263,7 @@ class TestDatabaseManagerMethods:
 
         # Test calculation
         metrics = db_manager.get_dynamic_risk_performance_metrics(
-            session_id=123,
-            start_date=datetime.utcnow() - timedelta(days=30)
+            session_id=123, start_date=datetime.utcnow() - timedelta(days=30)
         )
 
         # Verify basic metrics are calculated
@@ -288,7 +280,7 @@ class TestDatabaseManagerMethods:
         mock_context.__enter__ = Mock(return_value=mock_session)
         mock_context.__exit__ = Mock(return_value=None)
         db_manager.get_session.return_value = mock_context
-        
+
         # Mock empty trade data
         mock_query = Mock()
         mock_query.filter.return_value = mock_query

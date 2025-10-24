@@ -93,26 +93,26 @@ def test_edge_cases_small_position_and_exact_hits():
 def test_strategy_integration():
     """Test that strategies can provide partial operations configuration"""
     from src.strategies.ml_adaptive import create_ml_adaptive_strategy
-    
+
     strategy = create_ml_adaptive_strategy()
     overrides = strategy.get_risk_overrides()
-    
+
     assert overrides is not None
-    assert 'partial_operations' in overrides
-    
-    partial_config = overrides['partial_operations']
-    assert 'exit_targets' in partial_config
-    assert 'exit_sizes' in partial_config
-    assert 'scale_in_thresholds' in partial_config
-    assert 'scale_in_sizes' in partial_config
-    assert 'max_scale_ins' in partial_config
-    
+    assert "partial_operations" in overrides
+
+    partial_config = overrides["partial_operations"]
+    assert "exit_targets" in partial_config
+    assert "exit_sizes" in partial_config
+    assert "scale_in_thresholds" in partial_config
+    assert "scale_in_sizes" in partial_config
+    assert "max_scale_ins" in partial_config
+
     # Verify the configuration values
-    assert partial_config['exit_targets'] == [0.03, 0.06, 0.10]
-    assert partial_config['exit_sizes'] == [0.25, 0.25, 0.50]
-    assert partial_config['scale_in_thresholds'] == [0.02, 0.05]
-    assert partial_config['scale_in_sizes'] == [0.25, 0.25]
-    assert partial_config['max_scale_ins'] == 2
+    assert partial_config["exit_targets"] == [0.03, 0.06, 0.10]
+    assert partial_config["exit_sizes"] == [0.25, 0.25, 0.50]
+    assert partial_config["scale_in_thresholds"] == [0.02, 0.05]
+    assert partial_config["scale_in_sizes"] == [0.25, 0.25]
+    assert partial_config["max_scale_ins"] == 2
 
 
 class TestPartialExitPolicyEdgeCases:
@@ -125,7 +125,7 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[],
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         actions = policy.check_partial_exits(pos, 110.0)
         assert actions == []
 
@@ -146,13 +146,15 @@ class TestPartialExitPolicyEdgeCases:
             scale_in_sizes=[],
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         action = policy.check_scale_in_opportunity(pos, 105.0)
         assert action is None
 
     def test_mismatched_scale_in_arrays_length(self):
         """Test policy with mismatched scale-in arrays."""
-        with pytest.raises(ValueError, match="scale_in_thresholds and scale_in_sizes must have equal length"):
+        with pytest.raises(
+            ValueError, match="scale_in_thresholds and scale_in_sizes must have equal length"
+        ):
             PartialExitPolicy(
                 exit_targets=[0.05],
                 exit_sizes=[1.0],
@@ -236,7 +238,7 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.5],
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=0.0, current_size=0.0)
-        
+
         # The implementation doesn't check original_size in check_partial_exits
         # It only checks if PnL target is met, so it will return an action
         actions = policy.check_partial_exits(pos, 105.0)
@@ -249,7 +251,7 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.5],
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=-0.5)
-        
+
         # Should still check for exits based on original size and entry price
         actions = policy.check_partial_exits(pos, 105.0)
         assert len(actions) == 1
@@ -261,7 +263,7 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.5],
         )
         pos = PositionState(entry_price=0.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         # Should not crash but may not work as expected
         actions = policy.check_partial_exits(pos, 105.0)
         # Behavior depends on implementation - should handle gracefully
@@ -274,7 +276,7 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.5],
         )
         pos = PositionState(entry_price=-100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         actions = policy.check_partial_exits(pos, 105.0)
         assert isinstance(actions, list)
 
@@ -285,12 +287,12 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.5, 0.5],
         )
         pos = PositionState(entry_price=100.0, side="short", original_size=1.0, current_size=1.0)
-        
+
         # Price drops 5% (favorable for short)
         actions = policy.check_partial_exits(pos, 95.0)
         assert len(actions) == 1
         assert actions[0]["target_level"] == 0
-        
+
         # Price drops 12% (both targets hit)
         actions = policy.check_partial_exits(pos, 88.0)
         assert len(actions) == 2
@@ -302,7 +304,7 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.3, 0.3, 0.4],
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         # At 12% move, should trigger targets 0 and 2 (0.10 and 0.05)
         actions = policy.check_partial_exits(pos, 112.0)
         target_levels = [a["target_level"] for a in actions]
@@ -316,15 +318,17 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.5],
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         # Apply zero size exit
         policy.apply_partial_exit(pos, executed_size_fraction_of_original=0.0, price=105.0)
         assert pos.current_size == 1.0  # No change
         assert pos.partial_exits_taken == 1  # Still counted
         assert pos.last_partial_exit_price == 105.0
-        
+
         # Apply negative size exit (acts like scale-in)
-        pos_reset = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
+        pos_reset = PositionState(
+            entry_price=100.0, side="long", original_size=1.0, current_size=1.0
+        )
         policy.apply_partial_exit(pos_reset, executed_size_fraction_of_original=-0.5, price=105.0)
         assert pos_reset.current_size == 1.5  # Increased (negative exit = scale in)
         assert pos_reset.partial_exits_taken == 1
@@ -339,15 +343,17 @@ class TestPartialExitPolicyEdgeCases:
             max_scale_ins=2,  # Allow scale-ins
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         # Apply zero size scale-in
         policy.apply_scale_in(pos, add_size_fraction_of_original=0.0, price=102.0)
         assert pos.current_size == 1.0  # No change
         assert pos.scale_ins_taken == 1  # Still counted
         assert pos.last_scale_in_price == 102.0
-        
+
         # Apply negative size scale-in (acts like partial exit)
-        pos_reset = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
+        pos_reset = PositionState(
+            entry_price=100.0, side="long", original_size=1.0, current_size=1.0
+        )
         policy.apply_scale_in(pos_reset, add_size_fraction_of_original=-0.5, price=102.0)
         assert pos_reset.current_size == 0.5  # Decreased (negative scale-in = partial exit)
         assert pos_reset.scale_ins_taken == 1
@@ -362,7 +368,7 @@ class TestPartialExitPolicyEdgeCases:
             max_scale_ins=1,  # Allow 1 scale-in
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=0.9)
-        
+
         # Scale-in should be limited to 1.0 max
         policy.apply_scale_in(pos, add_size_fraction_of_original=0.5, price=102.0)
         assert pos.current_size == 1.0  # Capped at 1.0
@@ -378,7 +384,7 @@ class TestPartialExitPolicyEdgeCases:
             max_scale_ins=0,  # No scale-ins allowed
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         action = policy.check_scale_in_opportunity(pos, 102.0)
         assert action is None
 
@@ -393,7 +399,7 @@ class TestPartialExitPolicyEdgeCases:
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
         pos.scale_ins_taken = 1  # Already at limit
-        
+
         action = policy.check_scale_in_opportunity(pos, 102.0)
         assert action is None
 
@@ -408,7 +414,7 @@ class TestPartialExitPolicyEdgeCases:
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
         pos.scale_ins_taken = 2  # Exceeded limit
-        
+
         action = policy.check_scale_in_opportunity(pos, 102.0)
         assert action is None
 
@@ -419,7 +425,7 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.3, 0.3, 0.4],
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         # At 5% move, should trigger both level 0 and 1
         actions = policy.check_partial_exits(pos, 105.0)
         assert len(actions) == 2
@@ -435,7 +441,7 @@ class TestPartialExitPolicyEdgeCases:
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
         pos.partial_exits_taken = 2  # All exits taken
-        
+
         actions = policy.check_partial_exits(pos, 115.0)  # 15% move
         assert actions == []
 
@@ -447,7 +453,7 @@ class TestPartialExitPolicyEdgeCases:
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
         pos.partial_exits_taken = 5  # More than available targets
-        
+
         actions = policy.check_partial_exits(pos, 110.0)
         assert actions == []
 
@@ -457,11 +463,13 @@ class TestPartialExitPolicyEdgeCases:
             exit_targets=[0.05],
             exit_sizes=[0.5],
         )
-        pos = PositionState(entry_price=100.0, side="long", original_size=0.000001, current_size=0.000001)
-        
+        pos = PositionState(
+            entry_price=100.0, side="long", original_size=0.000001, current_size=0.000001
+        )
+
         actions = policy.check_partial_exits(pos, 105.0)
         assert len(actions) == 1
-        
+
         # Apply the exit
         policy.apply_partial_exit(pos, executed_size_fraction_of_original=0.5, price=105.0)
         assert pos.current_size == pytest.approx(0.0000005, abs=1e-9)
@@ -473,7 +481,7 @@ class TestPartialExitPolicyEdgeCases:
             exit_sizes=[0.25, 0.25, 0.25, 0.25],
         )
         pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=1.0)
-        
+
         # Extreme 1000% move
         actions = policy.check_partial_exits(pos, 1100.0)
         assert len(actions) == 4  # All targets hit
@@ -488,13 +496,10 @@ class TestPartialExitPolicyEdgeCases:
         assert pos.current_size == 0.0
         assert pos.partial_exits_taken == 0
         assert pos.scale_ins_taken == 0
-        
+
         # Test with extreme values
         pos_extreme = PositionState(
-            entry_price=999999.99,
-            side="short",
-            original_size=1000000.0,
-            current_size=500000.0
+            entry_price=999999.99, side="short", original_size=1000000.0, current_size=500000.0
         )
         assert pos_extreme.entry_price == 999999.99
         assert pos_extreme.side == "short"
@@ -507,13 +512,8 @@ class TestPositionStateEdgeCases:
 
     def test_position_state_creation(self):
         """Test PositionState creation with various parameters."""
-        pos = PositionState(
-            entry_price=100.0,
-            side="long",
-            original_size=1.0,
-            current_size=0.8
-        )
-        
+        pos = PositionState(entry_price=100.0, side="long", original_size=1.0, current_size=0.8)
+
         assert pos.entry_price == 100.0
         assert pos.side == "long"
         assert pos.original_size == 1.0
@@ -529,20 +529,15 @@ class TestPositionStateEdgeCases:
             original_size=2.0,
             current_size=1.5,
             partial_exits_taken=2,
-            scale_ins_taken=1
+            scale_ins_taken=1,
         )
-        
+
         assert pos.partial_exits_taken == 2
         assert pos.scale_ins_taken == 1
 
     def test_position_state_invalid_side(self):
         """Test PositionState with invalid side."""
         # PositionState doesn't validate side parameter
-        pos = PositionState(
-            entry_price=100.0,
-            side="invalid",
-            original_size=1.0,
-            current_size=1.0
-        )
-        
+        pos = PositionState(entry_price=100.0, side="invalid", original_size=1.0, current_size=1.0)
+
         assert pos.side == "invalid"  # Should accept any value

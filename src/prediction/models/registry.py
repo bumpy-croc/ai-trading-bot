@@ -52,6 +52,7 @@ class StrategyModel:
     def key(self) -> str:
         return f"{self.symbol}:{self.timeframe}:{self.model_type}:{self.version_id}"
 
+
 # Set up logger
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,9 @@ logger = logging.getLogger(__name__)
 class PredictionModelRegistry:
     """Registry for model bundles and simple selection API."""
 
-    def __init__(self, config: PredictionConfig, cache_manager: Optional[PredictionCacheManager] = None):
+    def __init__(
+        self, config: PredictionConfig, cache_manager: Optional[PredictionCacheManager] = None
+    ):
         """
         Initialize the prediction model registry.
 
@@ -92,9 +95,7 @@ class PredictionModelRegistry:
                 model_type = mtype_dir.name
                 # Load concrete versions first so the latest symlink assignment wins
                 latest = mtype_dir / "latest"
-                version_dirs = [
-                    p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"
-                ]
+                version_dirs = [p for p in mtype_dir.iterdir() if p.is_dir() and p.name != "latest"]
                 # Deterministic order keeps logging/tests stable; latest applied afterwards
                 version_dirs.sort()
                 for vdir in version_dirs:
@@ -166,6 +167,7 @@ class PredictionModelRegistry:
         try:
             runner = OnnxRunner(model_path, self.config, self.cache_manager)
         except Exception:
+
             class _StubRunner:
                 def __init__(self, path: str):
                     self.model_path = path
@@ -208,9 +210,7 @@ class PredictionModelRegistry:
         key = (symbol, timeframe, model_type)
         bundle = self._bundles.get(key)
         if bundle is None:
-            raise ModelNotAvailableError(
-                f"No model bundle for {symbol} {timeframe} {model_type}."
-            )
+            raise ModelNotAvailableError(f"No model bundle for {symbol} {timeframe} {model_type}.")
         # Stage currently informational; production_index ensures latest symlink dominance
         return bundle
 
@@ -232,7 +232,6 @@ class PredictionModelRegistry:
         if errors:
             raise ModelLoadError("; ".join(errors))
         return result
-
 
     # ---- Runner helpers for engine ----
     def get_default_runner(self) -> OnnxRunner:

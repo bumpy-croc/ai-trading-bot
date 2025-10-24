@@ -113,7 +113,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
     def _initialize_client(self):
         """Initialize Binance client with geo-aware API selection and error handling"""
         logger.debug(f"_initialize_client called - BINANCE_AVAILABLE: {BINANCE_AVAILABLE}")
-        
+
         if not BINANCE_AVAILABLE:
             logger.warning("Binance library not available - using mock client")
             self._client = self._create_offline_client()
@@ -122,18 +122,24 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         # Determine which Binance API to use based on location
         api_endpoint = get_binance_api_endpoint()
         is_us = is_us_location()
-        
-        logger.info(f"Geo-detection result: {'US location' if is_us else 'Non-US location'} - using {api_endpoint} API")
+
+        logger.info(
+            f"Geo-detection result: {'US location' if is_us else 'Non-US location'} - using {api_endpoint} API"
+        )
 
         try:
-            logger.debug(f"Attempting to create {api_endpoint} client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}")
-            
+            logger.debug(
+                f"Attempting to create {api_endpoint} client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}"
+            )
+
             # Create client with appropriate API endpoint
             if self.api_key and self.api_secret:
                 logger.debug(f"Creating authenticated {api_endpoint} client...")
                 if api_endpoint == "binanceus":
                     # For Binance US, use tld='us' parameter
-                    self._client = Client(self.api_key, self.api_secret, testnet=self.testnet, tld='us')
+                    self._client = Client(
+                        self.api_key, self.api_secret, testnet=self.testnet, tld="us"
+                    )
                 else:
                     # For global Binance
                     self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
@@ -141,22 +147,22 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.debug(f"Creating public {api_endpoint} client...")
                 if api_endpoint == "binanceus":
                     # For Binance US public client
-                    self._client = Client(tld='us')
+                    self._client = Client(tld="us")
                 else:
                     # For global Binance public client
                     self._client = Client()
-            
+
             logger.info(
                 f"{api_endpoint.title()} client initialized successfully "
                 f"({'with credentials' if self.api_key and self.api_secret else 'public mode'}, "
                 f"testnet: {self.testnet})"
             )
-                
+
             # Test the client with a simple operation
             logger.debug("Testing client with server time request...")
             test_response = self._client.get_server_time()
             logger.debug(f"Server time test successful: {test_response}")
-            
+
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
@@ -262,11 +268,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 # Check if this is expected (future dates) or an error
                 current_time = datetime.now()
                 if end is not None and end > current_time:
-                    logger.info(f"No data available for future dates: requested {start} to {end}, current time is {current_time}")
+                    logger.info(
+                        f"No data available for future dates: requested {start} to {end}, current time is {current_time}"
+                    )
                 elif end is not None and end > current_time - timedelta(hours=1):
-                    logger.info(f"No recent data available yet: requested {start} to {end}, current time is {current_time}")
+                    logger.info(
+                        f"No recent data available yet: requested {start} to {end}, current time is {current_time}"
+                    )
                 else:
-                    logger.warning(f"No data returned for {symbol} {timeframe} from {start} to {end}")
+                    logger.warning(
+                        f"No data returned for {symbol} {timeframe} from {start} to {end}"
+                    )
             return df
 
         except Exception as e:
@@ -330,9 +342,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return float(ticker["price"])
         except Exception as e:
             error_type = type(e).__name__
-            logger.error(
-                f"Error fetching current price for {symbol}: {error_type}: {str(e)}"
-            )
+            logger.error(f"Error fetching current price for {symbol}: {error_type}: {str(e)}")
             return 0.0
 
     # ========================================

@@ -66,7 +66,7 @@ class PredictionEngine:
             self.cache_manager = PredictionCacheManager(
                 database_manager,
                 ttl=self.config.prediction_cache_ttl,
-                max_size=self.config.prediction_cache_max_size
+                max_size=self.config.prediction_cache_max_size,
             )
 
         # Initialize components
@@ -151,9 +151,7 @@ class PredictionEngine:
             # Resolve bundle for prediction and align features to its schema
             bundle = self._resolve_bundle(model_name)
             model = bundle.runner
-            prepared_features = self._prepare_features_for_bundle(
-                bundle, features, features_df
-            )
+            prepared_features = self._prepare_features_for_bundle(bundle, features, features_df)
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
@@ -331,13 +329,9 @@ class PredictionEngine:
         base_features: np.ndarray
         if features_df is not None:
             original_columns = ["open", "high", "low", "close", "volume"]
-            feature_columns = [
-                c for c in features_df.columns if c not in original_columns
-            ]
+            feature_columns = [c for c in features_df.columns if c not in original_columns]
             if not feature_columns and not bundle.feature_schema:
-                raise FeatureExtractionError(
-                    "No feature columns found for series prediction"
-                )
+                raise FeatureExtractionError("No feature columns found for series prediction")
             base_features = (
                 features_df[feature_columns].to_numpy(dtype=np.float32)
                 if feature_columns
@@ -475,13 +469,9 @@ class PredictionEngine:
                 # Extract features
                 feature_start_time = time.time()
                 try:
-                    features_df_or_arr = self.feature_pipeline.transform(
-                        data, use_cache=True
-                    )
+                    features_df_or_arr = self.feature_pipeline.transform(data, use_cache=True)
                 except Exception as exc:
-                    raise FeatureExtractionError(
-                        f"Feature extraction failed: {exc}"
-                    ) from exc
+                    raise FeatureExtractionError(f"Feature extraction failed: {exc}") from exc
 
                 if isinstance(features_df_or_arr, pd.DataFrame):
                     features_df = features_df_or_arr
@@ -490,9 +480,7 @@ class PredictionEngine:
                         col for col in features_df.columns if col not in original_columns
                     ]
                     if not feature_columns and not bundle.feature_schema:
-                        raise FeatureExtractionError(
-                            "No feature columns found in pipeline output"
-                        )
+                        raise FeatureExtractionError("No feature columns found in pipeline output")
                     base_features = (
                         features_df[feature_columns].to_numpy(dtype=np.float32)
                         if feature_columns
@@ -600,9 +588,7 @@ class PredictionEngine:
             if (self._cache_hits + self._cache_misses) > 0
             else 0.0
         )
-        model_times = {
-            k: np.mean(v) for k, v in self._model_inference_times.items()
-        }
+        model_times = {k: np.mean(v) for k, v in self._model_inference_times.items()}
         avg_feature_time = (
             self._total_feature_extraction_time / self._feature_extraction_count
             if self._feature_extraction_count > 0
@@ -640,30 +626,30 @@ class PredictionEngine:
     def get_cache_stats(self) -> dict[str, Any]:
         """Get comprehensive cache statistics"""
         stats = {}
-        
+
         # Feature cache stats
         if self.feature_pipeline.cache:
             stats["feature_cache"] = self.feature_pipeline.cache.get_stats()
-        
+
         # Prediction cache stats
         if self.cache_manager:
             stats["prediction_cache"] = self.cache_manager.get_stats()
-        
+
         return stats
 
     def invalidate_model_cache(self, model_name: Optional[str] = None) -> int:
         """
         Invalidate prediction cache for specific model or all models.
-        
+
         Args:
             model_name: Specific model name to invalidate, or None for all models
-            
+
         Returns:
             Number of cache entries invalidated
         """
         if not self.cache_manager:
             return 0
-            
+
         return self.model_registry.invalidate_cache(model_name)
 
     def reload_models_and_clear_cache(self) -> None:
@@ -671,7 +657,7 @@ class PredictionEngine:
         # Clear prediction cache first
         if self.cache_manager:
             self.cache_manager.clear()
-        
+
         # Reload models
         self.model_registry.reload_models()
 
@@ -716,9 +702,11 @@ class PredictionEngine:
             health["components"]["model_registry"] = {
                 "status": "healthy",
                 "available_models": len(bundles),
-                "default_model": getattr(default_bundle.runner, "model_path", None)
-                if default_bundle is not None
-                else None,
+                "default_model": (
+                    getattr(default_bundle.runner, "model_path", None)
+                    if default_bundle is not None
+                    else None
+                ),
             }
         except Exception as e:
             health["components"]["model_registry"] = {"status": "error", "error": str(e)}
@@ -836,9 +824,7 @@ class PredictionEngine:
 
         if bundle.feature_schema and features_df is not None:
             try:
-                selected, sequence_length = self._select_schema_features(
-                    bundle, features_df
-                )
+                selected, sequence_length = self._select_schema_features(bundle, features_df)
                 window = selected[-sequence_length:, :]
                 if window.ndim == 2:
                     return window[None, :, :]

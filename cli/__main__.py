@@ -70,11 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     # Import and register command groups
     from cli.commands import (
         backtest,
+        codex,
         dashboards,
         data,
         db,
         dev,
-        docs as docs_cmd,
         live,
         live_health,
         migration,
@@ -84,6 +84,9 @@ def build_parser() -> argparse.ArgumentParser:
         strategies,
         tests,
         train,
+    )
+    from cli.commands import (
+        docs as docs_cmd,
     )
 
     dashboards.register(subparsers)
@@ -101,6 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     docs_cmd.register(subparsers)
     strategies.register(subparsers)
     regime.register(subparsers)
+    codex.register(subparsers)
 
     return parser
 

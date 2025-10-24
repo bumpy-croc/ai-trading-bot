@@ -73,9 +73,9 @@ except ImportError:
     MLBasicSignalGenerator = None
     FixedRiskManager = None
     ConfidenceWeightedSizer = None
+
     def cash_pnl(pnl_pct, balance_before):
         return float(pnl_pct) * float(balance_before)
-
 
 
 class TestLiveTradingEngine:
@@ -254,7 +254,10 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
         strategy=mock_strategy,
         data_provider=mock_data_provider,
         trailing_stop_policy=TrailingStopPolicy(
-            activation_threshold=0.005, trailing_distance_pct=0.005, breakeven_threshold=0.02, breakeven_buffer=0.001
+            activation_threshold=0.005,
+            trailing_distance_pct=0.005,
+            breakeven_threshold=0.02,
+            breakeven_buffer=0.001,
         ),
     )
 
@@ -272,6 +275,7 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
     engine.position_db_ids[position.order_id] = None  # disable db for this test
 
     import pandas as pd
+
     df = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0], "atr": [1.0, 1.0, 1.0, 1.0]})
 
     # Before activation
@@ -290,70 +294,78 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
     assert position.breakeven_triggered is True
 
 
-
 @pytest.mark.live_trading
 def test_order_execution_with_component_strategy(mock_data_provider):
     """Test order execution using component-based strategy with TradingDecision"""
     if not LIVE_TRADING_AVAILABLE or Strategy is None:
         pytest.skip("Component strategy not available")
-    
+
     # Create a component-based strategy
     signal_generator = MLBasicSignalGenerator(name="test_ml_basic_sg")
     risk_manager = FixedRiskManager(risk_per_trade=0.02)
     position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-    
+
     strategy = Strategy(
         name="test_ml_basic",
         signal_generator=signal_generator,
         risk_manager=risk_manager,
-        position_sizer=position_sizer
+        position_sizer=position_sizer,
     )
-    
+
     # Create engine with component strategy
     engine = LiveTradingEngine(
         strategy=strategy,
         data_provider=mock_data_provider,
         enable_live_trading=False,
-        initial_balance=10000
+        initial_balance=10000,
     )
-    
+
     # Create test data
-    df = pd.DataFrame({
-        'open': [50000, 50100, 50200],
-        'high': [50100, 50200, 50300],
-        'low': [49900, 50000, 50100],
-        'close': [50000, 50100, 50200],
-        'volume': [1000, 1100, 1200]
-    }, index=pd.date_range('2024-01-01', periods=3, freq='1h'))
-    
+    df = pd.DataFrame(
+        {
+            "open": [50000, 50100, 50200],
+            "high": [50100, 50200, 50300],
+            "low": [49900, 50000, 50100],
+            "close": [50000, 50100, 50200],
+            "volume": [1000, 1100, 1200],
+        },
+        index=pd.date_range("2024-01-01", periods=3, freq="1h"),
+    )
+
     mock_data_provider.get_live_data.return_value = df
     mock_data_provider.get_current_price.return_value = 50200
-    
+
     # Process candle and get decision
     decision = strategy.process_candle(df, 2, engine.current_balance)
-    
+
     # Validate TradingDecision object
     assert isinstance(decision, TradingDecision)
-    assert hasattr(decision, 'signal')
-    assert hasattr(decision, 'position_size')
-    assert hasattr(decision, 'risk_metrics')
-    assert decision.signal.direction in [SignalDirection.BUY, SignalDirection.SELL, SignalDirection.HOLD]
+    assert hasattr(decision, "signal")
+    assert hasattr(decision, "position_size")
+    assert hasattr(decision, "risk_metrics")
+    assert decision.signal.direction in [
+        SignalDirection.BUY,
+        SignalDirection.SELL,
+        SignalDirection.HOLD,
+    ]
     assert 0 <= decision.signal.confidence <= 1
     assert decision.position_size >= 0
-    
+
     # If signal is BUY, test order placement
     if decision.signal.direction == SignalDirection.BUY:
         requested_notional = decision.position_size
-        requested_fraction = requested_notional / engine.current_balance if engine.current_balance else 0.0
+        requested_fraction = (
+            requested_notional / engine.current_balance if engine.current_balance else 0.0
+        )
         capped_fraction = min(requested_fraction, engine.max_position_size)
         engine._open_position(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
             size=capped_fraction,
             price=50200,
-            stop_loss=decision.risk_metrics.get('stop_loss_price')
+            stop_loss=decision.risk_metrics.get("stop_loss_price"),
         )
-        
+
         assert len(engine.positions) == 1
         position = list(engine.positions.values())[0]
         assert position.size == capped_fraction
@@ -365,7 +377,7 @@ def test_position_sizing_from_trading_decision(mock_data_provider):
     """Test that position sizing comes from TradingDecision, not legacy methods"""
     if not LIVE_TRADING_AVAILABLE or Strategy is None:
         pytest.skip("Component strategy not available")
-    
+
     class _DeterministicSignalGenerator(SignalGenerator):
         def __init__(self) -> None:
             super().__init__("deterministic_signal")
@@ -387,35 +399,38 @@ def test_position_sizing_from_trading_decision(mock_data_provider):
     signal_generator = _DeterministicSignalGenerator()
     risk_manager = FixedRiskManager(risk_per_trade=0.02)
     position_sizer = ConfidenceWeightedSizer(base_fraction=0.03)  # 3% base
-    
+
     strategy = Strategy(
         name="test_sizing",
         signal_generator=signal_generator,
         risk_manager=risk_manager,
-        position_sizer=position_sizer
+        position_sizer=position_sizer,
     )
-    
+
     engine = LiveTradingEngine(
         strategy=strategy,
         data_provider=mock_data_provider,
         enable_live_trading=False,
-        initial_balance=10000
+        initial_balance=10000,
     )
-    
+
     # Create test data with enough history for ML model (120+ candles)
-    df = pd.DataFrame({
-        'open': [50000 + i * 10 for i in range(150)],
-        'high': [50100 + i * 10 for i in range(150)],
-        'low': [49900 + i * 10 for i in range(150)],
-        'close': [50000 + i * 10 for i in range(150)],
-        'volume': [1000 + i * 10 for i in range(150)]
-    }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-    
+    df = pd.DataFrame(
+        {
+            "open": [50000 + i * 10 for i in range(150)],
+            "high": [50100 + i * 10 for i in range(150)],
+            "low": [49900 + i * 10 for i in range(150)],
+            "close": [50000 + i * 10 for i in range(150)],
+            "volume": [1000 + i * 10 for i in range(150)],
+        },
+        index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+    )
+
     mock_data_provider.get_live_data.return_value = df
-    
+
     # Get decision
     decision = strategy.process_candle(df, 149, engine.current_balance)
-    
+
     # Verify position size is calculated by component
     # Note: position_size might be 0 if signal is HOLD
     assert decision.position_size >= 0
@@ -424,67 +439,67 @@ def test_position_sizing_from_trading_decision(mock_data_provider):
     if decision.signal.direction != SignalDirection.HOLD:
         assert decision.position_size > 0
         # Position size is in dollars, should be reasonable fraction of balance
-        assert decision.position_size <= engine.current_balance * 0.05  # Should not exceed 5% of balance
-    
+        assert (
+            decision.position_size <= engine.current_balance * 0.05
+        )  # Should not exceed 5% of balance
+
     # Verify position size comes from TradingDecision, not legacy method
     # The component strategy may have the method for compatibility but shouldn't use it
-    assert 'position_size' in decision.__dict__
+    assert "position_size" in decision.__dict__
 
 
-@pytest.mark.live_trading  
+@pytest.mark.live_trading
 def test_stop_loss_from_component_strategy(mock_data_provider):
     """Test that stop loss comes from component strategy, not legacy methods"""
     if not LIVE_TRADING_AVAILABLE or Strategy is None:
         pytest.skip("Component strategy not available")
-    
+
     signal_generator = MLBasicSignalGenerator(name="test_stop_loss_sg")
     risk_manager = FixedRiskManager(risk_per_trade=0.02)
     position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-    
+
     strategy = Strategy(
         name="test_stop_loss",
         signal_generator=signal_generator,
         risk_manager=risk_manager,
-        position_sizer=position_sizer
+        position_sizer=position_sizer,
     )
-    
+
     engine = LiveTradingEngine(
-        strategy=strategy,
-        data_provider=mock_data_provider,
-        enable_live_trading=False
+        strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
     )
-    
+
     # Create test data with enough history for ML model
-    df = pd.DataFrame({
-        'open': [50000 + i * 5 for i in range(150)],
-        'high': [50100 + i * 5 for i in range(150)],
-        'low': [49900 + i * 5 for i in range(150)],
-        'close': [50000 + i * 5 for i in range(150)],
-        'volume': [1000 + i * 5 for i in range(150)]
-    }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-    
+    df = pd.DataFrame(
+        {
+            "open": [50000 + i * 5 for i in range(150)],
+            "high": [50100 + i * 5 for i in range(150)],
+            "low": [49900 + i * 5 for i in range(150)],
+            "close": [50000 + i * 5 for i in range(150)],
+            "volume": [1000 + i * 5 for i in range(150)],
+        },
+        index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+    )
+
     mock_data_provider.get_live_data.return_value = df
-    
+
     # Get decision
     decision = strategy.process_candle(df, 149, 10000)
-    
+
     if decision.signal.direction == SignalDirection.BUY:
         # Get stop loss from strategy
         stop_loss = strategy.get_stop_loss_price(
-            entry_price=50000,
-            signal=decision.signal,
-            regime=decision.regime
+            entry_price=50000, signal=decision.signal, regime=decision.regime
         )
-        
+
         # Verify stop loss is reasonable
         assert stop_loss is not None
         assert stop_loss < 50000  # Stop loss should be below entry for long
         assert stop_loss > 48000  # Should not be too far away
-        
+
         # Verify stop loss comes from component strategy method
         # The strategy has get_stop_loss_price, not calculate_stop_loss
-        assert hasattr(strategy, 'get_stop_loss_price')
-
+        assert hasattr(strategy, "get_stop_loss_price")
 
 
 @pytest.mark.live_trading
@@ -492,64 +507,62 @@ def test_position_exit_with_should_exit_position(mock_data_provider):
     """Test position exit using should_exit_position() from component strategy"""
     if not LIVE_TRADING_AVAILABLE or Strategy is None:
         pytest.skip("Component strategy not available")
-    
+
     signal_generator = MLBasicSignalGenerator(name="test_exit_sg")
     risk_manager = FixedRiskManager(risk_per_trade=0.02)
     position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-    
+
     strategy = Strategy(
         name="test_exit",
         signal_generator=signal_generator,
         risk_manager=risk_manager,
-        position_sizer=position_sizer
+        position_sizer=position_sizer,
     )
-    
+
     engine = LiveTradingEngine(
         strategy=strategy,
         data_provider=mock_data_provider,
         enable_live_trading=False,
-        initial_balance=10000
+        initial_balance=10000,
     )
-    
+
     # Create test data
-    df = pd.DataFrame({
-        'open': [50000 + i * 10 for i in range(150)],
-        'high': [50100 + i * 10 for i in range(150)],
-        'low': [49900 + i * 10 for i in range(150)],
-        'close': [50000 + i * 10 for i in range(150)],
-        'volume': [1000 + i * 10 for i in range(150)]
-    }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-    
+    df = pd.DataFrame(
+        {
+            "open": [50000 + i * 10 for i in range(150)],
+            "high": [50100 + i * 10 for i in range(150)],
+            "low": [49900 + i * 10 for i in range(150)],
+            "close": [50000 + i * 10 for i in range(150)],
+            "volume": [1000 + i * 10 for i in range(150)],
+        },
+        index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+    )
+
     mock_data_provider.get_live_data.return_value = df
-    
+
     # Create a position
     from src.strategies.components import Position as ComponentPosition, MarketData
-    
+
     position = ComponentPosition(
         symbol="BTCUSDT",
         entry_price=50000,
         current_price=51490,
         size=0.1,
         side="long",
-        entry_time=datetime.now()
+        entry_time=datetime.now(),
     )
-    
+
     # Create market data
-    market_data = MarketData(
-        symbol="BTCUSDT",
-        price=51490,
-        volume=2490,
-        timestamp=datetime.now()
-    )
-    
+    market_data = MarketData(symbol="BTCUSDT", price=51490, volume=2490, timestamp=datetime.now())
+
     # Test should_exit_position
     should_exit = strategy.should_exit_position(position, market_data)
-    
+
     # Verify the method exists and returns a boolean
     assert isinstance(should_exit, bool)
-    
+
     # Verify we're using should_exit_position, not legacy check_exit_conditions
-    assert hasattr(strategy, 'should_exit_position')
+    assert hasattr(strategy, "should_exit_position")
 
 
 @pytest.mark.live_trading
@@ -557,56 +570,55 @@ def test_stop_loss_update_with_component_strategy(mock_data_provider):
     """Test stop loss updates using component strategy"""
     if not LIVE_TRADING_AVAILABLE or Strategy is None:
         pytest.skip("Component strategy not available")
-    
+
     signal_generator = MLBasicSignalGenerator(name="test_sl_update_sg")
     risk_manager = FixedRiskManager(risk_per_trade=0.02)
     position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-    
+
     strategy = Strategy(
         name="test_sl_update",
         signal_generator=signal_generator,
         risk_manager=risk_manager,
-        position_sizer=position_sizer
+        position_sizer=position_sizer,
     )
-    
+
     engine = LiveTradingEngine(
-        strategy=strategy,
-        data_provider=mock_data_provider,
-        enable_live_trading=False
+        strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
     )
-    
+
     # Create test data
-    df = pd.DataFrame({
-        'open': [50000 + i * 10 for i in range(150)],
-        'high': [50100 + i * 10 for i in range(150)],
-        'low': [49900 + i * 10 for i in range(150)],
-        'close': [50000 + i * 10 for i in range(150)],
-        'volume': [1000 + i * 10 for i in range(150)]
-    }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-    
+    df = pd.DataFrame(
+        {
+            "open": [50000 + i * 10 for i in range(150)],
+            "high": [50100 + i * 10 for i in range(150)],
+            "low": [49900 + i * 10 for i in range(150)],
+            "close": [50000 + i * 10 for i in range(150)],
+            "volume": [1000 + i * 10 for i in range(150)],
+        },
+        index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+    )
+
     mock_data_provider.get_live_data.return_value = df
-    
+
     # Get a decision to get a signal
     decision = strategy.process_candle(df, 149, 10000)
-    
+
     # Get initial stop loss
     entry_price = 51490
     stop_loss_1 = strategy.get_stop_loss_price(
-        entry_price=entry_price,
-        signal=decision.signal,
-        regime=decision.regime
+        entry_price=entry_price, signal=decision.signal, regime=decision.regime
     )
-    
+
     # Verify stop loss is reasonable
     if stop_loss_1 is not None:
         if decision.signal.direction == SignalDirection.BUY:
             assert stop_loss_1 < entry_price  # Stop loss below entry for long
         elif decision.signal.direction == SignalDirection.SELL:
             assert stop_loss_1 > entry_price  # Stop loss above entry for short
-    
+
     # Test that we can update stop loss (e.g., for trailing stops)
     # The component strategy should support this through get_stop_loss_price
-    assert hasattr(strategy, 'get_stop_loss_price')
+    assert hasattr(strategy, "get_stop_loss_price")
 
 
 @pytest.mark.live_trading
@@ -614,46 +626,49 @@ def test_position_management_with_trading_decision(mock_data_provider):
     """Test complete position management flow with TradingDecision objects"""
     if not LIVE_TRADING_AVAILABLE or Strategy is None:
         pytest.skip("Component strategy not available")
-    
+
     signal_generator = MLBasicSignalGenerator(name="test_pm_sg")
     risk_manager = FixedRiskManager(risk_per_trade=0.02)
     position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-    
+
     strategy = Strategy(
         name="test_pm",
         signal_generator=signal_generator,
         risk_manager=risk_manager,
-        position_sizer=position_sizer
+        position_sizer=position_sizer,
     )
-    
+
     engine = LiveTradingEngine(
         strategy=strategy,
         data_provider=mock_data_provider,
         enable_live_trading=False,
-        initial_balance=10000
+        initial_balance=10000,
     )
-    
+
     # Create test data
-    df = pd.DataFrame({
-        'open': [50000 + i * 10 for i in range(150)],
-        'high': [50100 + i * 10 for i in range(150)],
-        'low': [49900 + i * 10 for i in range(150)],
-        'close': [50000 + i * 10 for i in range(150)],
-        'volume': [1000 + i * 10 for i in range(150)]
-    }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-    
+    df = pd.DataFrame(
+        {
+            "open": [50000 + i * 10 for i in range(150)],
+            "high": [50100 + i * 10 for i in range(150)],
+            "low": [49900 + i * 10 for i in range(150)],
+            "close": [50000 + i * 10 for i in range(150)],
+            "volume": [1000 + i * 10 for i in range(150)],
+        },
+        index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+    )
+
     mock_data_provider.get_live_data.return_value = df
     mock_data_provider.get_current_price.return_value = 51490
-    
+
     # Get decision
     decision = strategy.process_candle(df, 149, engine.current_balance)
-    
+
     # Verify TradingDecision has all necessary fields for position management
-    assert hasattr(decision, 'signal')
-    assert hasattr(decision, 'position_size')
-    assert hasattr(decision, 'risk_metrics')
-    assert hasattr(decision, 'regime')
-    
+    assert hasattr(decision, "signal")
+    assert hasattr(decision, "position_size")
+    assert hasattr(decision, "risk_metrics")
+    assert hasattr(decision, "regime")
+
     # If we get a BUY signal, test opening and managing position
     if decision.signal.direction == SignalDirection.BUY:
         # Open position using decision data
@@ -662,16 +677,16 @@ def test_position_management_with_trading_decision(mock_data_provider):
             side=PositionSide.LONG,
             size=decision.position_size,
             price=51490,
-            stop_loss=decision.risk_metrics.get('stop_loss_price')
+            stop_loss=decision.risk_metrics.get("stop_loss_price"),
         )
-        
+
         assert len(engine.positions) == 1
         position = list(engine.positions.values())[0]
-        
+
         # Verify position was created with data from TradingDecision
         assert position.size == decision.position_size
         assert position.entry_price == 51490
-        
+
         # Test position exit
         engine._close_position(position, "test_exit")
         assert len(engine.positions) == 0

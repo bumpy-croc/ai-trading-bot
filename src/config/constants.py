@@ -64,11 +64,11 @@ DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
 DEFAULT_MAX_HOLDING_HOURS = 336  # 14 days
 DEFAULT_END_OF_DAY_FLAT = False
 DEFAULT_WEEKEND_FLAT = False
-DEFAULT_MARKET_TIMEZONE = 'UTC'
+DEFAULT_MARKET_TIMEZONE = "UTC"
 DEFAULT_TIME_RESTRICTIONS = {
-    'no_overnight': True,
-    'no_weekend': True,
-    'trading_hours_only': False,
+    "no_overnight": True,
+    "no_weekend": True,
+    "trading_hours_only": False,
 }
 
 # Regime Detection Defaults (constants)
@@ -98,15 +98,15 @@ DEFAULT_RECOVERY_THRESHOLDS = [0.02, 0.05]  # 2%, 5%
 DEFAULT_VOLATILITY_ADJUSTMENT_ENABLED = True
 DEFAULT_VOLATILITY_WINDOW_DAYS = 30
 DEFAULT_HIGH_VOLATILITY_THRESHOLD = 0.03  # 3% daily volatility
-DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01   # 1% daily volatility
+DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01  # 1% daily volatility
 DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)  # (high_vol, low_vol)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 
 # Partial operations defaults (partial exits and scale-ins)
 DEFAULT_PARTIAL_EXIT_TARGETS = [0.03, 0.06, 0.10]  # 3%, 6%, 10%
-DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]   # 25%, 25%, 50% of original size
-DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]        # 2%, 5%
-DEFAULT_SCALE_IN_SIZES = [0.25, 0.25]             # 25%, 25% of original size
+DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]  # 25%, 25%, 50% of original size
+DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]  # 2%, 5%
+DEFAULT_SCALE_IN_SIZES = [0.25, 0.25]  # 25%, 25% of original size
 DEFAULT_MAX_SCALE_INS = 2
 
 # Trailing Stop Defaults

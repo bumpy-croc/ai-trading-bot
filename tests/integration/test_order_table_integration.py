@@ -47,7 +47,7 @@ class TestOrderTableIntegration:
             size=0.02,
             strategy_name="test_strategy",
             entry_order_id=unique_id,
-            session_id=session_id
+            session_id=session_id,
         )
 
         return {"position_id": position_id, "session_id": session_id}
@@ -66,12 +66,12 @@ class TestOrderTableIntegration:
                 quantity=0.001,
                 price=50000.0,
                 strategy_name="test_strategy",
-                session_id=test_position["session_id"]
+                session_id=test_position["session_id"],
             )
-            
+
             session.add(order)
             session.commit()
-            
+
             # * Verify the order was created
             assert order.id is not None
             assert order.position_id == test_position["position_id"]
@@ -86,7 +86,7 @@ class TestOrderTableIntegration:
             # * Get the position
             position = session.query(Position).filter_by(id=test_position["position_id"]).first()
             assert position is not None
-            
+
             # * Create multiple orders for this position
             entry_order = Order(
                 position_id=test_position["position_id"],
@@ -97,11 +97,11 @@ class TestOrderTableIntegration:
                 side=PositionSide.LONG,
                 quantity=0.001,
                 strategy_name="test_strategy",
-                session_id=test_position["session_id"]
+                session_id=test_position["session_id"],
             )
-            
+
             partial_exit_order = Order(
-                position_id=test_position["position_id"], 
+                position_id=test_position["position_id"],
                 order_type=OrderType.PARTIAL_EXIT,
                 status=OrderStatus.PENDING,
                 internal_order_id="partial_exit_1",
@@ -111,13 +111,13 @@ class TestOrderTableIntegration:
                 strategy_name="test_strategy",
                 session_id=test_position["session_id"],
                 target_level=1,
-                size_fraction=0.5
+                size_fraction=0.5,
             )
-            
+
             session.add(entry_order)
             session.add(partial_exit_order)
             session.commit()
-            
+
             # * Test the relationship
             session.refresh(position)
             # * Note: log_position automatically creates 1 ENTRY order, plus 2 created here = 3 total
@@ -140,9 +140,9 @@ class TestOrderTableIntegration:
                 side=PositionSide.LONG,
                 quantity=0.001,
                 strategy_name="test_strategy",
-                session_id=test_position["session_id"]
+                session_id=test_position["session_id"],
             )
-            
+
             session.add(order)
             session.commit()
 
@@ -152,7 +152,7 @@ class TestOrderTableIntegration:
             order.filled_price = 50100.0
             order.filled_at = datetime.utcnow()
             session.commit()
-            
+
             # * Verify the update
             session.refresh(order)
             assert order.status == OrderStatus.FILLED
@@ -174,12 +174,12 @@ class TestOrderTableIntegration:
                 strategy_name="test_strategy",
                 session_id=test_position["session_id"],
                 target_level=2,  # Second partial exit level
-                size_fraction=0.3  # 30% of original position
+                size_fraction=0.3,  # 30% of original position
             )
-            
+
             session.add(partial_order)
             session.commit()
-            
+
             # * Verify partial operation fields
             assert partial_order.target_level == 2
             assert float(partial_order.size_fraction) == 0.3
@@ -197,12 +197,12 @@ class TestOrderTableIntegration:
                 side=PositionSide.LONG,
                 quantity=0.001,
                 strategy_name="test_strategy",
-                session_id=test_position["session_id"]
+                session_id=test_position["session_id"],
             )
-            
+
             session.add(order1)
             session.commit()
-            
+
             # * Try to create another order with same internal_order_id and session_id
             order2 = Order(
                 position_id=test_position["position_id"],
@@ -213,12 +213,13 @@ class TestOrderTableIntegration:
                 side=PositionSide.LONG,
                 quantity=0.001,
                 strategy_name="test_strategy",
-                session_id=test_position["session_id"]  # Same as order1
+                session_id=test_position["session_id"],  # Same as order1
             )
-            
+
             session.add(order2)
-            
+
             # * This should raise an integrity error due to unique constraint
             from sqlalchemy.exc import IntegrityError
+
             with pytest.raises(IntegrityError):
                 session.commit()

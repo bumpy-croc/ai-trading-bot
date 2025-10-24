@@ -8,12 +8,13 @@ Revises: 0011_fix_orderstatus_enum
 Create Date: 2025-01-11
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = '0012_fix_pos_status'
-down_revision = '0011_fix_orderstatus_enum'
+revision = "0012_fix_pos_status"
+down_revision = "0011_fix_orderstatus_enum"
 branch_labels = None
 depends_on = None
 
@@ -26,10 +27,12 @@ def upgrade() -> None:
     """
     # * Update positions that have filled data but are stuck in PENDING status
     connection = op.get_bind()
-    
+
     # ! Find positions with PENDING status but have entry_price and quantity filled
     # ! These should be OPEN positions as they represent filled orders
-    result = connection.execute(sa.text("""
+    result = connection.execute(
+        sa.text(
+            """
         UPDATE positions 
         SET status = 'OPEN', last_update = NOW()
         WHERE status = 'PENDING' 
@@ -37,8 +40,10 @@ def upgrade() -> None:
         AND quantity IS NOT NULL 
         AND quantity > 0
         RETURNING id, symbol, order_id;
-    """))
-    
+    """
+        )
+    )
+
     updated_rows = result.fetchall()
     if updated_rows:
         print(f"Updated {len(updated_rows)} positions from PENDING to OPEN status:")

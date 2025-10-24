@@ -10,7 +10,9 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.mock_only
-def test_mfe_mae_throttle_prevents_rapid_db_updates(mock_strategy, mock_data_provider, tmp_path, monkeypatch):
+def test_mfe_mae_throttle_prevents_rapid_db_updates(
+    mock_strategy, mock_data_provider, tmp_path, monkeypatch
+):
     from src.live.trading_engine import LiveTradingEngine, PositionSide
 
     # Minimal data feed
@@ -45,5 +47,3 @@ def test_mfe_mae_throttle_prevents_rapid_db_updates(mock_strategy, mock_data_pro
     # Engine remains logically active for the scope of this test
     assert engine.is_running is True
     engine.stop()
-
-

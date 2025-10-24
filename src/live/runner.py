@@ -94,12 +94,8 @@ def parse_args():
         default="binance",
         help="Data provider to use",
     )
-    parser.add_argument(
-        "--mock-data", action="store_true", help="Use mock data for testing"
-    )
-    parser.add_argument(
-        "--no-cache", action="store_true", help="Disable data caching"
-    )
+    parser.add_argument("--mock-data", action="store_true", help="Use mock data for testing")
+    parser.add_argument("--no-cache", action="store_true", help="Disable data caching")
 
     # Risk management
     parser.add_argument(
@@ -122,12 +118,8 @@ def parse_args():
     )
 
     # Logging and monitoring
-    parser.add_argument(
-        "--log-trades", action="store_true", help="Log individual trades to file"
-    )
-    parser.add_argument(
-        "--webhook-url", help="Webhook URL for trade notifications"
-    )
+    parser.add_argument("--log-trades", action="store_true", help="Log individual trades to file")
+    parser.add_argument("--webhook-url", help="Webhook URL for trade notifications")
     parser.add_argument(
         "--snapshot-interval",
         type=int,
@@ -136,9 +128,7 @@ def parse_args():
     )
 
     # Sentiment analysis
-    parser.add_argument(
-        "--use-sentiment", action="store_true", help="Enable sentiment analysis"
-    )
+    parser.add_argument("--use-sentiment", action="store_true", help="Enable sentiment analysis")
 
     return parser.parse_args()
 
@@ -221,7 +211,9 @@ def main():
         # Initialize sentiment provider if requested
         sentiment_provider = None
         if args.use_sentiment:
-            logger.warning("❌ Sentiment analysis not available - sentiment providers have been removed")
+            logger.warning(
+                "❌ Sentiment analysis not available - sentiment providers have been removed"
+            )
             logger.info("Continuing without sentiment analysis...")
 
         # Set up risk parameters

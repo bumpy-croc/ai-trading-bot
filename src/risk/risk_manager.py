@@ -217,18 +217,20 @@ class RiskManager:
         strategy_overrides = strategy_overrides or {}
         indicators = indicators or {}
         sizer = strategy_overrides.get("position_sizer", "fixed_fraction")
-        
+
         # * Handle Mock objects in tests by converting to float safely
         try:
             min_fraction = float(strategy_overrides.get("min_fraction", 0.0))
         except (TypeError, ValueError):
             min_fraction = 0.0
-            
+
         try:
-            max_fraction = float(strategy_overrides.get("max_fraction", self.params.max_position_size))
+            max_fraction = float(
+                strategy_overrides.get("max_fraction", self.params.max_position_size)
+            )
         except (TypeError, ValueError):
             max_fraction = float(self.params.max_position_size)
-            
+
         max_fraction = min(max_fraction, self.params.max_position_size)
 
         # Respect remaining daily risk
@@ -276,7 +278,7 @@ class RiskManager:
 
         # Clamp
         fraction = max(min_fraction, min(max_fraction, fraction))
-        
+
         # Optional correlation-based size reduction
         try:
             if correlation_ctx and fraction > 0:
@@ -397,7 +399,12 @@ class RiskManager:
         """Calculate total position exposure (sum of fractions)"""
         return float(sum(pos["size"] for pos in self.positions.values()))
 
-    def get_position_correlation_risk(self, symbols: list, corr_matrix: pd.DataFrame | None = None, threshold: Optional[float] = None) -> float:
+    def get_position_correlation_risk(
+        self,
+        symbols: list,
+        corr_matrix: pd.DataFrame | None = None,
+        threshold: Optional[float] = None,
+    ) -> float:
         """Calculate correlated exposure across provided symbols.
 
         If a correlation matrix is provided, group symbols whose pairwise correlation
@@ -412,9 +419,7 @@ class RiskManager:
             # Fallback: sum exposures for given symbols
             if corr_matrix is None or corr_matrix.empty:
                 exposure = sum(
-                    float(pos.get("size", 0.0))
-                    for s, pos in self.positions.items()
-                    if s in sym_set
+                    float(pos.get("size", 0.0)) for s, pos in self.positions.items() if s in sym_set
                 )
                 return round(float(exposure), 8)
 
@@ -440,7 +445,11 @@ class RiskManager:
             for i, a in enumerate(cols):
                 for j in range(i + 1, len(cols)):
                     b = cols[j]
-                    val = corr_matrix.at[a, b] if (a in corr_matrix.index and b in corr_matrix.columns) else None
+                    val = (
+                        corr_matrix.at[a, b]
+                        if (a in corr_matrix.index and b in corr_matrix.columns)
+                        else None
+                    )
                     if pd.notna(val) and float(val) >= thr:
                         union(a, b)
 
@@ -473,7 +482,9 @@ class RiskManager:
         """Return the maximum number of concurrent positions allowed."""
         return self.max_concurrent_positions
 
-    def adjust_position_after_partial_exit(self, symbol: str, executed_fraction_of_original: float) -> None:
+    def adjust_position_after_partial_exit(
+        self, symbol: str, executed_fraction_of_original: float
+    ) -> None:
         """Reduce tracked exposure after a partial exit.
 
         executed_fraction_of_original is the fraction of ORIGINAL size removed.
@@ -487,7 +498,9 @@ class RiskManager:
         # Reduce daily risk used proportionally (approximation)
         self.daily_risk_used = max(0.0, self.daily_risk_used - float(executed_fraction_of_original))
 
-    def adjust_position_after_scale_in(self, symbol: str, added_fraction_of_original: float) -> None:
+    def adjust_position_after_scale_in(
+        self, symbol: str, added_fraction_of_original: float
+    ) -> None:
         """Increase tracked exposure after a scale-in, enforcing daily and per-position caps."""
         pos = self.positions.get(symbol)
         if not pos:

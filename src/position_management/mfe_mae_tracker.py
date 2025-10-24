@@ -42,7 +42,9 @@ class MFEMAETracker:
         If `as_sized` is True, returns sized PnL fractions using `position_fraction`.
         """
         side_enum = side if isinstance(side, Side) else Side(side)
-        move = pnl_percent(entry_price, current_price, side_enum, position_fraction if as_sized else 1.0)
+        move = pnl_percent(
+            entry_price, current_price, side_enum, position_fraction if as_sized else 1.0
+        )
         # Positive move contributes to MFE candidate; negative to MAE candidate
         mfe_cand = max(0.0, move)
         mae_cand = min(0.0, move)

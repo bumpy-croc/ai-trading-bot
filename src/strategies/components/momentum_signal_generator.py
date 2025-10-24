@@ -79,7 +79,12 @@ class MomentumSignalGenerator(SignalGenerator):
 
         # Entry conditions
         decision_buy = (
-            (momentum_3 is not None and momentum_3 > self.momentum_entry_threshold and trend_strength and trend_strength > 0.005)
+            (
+                momentum_3 is not None
+                and momentum_3 > self.momentum_entry_threshold
+                and trend_strength
+                and trend_strength > 0.005
+            )
             or (breakout and momentum_3 and momentum_3 > 0.003)
             or (strong_momentum)
             or (bullish_trend and momentum_7 is not None and momentum_7 > 0.003)
@@ -137,7 +142,10 @@ class MomentumSignalGenerator(SignalGenerator):
         if index < periods:
             return None
         try:
-            return float((df[col].iloc[index] - df[col].iloc[index - periods]) / max(df[col].iloc[index - periods], 1e-12))
+            return float(
+                (df[col].iloc[index] - df[col].iloc[index - periods])
+                / max(df[col].iloc[index - periods], 1e-12)
+            )
         except Exception:
             return None
 
@@ -176,5 +184,3 @@ class MomentumSignalGenerator(SignalGenerator):
             }
         )
         return params
-
-

@@ -19,16 +19,27 @@ class TrailingStopPolicy:
     breakeven_buffer: float = 0.001  # 0.1% above breakeven for long (below for short)
 
     def compute_distance(self, price: float, atr: float | None) -> float | None:
-        if atr is not None and atr > 0 and self.atr_multiplier is not None and self.atr_multiplier > 0:
+        if (
+            atr is not None
+            and atr > 0
+            and self.atr_multiplier is not None
+            and self.atr_multiplier > 0
+        ):
             return float(atr) * float(self.atr_multiplier)
         if self.trailing_distance_pct is not None and self.trailing_distance_pct > 0:
             return float(price) * float(self.trailing_distance_pct)
         return None
 
-    def _pnl_fraction(self, entry_price: float, current_price: float, side: str, position_fraction: float) -> float:
+    def _pnl_fraction(
+        self, entry_price: float, current_price: float, side: str, position_fraction: float
+    ) -> float:
         if entry_price <= 0 or position_fraction <= 0:
             return 0.0
-        raw = (current_price - entry_price) / entry_price if side == "long" else (entry_price - current_price) / entry_price
+        raw = (
+            (current_price - entry_price) / entry_price
+            if side == "long"
+            else (entry_price - current_price) / entry_price
+        )
         return raw * position_fraction
 
     def update_trailing_stop(
@@ -72,7 +83,11 @@ class TrailingStopPolicy:
         new_stop: float | None = existing_stop
 
         # If breakeven triggered, compute breakeven stop with buffer
-        if breakeven_triggered and self.breakeven_threshold is not None and self.breakeven_threshold > 0:
+        if (
+            breakeven_triggered
+            and self.breakeven_threshold is not None
+            and self.breakeven_threshold > 0
+        ):
             if side == "long":
                 be = entry_price * (1.0 + max(0.0, self.breakeven_buffer))
                 new_stop = be if new_stop is None else max(float(new_stop), float(be))

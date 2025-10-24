@@ -42,10 +42,10 @@ def create_ml_sentiment_strategy(
 ) -> Strategy:
     """
     Create ML Sentiment strategy using component composition.
-    
+
     This strategy uses sentiment-aware signal generation to enhance
     prediction accuracy with market sentiment data.
-    
+
     Args:
         name: Strategy name
         model_path: Path to ONNX model file (sentiment model)
@@ -54,7 +54,7 @@ def create_ml_sentiment_strategy(
         model_name: Model name for prediction engine
         model_type: Model type (e.g., "sentiment")
         timeframe: Model timeframe (e.g., "1h")
-    
+
     Returns:
         Configured Strategy instance
     """
@@ -66,22 +66,22 @@ def create_ml_sentiment_strategy(
         use_prediction_engine=use_prediction_engine,
         model_name=model_name,
     )
-    
+
     # Create fixed risk manager (2% risk per trade)
     risk_manager = FixedRiskManager(
         risk_per_trade=0.02,
         stop_loss_pct=0.02,
     )
-    
+
     # Create position sizer with confidence weighting (20% base)
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=0.2,
         min_confidence=0.3,
     )
-    
+
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
-    
+
     return Strategy(
         name=name,
         signal_generator=signal_generator,

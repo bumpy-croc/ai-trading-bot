@@ -59,3 +59,26 @@ succinct changelog, bumps the semantic version, and auto-stages the updated mani
 - `make optimizer` – trigger the optimisation CLI with the default configuration.
 
 Use these wrappers to mirror CI behaviour locally before opening pull requests.
+
+## Codex auto-review workflow
+
+The repository includes a Codex-driven loop that keeps running fast validations, requests a structured review, and lets Codex apply fixes until the review comes back clean.
+
+```bash
+python -m cli codex auto-review \
+  --plan-path docs/execplans/codex_auto_review.md \
+  --check "make test" \
+  --check "make code-quality" \
+  --max-iterations 3
+```
+
+Key behaviour:
+
+- Validation commands (`--check`) run before every review iteration. If you omit the flag the workflow defaults to `make test` and `make code-quality`. Provide only the fast checks you need during development.
+- The workflow automatically diffs your current branch against `develop` (override with `--compare-branch <name>` or `--compare-branch ""` to disable) so Codex focuses on the recent changes.
+- The review step enforces `cli/core/schemas/codex_review.schema.json`, so Codex replies with machine-readable findings. When the findings array is empty and validations pass, the command exits with status 0.
+- Fix iterations run in `--full-auto` mode by default. Pass `--dangerous-fix` to let Codex bypass sandboxing/approvals entirely (recommended only in a disposable environment).
+- Artifacts live under `.codex/workflows/<timestamp>/` and include validation logs, structured review JSON, and Codex fix transcripts for auditability.
+- Run the command through the project’s Python 3.11 environment (`python3.11 -m cli ...` or `.venv/bin/python -m cli ...`) because the codebase relies on 3.10+ typing features. The loop also injects that interpreter as the `PYTHON` environment variable so Makefile targets like `make test` work even if `python` is not on your PATH (override with `--python-bin`).
+
+You can point `--plan-path` to the ExecPlan that guided the change so Codex understands the intended milestones, but the flag is optional—leaving it out simply tells Codex to review the diff/validations. Use `--profile <name>` to select an alternate Codex configuration, or `--max-iterations 0` for a dry run that just prints the help/exit path without calling Codex.

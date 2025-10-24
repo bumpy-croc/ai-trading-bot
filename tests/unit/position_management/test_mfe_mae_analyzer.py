@@ -186,7 +186,7 @@ class TestMFEMAEAnalyzer:
 
         result = self.analyzer.identify_optimal_exit_points(trades)
         assert len(result) == 2
-        
+
         assert isinstance(result[0], TradeMFERecord)
         assert result[0].strategy_name == "ml_basic"
         assert result[0].mfe == pytest.approx(0.05)
@@ -214,7 +214,7 @@ class TestMFEMAEAnalyzer:
 
         result = self.analyzer.identify_optimal_exit_points(trades)
         assert len(result) == 2
-        
+
         assert result[0].strategy_name == ""
         assert result[0].mfe == pytest.approx(0.0)
         assert result[0].mae == pytest.approx(0.0)

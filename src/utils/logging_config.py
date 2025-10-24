@@ -101,10 +101,28 @@ class ContextInjectorFilter(logging.Filter):
 
     # * Built-in LogRecord fields that should not be overwritten
     _RESERVED_FIELDS = {
-        "name", "msg", "args", "levelname", "levelno", "pathname", "filename", 
-        "module", "lineno", "funcName", "created", "msecs", "relativeCreated", 
-        "thread", "threadName", "processName", "process", "getMessage", 
-        "exc_info", "exc_text", "stack_info", "message"
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "getMessage",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "message",
     }
 
     def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
@@ -177,37 +195,60 @@ class MaxMessageLengthFilter(logging.Filter):
 
 class SimpleJsonFormatter(logging.Formatter):
     """Custom JSON formatter for structured logging."""
-    
+
     def format(self, record: logging.LogRecord) -> str:
         # * Safely get the message without overwriting the message field
         try:
             message = record.getMessage()
         except Exception:
             message = str(record.msg) if record.msg else ""
-            
+
         log_entry = {
             "timestamp": self.formatTime(record),
             "level": record.levelname,
             "logger": record.name,
             "message": message,
         }
-        
+
         # * Add exception info if present
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
-            
+
         # * Add any extra fields from the record (excluding built-in fields)
         for key, value in record.__dict__.items():
-            if key not in ["name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module", "lineno", "funcName", "created", "msecs", "relativeCreated", "thread", "threadName", "processName", "process", "getMessage", "exc_info", "exc_text", "stack_info", "message"]:
+            if key not in [
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "getMessage",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+                "message",
+            ]:
                 log_entry[key] = value
-                
+
         return json.dumps(log_entry)
 
 
 def build_logging_config(level_name: str | None = None, json: bool = False) -> dict[str, Any]:
     cfg = get_config()
     level = (level_name or cfg.get("LOG_LEVEL", "INFO")).upper()
-    
+
     # * Use custom JSON formatter for structured logging
     if json:
         formatter = {
@@ -240,7 +281,10 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
         },
         "loggers": {
             # Reduce noise from chatty libraries while allowing overrides via config
-            "sqlalchemy.engine": {"level": cfg.get("LOG_SQLALCHEMY_LEVEL", "WARNING"), "propagate": True},
+            "sqlalchemy.engine": {
+                "level": cfg.get("LOG_SQLALCHEMY_LEVEL", "WARNING"),
+                "propagate": True,
+            },
             "urllib3": {"level": cfg.get("LOG_URLLIB3_LEVEL", "WARNING"), "propagate": True},
             "binance": {"level": cfg.get("LOG_BINANCE_LEVEL", "WARNING"), "propagate": True},
             "ccxt": {"level": cfg.get("LOG_CCXT_LEVEL", "WARNING"), "propagate": True},
@@ -262,9 +306,12 @@ def configure_logging(level_name: str | None = None, use_json: bool | None = Non
         else:
             # Heuristics: Railway or ENV/APP_ENV=production -> JSON by default
             is_railway = any(
-                cfg.get(k) is not None for k in ("RAILWAY_DEPLOYMENT_ID", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
+                cfg.get(k) is not None
+                for k in ("RAILWAY_DEPLOYMENT_ID", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
             )
-            env_name = (cfg.get("ENV") or cfg.get("APP_ENV") or cfg.get("RAILWAY_ENVIRONMENT_NAME") or "").lower()
+            env_name = (
+                cfg.get("ENV") or cfg.get("APP_ENV") or cfg.get("RAILWAY_ENVIRONMENT_NAME") or ""
+            ).lower()
             is_production = env_name == "production"
             use_json = is_railway or is_production
     config = build_logging_config(level_name, json=use_json)

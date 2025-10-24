@@ -25,7 +25,9 @@ class DummySignalGenerator(SignalGenerator):
     def __init__(self):
         super().__init__("dummy_signal")
 
-    def generate_signal(self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None) -> Signal:
+    def generate_signal(
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
+    ) -> Signal:
         self.validate_inputs(df, index)
         return Signal(direction=SignalDirection.BUY, strength=1.0, confidence=0.9, metadata={})
 
@@ -40,13 +42,11 @@ class DummySignalGenerator(SignalGenerator):
     def get_feature_generators(self) -> list[FeatureGeneratorSpec]:
         def _generate_features(frame: pd.DataFrame) -> pd.DataFrame:
             return pd.DataFrame(
-                {
-                    'dummy_feature': frame['close'].rolling(window=2, min_periods=1).mean()
-                }
+                {"dummy_feature": frame["close"].rolling(window=2, min_periods=1).mean()}
             )
 
         def _incremental(frame: pd.DataFrame, new_row: pd.Series) -> pd.Series:
-            return pd.Series({'dummy_feature': float(new_row['close'])})
+            return pd.Series({"dummy_feature": float(new_row["close"])})
 
         return [
             FeatureGeneratorSpec(
@@ -69,16 +69,22 @@ class DummyRiskManager(RiskManager):
     def warmup_period(self) -> int:
         return 2
 
-    def calculate_position_size(self, signal: Signal, balance: float, regime: RegimeContext | None = None) -> float:
+    def calculate_position_size(
+        self, signal: Signal, balance: float, regime: RegimeContext | None = None
+    ) -> float:
         self.validate_inputs(balance)
         if signal.direction is SignalDirection.HOLD:
             return 0.0
         return balance * 0.1
 
-    def should_exit(self, position: Position, current_data: MarketData, regime: RegimeContext | None = None) -> bool:
+    def should_exit(
+        self, position: Position, current_data: MarketData, regime: RegimeContext | None = None
+    ) -> bool:
         return False
 
-    def get_stop_loss(self, entry_price: float, signal: Signal, regime: RegimeContext | None = None) -> float:
+    def get_stop_loss(
+        self, entry_price: float, signal: Signal, regime: RegimeContext | None = None
+    ) -> float:
         return entry_price * 0.9
 
 
@@ -88,7 +94,13 @@ class DummyPositionSizer(PositionSizer):
     def __init__(self):
         super().__init__("dummy_sizer")
 
-    def calculate_size(self, signal: Signal, balance: float, risk_amount: float, regime: RegimeContext | None = None) -> float:
+    def calculate_size(
+        self,
+        signal: Signal,
+        balance: float,
+        risk_amount: float,
+        regime: RegimeContext | None = None,
+    ) -> float:
         self.validate_inputs(balance, risk_amount)
         return risk_amount
 
@@ -127,11 +139,11 @@ class RecordingStrategy(Strategy):
 def sample_dataframe() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            'open': [100, 101, 102, 103, 104],
-            'high': [101, 102, 103, 104, 105],
-            'low': [99, 100, 101, 102, 103],
-            'close': [100, 101, 102, 103, 104],
-            'volume': [10, 11, 12, 13, 14],
+            "open": [100, 101, 102, 103, 104],
+            "high": [101, 102, 103, 104, 105],
+            "low": [99, 100, 101, 102, 103],
+            "close": [100, 101, 102, 103, 104],
+            "volume": [10, 11, 12, 13, 14],
         }
     )
 
@@ -147,17 +159,21 @@ def runtime_strategy() -> RecordingStrategy:
     )
 
 
-def test_prepare_data_enriches_dataset(runtime_strategy: RecordingStrategy, sample_dataframe: pd.DataFrame) -> None:
+def test_prepare_data_enriches_dataset(
+    runtime_strategy: RecordingStrategy, sample_dataframe: pd.DataFrame
+) -> None:
     runtime = StrategyRuntime(runtime_strategy)
     dataset = runtime.prepare_data(sample_dataframe)
 
     assert runtime_strategy.prepared_with is dataset
-    assert 'dummy_feature' in dataset.data.columns
-    assert dataset.feature_caches['dummy_signal_features'].supports_incremental()
+    assert "dummy_feature" in dataset.data.columns
+    assert dataset.feature_caches["dummy_signal_features"].supports_incremental()
     assert dataset.warmup_period == runtime_strategy.warmup_period
 
 
-def test_process_produces_trading_decision(runtime_strategy: RecordingStrategy, sample_dataframe: pd.DataFrame) -> None:
+def test_process_produces_trading_decision(
+    runtime_strategy: RecordingStrategy, sample_dataframe: pd.DataFrame
+) -> None:
     runtime = StrategyRuntime(runtime_strategy)
     runtime.prepare_data(sample_dataframe)
 
@@ -166,10 +182,15 @@ def test_process_produces_trading_decision(runtime_strategy: RecordingStrategy, 
 
     assert decision.signal.direction is SignalDirection.BUY
     assert decision.position_size > 0
-    assert decision.metadata['components']['signal_generator'] == runtime_strategy.signal_generator.name
+    assert (
+        decision.metadata["components"]["signal_generator"]
+        == runtime_strategy.signal_generator.name
+    )
 
 
-def test_finalize_clears_dataset(runtime_strategy: RecordingStrategy, sample_dataframe: pd.DataFrame) -> None:
+def test_finalize_clears_dataset(
+    runtime_strategy: RecordingStrategy, sample_dataframe: pd.DataFrame
+) -> None:
     runtime = StrategyRuntime(runtime_strategy)
     runtime.prepare_data(sample_dataframe)
     runtime.finalize()
@@ -183,7 +204,7 @@ def test_prepare_data_validates_required_columns(sample_dataframe: pd.DataFrame)
     class MissingColumnSignalGenerator(DummySignalGenerator):
         def get_feature_generators(self) -> list[FeatureGeneratorSpec]:
             def _generate_features(frame: pd.DataFrame) -> pd.DataFrame:
-                return pd.DataFrame({'feature': frame['missing']})
+                return pd.DataFrame({"feature": frame["missing"]})
 
             return [
                 FeatureGeneratorSpec(

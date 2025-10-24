@@ -47,7 +47,7 @@ def create_ml_basic_strategy(
 ) -> Strategy:
     """
     Create ML Basic strategy using component composition.
-    
+
     Args:
         name: Strategy name
         model_path: Path to ONNX model file
@@ -56,11 +56,12 @@ def create_ml_basic_strategy(
         model_name: Model name for prediction engine
         model_type: Model type (e.g., "basic")
         timeframe: Model timeframe (e.g., "1h")
-    
+
     Returns:
         Configured Strategy instance
     """
     if fast_mode:
+
         class _FastRegimeDetector:
             """Lightweight regime detector for fast test execution."""
 
@@ -94,20 +95,20 @@ def create_ml_basic_strategy(
             model_type=model_type,
             timeframe=timeframe,
         )
-        
+
         # Create risk manager with fixed stop loss (2%)
         risk_manager = FixedRiskManager(
             risk_per_trade=0.02,
             stop_loss_pct=0.02,
         )
-        
+
         # Create position sizer with confidence weighting (20% base)
         position_sizer = ConfidenceWeightedSizer(
             base_fraction=0.2,
             min_confidence=0.3,
         )
         regime_detector = EnhancedRegimeDetector()
-    
+
     strategy = Strategy(
         name=name,
         signal_generator=signal_generator,

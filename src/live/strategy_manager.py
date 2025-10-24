@@ -55,34 +55,39 @@ class StrategyManager:
 
         # Strategy registry with factory functions
         self.strategy_registry = {}
-            
+
         # Register strategy factory functions
         try:
             from src.strategies.ml_basic import create_ml_basic_strategy
+
             self.strategy_registry["ml_basic"] = create_ml_basic_strategy
         except Exception as e:
             logger.debug(f"ML Basic strategy not available: {e}")
-            
+
         try:
             from src.strategies.ml_adaptive import create_ml_adaptive_strategy
+
             self.strategy_registry["ml_adaptive"] = create_ml_adaptive_strategy
         except Exception as e:
             logger.debug(f"ML Adaptive strategy not available: {e}")
-            
+
         try:
             from src.strategies.ensemble_weighted import create_ensemble_weighted_strategy
+
             self.strategy_registry["ensemble_weighted"] = create_ensemble_weighted_strategy
         except Exception as e:
             logger.debug(f"Ensemble Weighted strategy not available: {e}")
-            
+
         try:
             from src.strategies.momentum_leverage import create_momentum_leverage_strategy
+
             self.strategy_registry["momentum_leverage"] = create_momentum_leverage_strategy
         except Exception as e:
             logger.debug(f"Momentum Leverage strategy not available: {e}")
-            
+
         try:
             from src.strategies.ml_sentiment import create_ml_sentiment_strategy
+
             self.strategy_registry["ml_sentiment"] = create_ml_sentiment_strategy
         except Exception as e:
             logger.debug(f"ML Sentiment strategy not available: {e}")
@@ -113,7 +118,7 @@ class StrategyManager:
         self, strategy_name: str, version: str, config: dict[str, Any] | None = None
     ) -> tuple[Strategy, StrategyVersionRecord]:
         """Create a strategy instance and version record without mutating state.
-        
+
         Uses factory functions to create component-based Strategy instances.
         """
 
@@ -143,7 +148,7 @@ class StrategyManager:
         self, strategy_name: str, version: str = "latest", config: dict[str, Any] | None = None
     ) -> Strategy:
         """Load a strategy with version control.
-        
+
         Uses factory functions to create component-based Strategy instances.
         """
 
@@ -346,7 +351,9 @@ class StrategyManager:
         try:
             strategy_name = update_data["strategy_name"]
 
-            logger.warning(f"Strategy {strategy_name} doesn't support model updates in component-based architecture")
+            logger.warning(
+                f"Strategy {strategy_name} doesn't support model updates in component-based architecture"
+            )
             return False
 
         except Exception as e:

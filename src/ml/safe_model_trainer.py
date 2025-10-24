@@ -116,19 +116,23 @@ class SafeModelTrainer:
         # Backup existing model files
         model_files = []
         if with_sentiment:
-            model_files.extend([
-                f"{symbol.lower()}_sentiment.onnx",
-                f"{symbol.lower()}_sentiment.h5",
-                f"{symbol.lower()}_sentiment.keras",
-                f"{symbol.lower()}_sentiment_metadata.json",
-            ])
+            model_files.extend(
+                [
+                    f"{symbol.lower()}_sentiment.onnx",
+                    f"{symbol.lower()}_sentiment.h5",
+                    f"{symbol.lower()}_sentiment.keras",
+                    f"{symbol.lower()}_sentiment_metadata.json",
+                ]
+            )
         else:
-            model_files.extend([
-                f"{symbol.lower()}_price.onnx",
-                f"{symbol.lower()}_price.h5",
-                f"{symbol.lower()}_price.keras",
-                f"{symbol.lower()}_price_metadata.json",
-            ])
+            model_files.extend(
+                [
+                    f"{symbol.lower()}_price.onnx",
+                    f"{symbol.lower()}_price.h5",
+                    f"{symbol.lower()}_price.keras",
+                    f"{symbol.lower()}_price_metadata.json",
+                ]
+            )
 
         backup_path = self.backup_dir / backup_name
         backup_path.mkdir(exist_ok=True)
@@ -155,10 +159,14 @@ class SafeModelTrainer:
         cmd = [
             sys.executable,
             str(script_path),
-            "--symbol", symbol,
-            "--days", str(days),
-            "--epochs", str(epochs),
-            "--output-dir", str(self.staging_dir),
+            "--symbol",
+            symbol,
+            "--days",
+            str(days),
+            "--epochs",
+            str(epochs),
+            "--output-dir",
+            str(self.staging_dir),
         ]
 
         logger.info(f"Running training command: {' '.join(cmd)}")
@@ -183,7 +191,7 @@ class SafeModelTrainer:
         """Parse training output to extract model information"""
         # This is a simplified parser - in practice, you'd want more robust parsing
         model_type = "sentiment" if with_sentiment else "price"
-        
+
         return {
             "symbol": symbol,
             "model_type": model_type,
@@ -194,7 +202,7 @@ class SafeModelTrainer:
                 f"{symbol.lower()}_{model_type}.h5",
                 f"{symbol.lower()}_{model_type}.keras",
                 f"{symbol.lower()}_{model_type}_metadata.json",
-            ]
+            ],
         }
 
     def _validate_model(self, model_info: dict) -> dict:
@@ -217,7 +225,7 @@ class SafeModelTrainer:
     def _prepare_deployment_package(self, model_info: dict) -> dict:
         """Prepare model for deployment"""
         deployment_id = f"{model_info['symbol']}_{model_info['model_type']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
+
         return {
             "deployment_id": deployment_id,
             "staging_path": str(self.staging_dir),
@@ -249,7 +257,7 @@ class SafeModelTrainer:
             for model_file in deployment_package["model_info"]["model_files"]:
                 source = staging_path / model_file
                 destination = self.models_dir / model_file
-                
+
                 if source.exists():
                     shutil.copy2(source, destination)
                     logger.info(f"Deployed: {model_file}")
@@ -274,21 +282,25 @@ class SafeModelTrainer:
         # List staging models
         if self.staging_dir.exists():
             for file_path in self.staging_dir.glob("*.onnx"):
-                staging_models.append({
+                staging_models.append(
+                    {
+                        "name": file_path.name,
+                        "path": str(file_path),
+                        "size": file_path.stat().st_size,
+                        "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
+                    }
+                )
+
+        # List live models
+        for file_path in self.models_dir.glob("*.onnx"):
+            live_models.append(
+                {
                     "name": file_path.name,
                     "path": str(file_path),
                     "size": file_path.stat().st_size,
                     "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
-                })
-
-        # List live models
-        for file_path in self.models_dir.glob("*.onnx"):
-            live_models.append({
-                "name": file_path.name,
-                "path": str(file_path),
-                "size": file_path.stat().st_size,
-                "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
-            })
+                }
+            )
 
         return {
             "staging": staging_models,
@@ -305,12 +317,14 @@ def main():
     parser.add_argument("--days", type=int, default=365, help="Days of historical data")
     parser.add_argument("--epochs", type=int, default=50, help="Training epochs")
     parser.add_argument("--auto-deploy", action="store_true", help="Auto-deploy after training")
-    parser.add_argument("--close-positions", action="store_true", help="Close positions before deployment")
+    parser.add_argument(
+        "--close-positions", action="store_true", help="Close positions before deployment"
+    )
 
     args = parser.parse_args()
 
     trainer = SafeModelTrainer()
-    
+
     # Train model
     result = trainer.train_model_safe(
         symbol=args.symbol,

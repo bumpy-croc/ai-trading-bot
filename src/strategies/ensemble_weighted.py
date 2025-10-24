@@ -52,33 +52,33 @@ def create_ensemble_weighted_strategy(
 ) -> Strategy:
     """
     Create Ensemble Weighted strategy using component composition.
-    
+
     Args:
         name: Strategy name
         use_ml_basic: Whether to include ML Basic signal generator
         use_ml_adaptive: Whether to include ML Adaptive signal generator
         use_ml_sentiment: Whether to include ML Sentiment signal generator
-    
+
     Returns:
         Configured Strategy instance
     """
     # Create individual signal generators with weights
     generators = {}
-    
+
     if use_ml_basic:
         generators[MLBasicSignalGenerator()] = 0.30
     if use_ml_adaptive:
         generators[MLSignalGenerator()] = 0.30
     if use_ml_sentiment:
         generators[MLSignalGenerator()] = 0.15
-    
+
     # Create weighted voting signal generator
     signal_generator = WeightedVotingSignalGenerator(
         generators=generators,
         min_confidence=0.3,
         consensus_threshold=0.6,
     )
-    
+
     # Create volatility-based risk manager
     risk_manager = VolatilityRiskManager(
         base_risk=STOP_LOSS_PCT,
@@ -86,16 +86,16 @@ def create_ensemble_weighted_strategy(
         min_risk=0.005,
         max_risk=0.05,
     )
-    
+
     # Create aggressive position sizer
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=BASE_POSITION_SIZE,
         min_confidence=0.3,
     )
-    
+
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
-    
+
     strategy = Strategy(
         name=name,
         signal_generator=signal_generator,
@@ -103,20 +103,20 @@ def create_ensemble_weighted_strategy(
         position_sizer=position_sizer,
         regime_detector=regime_detector,
     )
-    
+
     # Expose configuration for test validation
     strategy.stop_loss_pct = STOP_LOSS_PCT
     strategy.take_profit_pct = TAKE_PROFIT_PCT
     strategy.min_position_size_ratio = MIN_POSITION_SIZE_RATIO
     strategy.max_position_size_ratio = MAX_POSITION_SIZE_RATIO
     strategy.trading_pair = "BTCUSDT"
-    
+
     # Expose normalized component weights for introspection
     strategy.component_weights = {
         generator.__class__.__name__: weight
         for generator, weight in signal_generator.generators.items()
     }
-    
+
     # Configure trailing stop behavior via risk overrides
     strategy._risk_overrides = {
         "trailing_stop": {
@@ -127,5 +127,5 @@ def create_ensemble_weighted_strategy(
             "cooldown_hours": 4,
         }
     }
-    
+
     return strategy

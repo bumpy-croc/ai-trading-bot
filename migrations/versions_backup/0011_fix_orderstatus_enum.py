@@ -102,5 +102,3 @@ def downgrade() -> None:
     # Non-destructive downgrade: keep the normalized enum as data may depend on it
     # Optionally, we could recreate previous enum state, but we choose no-op for safety.
     pass
-
-

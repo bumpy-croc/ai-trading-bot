@@ -1,0 +1,14 @@
+        # Command
+        make test
+
+        # Exit code
+        2
+
+        # STDOUT
+        python -m pip install --upgrade pip
+
+
+        # STDERR
+        make: python: No such file or directory
+make: *** [install] Error 1
+

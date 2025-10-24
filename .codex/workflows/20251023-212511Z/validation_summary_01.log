@@ -1,0 +1,7 @@
+FAIL | make test | 0.0s | log: .codex/workflows/20251023-212511Z/validation_01_make-test.log
+    make: python: No such file or directory
+    make: *** [install] Error 1
+FAIL | make code-quality | 0.3s | log: .codex/workflows/20251023-212511Z/validation_02_make-code-quality.log
+    All done! ✨ 🍰 ✨
+    357 files left unchanged.
+    make: *** [code-quality] Error 1

@@ -40,17 +40,17 @@ def create_ml_adaptive_strategy(
 ) -> Strategy:
     """
     Create ML Adaptive strategy using component composition.
-    
+
     This strategy uses regime-aware thresholds and adaptive risk management
     to adjust to changing market conditions.
-    
+
     Args:
         name: Strategy name
         model_path: Path to ONNX model file
         sequence_length: Number of candles for sequence prediction
         use_prediction_engine: Whether to use centralized prediction engine
         model_name: Model name for prediction engine
-    
+
     Returns:
         Configured Strategy instance
     """
@@ -62,21 +62,21 @@ def create_ml_adaptive_strategy(
         use_prediction_engine=use_prediction_engine,
         model_name=model_name,
     )
-    
+
     # Create regime-adaptive risk manager
     risk_manager = RegimeAdaptiveRiskManager(
         base_risk=0.02,  # 2% base risk
     )
-    
+
     # Create position sizer with confidence weighting (20% base)
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=0.2,
         min_confidence=0.3,
     )
-    
+
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
-    
+
     strategy = Strategy(
         name=name,
         signal_generator=signal_generator,

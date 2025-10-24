@@ -360,7 +360,7 @@ _global_feature_cache: Optional[FeatureCache] = None
 class PredictionCacheManager:
     """
     Database-backed prediction cache manager with LRU eviction and TTL support.
-    
+
     This cache manager stores prediction results in the database to avoid
     redundant model inference on identical feature inputs.
     """
@@ -368,7 +368,7 @@ class PredictionCacheManager:
     def __init__(self, database_manager, ttl: int = 60, max_size: int = 1000):
         """
         Initialize prediction cache manager.
-        
+
         Args:
             database_manager: Database manager instance
             ttl: Time-to-live for cache entries in seconds
@@ -403,18 +403,19 @@ class PredictionCacheManager:
             # Fallback to string-based hashing if any error occurs
             logger.warning(
                 "Failed to hash features using tobytes(): %s: %s. Falling back to string-based hashing.",
-                type(e).__name__, str(e)
+                type(e).__name__,
+                str(e),
             )
             return hashlib.sha256(str(features).encode()).hexdigest()
 
     def _generate_config_hash(self, model_name: str, config: dict) -> str:
         """
         Generate a hash for model configuration.
-        
+
         Args:
             model_name: Name of the model
             config: Model configuration dictionary
-            
+
         Returns:
             Hash string for the configuration
         """
@@ -424,12 +425,12 @@ class PredictionCacheManager:
     def _generate_cache_key(self, features: np.ndarray, model_name: str, config: dict) -> str:
         """
         Generate a cache key for the prediction request.
-        
+
         Args:
             features: Input features array
             model_name: Name of the model
             config: Model configuration dictionary
-            
+
         Returns:
             Cache key string
         """
@@ -440,36 +441,40 @@ class PredictionCacheManager:
     def get(self, features: np.ndarray, model_name: str, config: dict) -> Optional[dict]:
         """
         Get cached prediction result.
-        
+
         Args:
             features: Input features array
             model_name: Name of the model
             config: Model configuration dictionary
-            
+
         Returns:
             Cached prediction result dict or None if not found/expired
         """
         cache_key = self._generate_cache_key(features, model_name, config)
-        
+
         try:
             with self.db_manager.get_session() as session:
                 # Find cache entry
-                cache_entry = session.query(PredictionCache).filter(
-                    PredictionCache.cache_key == cache_key,
-                    PredictionCache.expires_at > datetime.utcnow()
-                ).first()
-                
+                cache_entry = (
+                    session.query(PredictionCache)
+                    .filter(
+                        PredictionCache.cache_key == cache_key,
+                        PredictionCache.expires_at > datetime.utcnow(),
+                    )
+                    .first()
+                )
+
                 if cache_entry is None:
                     self._stats["misses"] += 1
                     return None
-                
+
                 # Update access statistics
                 cache_entry.access_count += 1
                 cache_entry.last_accessed = datetime.utcnow()
                 session.commit()
-                
+
                 self._stats["hits"] += 1
-                
+
                 return {
                     "price": float(cache_entry.predicted_price),
                     "confidence": float(cache_entry.confidence),
@@ -477,17 +482,24 @@ class PredictionCacheManager:
                     "cache_hit": True,
                     "access_count": cache_entry.access_count,
                 }
-                
+
         except Exception as e:
             logger.warning(f"Error accessing prediction cache: {e}")
             self._stats["misses"] += 1
             return None
 
-    def set(self, features: np.ndarray, model_name: str, config: dict, 
-            price: float, confidence: float, direction: int) -> None:
+    def set(
+        self,
+        features: np.ndarray,
+        model_name: str,
+        config: dict,
+        price: float,
+        confidence: float,
+        direction: int,
+    ) -> None:
         """
         Cache a prediction result.
-        
+
         Args:
             features: Input features array
             model_name: Name of the model
@@ -500,14 +512,16 @@ class PredictionCacheManager:
         features_hash = self._generate_features_hash(features)
         config_hash = self._generate_config_hash(model_name, config)
         expires_at = datetime.utcnow() + timedelta(seconds=self.ttl)
-        
+
         try:
             with self.db_manager.get_session() as session:
                 # Check if entry already exists
-                existing_entry = session.query(PredictionCache).filter(
-                    PredictionCache.cache_key == cache_key
-                ).first()
-                
+                existing_entry = (
+                    session.query(PredictionCache)
+                    .filter(PredictionCache.cache_key == cache_key)
+                    .first()
+                )
+
                 if existing_entry is not None:
                     # Update existing entry
                     existing_entry.predicted_price = price
@@ -528,36 +542,38 @@ class PredictionCacheManager:
                         config_hash=config_hash,
                     )
                     session.add(cache_entry)
-                
+
                 session.commit()
                 self._stats["sets"] += 1
-                
+
                 # Clean up expired entries and enforce size limit
                 self._cleanup_expired(session)
                 self._enforce_size_limit(session)
-                
+
         except Exception as e:
             logger.warning(f"Error setting prediction cache: {e}")
 
     def _cleanup_expired(self, session) -> int:
         """
         Remove expired cache entries.
-        
+
         Args:
             session: Database session
-            
+
         Returns:
             Number of entries removed
         """
         try:
-            expired_count = session.query(PredictionCache).filter(
-                PredictionCache.expires_at <= datetime.utcnow()
-            ).delete()
-            
+            expired_count = (
+                session.query(PredictionCache)
+                .filter(PredictionCache.expires_at <= datetime.utcnow())
+                .delete()
+            )
+
             session.commit()
             self._stats["expired_cleanups"] += expired_count
             return expired_count
-            
+
         except Exception as e:
             logger.warning(f"Error cleaning up expired cache entries: {e}")
             return 0
@@ -565,34 +581,37 @@ class PredictionCacheManager:
     def _enforce_size_limit(self, session) -> int:
         """
         Enforce cache size limit using LRU eviction.
-        
+
         Args:
             session: Database session
-            
+
         Returns:
             Number of entries evicted
         """
         try:
             current_count = session.query(PredictionCache).count()
-            
+
             if current_count <= self.max_size:
                 return 0
-            
+
             # Remove oldest entries (LRU eviction)
             entries_to_remove = current_count - self.max_size
-            
+
             # Get oldest entries by last_accessed
-            oldest_entries = session.query(PredictionCache).order_by(
-                PredictionCache.last_accessed.asc()
-            ).limit(entries_to_remove).all()
-            
+            oldest_entries = (
+                session.query(PredictionCache)
+                .order_by(PredictionCache.last_accessed.asc())
+                .limit(entries_to_remove)
+                .all()
+            )
+
             for entry in oldest_entries:
                 session.delete(entry)
-            
+
             session.commit()
             self._stats["evictions"] += entries_to_remove
             return entries_to_remove
-            
+
         except Exception as e:
             logger.warning(f"Error enforcing cache size limit: {e}")
             return 0
@@ -600,22 +619,24 @@ class PredictionCacheManager:
     def invalidate_model(self, model_name: str) -> int:
         """
         Invalidate all cache entries for a specific model.
-        
+
         Args:
             model_name: Name of the model to invalidate
-            
+
         Returns:
             Number of entries invalidated
         """
         try:
             with self.db_manager.get_session() as session:
-                invalidated_count = session.query(PredictionCache).filter(
-                    PredictionCache.model_name == model_name
-                ).delete()
-                
+                invalidated_count = (
+                    session.query(PredictionCache)
+                    .filter(PredictionCache.model_name == model_name)
+                    .delete()
+                )
+
                 session.commit()
                 return invalidated_count
-                
+
         except Exception as e:
             logger.warning(f"Error invalidating model cache: {e}")
             return 0
@@ -623,26 +644,30 @@ class PredictionCacheManager:
     def invalidate_config(self, model_name: str, config: dict) -> int:
         """
         Invalidate cache entries for a specific model configuration.
-        
+
         Args:
             model_name: Name of the model
             config: Model configuration dictionary
-            
+
         Returns:
             Number of entries invalidated
         """
         config_hash = self._generate_config_hash(model_name, config)
-        
+
         try:
             with self.db_manager.get_session() as session:
-                invalidated_count = session.query(PredictionCache).filter(
-                    PredictionCache.model_name == model_name,
-                    PredictionCache.config_hash == config_hash
-                ).delete()
-                
+                invalidated_count = (
+                    session.query(PredictionCache)
+                    .filter(
+                        PredictionCache.model_name == model_name,
+                        PredictionCache.config_hash == config_hash,
+                    )
+                    .delete()
+                )
+
                 session.commit()
                 return invalidated_count
-                
+
         except Exception as e:
             logger.warning(f"Error invalidating config cache: {e}")
             return 0
@@ -650,7 +675,7 @@ class PredictionCacheManager:
     def clear(self) -> int:
         """
         Clear all cache entries.
-        
+
         Returns:
             Number of entries cleared
         """
@@ -659,7 +684,7 @@ class PredictionCacheManager:
                 cleared_count = session.query(PredictionCache).delete()
                 session.commit()
                 return cleared_count
-                
+
         except Exception as e:
             logger.warning(f"Error clearing prediction cache: {e}")
             return 0
@@ -667,20 +692,22 @@ class PredictionCacheManager:
     def get_stats(self) -> dict:
         """
         Get cache statistics.
-        
+
         Returns:
             Dictionary with cache statistics
         """
         try:
             with self.db_manager.get_session() as session:
                 total_entries = session.query(PredictionCache).count()
-                expired_entries = session.query(PredictionCache).filter(
-                    PredictionCache.expires_at <= datetime.utcnow()
-                ).count()
-                
+                expired_entries = (
+                    session.query(PredictionCache)
+                    .filter(PredictionCache.expires_at <= datetime.utcnow())
+                    .count()
+                )
+
                 total_requests = self._stats["hits"] + self._stats["misses"]
                 hit_rate = self._stats["hits"] / total_requests if total_requests > 0 else 0.0
-                
+
                 return {
                     "total_entries": total_entries,
                     "expired_entries": expired_entries,
@@ -688,7 +715,7 @@ class PredictionCacheManager:
                     "total_requests": total_requests,
                     **self._stats,
                 }
-                
+
         except Exception as e:
             logger.warning(f"Error getting cache stats: {e}")
             return self._stats.copy()

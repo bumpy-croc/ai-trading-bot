@@ -32,11 +32,17 @@ def upgrade() -> None:
         if not _has_column("positions", "max_holding_until"):
             batch_op.add_column(sa.Column("max_holding_until", sa.DateTime(), nullable=True))
         if not _has_column("positions", "end_of_day_exit"):
-            batch_op.add_column(sa.Column("end_of_day_exit", sa.Boolean(), nullable=True, server_default=sa.false()))
+            batch_op.add_column(
+                sa.Column("end_of_day_exit", sa.Boolean(), nullable=True, server_default=sa.false())
+            )
         if not _has_column("positions", "weekend_exit"):
-            batch_op.add_column(sa.Column("weekend_exit", sa.Boolean(), nullable=True, server_default=sa.false()))
+            batch_op.add_column(
+                sa.Column("weekend_exit", sa.Boolean(), nullable=True, server_default=sa.false())
+            )
         if not _has_column("positions", "time_restriction_group"):
-            batch_op.add_column(sa.Column("time_restriction_group", sa.String(length=50), nullable=True))
+            batch_op.add_column(
+                sa.Column("time_restriction_group", sa.String(length=50), nullable=True)
+            )
 
     # Add columns to trading_sessions (idempotent checks)
     with op.batch_alter_table("trading_sessions") as batch_op:
@@ -85,4 +91,3 @@ def downgrade() -> None:
             batch_op.drop_column("end_of_day_exit")
         if _has_column("positions", "max_holding_until"):
             batch_op.drop_column("max_holding_until")
-

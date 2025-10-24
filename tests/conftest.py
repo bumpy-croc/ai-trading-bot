@@ -129,7 +129,7 @@ def maybe_setup_database(pytestconfig):
     """
     # Check TEST_TYPE environment variable first
     test_type = os.getenv("TEST_TYPE", "").lower()
-    
+
     # Decide DB based on whether integration tests are selected this session
     try:
         has_integration = bool(pytestconfig.stash.get(("integration", "selected"), False))
@@ -345,7 +345,7 @@ def risk_parameters():
 def mock_strategy():
     """Create a mock strategy for testing"""
     from src.strategies.components import Strategy
-    
+
     mock_strategy = Mock(spec=Strategy)
     mock_strategy.name = "TestStrategy"
     mock_strategy.trading_pair = "BTCUSDT"

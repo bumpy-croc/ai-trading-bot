@@ -16,11 +16,12 @@ import sys
 _WEB_SERVER_USE_GEVENT = os.environ.get("WEB_SERVER_USE_GEVENT", "0") == "1"
 
 # Detect if gevent monkey patching was already applied
-if _WEB_SERVER_USE_GEVENT and 'gevent' in sys.modules:
+if _WEB_SERVER_USE_GEVENT and "gevent" in sys.modules:
     _ASYNC_MODE = "gevent"
 elif _WEB_SERVER_USE_GEVENT:
     # Fallback: apply monkey patching if not done yet (for standalone imports)
     import gevent.monkey
+
     gevent.monkey.patch_all()
     _ASYNC_MODE = "gevent"
 else:
@@ -118,7 +119,9 @@ class MonitoringDashboard:
         templates_path = src_path / "dashboards" / "monitoring" / "templates"
         static_path = src_path / "dashboards" / "monitoring" / "static"
 
-        self.app = Flask(__name__, template_folder=str(templates_path), static_folder=str(static_path))
+        self.app = Flask(
+            __name__, template_folder=str(templates_path), static_folder=str(static_path)
+        )
         from src.utils.secrets import get_secret_key
 
         self.app.config["SECRET_KEY"] = get_secret_key()
@@ -445,15 +448,17 @@ class MonitoringDashboard:
                 ORDER BY status
                 """
                 results = self.db_manager.execute_query(query)
-                
+
                 # * Also get validation results
                 validation = self.db_manager.validate_position_status_consistency()
-                
-                return jsonify({
-                    "positions_by_status": results,
-                    "validation": validation,
-                    "timestamp": datetime.now().isoformat()
-                })
+
+                return jsonify(
+                    {
+                        "positions_by_status": results,
+                        "validation": validation,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
             except Exception as e:
                 logger.error(f"Debug positions endpoint error: {e}")
                 return jsonify({"error": str(e)}), 500
@@ -463,11 +468,13 @@ class MonitoringDashboard:
             """Endpoint to manually trigger position status fixes."""
             try:
                 fixes = self.db_manager.fix_position_status_inconsistencies()
-                return jsonify({
-                    "success": True,
-                    "fixes_applied": fixes,
-                    "timestamp": datetime.now().isoformat()
-                })
+                return jsonify(
+                    {
+                        "success": True,
+                        "fixes_applied": fixes,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
             except Exception as e:
                 logger.error(f"Fix positions endpoint error: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
@@ -804,12 +811,12 @@ class MonitoringDashboard:
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
-            
+
             if result and len(result) > 0:
                 return self._safe_float(result[0]["adjustment_factor"])
-            
+
             return 1.0  # Default factor when no adjustments
-            
+
         except Exception as e:
             logger.error(f"Error getting dynamic risk factor: {e}")
             return 1.0
@@ -826,12 +833,12 @@ class MonitoringDashboard:
             LIMIT 1
             """
             result = self.db_manager.execute_query(query)
-            
+
             if result and len(result) > 0:
                 return str(result[0]["trigger_reason"])
-            
+
             return "normal"  # Default reason when no adjustments
-            
+
         except Exception as e:
             logger.error(f"Error getting dynamic risk reason: {e}")
             return "normal"
@@ -848,12 +855,12 @@ class MonitoringDashboard:
             AND timestamp > NOW() - INTERVAL '1 hour'
             """
             result = self.db_manager.execute_query(query)
-            
+
             if result and len(result) > 0:
                 return int(result[0]["count"]) > 0
-            
+
             return False
-            
+
         except Exception as e:
             logger.error(f"Error checking dynamic risk status: {e}")
             return False
@@ -1553,18 +1560,30 @@ class MonitoringDashboard:
                             "current_size": self._safe_float(pos.get("current_size")),
                             "partial_exits_taken": pos.get("partial_exits_taken"),
                             "scale_ins_taken": pos.get("scale_ins_taken"),
-                            "last_partial_exit_price": self._safe_float(pos.get("last_partial_exit_price")),
+                            "last_partial_exit_price": self._safe_float(
+                                pos.get("last_partial_exit_price")
+                            ),
                             "last_scale_in_price": self._safe_float(pos.get("last_scale_in_price")),
                             # Trailing stops and MFE/MAE tracking
-                            "trailing_stop_activated": bool(pos.get("trailing_stop_activated", False)),
+                            "trailing_stop_activated": bool(
+                                pos.get("trailing_stop_activated", False)
+                            ),
                             "trailing_stop_price": (
                                 self._safe_float(pos.get("trailing_stop_price"))
                                 if pos.get("trailing_stop_price") is not None
                                 else None
                             ),
                             "breakeven_triggered": bool(pos.get("breakeven_triggered", False)),
-                            "mfe": self._safe_float(pos.get("mfe")) if pos.get("mfe") is not None else 0.0,
-                            "mae": self._safe_float(pos.get("mae")) if pos.get("mae") is not None else 0.0,
+                            "mfe": (
+                                self._safe_float(pos.get("mfe"))
+                                if pos.get("mfe") is not None
+                                else 0.0
+                            ),
+                            "mae": (
+                                self._safe_float(pos.get("mae"))
+                                if pos.get("mae") is not None
+                                else 0.0
+                            ),
                         }
                     )
                 )

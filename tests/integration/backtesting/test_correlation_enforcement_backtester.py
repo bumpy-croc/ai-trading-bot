@@ -26,7 +26,9 @@ class AlwaysBuySignalGenerator(SignalGenerator):
             direction=SignalDirection.BUY,
             confidence=1.0,
             strength=1.0,
-            metadata={"timestamp": df.index[index] if len(df.index) > index else pd.Timestamp.utcnow()},
+            metadata={
+                "timestamp": df.index[index] if len(df.index) > index else pd.Timestamp.utcnow()
+            },
         )
 
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
@@ -58,7 +60,9 @@ class PassThroughSizer(PositionSizer):
     def __init__(self):
         super().__init__(name="pass_through")
 
-    def calculate_size(self, signal: Signal, balance: float, risk_amount: float, regime=None) -> float:
+    def calculate_size(
+        self, signal: Signal, balance: float, risk_amount: float, regime=None
+    ) -> float:
         return risk_amount
 
 
@@ -119,7 +123,9 @@ def test_backtester_correlation_reduces_size(monkeypatch):
         max_daily_risk=1.0,
     )
 
-    bt = Backtester(strategy=DummyComponentStrategy(), data_provider=provider, risk_parameters=risk_params)
+    bt = Backtester(
+        strategy=DummyComponentStrategy(), data_provider=provider, risk_parameters=risk_params
+    )
     bt.balance = 10_000
 
     # Seed an existing correlated open position

@@ -11,8 +11,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.mock_only
 def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, mock_data_provider):
-    """End-to-end: session → open → MFE/MAE update → trade log → close position.
-    """
+    """End-to-end: session → open → MFE/MAE update → trade log → close position."""
     from src.live.trading_engine import LiveTradingEngine, PositionSide
 
     # Minimal data feed
@@ -51,5 +50,3 @@ def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, 
 
     # Cleanly stop engine
     engine.is_running = False
-
-

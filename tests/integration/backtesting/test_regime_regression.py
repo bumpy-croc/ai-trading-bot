@@ -57,7 +57,10 @@ class DeterministicSignalGenerator(SignalGenerator):
     def generate_signal(self, df: pd.DataFrame, index: int, regime=None) -> Signal:
         self.entry_checks.append(index)
 
-        if self._active_entry_index is not None and index - self._active_entry_index >= self.hold_period:
+        if (
+            self._active_entry_index is not None
+            and index - self._active_entry_index >= self.hold_period
+        ):
             self._active_entry_index = None
             self.exit_events.append(index)
             return Signal(
@@ -109,7 +112,10 @@ class DeterministicSignalGenerator(SignalGenerator):
         )
 
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
-        if self._active_entry_index is not None and index - self._active_entry_index >= self.hold_period:
+        if (
+            self._active_entry_index is not None
+            and index - self._active_entry_index >= self.hold_period
+        ):
             return 0.8
         if index > 0 and index % self.entry_period == 0:
             return 0.8
@@ -118,29 +124,31 @@ class DeterministicSignalGenerator(SignalGenerator):
 
 class DeterministicRiskManager(RiskManager):
     """Deterministic risk manager for regression testing"""
-    
+
     def __init__(self, size: float):
         super().__init__(name="deterministic_risk")
         self.size = size
-    
+
     def calculate_position_size(self, signal: Signal, balance: float, regime=None) -> float:
         return self.size * balance
-    
+
     def should_exit(self, position, current_data, regime=None) -> bool:
         return False
-    
+
     def get_stop_loss(self, entry_price: float, signal: Signal, regime=None) -> float:
         return entry_price * 0.99
 
 
 class DeterministicPositionSizer(PositionSizer):
     """Deterministic position sizer for regression testing"""
-    
+
     def __init__(self, size: float):
         super().__init__(name="deterministic_sizer")
         self.size = size
-    
-    def calculate_size(self, signal: Signal, balance: float, risk_amount: float, regime=None) -> float:
+
+    def calculate_size(
+        self, signal: Signal, balance: float, risk_amount: float, regime=None
+    ) -> float:
         return self.size
 
 
@@ -157,7 +165,7 @@ def create_deterministic_strategy(
         name=name,
         signal_generator=signal_gen,
         risk_manager=DeterministicRiskManager(size),
-        position_sizer=DeterministicPositionSizer(size)
+        position_sizer=DeterministicPositionSizer(size),
     )
 
 
@@ -230,7 +238,9 @@ class StubRegimeStrategySwitcher:
             "analysis_timestamp": datetime(2022, 1, 1),
         }
 
-    def should_switch_strategy(self, regime_analysis: dict[str, Any], current_candle_index: int | None = None) -> dict[str, Any]:
+    def should_switch_strategy(
+        self, regime_analysis: dict[str, Any], current_candle_index: int | None = None
+    ) -> dict[str, Any]:
         consensus = regime_analysis["consensus_regime"]
         should_switch = self._analysis_calls >= 2 and self._switches_executed == 0
         optimal_strategy = "alternate" if should_switch else "ml_basic"
@@ -239,7 +249,11 @@ class StubRegimeStrategySwitcher:
             "reason": "deterministic-switch" if should_switch else "regime-stable",
             "new_regime": consensus["regime_label"],
             "optimal_strategy": optimal_strategy,
-            "current_strategy": self.strategy_manager.current_strategy.name if self.strategy_manager.current_strategy else None,
+            "current_strategy": (
+                self.strategy_manager.current_strategy.name
+                if self.strategy_manager.current_strategy
+                else None
+            ),
             "confidence": consensus["confidence"],
             "agreement": consensus["agreement_score"],
         }

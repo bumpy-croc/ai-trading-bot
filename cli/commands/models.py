@@ -101,5 +101,3 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_promote.add_argument("model_type")
     p_promote.add_argument("version")
     p_promote.set_defaults(func=_handle_promote)
-
-

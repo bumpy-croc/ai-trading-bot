@@ -44,11 +44,14 @@ class TestOrderLifecycle:
     def test_order_creation_and_fill_lifecycle(self, db_manager):
         """Test the complete lifecycle of an order from creation to fill."""
         # * Phase 1: Create a pending order using direct database manipulation
-        session_id = db_manager.create_trading_session("test_strategy", "BTCUSDT", "1h", "live", 10000.0)
-        
+        session_id = db_manager.create_trading_session(
+            "test_strategy", "BTCUSDT", "1h", "live", 10000.0
+        )
+
         # * Create position with OPEN status (positions are active when created)
         with db_manager.get_session() as session:
             from src.database.models import Position
+
             position = Position(
                 symbol="BTCUSDT",
                 side=PositionSide.LONG,
@@ -58,7 +61,7 @@ class TestOrderLifecycle:
                 size=0.02,
                 strategy_name="test_strategy",
                 session_id=session_id,
-                entry_time=datetime.utcnow()
+                entry_time=datetime.utcnow(),
             )
             session.add(position)
             session.commit()
@@ -74,7 +77,7 @@ class TestOrderLifecycle:
             strategy_name="test_strategy",
             session_id=session_id,
             price=50000.0,
-            exchange_order_id="test_order_123"
+            exchange_order_id="test_order_123",
         )
 
         # * Verify order is created as PENDING
@@ -82,11 +85,11 @@ class TestOrderLifecycle:
         assert len(pending_orders) == 1
         assert pending_orders[0]["status"] == "PENDING"
         assert pending_orders[0]["order_id"] == "test_order_123"
-        
+
         # * Verify position is active (created positions start as OPEN)
         active_positions = db_manager.get_active_positions(session_id)
         assert len(active_positions) == 1
-        
+
         # * Phase 2: Fill the entry order (PENDING -> FILLED)
         orders = db_manager.get_orders_for_position(position_id)
         entry_order_id = orders[0]["id"]
@@ -95,7 +98,7 @@ class TestOrderLifecycle:
             order_id=entry_order_id,
             status=OrderStatus.FILLED,
             filled_price=50100.0,  # Slight slippage
-            filled_quantity=0.001
+            filled_quantity=0.001,
         )
         assert success is True
 
@@ -107,24 +110,26 @@ class TestOrderLifecycle:
         active_positions = db_manager.get_active_positions(session_id)
         assert len(active_positions) == 1
         assert active_positions[0]["id"] == position_id
-        assert float(active_positions[0]["entry_price"]) == 50000.0  # Original price, not filled price
+        assert (
+            float(active_positions[0]["entry_price"]) == 50000.0
+        )  # Original price, not filled price
         assert float(active_positions[0]["quantity"]) == 0.001  # Updated quantity
-        
+
         # * Phase 3: Close the position
         success = db_manager.close_position(
-            position_id=position_id,
-            exit_price=51000.0,
-            pnl=900.0  # (51000 - 50100) * 0.001 = 0.9
+            position_id=position_id, exit_price=51000.0, pnl=900.0  # (51000 - 50100) * 0.001 = 0.9
         )
         assert success is True
-        
+
         # * Verify no active positions
         active_positions = db_manager.get_active_positions(session_id)
         assert len(active_positions) == 0
 
     def test_order_cancellation_lifecycle(self, db_manager):
         """Test order cancellation before fill."""
-        session_id = db_manager.create_trading_session("test_strategy", "BTCUSDT", "1h", "live", 10000.0)
+        session_id = db_manager.create_trading_session(
+            "test_strategy", "BTCUSDT", "1h", "live", 10000.0
+        )
 
         # * Create position and pending order
         position_id = db_manager.log_position(
@@ -135,7 +140,7 @@ class TestOrderLifecycle:
             quantity=0.001,
             strategy_name="test_strategy",
             entry_order_id="test_order_456",
-            session_id=session_id
+            session_id=session_id,
         )
 
         # * Create a pending exit order
@@ -147,13 +152,13 @@ class TestOrderLifecycle:
             quantity=0.0005,
             strategy_name="test_strategy",
             session_id=session_id,
-            price=51000.0
+            price=51000.0,
         )
 
         # * Cancel the order
         success = db_manager.update_order_status_new(order_id, OrderStatus.CANCELLED)
         assert success is True
-        
+
         # * Verify no pending orders
         pending_orders = db_manager.get_pending_orders_new(session_id)
         assert len(pending_orders) == 0
@@ -165,7 +170,9 @@ class TestOrderLifecycle:
     def test_account_sync_order_fill(self, synchronizer, db_manager):
         """Test order fill through account synchronization."""
         # * Create a trading session first
-        session_id = db_manager.create_trading_session("test_strategy", "BTCUSDT", "1h", "live", 10000.0)
+        session_id = db_manager.create_trading_session(
+            "test_strategy", "BTCUSDT", "1h", "live", 10000.0
+        )
 
         # Update synchronizer to use the actual session
         synchronizer.session_id = session_id
@@ -179,7 +186,7 @@ class TestOrderLifecycle:
             quantity=0.001,
             strategy_name="test_strategy",
             entry_order_id="sync_test_order",
-            session_id=session_id
+            session_id=session_id,
         )
 
         # Create a pending order for this position
@@ -192,9 +199,9 @@ class TestOrderLifecycle:
             strategy_name="test_strategy",
             session_id=session_id,
             exchange_order_id="sync_test_exit_order",
-            price=51000.0
+            price=51000.0,
         )
-        
+
         # * Mock exchange returning filled order
         filled_order = Order(
             order_id="sync_test_exit_order",
@@ -209,29 +216,34 @@ class TestOrderLifecycle:
             commission=0.0,
             commission_asset="USDT",
             create_time=datetime.utcnow(),
-            update_time=datetime.utcnow()
+            update_time=datetime.utcnow(),
         )
-        
+
         synchronizer.exchange.get_open_orders.return_value = [filled_order]
-        
+
         # * Run synchronization
         result = synchronizer._sync_orders([filled_order])
-        
+
         # * Verify sync was successful
         assert result["synced"] is True
-        
+
         # * Verify position is still active (exit order was partial, so position should remain open)
         active_positions = db_manager.get_active_positions(session_id)
         assert len(active_positions) == 1
-        assert float(active_positions[0]["entry_price"]) == 50000.0  # Entry price should remain unchanged
+        assert (
+            float(active_positions[0]["entry_price"]) == 50000.0
+        )  # Entry price should remain unchanged
 
     def test_status_consistency_validation(self, db_manager):
         """Test that positions maintain consistent status (OPEN/CLOSED only)."""
-        session_id = db_manager.create_trading_session("test_strategy", "BTCUSDT", "1h", "live", 10000.0)
+        session_id = db_manager.create_trading_session(
+            "test_strategy", "BTCUSDT", "1h", "live", 10000.0
+        )
 
         # * Create a normal position (should be OPEN)
         with db_manager.get_session() as session:
             from src.database.models import Position
+
             position = Position(
                 symbol="BTCUSDT",
                 side=PositionSide.LONG,
@@ -241,7 +253,7 @@ class TestOrderLifecycle:
                 size=0.02,
                 strategy_name="test_strategy",
                 session_id=session_id,
-                entry_time=datetime.utcnow()
+                entry_time=datetime.utcnow(),
             )
             session.add(position)
             session.commit()
@@ -267,11 +279,14 @@ class TestOrderLifecycle:
 
     def test_orphaned_position_handling(self, db_manager):
         """Test that positions with valid data are properly handled."""
-        session_id = db_manager.create_trading_session("test_strategy", "BTCUSDT", "1h", "live", 10000.0)
+        session_id = db_manager.create_trading_session(
+            "test_strategy", "BTCUSDT", "1h", "live", 10000.0
+        )
 
         # * Create a normal position (positions now always have valid data)
         with db_manager.get_session() as session:
             from src.database.models import Position
+
             position = Position(
                 symbol="BTCUSDT",
                 side=PositionSide.LONG,
@@ -281,7 +296,7 @@ class TestOrderLifecycle:
                 size=0.02,
                 strategy_name="test_strategy",
                 session_id=session_id,
-                entry_time=datetime.utcnow()
+                entry_time=datetime.utcnow(),
             )
             session.add(position)
             session.commit()
@@ -290,8 +305,9 @@ class TestOrderLifecycle:
         # Count positions for this session
         with db_manager.get_session() as session:
             from src.database.models import Position
+
             session_positions = session.query(Position).filter_by(session_id=session_id).all()
-            open_positions = [p for p in session_positions if p.status.value == 'OPEN']
+            open_positions = [p for p in session_positions if p.status.value == "OPEN"]
             assert len(open_positions) == 1
 
             # Check that our position is not orphaned
@@ -306,7 +322,9 @@ class TestOrderLifecycle:
 
     def test_method_name_consistency(self, db_manager):
         """Test that new order-based methods work correctly."""
-        session_id = db_manager.create_trading_session("test_strategy", "BTCUSDT", "1h", "live", 10000.0)
+        session_id = db_manager.create_trading_session(
+            "test_strategy", "BTCUSDT", "1h", "live", 10000.0
+        )
 
         # * Test get_pending_orders_new method
         pending_orders = db_manager.get_pending_orders_new(session_id)
@@ -321,7 +339,7 @@ class TestOrderLifecycle:
             quantity=0.001,
             strategy_name="test_strategy",
             entry_order_id="test_method_consistency",
-            session_id=session_id
+            session_id=session_id,
         )
 
         # * Create a pending order for this position
@@ -333,7 +351,7 @@ class TestOrderLifecycle:
             quantity=0.0005,
             strategy_name="test_strategy",
             session_id=session_id,
-            price=51000.0
+            price=51000.0,
         )
 
         # * Verify method returns the pending order

@@ -36,6 +36,7 @@ def setup_paper_trading():
     # Setup sentiment provider (optional)
     try:
         from src.data_providers.sentiment_provider import SentimentProvider
+
         sentiment_provider = SentimentProvider()
         print("Sentiment provider initialized")
     except ImportError:

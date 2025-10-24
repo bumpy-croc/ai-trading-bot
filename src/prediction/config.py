@@ -53,7 +53,7 @@ class PredictionConfig:
     enable_ensemble: bool = DEFAULT_ENABLE_ENSEMBLE
     ensemble_method: str = DEFAULT_ENSEMBLE_METHOD
     enable_regime_aware_confidence: bool = DEFAULT_ENABLE_REGIME_AWARE_CONFIDENCE
-    
+
     # Prediction caching options
     prediction_cache_enabled: bool = DEFAULT_PREDICTION_CACHE_ENABLED
     prediction_cache_ttl: int = DEFAULT_PREDICTION_CACHE_TTL

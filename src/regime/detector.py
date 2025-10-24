@@ -162,6 +162,7 @@ class RegimeDetector:
     @staticmethod
     def _percentile_rank(series: pd.Series, lookback: int) -> pd.Series:
         """Optimized percentile rank calculation"""
+
         def rank_last(window: pd.Series | np.ndarray) -> float:
             arr = np.asarray(window)
             if np.isnan(arr).any():
@@ -194,7 +195,7 @@ class RegimeDetector:
         # Use engine='numba' for better performance if available
         try:
             return series.rolling(window=lookback, min_periods=lookback).apply(
-                rank_last, raw=True, engine='numba'
+                rank_last, raw=True, engine="numba"
             )
         except Exception:
             # Fallback to default engine

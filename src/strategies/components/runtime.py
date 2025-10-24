@@ -81,10 +81,14 @@ class SupportsRuntimeHooks(Protocol):
     def warmup_period(self) -> int:  # pragma: no cover - protocol definition
         ...
 
-    def get_feature_generators(self) -> Sequence[FeatureGeneratorSpec]:  # pragma: no cover - protocol definition
+    def get_feature_generators(
+        self,
+    ) -> Sequence[FeatureGeneratorSpec]:  # pragma: no cover - protocol definition
         ...
 
-    def prepare_runtime(self, dataset: StrategyDataset) -> None:  # pragma: no cover - protocol definition
+    def prepare_runtime(
+        self, dataset: StrategyDataset
+    ) -> None:  # pragma: no cover - protocol definition
         ...
 
     def process_candle(
@@ -138,9 +142,7 @@ class StrategyRuntime:
         for spec in specs:
             missing = [col for col in spec.required_columns if col not in working_df.columns]
             if missing:
-                raise ValueError(
-                    f"Feature generator '{spec.name}' missing column(s): {missing}"
-                )
+                raise ValueError(f"Feature generator '{spec.name}' missing column(s): {missing}")
 
             generated = spec.generate(working_df)
             if not isinstance(generated, pd.DataFrame):
@@ -160,7 +162,9 @@ class StrategyRuntime:
             )
             warmup = max(warmup, int(spec.warmup_period))
 
-        dataset = StrategyDataset(data=working_df, warmup_period=warmup, feature_caches=feature_caches)
+        dataset = StrategyDataset(
+            data=working_df, warmup_period=warmup, feature_caches=feature_caches
+        )
         self._dataset = dataset
         self._strategy.prepare_runtime(dataset)
         return dataset

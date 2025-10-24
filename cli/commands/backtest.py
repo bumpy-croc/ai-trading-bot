@@ -38,12 +38,12 @@ def _load_strategy(strategy_name: str):
         "ensemble_weighted": create_ensemble_weighted_strategy,
         "momentum_leverage": create_momentum_leverage_strategy,
     }
-    
+
     try:
         builder = available_strategies.get(strategy_name)
         if builder is not None:
             return builder()
-        
+
         print(f"Unknown strategy: {strategy_name}")
         print(f"Available strategies: {', '.join(available_strategies.keys())}")
         raise SystemExit(1)
@@ -77,7 +77,7 @@ def _handle(ns: argparse.Namespace) -> int:
         configure_logging()
 
         start_date, end_date = _get_date_range(ns)
-        
+
         strategy = _load_strategy(ns.strategy)
         logger.info(f"Loaded strategy: {strategy.name}")
 
@@ -98,7 +98,7 @@ def _handle(ns: argparse.Namespace) -> int:
 
             # Determine appropriate cache TTL based on provider state
             from src.utils.cache_utils import get_cache_ttl_for_provider
-            
+
             cache_ttl = get_cache_ttl_for_provider(provider, ns.cache_ttl)
             data_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)
             logger.info(f"Using cached data provider (TTL: {cache_ttl} hours)")
@@ -120,7 +120,7 @@ def _handle(ns: argparse.Namespace) -> int:
 
         # Default to no database logging for performance, unless explicitly enabled
         enable_db_logging = ns.log_to_db
-        
+
         backtester = Backtester(
             strategy=strategy,
             data_provider=data_provider,
@@ -240,8 +240,6 @@ def _handle(ns: argparse.Namespace) -> int:
         return 1
 
 
-
-
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("backtest", help="Run strategy backtest")
     p.add_argument("strategy", help="Strategy name - e.g., ml_basic")
@@ -255,7 +253,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--initial-balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
     )
-    p.add_argument("--risk-per-trade", type=float, default=0.01, help="Risk per trade - 1 percent equals 0.01")
+    p.add_argument(
+        "--risk-per-trade", type=float, default=0.01, help="Risk per trade - 1 percent equals 0.01"
+    )
     p.add_argument("--max-risk-per-trade", type=float, default=0.02, help="Maximum risk per trade")
     p.add_argument(
         "--use-sentiment", action="store_true", help="Use sentiment analysis in backtest"
@@ -263,7 +263,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--no-cache", action="store_true", help="Disable data caching")
     p.add_argument("--cache-ttl", type=int, default=24, help="Cache TTL in hours - default: 24")
     p.add_argument(
-        "--log-to-db", action="store_true", help="Enable database logging for this backtest - slower but provides detailed logs"
+        "--log-to-db",
+        action="store_true",
+        help="Enable database logging for this backtest - slower but provides detailed logs",
     )
     p.add_argument(
         "--provider",

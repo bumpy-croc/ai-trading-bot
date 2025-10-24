@@ -336,15 +336,15 @@ class AccountSynchronizer:
                             self.db_manager.update_order_status_new(
                                 order_id=db_order["id"],
                                 status="FILLED",
-                                filled_quantity=getattr(exchange_order, 'filled_quantity', None),
-                                filled_price=getattr(exchange_order, 'average_price', None),
-                                exchange_order_id=exchange_order.order_id
+                                filled_quantity=getattr(exchange_order, "filled_quantity", None),
+                                filled_price=getattr(exchange_order, "average_price", None),
+                                exchange_order_id=exchange_order.order_id,
                             )
                         else:
                             self.db_manager.update_order_status_new(
                                 order_id=db_order["id"],
                                 status=exchange_order.status.value.upper(),
-                                exchange_order_id=exchange_order.order_id
+                                exchange_order_id=exchange_order.order_id,
                             )
 
                     synced_orders.append(
@@ -364,7 +364,9 @@ class AccountSynchronizer:
                     # For new orders from exchange, we need to find/create the position
                     # This is simplified - in a real implementation we'd need more logic
                     # For now, we'll skip creating new orders from sync
-                    logger.info(f"Skipping creation of new order {exchange_order.order_id} from sync")
+                    logger.info(
+                        f"Skipping creation of new order {exchange_order.order_id} from sync"
+                    )
 
                     # Add to the new_orders list for reporting
                     new_orders.append(
@@ -392,13 +394,10 @@ class AccountSynchronizer:
 
                     # Mark as cancelled using new methods
                     self.db_manager.update_order_status_new(
-                        order_id=db_order["id"],
-                        status="CANCELLED"
+                        order_id=db_order["id"], status="CANCELLED"
                     )
 
-                    cancelled_orders.append(
-                        {"order_id": order_id, "symbol": db_order["symbol"]}
-                    )
+                    cancelled_orders.append({"order_id": order_id, "symbol": db_order["symbol"]})
 
             return {
                 "synced": True,
