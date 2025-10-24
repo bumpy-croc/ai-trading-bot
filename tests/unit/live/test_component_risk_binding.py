@@ -4,6 +4,7 @@ from src.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import Strategy as ComponentStrategy
 from src.strategies.components.risk_adapter import CoreRiskAdapter
+from tests.mocks import MockDatabaseManager
 
 
 class DummyComponent:
@@ -33,7 +34,22 @@ def _build_component_strategy(risk_params: RiskParameters) -> ComponentStrategy:
     )
 
 
-def test_engine_uses_component_risk_parameters_when_none_provided():
+def _build_engine(
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    strategy: ComponentStrategy,
+    **engine_kwargs,
+) -> LiveTradingEngine:
+    monkeypatch.setattr("src.live.trading_engine.DatabaseManager", MockDatabaseManager)
+    engine_kwargs.setdefault("data_provider", object())
+    engine_kwargs.setdefault("enable_live_trading", False)
+    engine_kwargs.setdefault("log_trades", False)
+    return LiveTradingEngine(strategy=strategy, **engine_kwargs)
+
+
+def test_engine_uses_component_risk_parameters_when_none_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     component_params = RiskParameters(
         base_risk_per_trade=0.015,
         max_position_size=0.1,
@@ -41,12 +57,7 @@ def test_engine_uses_component_risk_parameters_when_none_provided():
     )
     strategy = _build_component_strategy(component_params)
 
-    engine = LiveTradingEngine(
-        strategy=strategy,
-        data_provider=object(),
-        enable_live_trading=False,
-        log_trades=False,
-    )
+    engine = _build_engine(monkeypatch=monkeypatch, strategy=strategy)
 
     params = engine.risk_manager.params
     assert params.base_risk_per_trade == pytest.approx(0.015)
@@ -54,7 +65,9 @@ def test_engine_uses_component_risk_parameters_when_none_provided():
     assert params.default_take_profit_pct == pytest.approx(0.04)
 
 
-def test_engine_merges_engine_and_component_parameters():
+def test_engine_merges_engine_and_component_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     component_params = RiskParameters(
         base_risk_per_trade=0.015,
         max_position_size=0.1,
@@ -67,12 +80,10 @@ def test_engine_merges_engine_and_component_parameters():
 
     strategy = _build_component_strategy(component_params)
 
-    engine = LiveTradingEngine(
+    engine = _build_engine(
+        monkeypatch=monkeypatch,
         strategy=strategy,
-        data_provider=object(),
         risk_parameters=engine_params,
-        enable_live_trading=False,
-        log_trades=False,
     )
 
     params = engine.risk_manager.params
@@ -81,7 +92,9 @@ def test_engine_merges_engine_and_component_parameters():
     assert params.default_take_profit_pct == pytest.approx(0.04)
 
 
-def test_engine_preserves_component_overrides_for_default_engine_parameters():
+def test_engine_preserves_component_overrides_for_default_engine_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     component_params = RiskParameters(
         trailing_activation_threshold=None,
         trailing_distance_pct=None,
@@ -93,12 +106,10 @@ def test_engine_preserves_component_overrides_for_default_engine_parameters():
 
     strategy = _build_component_strategy(component_params)
 
-    engine = LiveTradingEngine(
+    engine = _build_engine(
+        monkeypatch=monkeypatch,
         strategy=strategy,
-        data_provider=object(),
         risk_parameters=RiskParameters(),
-        enable_live_trading=False,
-        log_trades=False,
     )
 
     params = engine.risk_manager.params
