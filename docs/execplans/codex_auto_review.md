@@ -40,6 +40,9 @@ Ship a repeatable command-line workflow that pairs the local Codex CLI with our 
 - Decision: Set the `PYTHON` env var for validation commands using the caller’s interpreter and appease Codex schema constraints by requiring all declared keys.
   Rationale: Avoids Makefile failures on machines without a `python` shim and keeps structured reviews compatible with the Codex API.
   Date/Author: 2025-10-23, Codex agent.
+- Decision: Default the workflow to skip validations and instruct Codex to focus reviews/fixes strictly on files present in the diff context.
+  Rationale: Users can still opt into targeted checks with `--check`, but the common case now mirrors `codex /review` (diff-only) for faster iterations and prevents repo-wide edits.
+  Date/Author: 2025-10-24, Codex agent.
 
 ## Outcomes & Retrospective
 
@@ -58,11 +61,11 @@ The Codex CLI is available via the `codex` binary configured under `.codex/`. Pr
 
 Describe the edits in order with enough detail for a newcomer:
 
-1. Create `cli/core/codex_workflow.py` housing orchestration utilities: running validation commands, constructing prompts, invoking `codex exec` with schemas, and parsing responses. Include facilities for truncating command logs and summarising results.
+1. Create `cli/core/codex_workflow.py` housing orchestration utilities: optionally running validation commands, constructing prompts that emphasise diff-only scope, invoking `codex exec` with schemas, and parsing responses. Include facilities for truncating command logs and summarising results.
 2. Add a JSON schema file (e.g., `cli/core/schemas/codex_review.schema.json`) defining the structure of review outcomes with `summary` plus a `findings` array capturing file, optional line, severity, description, and recommendation.
     3. Implement `cli/commands/codex.py` that registers a `codex auto-review` subcommand, accepts CLI options (`--plan-path`, `--check`, `--max-iterations`, `--profile`, `--review-schema`, `--compare-branch`, `--workspace`), and delegates to the core module.
 4. Update `cli/__main__.py` to register the new command module.
-5. Ensure the workflow stores intermediate artifacts (validation logs and review JSON) under a predictable directory (e.g., `.codex/workflows/<timestamp>/`) to aid manual inspection.
+5. Ensure the workflow stores intermediate artifacts (review JSON plus optional validation logs when checks are configured) under a predictable directory (e.g., `.codex/workflows/<timestamp>/`) to aid manual inspection.
     6. Author documentation (likely `docs/development.md` or a dedicated `docs/automation.md`) covering prerequisites, default behavior, optional ExecPlan usage, customization, and safety notes about Codex running without approvals.
 7. Write unit-level tests (probably under `tests/unit/cli/test_codex_workflow.py`) for pure-Python helpers such as validation summarisation and findings parsing so we have coverage without hitting the real Codex service.
     8. Run formatting (`ruff`, `black`), targeted tests, and capture outputs for the Outcomes section.
@@ -73,18 +76,18 @@ Commands run or queued during implementation (repository root unless noted):
 
 - `black cli/core/codex_workflow.py cli/commands/codex.py cli/__main__.py tests/unit/cli/test_codex_workflow.py` → reformatted new helper module.
 - `ruff check cli/core/codex_workflow.py cli/commands/codex.py cli/__main__.py tests/unit/cli/test_codex_workflow.py` → all checks passed after import sorting.
-    - `pytest tests/unit/cli/test_codex_workflow.py` → 9 passed (Python 3.11).
+- `pytest tests/unit/cli/test_codex_workflow.py` → 10 passed (Python 3.11).
     - `python3.11 -m cli codex auto-review --help` → verified CLI wiring and help text without contacting Codex.
     - `python3.11 -m cli codex auto-review --max-iterations 0 --check "echo noop" --python-bin $(which python3.11)` → exercised early-exit path and confirmed env injection works.
-- (Planned) `python3.11 -m cli codex auto-review --plan-path docs/execplans/codex_auto_review.md --check "make test" --check "make code-quality" --max-iterations 2` for an end-to-end dry run when Codex access is desired.
+- (Planned) `python3.11 -m cli codex auto-review --plan-path docs/execplans/codex_auto_review.md --max-iterations 2` for an end-to-end dry run (add `--check ...` only when specific validations are required).
 
 ## Validation and Acceptance
 
 Current validation status:
 
 1. `python3.11 -m cli codex auto-review --help` prints the expected options, confirming the new subcommand is wired.
-2. `pytest tests/unit/cli/test_codex_workflow.py` exercises prompt helpers, diff injection, shim handling, and guard-rails (9 passed).
-3. `python3.11 -m cli codex auto-review --max-iterations 0 --check "echo noop"` validates the CLI path that exits before invoking Codex.
+2. `pytest tests/unit/cli/test_codex_workflow.py` exercises prompt helpers, diff injection, shim handling, and guard-rails (10 passed).
+3. `python3.11 -m cli codex auto-review --max-iterations 0` validates the CLI path that exits before invoking Codex and confirms that skipping validations is supported.
 4. A future integrated dry run (with Codex credentials available) should demonstrate the full review/fix loop; document results once executed.
 
 ## Idempotence and Recovery
@@ -95,7 +98,7 @@ The CLI should be safe to rerun: it recreates its artifact folder per timestamp 
 
 Plan to capture:
 
-- Validation command transcripts saved under `.codex/workflows/<timestamp>/validation_<step>.log`.
+- Validation command transcripts saved under `.codex/workflows/<timestamp>/validation_<step>.log` whenever checks are configured.
 - Structured review output stored as JSON under the same directory.
 - Final summary echoed to stdout for quick scanning.
 
@@ -114,3 +117,4 @@ These artifacts make the run auditable.
 - 2025-10-23 19:20Z — Integrated diff context defaults and clarified ExecPlan optionality.
 - 2025-10-23 19:45Z — Injected Python interpreter handling, updated docs, and refined schema requirements to satisfy Codex.
 - 2025-10-23 20:05Z — Added python shim helper plus tests to ensure Makefile commands locate the interpreter.
+- 2025-10-24 10:30Z — Defaulted the workflow to diff-only review/fix cycles, tightened prompts to forbid repo-wide edits, and refreshed docs/tests accordingly.

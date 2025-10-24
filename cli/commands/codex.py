@@ -46,8 +46,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         action="append",
         help=(
             "Validation command to execute before each review iteration. "
-            "Provide multiple times to run several checks. Defaults to 'make test' "
-            "and 'make code-quality' when omitted."
+            "Provide multiple times to run several checks. "
+            "Omit to skip validations and rely solely on Codex review/fix cycles."
         ),
     )
     auto.add_argument(

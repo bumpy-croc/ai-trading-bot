@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
-DEFAULT_CHECKS: list[str] = ["make test", "make code-quality"]
+DEFAULT_CHECKS: list[str] = []
 MAX_LOG_CHARS = 4000
 PLAN_MAX_CHARS = 8000
 DIFF_MAX_CHARS = 12000
@@ -97,12 +97,12 @@ def _load_plan_text(plan_path: Path | None) -> str:
 def _ensure_python_on_path(python_bin: str, env: dict[str, str]) -> TemporaryDirectory | None:
     existing_python = shutil.which("python", path=env.get("PATH"))
     python_path_str = shutil.which(python_bin) or python_bin
-    python_path = Path(python_path_str)
+    python_path = Path(python_path_str).expanduser().resolve(strict=False)
 
     if not python_path.exists():
         raise FileNotFoundError(f"Specified python interpreter not found: {python_bin}")
 
-    resolved_python = python_path.resolve()
+    resolved_python = python_path
 
     need_shim = False
     if not existing_python:
@@ -296,6 +296,11 @@ def _build_review_prompt(
 
         Review iteration: {iteration}
 
+        Scope guardrails:
+        - Focus on behaviours introduced or modified by the diff context above.
+        - You may read other files for background, but only report findings caused or revealed by the diff.
+        - If the diff does not introduce problems, respond with no findings.
+
         Produce a JSON object that strictly matches the provided schema. Only include actionable
         findings (correctness, security, performance, testing gaps). If the codebase looks good,
         return an empty findings list and set the summary to an affirmative statement.
@@ -339,6 +344,7 @@ def _build_fix_prompt(
         2. Re-run the validation commands listed above to confirm success.
         3. Update the ExecPlan progress if you make meaningful milestones (optional but encouraged).
         4. Conclude with a concise summary of actions taken and test outcomes.
+        5. Limit edits to files/lines from the diff unless resolving the diff's issues requires touching a closely-related dependency.
 
         You are entering fix iteration {iteration}. Stop once all findings are resolved or you have
         no further actionable changes.
@@ -419,34 +425,50 @@ def run_auto_review(
     plan_text = _load_plan_text(plan_path)
 
     validation_commands = list(checks) if checks else list(DEFAULT_CHECKS)
-    if not validation_commands:
-        raise ValueError("At least one validation command must be provided.")
 
     python_executable = python_bin or sys.executable or "python3"
     resolved_python = shutil.which(python_executable) or python_executable
-    if not Path(resolved_python).exists():
+    python_path = Path(resolved_python).expanduser().resolve(strict=False)
+    if not python_path.exists():
         raise FileNotFoundError(f"Python interpreter not found: {python_executable}")
 
     env = os.environ.copy()
-    env["PYTHON"] = resolved_python
+    env["PYTHON"] = str(python_path)
 
     shim_dir: TemporaryDirectory | None = None
 
     try:
-        shim_dir = _ensure_python_on_path(resolved_python, env)
+        shim_dir = _ensure_python_on_path(str(python_path), env)
         last_review_payload: dict | None = None
 
         for iteration in range(1, max_iterations + 1):
             print(f"\n=== Automated Codex Loop :: Iteration {iteration}/{max_iterations} ===")
             diff_context = _gather_diff_context(compare_branch, workdir)
-            validation_results = run_validation_commands(
-                validation_commands, cwd=workdir, artifact_dir=artifact_dir, env=env
-            )
-            validation_summary, validations_ok = _summarise_validation_results(validation_results)
-            summary_log = _write_log(
-                artifact_dir, f"validation_summary_{iteration:02d}.log", validation_summary + "\n"
-            )
-            print(f"Validation summary recorded at {summary_log}")
+            if validation_commands:
+                validation_results = run_validation_commands(
+                    validation_commands, cwd=workdir, artifact_dir=artifact_dir, env=env
+                )
+                validation_summary, validations_ok = _summarise_validation_results(
+                    validation_results
+                )
+                summary_log = _write_log(
+                    artifact_dir,
+                    f"validation_summary_{iteration:02d}.log",
+                    validation_summary + "\n",
+                )
+                print(f"Validation summary recorded at {summary_log}")
+            else:
+                validation_results = []
+                validation_summary = (
+                    "Validation commands skipped; focusing on review/fix for current diff."
+                )
+                validations_ok = True
+                summary_log = _write_log(
+                    artifact_dir,
+                    f"validation_summary_{iteration:02d}.log",
+                    validation_summary + "\n",
+                )
+                print("Validation commands skipped (no --check provided).")
 
             review_prompt = _build_review_prompt(
                 plan_text=plan_text,
@@ -477,25 +499,20 @@ def run_auto_review(
                 return 0
 
             last_review_payload = review_payload
-
-            if iteration == max_iterations:
-                print("Reached maximum iterations before achieving a clean review.")
-                break
+            next_iteration = iteration + 1 if iteration < max_iterations else iteration
 
             fix_prompt = _build_fix_prompt(
                 plan_text=plan_text,
                 validation_summary=validation_summary,
                 findings=findings,
                 commands=validation_commands,
-                iteration=iteration + 1,
+                iteration=next_iteration,
                 diff_context=diff_context,
             )
 
-            fix_args: list[str] = []
+            fix_args: list[str] = ["--full-auto"]
             if dangerous_fix:
                 fix_args.append("--dangerously-bypass-approvals-and-sandbox")
-            else:
-                fix_args.append("--full-auto")
 
             raw_fix_output = _invoke_codex_exec(
                 fix_prompt,
@@ -507,6 +524,10 @@ def run_auto_review(
             fix_path = artifact_dir / f"fix_{iteration:02d}.log"
             fix_path.write_text(raw_fix_output + "\n", encoding="utf-8")
             print(f"Stored Codex fix transcript at {fix_path}")
+
+            if iteration == max_iterations:
+                print("Reached maximum iterations before achieving a clean review.")
+                break
 
         if last_review_payload is not None:
             outstanding_path = artifact_dir / "outstanding_findings.json"

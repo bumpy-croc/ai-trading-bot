@@ -80,6 +80,19 @@ def test_build_review_prompt_includes_diff() -> None:
     )
     assert "diff content" in prompt
     assert "Plan text" in prompt
+    assert "Focus on behaviours" in prompt
+
+
+def test_build_fix_prompt_limits_scope() -> None:
+    prompt = cw._build_fix_prompt(
+        plan_text="Plan text",
+        validation_summary="All good",
+        findings=[],
+        commands=[],
+        iteration=2,
+        diff_context="diff content",
+    )
+    assert "Limit edits" in prompt
 
 
 def test_gather_diff_context_without_branch(tmp_path: Path) -> None:

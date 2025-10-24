@@ -67,15 +67,14 @@ The repository includes a Codex-driven loop that keeps running fast validations,
 ```bash
 python -m cli codex auto-review \
   --plan-path docs/execplans/codex_auto_review.md \
-  --check "make test" \
-  --check "make code-quality" \
   --max-iterations 3
 ```
 
 Key behaviour:
 
-- Validation commands (`--check`) run before every review iteration. If you omit the flag the workflow defaults to `make test` and `make code-quality`. Provide only the fast checks you need during development.
+- Validation commands (`--check`) run before every review iteration. If you omit the flag, no tests or linters run and the workflow relies solely on Codex review/fix cycles. Add only the fast checks you actually need.
 - The workflow automatically diffs your current branch against `develop` (override with `--compare-branch <name>` or `--compare-branch ""` to disable) so Codex focuses on the recent changes.
+- Codex is explicitly told to focus on issues introduced by that diff; it can inspect other files for context but only reports regressions tied to the diff, so keep the diff scoped to the work you want touched.
 - The review step enforces `cli/core/schemas/codex_review.schema.json`, so Codex replies with machine-readable findings. When the findings array is empty and validations pass, the command exits with status 0.
 - Fix iterations run in `--full-auto` mode by default. Pass `--dangerous-fix` to let Codex bypass sandboxing/approvals entirely (recommended only in a disposable environment).
 - Artifacts live under `.codex/workflows/<timestamp>/` and include validation logs, structured review JSON, and Codex fix transcripts for auditability.
