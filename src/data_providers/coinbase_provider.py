@@ -60,16 +60,117 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         # Initialize DataProvider
         DataProvider.__init__(self)
 
+        config = get_config()
+
         # Credentials from config if not provided
-        if api_key is None or api_secret is None:
-            config = get_config()
-            api_key = api_key or config.get("COINBASE_API_KEY")
-            api_secret = api_secret or config.get("COINBASE_API_SECRET")
-            passphrase = passphrase or config.get("COINBASE_API_PASSPHRASE")
+        if api_key is None:
+            api_key = config.get("COINBASE_API_KEY")
+        if api_secret is None:
+            api_secret = config.get("COINBASE_API_SECRET")
+        if passphrase is None:
+            passphrase = config.get("COINBASE_API_PASSPHRASE")
+
+        env_name = str(config.get("ENV", "")).lower()
+        allow_test_credentials = testnet or env_name in {"test", "testing", "ci"}
+
+        # SEC-004 Fix: Validate credentials are properly formatted
+        api_key, api_secret, passphrase = self._validate_credentials(
+            api_key,
+            api_secret,
+            passphrase,
+            allow_test_credentials=allow_test_credentials,
+        )
 
         # Initialize ExchangeInterface (will handle _initialize_client)
         ExchangeInterface.__init__(self, api_key or "", api_secret or "", testnet)
         self.passphrase = passphrase
+
+    @staticmethod
+    def _validate_credentials(
+        api_key: Optional[str],
+        api_secret: Optional[str],
+        passphrase: Optional[str],
+        *,
+        allow_test_credentials: bool = False,
+    ) -> tuple[str, str, str]:
+        """
+        Validate and normalize Coinbase API credentials.
+        
+        SEC-004 Fix: Ensure credentials are properly formatted or explicitly missing.
+        
+        Args:
+            api_key: API key to validate
+            api_secret: API secret to validate
+            passphrase: API passphrase to validate
+            
+        Returns:
+            Tuple of (api_key, api_secret, passphrase) - empty strings if not provided
+            
+        Raises:
+            ValueError: If credentials are provided but malformed
+        """
+        # If all are missing/None, return empty strings for public mode
+        if not api_key and not api_secret and not passphrase:
+            return "", "", ""
+        
+        # Require key and secret to be provided together
+        if bool(api_key) != bool(api_secret):
+            raise ValueError(
+                "Coinbase API key and secret must be provided together. "
+                "Either supply both COINBASE_API_KEY and COINBASE_API_SECRET, or neither."
+            )
+
+        # Passphrase must align with key/secret usage
+        if passphrase and not (api_key and api_secret):
+            raise ValueError(
+                "Coinbase API passphrase provided without key/secret. "
+                "Provide COINBASE_API_KEY, COINBASE_API_SECRET, and COINBASE_API_PASSPHRASE together."
+            )
+        if api_key and api_secret and not passphrase:
+            if allow_test_credentials:
+                logger.debug(
+                    "Coinbase provider allowing missing passphrase for test environment"
+                )
+                passphrase = ""
+            else:
+                raise ValueError(
+                    "Coinbase credentials must include COINBASE_API_PASSPHRASE when providing API key and secret"
+                )
+
+        # Validate credential format (reasonable minimum length)
+        if api_key and len(str(api_key).strip()) < 20:
+            if allow_test_credentials:
+                logger.debug(
+                    "Coinbase provider allowing short API key for test environment"
+                )
+            else:
+                raise ValueError(
+                    f"Invalid COINBASE_API_KEY format (too short: {len(str(api_key))} chars)"
+                )
+        if api_secret and len(str(api_secret).strip()) < 20:
+            if allow_test_credentials:
+                logger.debug(
+                    "Coinbase provider allowing short API secret for test environment"
+                )
+            else:
+                raise ValueError(
+                    f"Invalid COINBASE_API_SECRET format (too short: {len(str(api_secret))} chars)"
+                )
+        if passphrase and len(str(passphrase).strip()) < 5:
+            if allow_test_credentials:
+                logger.debug(
+                    "Coinbase provider allowing short API passphrase for test environment"
+                )
+            else:
+                raise ValueError(
+                    f"Invalid COINBASE_API_PASSPHRASE format (too short: {len(str(passphrase))} chars)"
+                )
+
+        return (
+            str(api_key).strip() if api_key else "",
+            str(api_secret).strip() if api_secret else "",
+            str(passphrase).strip() if passphrase else "",
+        )
 
     # ---------------------- ExchangeInterface ---------------------
     def _initialize_client(self):

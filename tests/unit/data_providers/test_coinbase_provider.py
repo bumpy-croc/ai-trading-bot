@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from unittest.mock import Mock, patch
 
@@ -12,8 +13,13 @@ pytestmark = pytest.mark.unit
 class TestCoinbaseProvider:
     @pytest.mark.data_provider
     def test_initialization_without_keys(self):
-        provider = CoinbaseProvider()
-        assert provider is not None
+        # Test with no credentials - should work in test environment
+        with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            # Ensure no Coinbase credentials are set
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
+            provider = CoinbaseProvider()
+            assert provider is not None
 
     @pytest.mark.data_provider
     @patch("data_providers.coinbase_provider.requests.Session.get")
@@ -26,16 +32,21 @@ class TestCoinbaseProvider:
         mock_response.status_code = 200
         mock_response.json.return_value = sample_candles
         mock_get.return_value = mock_response
-        provider = CoinbaseProvider()
-        start_date = datetime.utcfromtimestamp(1640995200)
-        end_date = datetime.utcfromtimestamp(1640998800)
-        df = provider.get_historical_data("BTC-USD", "1h", start_date, end_date)
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == 2
-        for col in ["open", "high", "low", "close", "volume"]:
-            assert col in df.columns
-            assert pd.api.types.is_numeric_dtype(df[col])
-        assert df.index[0] < df.index[1]
+        
+        with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            # Ensure no Coinbase credentials are set
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
+            provider = CoinbaseProvider()
+            start_date = datetime.utcfromtimestamp(1640995200)
+            end_date = datetime.utcfromtimestamp(1640998800)
+            df = provider.get_historical_data("BTC-USD", "1h", start_date, end_date)
+            assert isinstance(df, pd.DataFrame)
+            assert len(df) == 2
+            for col in ["open", "high", "low", "close", "volume"]:
+                assert col in df.columns
+                assert pd.api.types.is_numeric_dtype(df[col])
+            assert df.index[0] < df.index[1]
 
     @pytest.mark.data_provider
     @patch("data_providers.coinbase_provider.requests.Session.get")
@@ -44,6 +55,11 @@ class TestCoinbaseProvider:
         mock_response.status_code = 200
         mock_response.json.return_value = {"price": "12345.67"}
         mock_get.return_value = mock_response
-        provider = CoinbaseProvider()
-        price = provider.get_current_price("BTC-USD")
-        assert price == 12345.67
+        
+        with patch.dict(os.environ, {"ENV": "test"}, clear=False):
+            # Ensure no Coinbase credentials are set
+            for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
+                os.environ.pop(key, None)
+            provider = CoinbaseProvider()
+            price = provider.get_current_price("BTC-USD")
+            assert price == 12345.67

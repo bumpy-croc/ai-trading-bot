@@ -83,11 +83,21 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         # Initialize DataProvider
         DataProvider.__init__(self)
 
+        config = get_config()
+
         # Get credentials from config if not provided
-        if api_key is None or api_secret is None:
-            config = get_config()
-            api_key = api_key or config.get("BINANCE_API_KEY")
-            api_secret = api_secret or config.get("BINANCE_API_SECRET")
+        if api_key is None:
+            api_key = config.get("BINANCE_API_KEY")
+        if api_secret is None:
+            api_secret = config.get("BINANCE_API_SECRET")
+
+        env_name = str(config.get("ENV", "")).lower()
+        allow_test_credentials = testnet or env_name in {"test", "testing", "ci"}
+
+        # SEC-004 Fix: Validate credentials are properly formatted
+        api_key, api_secret = self._validate_credentials(
+            api_key, api_secret, allow_test_credentials=allow_test_credentials
+        )
 
         # Initialize ExchangeInterface
         if api_key and api_secret:
@@ -99,16 +109,66 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.api_secret = api_secret
             self.testnet = testnet
             self._client = None
-
-        # Only initialize the client here when ExchangeInterface was NOT initialized
-        # (i.e., when running without credentials in public/data-only mode)
-        if not (api_key and api_secret):
+            logger.info("Binance provider initialized in read-only mode (no credentials)")
             self._initialize_client()
 
-        if not api_key or not api_secret:
-            logger.warning(
-                "Binance API credentials not found – running in public-endpoint mode (read-only)."
+    @staticmethod
+    def _validate_credentials(
+        api_key: Optional[str],
+        api_secret: Optional[str],
+        *,
+        allow_test_credentials: bool = False,
+    ) -> tuple[str, str]:
+        """
+        Validate and normalize API credentials.
+        
+        SEC-004 Fix: Ensure credentials are properly formatted or explicitly missing.
+        
+        Args:
+            api_key: API key to validate
+            api_secret: API secret to validate
+            
+        Returns:
+            Tuple of (api_key, api_secret) - empty strings if not provided
+            
+        Raises:
+            ValueError: If credentials are provided but malformed
+        """
+        # If both are missing/None, return empty strings for read-only mode
+        if not api_key and not api_secret:
+            return "", ""
+        
+        # If only one is provided, that's an error
+        if bool(api_key) != bool(api_secret):
+            raise ValueError(
+                "Binance credentials must be provided together. "
+                "Either provide both BINANCE_API_KEY and BINANCE_API_SECRET, or neither."
             )
+        
+        # Validate credential format (reasonable minimum length)
+        if api_key and len(str(api_key).strip()) < 20:
+            if allow_test_credentials:
+                logger.debug(
+                    "Binance provider allowing short API key for test environment"
+                )
+            else:
+                raise ValueError(
+                    f"Invalid BINANCE_API_KEY format (too short: {len(str(api_key))} chars)"
+                )
+        if api_secret and len(str(api_secret).strip()) < 20:
+            if allow_test_credentials:
+                logger.debug(
+                    "Binance provider allowing short API secret for test environment"
+                )
+            else:
+                raise ValueError(
+                    f"Invalid BINANCE_API_SECRET format (too short: {len(str(api_secret))} chars)"
+                )
+
+        return (
+            str(api_key).strip() if api_key else "",
+            str(api_secret).strip() if api_secret else "",
+        )
 
     def _initialize_client(self):
         """Initialize Binance client with geo-aware API selection and error handling"""
