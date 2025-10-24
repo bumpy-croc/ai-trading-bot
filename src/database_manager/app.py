@@ -16,6 +16,7 @@ from flask import (  # type: ignore
 )
 from flask_admin import Admin  # type: ignore
 from flask_admin.contrib.sqla import ModelView  # type: ignore
+from flask_admin.form import SecureForm  # type: ignore
 from flask_limiter import Limiter  # type: ignore
 from flask_limiter.util import get_remote_address  # type: ignore
 from flask_login import (  # type: ignore
@@ -142,6 +143,7 @@ def create_app() -> "Flask":
         can_delete = True
         can_view_details = True
         page_size = 50
+        form_base_class = SecureForm
 
         def __init__(self, model, session, **kwargs):
             # Dynamically determine searchable string columns
@@ -200,6 +202,10 @@ def create_app() -> "Flask":
     # SEC-009: Initialize Rate Limiting
     limiter.init_app(app)
 
+    # Register global security extensions
+    csrf.init_app(app)
+    limiter.init_app(app)
+
     # --- Flask-Login setup for admin authentication ---
     login_manager = LoginManager()
     login_manager.init_app(app)
@@ -220,6 +226,7 @@ def create_app() -> "Flask":
 
     @app.route("/login", methods=["GET", "POST"])
     @limiter.limit("5 per minute")  # SEC-009: Rate limit login attempts
+    @csrf.exempt
     def login():
         if request.method == "POST":
             username = request.form.get("username")
@@ -285,6 +292,7 @@ def create_app() -> "Flask":
 
     # Simple schema "migration" route to ensure new tables are created
     @app.route("/migrate", methods=["POST", "GET"])
+    @csrf.exempt
     def migrate():
         """Synchronise database schema (creates any missing tables)."""
         try:
