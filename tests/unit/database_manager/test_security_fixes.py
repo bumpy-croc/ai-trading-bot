@@ -192,6 +192,7 @@ def test_sec_002_login_missing_password_graceful_failure(monkeypatch):
     flask_admin_module = ModuleType("flask_admin")
     flask_admin_contrib = ModuleType("flask_admin.contrib")
     flask_admin_sqla = ModuleType("flask_admin.contrib.sqla")
+    flask_admin_form = ModuleType("flask_admin.form")
 
     class DummyAdmin:
         def __init__(self, *args, **kwargs):
@@ -204,9 +205,13 @@ def test_sec_002_login_missing_password_graceful_failure(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
+    class DummySecureForm:
+        pass
+
     flask_admin_module.Admin = DummyAdmin
     flask_admin_contrib.sqla = flask_admin_sqla
     flask_admin_sqla.ModelView = DummyModelView
+    flask_admin_form.SecureForm = DummySecureForm
 
     flask_login_module = ModuleType("flask_login")
 
@@ -245,6 +250,7 @@ def test_sec_002_login_missing_password_graceful_failure(monkeypatch):
         monkeypatch.setitem(sys.modules, "flask_admin", flask_admin_module)
         monkeypatch.setitem(sys.modules, "flask_admin.contrib", flask_admin_contrib)
         monkeypatch.setitem(sys.modules, "flask_admin.contrib.sqla", flask_admin_sqla)
+        monkeypatch.setitem(sys.modules, "flask_admin.form", flask_admin_form)
         monkeypatch.setitem(sys.modules, "flask_login", flask_login_module)
 
         flask_login_module.LoginManager = DummyLoginManager
