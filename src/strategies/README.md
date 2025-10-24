@@ -72,11 +72,13 @@ Strategies are created by composing components. Here's how to create your own:
 ### Example: Simple Moving Average Strategy
 
 ```python
+from typing import Optional
+
 from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import SignalGenerator
+from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
 from src.strategies.components.risk_manager import FixedRiskManager
 from src.strategies.components.position_sizer import FixedFractionSizer
-from src.strategies.components.types import Signal, SignalDirection
+from src.strategies.components.regime_context import RegimeContext
 import pandas as pd
 
 class SimpleMASignalGenerator(SignalGenerator):
