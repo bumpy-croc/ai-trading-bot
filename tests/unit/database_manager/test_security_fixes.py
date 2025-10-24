@@ -115,9 +115,9 @@ def test_sec_003_secret_key_fallback_in_development():
     """SEC-003: Verify SECRET_KEY has fallback in development only."""
     with patch.dict(os.environ, {"ENV": "development"}, clear=False):
         os.environ.pop("DB_MANAGER_SECRET_KEY", None)
-        
+
         from src.database_manager.app import _ensure_secret_key
-        
+
         key = _ensure_secret_key()
         assert key == "dev-key-change-in-production"
 
@@ -131,6 +131,42 @@ def test_sec_003_secret_key_fallback_in_test():
 
         key = _ensure_secret_key()
         assert key == "dev-key-change-in-production"
+
+
+def test_sec_003_secret_key_defaults_to_production_when_env_missing():
+    """SEC-003: Missing env variables should fail closed."""
+    with patch.dict(os.environ, {}, clear=False):
+        for variable in ("DB_MANAGER_SECRET_KEY", "ENV", "FLASK_ENV"):
+            os.environ.pop(variable, None)
+
+        from src.database_manager.app import _ensure_secret_key
+
+        with pytest.raises(SystemExit):
+            _ensure_secret_key()
+
+
+def test_sec_003_secret_key_fallback_honours_flask_env_dev():
+    """SEC-003: FLASK_ENV should allow dev fallback when set to development."""
+    with patch.dict(os.environ, {"FLASK_ENV": "development"}, clear=False):
+        os.environ.pop("DB_MANAGER_SECRET_KEY", None)
+        os.environ.pop("ENV", None)
+
+        from src.database_manager.app import _ensure_secret_key
+
+        key = _ensure_secret_key()
+        assert key == "dev-key-change-in-production"
+
+
+def test_sec_003_secret_key_requires_flask_env_production():
+    """SEC-003: FLASK_ENV=production must require explicit secret key."""
+    with patch.dict(os.environ, {"FLASK_ENV": "production"}, clear=False):
+        os.environ.pop("DB_MANAGER_SECRET_KEY", None)
+        os.environ.pop("ENV", None)
+
+        from src.database_manager.app import _ensure_secret_key
+
+        with pytest.raises(SystemExit):
+            _ensure_secret_key()
 
 
 def test_sec_002_login_missing_password_graceful_failure(monkeypatch):

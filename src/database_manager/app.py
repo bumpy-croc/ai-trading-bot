@@ -26,14 +26,30 @@ def _ensure_secret_key() -> str:
         return secret_key
     
     # Allow fallback only in development-style environments
-    env = (os.getenv("ENV") or os.getenv("FLASK_ENV") or "development").lower()
-    if env in ("development", "dev", "test", "testing"):
+    env_value = os.getenv("ENV")
+    flask_env_value = os.getenv("FLASK_ENV")
+
+    normalized_env: Optional[str] = None
+    for value in (env_value, flask_env_value):
+        if value:
+            normalized_env = value.lower()
+            break
+
+    if normalized_env in {"development", "dev", "test", "testing"}:
         logger.warning(
             "⚠️  Using default SECRET_KEY - set DB_MANAGER_SECRET_KEY in production"
         )
         return "dev-key-change-in-production"
 
-    logger.error("❌ DB_MANAGER_SECRET_KEY required in production environment")
+    if normalized_env is None:
+        logger.error(
+            "❌ DB_MANAGER_SECRET_KEY required when ENV/FLASK_ENV is unset; "
+            "treating as production"
+        )
+    else:
+        logger.error(
+            "❌ DB_MANAGER_SECRET_KEY required in %s environment", normalized_env
+        )
     raise SystemExit(1)
 
 
