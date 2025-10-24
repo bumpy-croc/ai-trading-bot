@@ -7,7 +7,7 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -212,18 +212,50 @@ class LiveTradingEngine:
         self._configure_strategy(strategy)
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
-        self.risk_manager = RiskManager(risk_parameters)
-        
+
+        component_risk = None
+        component_risk_params = None
+        if isinstance(self.strategy, ComponentStrategy):
+            component_risk = getattr(self.strategy, "risk_manager", None)
+            component_risk_params = self._extract_component_risk_parameters(component_risk)
+
+        merged_risk_parameters = self._merge_risk_parameters(risk_parameters, component_risk_params)
+        self.risk_manager = RiskManager(merged_risk_parameters)
+
+        # Share the canonical risk manager with component strategies via the adapter.
+        if isinstance(self.strategy, ComponentStrategy):
+            if hasattr(component_risk, "bind_core_manager"):
+                try:
+                    component_risk.bind_core_manager(self.risk_manager)
+                except Exception as bind_error:
+                    logger.debug("Failed to bind core risk manager to component: %s", bind_error)
+            if hasattr(component_risk, "set_strategy_overrides"):
+                overrides = getattr(self.strategy, "_risk_overrides", None)
+                if overrides:
+                    try:
+                        component_risk.set_strategy_overrides(overrides)
+                    except Exception as override_error:
+                        logger.debug(
+                            "Failed to propagate risk overrides to component manager: %s",
+                            override_error,
+                        )
+
         # Trailing stop policy
         self.trailing_stop_policy = trailing_stop_policy or self._build_trailing_policy()
+        self._trailing_stop_opt_in = self.trailing_stop_policy is not None
         
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
         self.dynamic_risk_manager = None
+        self._component_dynamic_risk_config: DynamicRiskConfig | None = None
         if enable_dynamic_risk:
             config = dynamic_risk_config or DynamicRiskConfig()
             # Will be initialized after db_manager is available
             self._dynamic_risk_config = config
+
+        # Cache component-provided correlation context to avoid repeated lookups per bar.
+        self._component_risk_context_cache_key: tuple[str, int] | None = None
+        self._component_risk_context_cache: dict[str, Any] | None = None
         
         # Timing configuration
         self.base_check_interval = check_interval
@@ -242,6 +274,7 @@ class LiveTradingEngine:
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
         # Partial operations policy (disabled by default for parity)
+        self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager = partial_manager
         elif enable_partial_operations:
@@ -271,6 +304,9 @@ class LiveTradingEngine:
                 )
         else:
             self.partial_manager = None
+        self._partial_operations_opt_in = bool(
+            self.enable_partial_operations or self.partial_manager is not None
+        )
 
         # Correlation engine setup
         try:
@@ -378,6 +414,7 @@ class LiveTradingEngine:
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
         self.timeframe: str | None = None  # Will be set when trading starts
+        self._active_symbol: str | None = None
 
         # Performance tracking
         self.total_trades = 0
@@ -559,6 +596,65 @@ class LiveTradingEngine:
             logger.warning(f"Failed to get dynamic risk adjusted parameters: {e}")
             return self.risk_manager.params
 
+    def _extract_component_risk_parameters(
+        self, component_risk_manager: Any
+    ) -> RiskParameters | None:
+        """Clone risk parameters from a component adapter, if available."""
+
+        if component_risk_manager is None:
+            return None
+
+        core_manager = getattr(component_risk_manager, "_core_manager", None)
+        if core_manager is None:
+            return None
+
+        params = getattr(core_manager, "params", None)
+        if not isinstance(params, RiskParameters):
+            return None
+
+        return self._clone_risk_parameters(params)
+
+    def _merge_risk_parameters(
+        self,
+        engine_params: RiskParameters | None,
+        component_params: RiskParameters | None,
+    ) -> RiskParameters | None:
+        """Merge engine-provided and component-provided risk parameters."""
+
+        if engine_params is None and component_params is None:
+            return None
+
+        if component_params is None:
+            return self._clone_risk_parameters(engine_params)
+
+        if engine_params is None:
+            return component_params
+
+        component_dict = asdict(component_params)
+        engine_dict = asdict(engine_params)
+        default_dict = asdict(RiskParameters())
+
+        merged = dict(component_dict)
+        for key, value in engine_dict.items():
+            default_value = default_dict.get(key)
+
+            # Preserve component overrides when the engine sticks with defaults.
+            if value == default_value:
+                continue
+
+            merged[key] = value
+
+        return RiskParameters(**merged)
+
+    @staticmethod
+    def _clone_risk_parameters(params: RiskParameters | None) -> RiskParameters | None:
+        """Return a deep-cloned copy of risk parameters for safe reuse."""
+
+        if params is None:
+            return None
+
+        return RiskParameters(**asdict(params))
+
     def _configure_strategy(
         self, strategy: ComponentStrategy | StrategyRuntime
     ) -> None:
@@ -567,10 +663,24 @@ class LiveTradingEngine:
         runtime = strategy if isinstance(strategy, StrategyRuntime) else None
         base_strategy = runtime.strategy if runtime is not None else strategy
 
+        previous_component = getattr(self, "_component_strategy", None)
+
         self.strategy = base_strategy
         self._component_strategy = (
             base_strategy if isinstance(base_strategy, ComponentStrategy) else None
         )
+
+        if (
+            previous_component is not None
+            and previous_component is not self._component_strategy
+            and hasattr(previous_component, "set_additional_risk_context_provider")
+        ):
+            try:
+                previous_component.set_additional_risk_context_provider(None)
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                logger.debug(
+                    "Failed to clear risk context provider on previous strategy: %s", exc
+                )
 
         if runtime is not None:
             self._runtime = runtime
@@ -578,6 +688,174 @@ class LiveTradingEngine:
             self._runtime = StrategyRuntime(self._component_strategy)
         else:
             self._runtime = None
+
+        self._register_component_context_provider()
+
+    def _register_component_context_provider(self) -> None:
+        """Attach the engine-provided risk context hook to component strategies."""
+
+        strategy = getattr(self, "_component_strategy", None)
+        if strategy is None:
+            return
+
+        setter = getattr(strategy, "set_additional_risk_context_provider", None)
+        if not callable(setter):
+            return
+
+        def provider(df: pd.DataFrame, index: int, signal) -> dict[str, Any] | None:
+            return self._component_risk_context(df, index, signal)
+
+        try:
+            setter(provider)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug(
+                "Failed to attach risk context provider to component strategy: %s", exc
+            )
+
+    def _component_risk_context(
+        self, df: pd.DataFrame, index: int, signal
+    ) -> dict[str, Any]:
+        """Build supplemental risk context (e.g., correlation data) for components."""
+
+        strategy = getattr(self, "_component_strategy", None)
+        if strategy is None:
+            return {}
+
+        if getattr(self, "correlation_engine", None) is None:
+            return {}
+
+        symbol = self._active_symbol or getattr(strategy, "trading_pair", None)
+        if not symbol:
+            self._component_risk_context_cache_key = None
+            self._component_risk_context_cache = None
+            return {}
+
+        cache_key = (str(symbol), int(index))
+        cached_key = getattr(self, "_component_risk_context_cache_key", None)
+        if cached_key != cache_key:
+            self._component_risk_context_cache_key = None
+            self._component_risk_context_cache = None
+
+        overrides = None
+        if hasattr(strategy, "get_risk_overrides"):
+            try:
+                overrides = strategy.get_risk_overrides()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "Failed to fetch component risk overrides for correlation context: %s",
+                    exc,
+                )
+
+        # Only build correlation context when sizing a potential entry to avoid repeated
+        # historical price lookups on every candle. Reuse the cached value if the same bar
+        # has already triggered sizing.
+        try:
+            direction = getattr(signal, "direction", None)
+        except Exception:
+            direction = None
+
+        if direction == SignalDirection.HOLD:
+            return {}
+
+        correlation_ctx = self._get_correlation_context(
+            str(symbol),
+            df,
+            overrides,
+            index=index,
+        )
+        if not correlation_ctx:
+            return {}
+
+        return {"correlation_ctx": correlation_ctx}
+
+    def _get_correlation_context(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        overrides: dict | None,
+        *,
+        index: int | None = None,
+    ) -> dict | None:
+        """Return cached correlation context for the given bar or build it on demand."""
+
+        cache_key = (symbol, index) if index is not None else None
+        cached_key = getattr(self, "_component_risk_context_cache_key", None)
+        cached_ctx = getattr(self, "_component_risk_context_cache", None)
+        if cache_key is not None and cache_key == cached_key and cached_ctx is not None:
+            return cached_ctx
+
+        context = self._build_correlation_context(symbol, df, overrides)
+        if cache_key is not None:
+            if context:
+                self._component_risk_context_cache_key = cache_key
+                self._component_risk_context_cache = context
+            else:
+                if cache_key == getattr(self, "_component_risk_context_cache_key", None):
+                    self._component_risk_context_cache_key = None
+                    self._component_risk_context_cache = None
+        return context
+
+    def _apply_policies_from_decision(self, decision) -> None:
+        """Hydrate engine-level policies from component strategy output."""
+
+        if decision is None:
+            return
+
+        bundle = getattr(decision, "policies", None)
+        if not bundle:
+            return
+
+        try:
+            partial_descriptor = getattr(bundle, "partial_exit", None)
+            if partial_descriptor is not None:
+                if self._partial_operations_opt_in or self.partial_manager is not None:
+                    self.partial_manager = partial_descriptor.to_policy()
+                    self._partial_operations_opt_in = True
+                else:
+                    logger.debug(
+                        "Skipping partial-exit policy from component decision: partial operations disabled"
+                    )
+        except Exception as exc:
+            logger.debug("Failed to hydrate partial-exit policy from component decision: %s", exc)
+
+        try:
+            trailing_descriptor = getattr(bundle, "trailing_stop", None)
+            if trailing_descriptor is not None:
+                if self._trailing_stop_opt_in or self.trailing_stop_policy is not None:
+                    self.trailing_stop_policy = trailing_descriptor.to_policy()
+                    self._trailing_stop_opt_in = True
+                else:
+                    logger.debug(
+                        "Skipping trailing-stop policy from component decision: trailing stops disabled"
+                    )
+        except Exception as exc:
+            logger.debug("Failed to hydrate trailing-stop policy from component decision: %s", exc)
+
+        try:
+            dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
+            if dynamic_descriptor is not None:
+                config = dynamic_descriptor.to_config()
+                self._component_dynamic_risk_config = config
+                if not getattr(self, "enable_dynamic_risk", False):
+                    self.enable_dynamic_risk = True
+                if self.db_manager is not None:
+                    manager = getattr(self, "dynamic_risk_manager", None)
+                    should_create = (
+                        manager is None or getattr(manager, "config", None) != config
+                    )
+                    if should_create:
+                        self.dynamic_risk_manager = DynamicRiskManager(
+                            config=config,
+                            db_manager=self.db_manager,
+                        )
+                    else:
+                        try:
+                            self.dynamic_risk_manager.config = config
+                        except AttributeError:
+                            pass
+                        self.dynamic_risk_manager.db_manager = self.db_manager
+        except Exception as exc:
+            logger.debug("Failed to hydrate dynamic risk manager from component decision: %s", exc)
 
     # Runtime integration helpers -------------------------------------------------
 
@@ -662,6 +940,7 @@ class LiveTradingEngine:
         context = self._build_runtime_context(balance, current_price, current_time)
         try:
             decision = self._runtime.process(index, context)
+            self._apply_policies_from_decision(decision)
             return decision
         except Exception as exc:
             logger.warning("Runtime decision failed in live engine at index %s: %s", index, exc)
@@ -750,6 +1029,7 @@ class LiveTradingEngine:
             return
 
         self.is_running = True
+        self._active_symbol = symbol
         self.timeframe = timeframe  # Store the trading timeframe
         # Set base logging context for this engine run
         set_context(
@@ -943,6 +1223,7 @@ class LiveTradingEngine:
         logger.info("Trading loop started")
         steps = 0
         cfg = get_config()
+        self._active_symbol = symbol
         try:
             heartbeat_every = int(cfg.get("ENGINE_HEARTBEAT_STEPS", "60"))
         except Exception:
@@ -1098,7 +1379,12 @@ class LiveTradingEngine:
                                 overrides = None
                             indicators = self._extract_indicators(df, current_index)
                             # Correlation context for short entries
-                            short_correlation_ctx = self._build_correlation_context(symbol, df, overrides)
+                            short_correlation_ctx = self._get_correlation_context(
+                                symbol,
+                                df,
+                                overrides,
+                                index=current_index,
+                            )
                             if overrides and overrides.get("position_sizer"):
                                 short_fraction = self.risk_manager.calculate_position_fraction(
                                     df=df,
@@ -1671,7 +1957,8 @@ class LiveTradingEngine:
             # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper
             try:
                 decision = self.strategy.process_candle(df, current_index, self.current_balance, None)
-                
+                self._apply_policies_from_decision(decision)
+
                 notional_size = float(decision.position_size or 0.0)
                 balance = float(self.current_balance or 0.0)
                 size_fraction = 0.0 if balance <= 0 else max(0.0, notional_size / balance)
@@ -1700,7 +1987,7 @@ class LiveTradingEngine:
         if entry_signal and not use_runtime:
             # Component strategies supply their own sizing. Retain correlation context computation
             # for downstream consumers that expect it to be populated as part of the entry check.
-            self._build_correlation_context(symbol, df, None)
+            self._get_correlation_context(symbol, df, None, index=current_index)
 
         if position_size > 0:
             position_size = self._get_dynamic_risk_adjusted_size(position_size)

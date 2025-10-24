@@ -165,8 +165,13 @@ class RiskManager(ABC):
         self.name = name
     
     @abstractmethod
-    def calculate_position_size(self, signal: 'Signal', balance: float, 
-                              regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_position_size(
+        self,
+        signal: 'Signal',
+        balance: float,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
         """
         Calculate position size based on signal strength and risk parameters
         
@@ -184,8 +189,13 @@ class RiskManager(ABC):
         pass
     
     @abstractmethod
-    def should_exit(self, position: Position, current_data: MarketData, 
-                   regime: Optional['RegimeContext'] = None) -> bool:
+    def should_exit(
+        self,
+        position: Position,
+        current_data: MarketData,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> bool:
         """
         Determine if a position should be exited based on risk criteria
         
@@ -200,8 +210,13 @@ class RiskManager(ABC):
         pass
     
     @abstractmethod
-    def get_stop_loss(self, entry_price: float, signal: 'Signal', 
-                     regime: Optional['RegimeContext'] = None) -> float:
+    def get_stop_loss(
+        self,
+        entry_price: float,
+        signal: 'Signal',
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
         """
         Calculate stop loss level for a new position
         
@@ -254,6 +269,38 @@ class RiskManager(ABC):
 
         return []
 
+    def get_take_profit(
+        self,
+        entry_price: float,
+        signal: 'Signal',
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
+        """Return a take-profit level for the given signal.
+
+        Implementations should return the entry price when no explicit take profit
+        is available so that downstream consumers can treat the value as optional.
+        """
+
+        return entry_price
+
+    def get_position_policies(
+        self,
+        signal: 'Signal',
+        balance: float,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> Any:
+        """Return optional position-management policy descriptors.
+
+        Concrete implementations may override this hook to surface structured
+        policy information (e.g., partial exits, trailing stops). The default
+        implementation returns ``None`` to indicate that no additional policies
+        are supplied by the risk manager.
+        """
+
+        return None
+
 
 class FixedRiskManager(RiskManager):
     """
@@ -281,8 +328,13 @@ class FixedRiskManager(RiskManager):
         self.risk_per_trade = risk_per_trade
         self.stop_loss_pct = stop_loss_pct
     
-    def calculate_position_size(self, signal: 'Signal', balance: float, 
-                              regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_position_size(
+        self,
+        signal: 'Signal',
+        balance: float,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
         """Calculate position size based on fixed risk percentage"""
         self.validate_inputs(balance)
         
@@ -312,8 +364,13 @@ class FixedRiskManager(RiskManager):
         
         return max(min_position, min(max_position, position_size))
     
-    def should_exit(self, position: Position, current_data: MarketData, 
-                   regime: Optional['RegimeContext'] = None) -> bool:
+    def should_exit(
+        self,
+        position: Position,
+        current_data: MarketData,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> bool:
         """Determine exit based on stop loss percentage"""
         # Calculate current loss percentage
         loss_pct = abs(position.get_pnl_percentage()) / 100
@@ -324,8 +381,13 @@ class FixedRiskManager(RiskManager):
         
         return False
     
-    def get_stop_loss(self, entry_price: float, signal: 'Signal', 
-                     regime: Optional['RegimeContext'] = None) -> float:
+    def get_stop_loss(
+        self,
+        entry_price: float,
+        signal: 'Signal',
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
         """Calculate stop loss based on fixed percentage"""
         if entry_price <= 0:
             raise ValueError(f"entry_price must be positive, got {entry_price}")
@@ -367,6 +429,26 @@ class FixedRiskManager(RiskManager):
         })
         return params
 
+    def get_take_profit(
+        self,
+        entry_price: float,
+        signal: 'Signal',
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
+        """Return a symmetric take-profit target unless signal indicates hold."""
+
+        if entry_price <= 0:
+            raise ValueError(f"entry_price must be positive, got {entry_price}")
+
+        # Default to a 2:1 reward-to-risk ratio when explicit overrides are absent.
+        take_profit_pct = self.stop_loss_pct * 2
+        if signal.direction.value == 'buy':
+            return entry_price * (1 + take_profit_pct)
+        if signal.direction.value == 'sell':
+            return entry_price * (1 - take_profit_pct)
+        return entry_price
+
 
 class VolatilityRiskManager(RiskManager):
     """
@@ -406,8 +488,13 @@ class VolatilityRiskManager(RiskManager):
         self.min_risk = min_risk
         self.max_risk = max_risk
     
-    def calculate_position_size(self, signal: 'Signal', balance: float, 
-                              regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_position_size(
+        self,
+        signal: 'Signal',
+        balance: float,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
         """Calculate position size based on volatility-adjusted risk"""
         self.validate_inputs(balance)
         
@@ -444,8 +531,13 @@ class VolatilityRiskManager(RiskManager):
         
         return max(min_position, min(max_position, position_size))
     
-    def should_exit(self, position: Position, current_data: MarketData, 
-                   regime: Optional['RegimeContext'] = None) -> bool:
+    def should_exit(
+        self,
+        position: Position,
+        current_data: MarketData,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> bool:
         """Determine exit based on volatility-adjusted stop loss"""
         # Use volatility from market data if available
         volatility = current_data.volatility or 0.02
@@ -463,8 +555,13 @@ class VolatilityRiskManager(RiskManager):
         
         return False
     
-    def get_stop_loss(self, entry_price: float, signal: 'Signal', 
-                     regime: Optional['RegimeContext'] = None) -> float:
+    def get_stop_loss(
+        self,
+        entry_price: float,
+        signal: 'Signal',
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
         """Calculate stop loss based on ATR"""
         if entry_price <= 0:
             raise ValueError(f"entry_price must be positive, got {entry_price}")
@@ -516,6 +613,38 @@ class VolatilityRiskManager(RiskManager):
         })
         return params
 
+    def get_take_profit(
+        self,
+        entry_price: float,
+        signal: 'Signal',
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
+        """Mirror stop distance for take-profit targeting."""
+
+        if entry_price <= 0:
+            raise ValueError(f"entry_price must be positive, got {entry_price}")
+
+        atr_multiplier = getattr(self, "atr_multiplier", self.atr_multiplier)
+        atr = context.get('atr') if context else None
+        distance = None
+        if atr is not None and atr > 0:
+            distance = atr * atr_multiplier
+        elif context and 'volatility' in context:
+            try:
+                distance = float(context['volatility']) * entry_price
+            except Exception:
+                distance = None
+
+        if distance is None:
+            distance = entry_price * self.base_risk
+
+        if signal.direction.value == 'buy':
+            return entry_price + distance
+        if signal.direction.value == 'sell':
+            return entry_price - distance
+        return entry_price
+
 
 class RegimeAdaptiveRiskManager(RiskManager):
     """
@@ -561,8 +690,13 @@ class RegimeAdaptiveRiskManager(RiskManager):
             if not 0.1 <= multiplier <= 3.0:
                 raise ValueError(f"regime multiplier for {regime} must be between 0.1 and 3.0, got {multiplier}")
     
-    def calculate_position_size(self, signal: 'Signal', balance: float, 
-                              regime: Optional['RegimeContext'] = None) -> float:
+    def calculate_position_size(
+        self,
+        signal: 'Signal',
+        balance: float,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
         """Calculate position size based on regime-specific risk parameters"""
         self.validate_inputs(balance)
         
@@ -593,8 +727,13 @@ class RegimeAdaptiveRiskManager(RiskManager):
         
         return max(min_position, min(max_position, position_size))
     
-    def should_exit(self, position: Position, current_data: MarketData, 
-                   regime: Optional['RegimeContext'] = None) -> bool:
+    def should_exit(
+        self,
+        position: Position,
+        current_data: MarketData,
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> bool:
         """Determine exit based on regime-specific criteria"""
         # Get regime-specific stop loss percentage
         stop_loss_pct = self._get_regime_stop_loss(regime)
@@ -612,8 +751,13 @@ class RegimeAdaptiveRiskManager(RiskManager):
         
         return False
     
-    def get_stop_loss(self, entry_price: float, signal: 'Signal', 
-                     regime: Optional['RegimeContext'] = None) -> float:
+    def get_stop_loss(
+        self,
+        entry_price: float,
+        signal: 'Signal',
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
         """Calculate stop loss based on regime-specific parameters"""
         if entry_price <= 0:
             raise ValueError(f"entry_price must be positive, got {entry_price}")
@@ -630,6 +774,32 @@ class RegimeAdaptiveRiskManager(RiskManager):
         else:
             # No stop loss for hold signals
             return entry_price
+
+    def get_take_profit(
+        self,
+        entry_price: float,
+        signal: 'Signal',
+        regime: Optional['RegimeContext'] = None,
+        **context: Any,
+    ) -> float:
+        """Calculate a regime-adjusted take-profit level."""
+
+        if entry_price <= 0:
+            raise ValueError(f"entry_price must be positive, got {entry_price}")
+
+        stop_loss_pct = self._get_regime_stop_loss(regime)
+        reward_to_risk = context.get('reward_to_risk', 2.0)
+        try:
+            reward_to_risk = max(1.0, float(reward_to_risk))
+        except (TypeError, ValueError):
+            reward_to_risk = 2.0
+        take_profit_pct = stop_loss_pct * reward_to_risk
+
+        if signal.direction.value == 'buy':
+            return entry_price * (1 + take_profit_pct)
+        if signal.direction.value == 'sell':
+            return entry_price * (1 - take_profit_pct)
+        return entry_price
     
     def _get_regime_risk_multiplier(self, regime: Optional['RegimeContext']) -> float:
         """Get risk multiplier based on current regime"""

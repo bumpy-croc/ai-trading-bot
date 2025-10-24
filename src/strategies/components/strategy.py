@@ -8,17 +8,20 @@ logging and decision tracking.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional, Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 if TYPE_CHECKING:
     from .runtime import FeatureGeneratorSpec, StrategyDataset
 
+from .policies import PolicyBundle
 from .position_sizer import PositionSizer
 from .regime_context import EnhancedRegimeDetector, RegimeContext
 from .risk_manager import MarketData, Position, RiskManager
@@ -42,10 +45,11 @@ class TradingDecision:
     timestamp: datetime
     signal: Signal
     position_size: float
-    regime: Optional[RegimeContext]
+    regime: RegimeContext | None
     risk_metrics: dict[str, float]
     execution_time_ms: float
     metadata: dict[str, Any]
+    policies: PolicyBundle | None = None
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging/serialization"""
@@ -67,7 +71,8 @@ class TradingDecision:
             } if self.regime else None,
             'risk_metrics': self.risk_metrics,
             'execution_time_ms': self.execution_time_ms,
-            'metadata': self.metadata
+            'metadata': self.metadata,
+            'policies': self.policies.to_dict() if self.policies else None,
         }
 
 
@@ -81,7 +86,7 @@ class Strategy:
     
     def __init__(self, name: str, signal_generator: SignalGenerator,
                  risk_manager: RiskManager, position_sizer: PositionSizer,
-                 regime_detector: Optional[EnhancedRegimeDetector] = None,
+                 regime_detector: EnhancedRegimeDetector | None = None,
                  enable_logging: bool = True, max_history: int = 1000):
         """
         Initialize composable strategy
@@ -125,8 +130,11 @@ class Strategy:
         }
 
         # Runtime configuration
-        self._warmup_override: Optional[int] = None
-        self._last_signal: Optional[Signal] = None
+        self._warmup_override: int | None = None
+        self._last_signal: Signal | None = None
+        self._additional_risk_context_provider: (
+            Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None
+        ) = None
         
         self.logger.info(f"Strategy '{name}' initialized with components: "
                         f"SignalGen={signal_generator.name}, "
@@ -192,8 +200,13 @@ class Strategy:
 
         self.logger.debug("Runtime finalised for %s", self.name)
 
-    def process_candle(self, df: pd.DataFrame, index: int, balance: float,
-                      current_positions: Optional[list[Position]] = None) -> TradingDecision:
+    def process_candle(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        balance: float,
+        current_positions: list[Position] | None = None,
+    ) -> TradingDecision:
         """
         Process a single candle and make trading decision
         
@@ -225,8 +238,11 @@ class Strategy:
             # Step 2: Generate trading signal
             signal = self._generate_signal(df, index, regime)
             
-            # Step 3: Calculate risk-based position size
-            risk_position_size = self._calculate_risk_position_size(signal, balance, regime)
+            # Step 3: Build risk context and calculate risk-based position size
+            risk_context = self._build_risk_context(df, index, signal)
+            risk_position_size = self._calculate_risk_position_size(
+                signal, balance, regime, risk_context
+            )
             
             # Step 4: Apply position sizer adjustments
             final_position_size = self._calculate_final_position_size(
@@ -251,7 +267,21 @@ class Strategy:
                 df, index, balance, current_positions, regime, signal,
                 risk_position_size, validated_position_size
             )
-            
+
+            policies = None
+            try:
+                policy_kwargs = self._prepare_risk_kwargs(
+                    self.risk_manager.get_position_policies, risk_context
+                )
+                policies = self.risk_manager.get_position_policies(
+                    signal,
+                    balance,
+                    regime,
+                    **policy_kwargs,
+                )
+            except Exception as policy_error:
+                self.logger.debug("Risk policy extraction failed: %s", policy_error)
+
             # Create trading decision
             decision = TradingDecision(
                 timestamp=timestamp,
@@ -260,7 +290,8 @@ class Strategy:
                 regime=regime,
                 risk_metrics=risk_metrics,
                 execution_time_ms=execution_time_ms,
-                metadata=metadata
+                metadata=metadata,
+                policies=policies,
             )
             
             # Record decision
@@ -299,8 +330,12 @@ class Strategy:
             self._record_decision(decision)
             return decision
     
-    def should_exit_position(self, position: Position, current_data: MarketData,
-                           regime: Optional[RegimeContext] = None) -> bool:
+    def should_exit_position(
+        self,
+        position: Position,
+        current_data: MarketData,
+        regime: RegimeContext | None = None,
+    ) -> bool:
         """
         Determine if a position should be exited
         
@@ -318,8 +353,12 @@ class Strategy:
             self.logger.error(f"Error in exit decision: {e}")
             return False  # Conservative default
     
-    def get_stop_loss_price(self, entry_price: float, signal: Signal,
-                          regime: Optional[RegimeContext] = None) -> float:
+    def get_stop_loss_price(
+        self,
+        entry_price: float,
+        signal: Signal,
+        regime: RegimeContext | None = None,
+    ) -> float:
         """
         Get stop loss price for a position
         
@@ -423,7 +462,15 @@ class Strategy:
             'last_updated': datetime.now()
         }
         self.logger.info("Strategy history and metrics cleared")
-    
+
+    def set_additional_risk_context_provider(
+        self,
+        provider: Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None,
+    ) -> None:
+        """Register a hook that can enrich the risk context before delegation."""
+
+        self._additional_risk_context_provider = provider
+
     def get_component_info(self) -> dict[str, dict[str, Any]]:
         """Get information about all components"""
         return {
@@ -469,7 +516,7 @@ class Strategy:
                 params[attr] = getattr(self, attr)
         return params
 
-    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
+    def get_risk_overrides(self) -> dict[str, Any] | None:
         """Return configured risk overrides when provided."""
         return getattr(self, "_risk_overrides", None)
     
@@ -490,7 +537,7 @@ class Strategy:
         if missing_columns:
             raise ValueError(f"DataFrame missing required columns: {missing_columns}")
     
-    def _detect_regime(self, df: pd.DataFrame, index: int) -> Optional[RegimeContext]:
+    def _detect_regime(self, df: pd.DataFrame, index: int) -> RegimeContext | None:
         """Detect market regime"""
         try:
             return self.regime_detector.detect_regime(df, index)
@@ -498,8 +545,12 @@ class Strategy:
             self.logger.warning(f"Regime detection failed: {e}")
             return None
     
-    def _generate_signal(self, df: pd.DataFrame, index: int, 
-                        regime: Optional[RegimeContext]) -> Signal:
+    def _generate_signal(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        regime: RegimeContext | None,
+    ) -> Signal:
         """Generate trading signal"""
         try:
             return self.signal_generator.generate_signal(df, index, regime)
@@ -511,18 +562,114 @@ class Strategy:
                 confidence=0.0,
                 metadata={'error': str(e), 'component': 'signal_generator'}
             )
+
+    def _build_risk_context(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        signal: Signal,
+    ) -> dict[str, Any]:
+        """Construct contextual information for risk management delegation."""
+
+        price = float(df['close'].iloc[index]) if 'close' in df.columns else 0.0
+        overrides = self.get_risk_overrides() or {}
+        context: dict[str, Any] = {
+            'df': df,
+            'index': index,
+            'price': price,
+            'indicators': self._collect_indicator_snapshot(df, index, signal),
+            'strategy_overrides': overrides,
+        }
+
+        if self._additional_risk_context_provider is not None:
+            try:
+                extra_context = self._additional_risk_context_provider(df, index, signal)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self.logger.debug(
+                    "Additional risk context provider failed at index %s: %s",
+                    index,
+                    exc,
+                )
+            else:
+                if extra_context:
+                    context.update(dict(extra_context))
+
+        return context
+
+    def _collect_indicator_snapshot(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        signal: Signal,
+    ) -> dict[str, Any]:
+        """Return a lightweight dictionary of indicator values for the current row."""
+
+        try:
+            row = df.iloc[index]
+        except Exception:
+            return {}
+
+        snapshot: dict[str, Any] = {}
+        for column in df.columns:
+            try:
+                snapshot[column] = row[column]
+            except Exception:
+                continue
+
+        # Propagate signal metadata keys when present for adapters that rely on them.
+        if signal.metadata:
+            snapshot.update({f"signal_{k}": v for k, v in signal.metadata.items()})
+
+        return snapshot
+
+    def _prepare_risk_kwargs(
+        self, method: Any, context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Filter contextual kwargs to those accepted by ``method``."""
+
+        if not context:
+            return {}
+
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return dict(context)
+
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return dict(context)
+
+        allowed = {name for name in signature.parameters if name not in {'self'}}
+        return {key: value for key, value in context.items() if key in allowed}
     
-    def _calculate_risk_position_size(self, signal: Signal, balance: float,
-                                    regime: Optional[RegimeContext]) -> float:
+    def _calculate_risk_position_size(
+        self,
+        signal: Signal,
+        balance: float,
+        regime: RegimeContext | None,
+        context: dict[str, Any],
+    ) -> float:
         """Calculate risk-based position size"""
         try:
-            return self.risk_manager.calculate_position_size(signal, balance, regime)
+            filtered_context = self._prepare_risk_kwargs(
+                self.risk_manager.calculate_position_size, context
+            )
+            return self.risk_manager.calculate_position_size(
+                signal,
+                balance,
+                regime,
+                **filtered_context,
+            )
         except Exception as e:
             self.logger.error(f"Risk position size calculation failed: {e}")
             return 0.0
     
-    def _calculate_final_position_size(self, signal: Signal, balance: float,
-                                     risk_amount: float, regime: Optional[RegimeContext]) -> float:
+    def _calculate_final_position_size(
+        self,
+        signal: Signal,
+        balance: float,
+        risk_amount: float,
+        regime: RegimeContext | None,
+    ) -> float:
         """Calculate final position size using position sizer"""
         try:
             return self.position_sizer.calculate_size(signal, balance, risk_amount, regime)
@@ -530,8 +677,13 @@ class Strategy:
             self.logger.error(f"Final position size calculation failed: {e}")
             return risk_amount  # Fallback to risk manager's calculation
     
-    def _validate_position_size(self, position_size: float, signal: Signal,
-                              balance: float, regime: Optional[RegimeContext]) -> float:
+    def _validate_position_size(
+        self,
+        position_size: float,
+        signal: Signal,
+        balance: float,
+        regime: RegimeContext | None,
+    ) -> float:
         """Validate and bound position size"""
         if signal.direction == SignalDirection.HOLD:
             return 0.0
@@ -547,9 +699,14 @@ class Strategy:
         # Apply bounds only for positive positions
         return max(min_position, min(max_position, position_size))
     
-    def _calculate_risk_metrics(self, signal: Signal, balance: float,
-                              risk_position_size: float, final_position_size: float,
-                              regime: Optional[RegimeContext]) -> dict[str, float]:
+    def _calculate_risk_metrics(
+        self,
+        signal: Signal,
+        balance: float,
+        risk_position_size: float,
+        final_position_size: float,
+        regime: RegimeContext | None,
+    ) -> dict[str, float]:
         """Calculate risk-related metrics"""
         return {
             'risk_position_size': risk_position_size,
@@ -561,10 +718,17 @@ class Strategy:
             'regime_confidence': regime.confidence if regime else 0.0
         }
     
-    def _create_decision_metadata(self, df: pd.DataFrame, index: int, balance: float,
-                                current_positions: Optional[list[Position]],
-                                regime: Optional[RegimeContext], signal: Signal,
-                                risk_position_size: float, final_position_size: float) -> dict[str, Any]:
+    def _create_decision_metadata(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        balance: float,
+        current_positions: list[Position] | None,
+        regime: RegimeContext | None,
+        signal: Signal,
+        risk_position_size: float,
+        final_position_size: float,
+    ) -> dict[str, Any]:
         """Create comprehensive decision metadata"""
         metadata = {
             'strategy_name': self.name,

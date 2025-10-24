@@ -1,12 +1,14 @@
 """
-Strategy Manager with Versioning
+Component Strategy Manager with Versioning
 
-This module defines the StrategyManager class that orchestrates the component-based
-strategy architecture with versioning capabilities for A/B testing and rollbacks.
+This module defines the ComponentStrategyManager class that orchestrates the
+component-based strategy architecture with versioning capabilities for A/B
+testing and rollbacks.
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -137,7 +139,7 @@ class StrategyExecution:
     version_id: str
 
 
-class StrategyManager:
+class ComponentStrategyManager:
     """
     Component-based strategy manager with versioning
     
@@ -164,7 +166,7 @@ class StrategyManager:
             regime_detector: Optional regime detection component
         """
         self.name = name
-        self.logger = logging.getLogger(f"StrategyManager.{name}")
+        self.logger = logging.getLogger(f"ComponentStrategyManager.{name}")
         
         # Core components
         self.signal_generator = signal_generator
@@ -212,7 +214,16 @@ class StrategyManager:
             signal = self.signal_generator.generate_signal(df, index, regime)
             
             # Calculate position size using risk manager
-            risk_position_size = self.risk_manager.calculate_position_size(signal, balance, regime)
+            risk_context = self._build_risk_context(df, index, signal)
+            filtered_context = self._filter_risk_kwargs(
+                self.risk_manager.calculate_position_size, risk_context
+            )
+            risk_position_size = self.risk_manager.calculate_position_size(
+                signal,
+                balance,
+                regime,
+                **filtered_context,
+            )
             
             # Allow position sizer to further adjust the risk manager's position size
             # Position sizer gets the risk manager's position as the "risk amount"
@@ -271,6 +282,76 @@ class StrategyManager:
                 metadata={'error': str(e)}
             )
             return safe_signal, 0.0, {'error': str(e)}
+
+    def _build_risk_context(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        signal: Signal,
+    ) -> dict[str, Any]:
+        """Build contextual kwargs for risk manager delegation."""
+
+        price = float(df['close'].iloc[index]) if 'close' in df.columns else 0.0
+        context: dict[str, Any] = {
+            'df': df,
+            'index': index,
+            'price': price,
+            'indicators': self._collect_indicator_snapshot(df, index, signal),
+        }
+
+        # Surface strategy overrides when exposed by composed Strategy instances.
+        overrides = getattr(self, 'risk_overrides', None)
+        if overrides is None:
+            overrides = getattr(self, '_risk_overrides', None)
+        if overrides is not None:
+            context['strategy_overrides'] = overrides
+
+        return context
+
+    def _filter_risk_kwargs(
+        self, method: Any, context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return only keyword arguments accepted by the provided method."""
+
+        if not context:
+            return {}
+
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return dict(context)
+
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return dict(context)
+
+        allowed = {name for name in signature.parameters if name not in {'self'}}
+        return {key: value for key, value in context.items() if key in allowed}
+
+    def _collect_indicator_snapshot(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        signal: Signal,
+    ) -> dict[str, Any]:
+        """Return a dictionary of indicator values for the current row."""
+
+        try:
+            row = df.iloc[index]
+        except Exception:
+            return {}
+
+        snapshot: dict[str, Any] = {}
+        for column in df.columns:
+            try:
+                snapshot[column] = row[column]
+            except Exception:
+                continue
+
+        metadata = getattr(signal, 'metadata', None) or {}
+        if metadata:
+            snapshot.update({f"signal_{k}": v for k, v in metadata.items()})
+
+        return snapshot
     
     def create_version(
         self,
@@ -520,7 +601,7 @@ class StrategyManager:
         version_id = self.create_version(
             name="Initial Version",
             description="Initial strategy configuration",
-            parameters={'created_by': 'StrategyManager'}
+            parameters={'created_by': 'ComponentStrategyManager'}
         )
         self.activate_version(version_id)
     
@@ -595,13 +676,13 @@ class StrategyManager:
             # Generate new ID to avoid conflicts
             version.version_id = str(uuid4())
             version.is_active = False
-            
+
             self.versions[version.version_id] = version
-            
+
             self.logger.info(f"Imported strategy version {version.name} ({version.version_id})")
-            
+
             return version.version_id
-            
+
         except Exception as e:
             self.logger.error(f"Failed to import version: {e}")
             return None
