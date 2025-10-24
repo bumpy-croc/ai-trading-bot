@@ -20,14 +20,16 @@ Ideal for:
 - Environments with reliable sentiment data access
 """
 
-from typing import Optional
+from __future__ import annotations
 
+from src.risk.risk_manager import RiskManager as EngineRiskManager
+from src.risk.risk_manager import RiskParameters
 from src.strategies.components import (
-    Strategy,
-    MLSignalGenerator,
-    FixedRiskManager,
     ConfidenceWeightedSizer,
+    CoreRiskAdapter,
     EnhancedRegimeDetector,
+    MLSignalGenerator,
+    Strategy,
 )
 
 
@@ -35,17 +37,17 @@ def create_ml_sentiment_strategy(
     name: str = "MlSentiment",
     model_path: str = "src/ml/btcusdt_sentiment.onnx",
     sequence_length: int = 120,
-    use_prediction_engine: Optional[bool] = None,
-    model_name: Optional[str] = None,
-    model_type: Optional[str] = None,
-    timeframe: Optional[str] = None,
+    use_prediction_engine: bool | None = None,
+    model_name: str | None = None,
+    model_type: str | None = None,
+    timeframe: str | None = None,
 ) -> Strategy:
     """
     Create ML Sentiment strategy using component composition.
-
+    
     This strategy uses sentiment-aware signal generation to enhance
     prediction accuracy with market sentiment data.
-
+    
     Args:
         name: Strategy name
         model_path: Path to ONNX model file (sentiment model)
@@ -54,7 +56,7 @@ def create_ml_sentiment_strategy(
         model_name: Model name for prediction engine
         model_type: Model type (e.g., "sentiment")
         timeframe: Model timeframe (e.g., "1h")
-
+    
     Returns:
         Configured Strategy instance
     """
@@ -66,26 +68,41 @@ def create_ml_sentiment_strategy(
         use_prediction_engine=use_prediction_engine,
         model_name=model_name,
     )
-
-    # Create fixed risk manager (2% risk per trade)
-    risk_manager = FixedRiskManager(
-        risk_per_trade=0.02,
-        stop_loss_pct=0.02,
+    
+    risk_parameters = RiskParameters(
+        base_risk_per_trade=0.02,
+        default_take_profit_pct=0.04,
+        max_position_size=0.1,
     )
-
+    core_risk_manager = EngineRiskManager(risk_parameters)
+    risk_overrides = {
+        "position_sizer": "fixed_fraction",
+        "base_fraction": 0.02,
+        "max_fraction": 0.1,
+        "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.04,
+    }
+    risk_manager = CoreRiskAdapter(core_risk_manager)
+    risk_manager.set_strategy_overrides(risk_overrides)
+    
     # Create position sizer with confidence weighting (20% base)
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=0.2,
         min_confidence=0.3,
     )
-
+    
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
-
-    return Strategy(
+    
+    strategy = Strategy(
         name=name,
         signal_generator=signal_generator,
         risk_manager=risk_manager,
         position_sizer=position_sizer,
         regime_detector=regime_detector,
     )
+    strategy.stop_loss_pct = 0.02
+    strategy.take_profit_pct = 0.04
+    strategy.risk_per_trade = 0.02
+    strategy._risk_overrides = risk_overrides
+    return strategy

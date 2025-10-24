@@ -1,6 +1,6 @@
 # Documentation
 
-> **Last Updated**: 2025-10-21  
+> **Last Updated**: 2025-10-24  
 > **Maintained By**: AI Trading Bot Team
 
 This folder contains reference guides for the main subsystems that make up the AI trading platform. Each document focuses on how the runtime works today and includes links to relevant code and operational commands.

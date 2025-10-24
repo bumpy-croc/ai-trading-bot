@@ -1,6 +1,6 @@
 # Database
 
-> **Last Updated**: 2025-10-21  
+> **Last Updated**: 2025-10-24  
 > **Related Documentation**: [Configuration](configuration.md), [Development workflow](development.md#railway-deployment-quick-start)
 
 All persistent state flows through the PostgreSQL manager in `src/database/manager.py`. It enforces a PostgreSQL URL (SQLite is

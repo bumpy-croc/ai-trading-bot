@@ -7,7 +7,7 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -212,19 +212,51 @@ class LiveTradingEngine:
         self._configure_strategy(strategy)
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
-        self.risk_manager = RiskManager(risk_parameters)
+
+        component_risk = None
+        component_risk_params = None
+        if isinstance(self.strategy, ComponentStrategy):
+            component_risk = getattr(self.strategy, "risk_manager", None)
+            component_risk_params = self._extract_component_risk_parameters(component_risk)
+
+        merged_risk_parameters = self._merge_risk_parameters(risk_parameters, component_risk_params)
+        self.risk_manager = RiskManager(merged_risk_parameters)
+
+        # Share the canonical risk manager with component strategies via the adapter.
+        if isinstance(self.strategy, ComponentStrategy):
+            if hasattr(component_risk, "bind_core_manager"):
+                try:
+                    component_risk.bind_core_manager(self.risk_manager)
+                except Exception as bind_error:
+                    logger.debug("Failed to bind core risk manager to component: %s", bind_error)
+            if hasattr(component_risk, "set_strategy_overrides"):
+                overrides = getattr(self.strategy, "_risk_overrides", None)
+                if overrides:
+                    try:
+                        component_risk.set_strategy_overrides(overrides)
+                    except Exception as override_error:
+                        logger.debug(
+                            "Failed to propagate risk overrides to component manager: %s",
+                            override_error,
+                        )
 
         # Trailing stop policy
         self.trailing_stop_policy = trailing_stop_policy or self._build_trailing_policy()
-
+        self._trailing_stop_opt_in = self.trailing_stop_policy is not None
+        
         # Dynamic risk management
         self.enable_dynamic_risk = enable_dynamic_risk
         self.dynamic_risk_manager = None
+        self._component_dynamic_risk_config: DynamicRiskConfig | None = None
         if enable_dynamic_risk:
             config = dynamic_risk_config or DynamicRiskConfig()
             # Will be initialized after db_manager is available
             self._dynamic_risk_config = config
 
+        # Cache component-provided correlation context to avoid repeated lookups per bar.
+        self._component_risk_context_cache_key: tuple[str, int] | None = None
+        self._component_risk_context_cache: dict[str, Any] | None = None
+        
         # Timing configuration
         self.base_check_interval = check_interval
         self.check_interval = check_interval
@@ -242,6 +274,7 @@ class LiveTradingEngine:
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
         # Partial operations policy (disabled by default for parity)
+        self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager = partial_manager
         elif enable_partial_operations:
@@ -251,14 +284,14 @@ class LiveTradingEngine:
                 if hasattr(self.strategy, "get_risk_overrides")
                 else None
             )
-            if strategy_overrides and "partial_operations" in strategy_overrides:
-                partial_config = strategy_overrides["partial_operations"]
+            if strategy_overrides and 'partial_operations' in strategy_overrides:
+                partial_config = strategy_overrides['partial_operations']
                 self.partial_manager = PartialExitPolicy(
-                    exit_targets=partial_config.get("exit_targets", []),
-                    exit_sizes=partial_config.get("exit_sizes", []),
-                    scale_in_thresholds=partial_config.get("scale_in_thresholds", []),
-                    scale_in_sizes=partial_config.get("scale_in_sizes", []),
-                    max_scale_ins=partial_config.get("max_scale_ins", 0),
+                    exit_targets=partial_config.get('exit_targets', []),
+                    exit_sizes=partial_config.get('exit_sizes', []),
+                    scale_in_thresholds=partial_config.get('scale_in_thresholds', []),
+                    scale_in_sizes=partial_config.get('scale_in_sizes', []),
+                    max_scale_ins=partial_config.get('max_scale_ins', 0),
                 )
             else:
                 rp = self.risk_manager.params if self.risk_manager else RiskParameters()
@@ -271,6 +304,9 @@ class LiveTradingEngine:
                 )
         else:
             self.partial_manager = None
+        self._partial_operations_opt_in = bool(
+            self.enable_partial_operations or self.partial_manager is not None
+        )
 
         # Correlation engine setup
         try:
@@ -300,13 +336,14 @@ class LiveTradingEngine:
                 # Merge strategy risk overrides with engine config
                 final_config = self._merge_dynamic_risk_config(self._dynamic_risk_config)
                 self.dynamic_risk_manager = DynamicRiskManager(
-                    config=final_config, db_manager=self.db_manager
+                    config=final_config,
+                    db_manager=self.db_manager
                 )
                 logger.info("Dynamic risk management enabled")
             except Exception as e:
                 logger.warning(f"Failed to initialize dynamic risk manager: {e}")
                 self.dynamic_risk_manager = None
-
+        
         # Initialize exchange interface and account synchronizer
         self.exchange_interface = None
         self.account_synchronizer = None
@@ -356,9 +393,13 @@ class LiveTradingEngine:
                 self.strategy_manager.current_strategy = managed_strategy
                 self.strategy_manager.on_strategy_change = self._handle_strategy_change
                 self.strategy_manager.on_model_update = self._handle_model_update
-                logger.info(f"Hot swapping enabled for {managed_strategy.__class__.__name__}")
+                logger.info(
+                    f"Hot swapping enabled for {managed_strategy.__class__.__name__}"
+                )
             else:
-                logger.info("Hot swapping disabled: provided strategy does not implement Strategy")
+                logger.info(
+                    "Hot swapping disabled: provided strategy does not implement Strategy"
+                )
 
         # Set up strategy logging if database is available
         if self.db_manager:
@@ -373,6 +414,7 @@ class LiveTradingEngine:
         self.last_data_update = None
         self.last_account_snapshot = None  # Track when we last logged account state
         self.timeframe: str | None = None  # Will be set when trading starts
+        self._active_symbol: str | None = None
 
         # Performance tracking
         self.total_trades = 0
@@ -395,11 +437,7 @@ class LiveTradingEngine:
         if self.time_exit_policy is None:
             overrides = None
             try:
-                overrides = (
-                    self.strategy.get_risk_overrides()
-                    if hasattr(self.strategy, "get_risk_overrides")
-                    else None
-                )
+                overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, "get_risk_overrides") else None
             except Exception:
                 overrides = None
             time_cfg = None
@@ -416,9 +454,7 @@ class LiveTradingEngine:
                         trading_hours_only=bool(tr.get("trading_hours_only", False)),
                     )
                     self.time_exit_policy = TimeExitPolicy(
-                        max_holding_hours=time_cfg.get(
-                            "max_holding_hours", DEFAULT_MAX_HOLDING_HOURS
-                        ),
+                        max_holding_hours=time_cfg.get("max_holding_hours", DEFAULT_MAX_HOLDING_HOURS),
                         end_of_day_flat=time_cfg.get("end_of_day_flat", DEFAULT_END_OF_DAY_FLAT),
                         weekend_flat=time_cfg.get("weekend_flat", DEFAULT_WEEKEND_FLAT),
                         market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
@@ -456,46 +492,28 @@ class LiveTradingEngine:
                 if self.strategy and hasattr(self.strategy, "get_risk_overrides")
                 else None
             )
-            if not strategy_overrides or "dynamic_risk" not in strategy_overrides:
+            if not strategy_overrides or 'dynamic_risk' not in strategy_overrides:
                 return base_config
-
-            dynamic_overrides = strategy_overrides["dynamic_risk"]
-
+                
+            dynamic_overrides = strategy_overrides['dynamic_risk']
+            
             # Create a new config with merged values
             merged_config = DynamicRiskConfig(
-                enabled=dynamic_overrides.get("enabled", base_config.enabled),
-                performance_window_days=dynamic_overrides.get(
-                    "performance_window_days", base_config.performance_window_days
-                ),
-                drawdown_thresholds=dynamic_overrides.get(
-                    "drawdown_thresholds", base_config.drawdown_thresholds
-                ),
-                risk_reduction_factors=dynamic_overrides.get(
-                    "risk_reduction_factors", base_config.risk_reduction_factors
-                ),
-                recovery_thresholds=dynamic_overrides.get(
-                    "recovery_thresholds", base_config.recovery_thresholds
-                ),
-                volatility_adjustment_enabled=dynamic_overrides.get(
-                    "volatility_adjustment_enabled", base_config.volatility_adjustment_enabled
-                ),
-                volatility_window_days=dynamic_overrides.get(
-                    "volatility_window_days", base_config.volatility_window_days
-                ),
-                high_volatility_threshold=dynamic_overrides.get(
-                    "high_volatility_threshold", base_config.high_volatility_threshold
-                ),
-                low_volatility_threshold=dynamic_overrides.get(
-                    "low_volatility_threshold", base_config.low_volatility_threshold
-                ),
-                volatility_risk_multipliers=dynamic_overrides.get(
-                    "volatility_risk_multipliers", base_config.volatility_risk_multipliers
-                ),
+                enabled=dynamic_overrides.get('enabled', base_config.enabled),
+                performance_window_days=dynamic_overrides.get('performance_window_days', base_config.performance_window_days),
+                drawdown_thresholds=dynamic_overrides.get('drawdown_thresholds', base_config.drawdown_thresholds),
+                risk_reduction_factors=dynamic_overrides.get('risk_reduction_factors', base_config.risk_reduction_factors),
+                recovery_thresholds=dynamic_overrides.get('recovery_thresholds', base_config.recovery_thresholds),
+                volatility_adjustment_enabled=dynamic_overrides.get('volatility_adjustment_enabled', base_config.volatility_adjustment_enabled),
+                volatility_window_days=dynamic_overrides.get('volatility_window_days', base_config.volatility_window_days),
+                high_volatility_threshold=dynamic_overrides.get('high_volatility_threshold', base_config.high_volatility_threshold),
+                low_volatility_threshold=dynamic_overrides.get('low_volatility_threshold', base_config.low_volatility_threshold),
+                volatility_risk_multipliers=dynamic_overrides.get('volatility_risk_multipliers', base_config.volatility_risk_multipliers)
             )
-
+            
             logger.info(f"Merged strategy dynamic risk overrides from {self._strategy_name()}")
             return merged_config
-
+            
         except Exception as e:
             logger.warning(f"Failed to merge strategy dynamic risk overrides: {e}")
             return base_config
@@ -504,18 +522,18 @@ class LiveTradingEngine:
         """Apply dynamic risk adjustments to position size"""
         if not self.dynamic_risk_manager:
             return original_size
-
+            
         try:
             # Calculate dynamic risk adjustments
             adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
                 current_balance=self.current_balance,
                 peak_balance=self.peak_balance,
-                session_id=self.trading_session_id,
+                session_id=self.trading_session_id
             )
-
+            
             # Apply position size adjustment
             adjusted_size = original_size * adjustments.position_size_factor
-
+            
             # Log the adjustment if significant
             if abs(adjustments.position_size_factor - 1.0) > 0.1:  # >10% change
                 logger.info(
@@ -528,31 +546,27 @@ class LiveTradingEngine:
                     position_size_factor=adjustments.position_size_factor,
                     reason=adjustments.primary_reason,
                 )
-
+                
                 # Log to database for tracking
                 if self.db_manager and self.trading_session_id:
                     try:
                         self.db_manager.log_risk_adjustment(
                             session_id=self.trading_session_id,
-                            adjustment_type=adjustments.primary_reason.split("_")[
-                                0
-                            ],  # e.g., 'drawdown' from 'drawdown_15.0%'
+                            adjustment_type=adjustments.primary_reason.split('_')[0],  # e.g., 'drawdown' from 'drawdown_15.0%'
                             trigger_reason=adjustments.primary_reason,
-                            parameter_name="position_size_factor",
+                            parameter_name='position_size_factor',
                             original_value=1.0,
                             adjusted_value=adjustments.position_size_factor,
                             adjustment_factor=adjustments.position_size_factor,
-                            current_drawdown=adjustments.adjustment_details.get("current_drawdown"),
+                            current_drawdown=adjustments.adjustment_details.get('current_drawdown'),
                             performance_score=None,  # Could be enhanced to include performance score
-                            volatility_level=adjustments.adjustment_details.get(
-                                "performance_metrics", {}
-                            ).get("estimated_volatility"),
+                            volatility_level=adjustments.adjustment_details.get('performance_metrics', {}).get('estimated_volatility')
                         )
                     except Exception as log_e:
                         logger.warning(f"Failed to log risk adjustment to database: {log_e}")
-
+            
             return adjusted_size
-
+            
         except Exception as e:
             logger.warning(f"Failed to apply dynamic risk adjustment: {e}")
             return original_size
@@ -567,12 +581,13 @@ class LiveTradingEngine:
             adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
                 current_balance=self.current_balance,
                 peak_balance=self.peak_balance,
-                session_id=self.trading_session_id,
+                session_id=self.trading_session_id
             )
 
             # Apply adjustments to risk parameters
             adjusted_params = self.dynamic_risk_manager.apply_risk_adjustments(
-                self.risk_manager.params, adjustments
+                self.risk_manager.params,
+                adjustments
             )
 
             return adjusted_params
@@ -581,16 +596,91 @@ class LiveTradingEngine:
             logger.warning(f"Failed to get dynamic risk adjusted parameters: {e}")
             return self.risk_manager.params
 
-    def _configure_strategy(self, strategy: ComponentStrategy | StrategyRuntime) -> None:
+    def _extract_component_risk_parameters(
+        self, component_risk_manager: Any
+    ) -> RiskParameters | None:
+        """Clone risk parameters from a component adapter, if available."""
+
+        if component_risk_manager is None:
+            return None
+
+        core_manager = getattr(component_risk_manager, "_core_manager", None)
+        if core_manager is None:
+            return None
+
+        params = getattr(core_manager, "params", None)
+        if not isinstance(params, RiskParameters):
+            return None
+
+        return self._clone_risk_parameters(params)
+
+    def _merge_risk_parameters(
+        self,
+        engine_params: RiskParameters | None,
+        component_params: RiskParameters | None,
+    ) -> RiskParameters | None:
+        """Merge engine-provided and component-provided risk parameters."""
+
+        if engine_params is None and component_params is None:
+            return None
+
+        if component_params is None:
+            return self._clone_risk_parameters(engine_params)
+
+        if engine_params is None:
+            return component_params
+
+        component_dict = asdict(component_params)
+        engine_dict = asdict(engine_params)
+        default_dict = asdict(RiskParameters())
+
+        merged = dict(component_dict)
+        for key, value in engine_dict.items():
+            default_value = default_dict.get(key)
+
+            # Preserve component overrides when the engine sticks with defaults.
+            if value == default_value:
+                continue
+
+            merged[key] = value
+
+        return RiskParameters(**merged)
+
+    @staticmethod
+    def _clone_risk_parameters(params: RiskParameters | None) -> RiskParameters | None:
+        """Return a deep-cloned copy of risk parameters for safe reuse."""
+
+        if params is None:
+            return None
+
+        return RiskParameters(**asdict(params))
+
+    def _configure_strategy(
+        self, strategy: ComponentStrategy | StrategyRuntime
+    ) -> None:
         """Normalise strategy inputs and configure runtime bookkeeping."""
 
         runtime = strategy if isinstance(strategy, StrategyRuntime) else None
         base_strategy = runtime.strategy if runtime is not None else strategy
 
+        previous_component = getattr(self, "_component_strategy", None)
+
         self.strategy = base_strategy
         self._component_strategy = (
             base_strategy if isinstance(base_strategy, ComponentStrategy) else None
         )
+
+        if (
+            previous_component is not None
+            and previous_component is not self._component_strategy
+            and hasattr(previous_component, "set_additional_risk_context_provider")
+        ):
+            try:
+                previous_component.set_additional_risk_context_provider(None)
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                logger.debug(
+                    "Failed to clear risk context provider on previous strategy: %s", exc
+                )
 
         if runtime is not None:
             self._runtime = runtime
@@ -598,6 +688,174 @@ class LiveTradingEngine:
             self._runtime = StrategyRuntime(self._component_strategy)
         else:
             self._runtime = None
+
+        self._register_component_context_provider()
+
+    def _register_component_context_provider(self) -> None:
+        """Attach the engine-provided risk context hook to component strategies."""
+
+        strategy = getattr(self, "_component_strategy", None)
+        if strategy is None:
+            return
+
+        setter = getattr(strategy, "set_additional_risk_context_provider", None)
+        if not callable(setter):
+            return
+
+        def provider(df: pd.DataFrame, index: int, signal) -> dict[str, Any] | None:
+            return self._component_risk_context(df, index, signal)
+
+        try:
+            setter(provider)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug(
+                "Failed to attach risk context provider to component strategy: %s", exc
+            )
+
+    def _component_risk_context(
+        self, df: pd.DataFrame, index: int, signal
+    ) -> dict[str, Any]:
+        """Build supplemental risk context (e.g., correlation data) for components."""
+
+        strategy = getattr(self, "_component_strategy", None)
+        if strategy is None:
+            return {}
+
+        if getattr(self, "correlation_engine", None) is None:
+            return {}
+
+        symbol = self._active_symbol or getattr(strategy, "trading_pair", None)
+        if not symbol:
+            self._component_risk_context_cache_key = None
+            self._component_risk_context_cache = None
+            return {}
+
+        cache_key = (str(symbol), int(index))
+        cached_key = getattr(self, "_component_risk_context_cache_key", None)
+        if cached_key != cache_key:
+            self._component_risk_context_cache_key = None
+            self._component_risk_context_cache = None
+
+        overrides = None
+        if hasattr(strategy, "get_risk_overrides"):
+            try:
+                overrides = strategy.get_risk_overrides()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "Failed to fetch component risk overrides for correlation context: %s",
+                    exc,
+                )
+
+        # Only build correlation context when sizing a potential entry to avoid repeated
+        # historical price lookups on every candle. Reuse the cached value if the same bar
+        # has already triggered sizing.
+        try:
+            direction = getattr(signal, "direction", None)
+        except Exception:
+            direction = None
+
+        if direction == SignalDirection.HOLD:
+            return {}
+
+        correlation_ctx = self._get_correlation_context(
+            str(symbol),
+            df,
+            overrides,
+            index=index,
+        )
+        if not correlation_ctx:
+            return {}
+
+        return {"correlation_ctx": correlation_ctx}
+
+    def _get_correlation_context(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        overrides: dict | None,
+        *,
+        index: int | None = None,
+    ) -> dict | None:
+        """Return cached correlation context for the given bar or build it on demand."""
+
+        cache_key = (symbol, index) if index is not None else None
+        cached_key = getattr(self, "_component_risk_context_cache_key", None)
+        cached_ctx = getattr(self, "_component_risk_context_cache", None)
+        if cache_key is not None and cache_key == cached_key and cached_ctx is not None:
+            return cached_ctx
+
+        context = self._build_correlation_context(symbol, df, overrides)
+        if cache_key is not None:
+            if context:
+                self._component_risk_context_cache_key = cache_key
+                self._component_risk_context_cache = context
+            else:
+                if cache_key == getattr(self, "_component_risk_context_cache_key", None):
+                    self._component_risk_context_cache_key = None
+                    self._component_risk_context_cache = None
+        return context
+
+    def _apply_policies_from_decision(self, decision) -> None:
+        """Hydrate engine-level policies from component strategy output."""
+
+        if decision is None:
+            return
+
+        bundle = getattr(decision, "policies", None)
+        if not bundle:
+            return
+
+        try:
+            partial_descriptor = getattr(bundle, "partial_exit", None)
+            if partial_descriptor is not None:
+                if self._partial_operations_opt_in or self.partial_manager is not None:
+                    self.partial_manager = partial_descriptor.to_policy()
+                    self._partial_operations_opt_in = True
+                else:
+                    logger.debug(
+                        "Skipping partial-exit policy from component decision: partial operations disabled"
+                    )
+        except Exception as exc:
+            logger.debug("Failed to hydrate partial-exit policy from component decision: %s", exc)
+
+        try:
+            trailing_descriptor = getattr(bundle, "trailing_stop", None)
+            if trailing_descriptor is not None:
+                if self._trailing_stop_opt_in or self.trailing_stop_policy is not None:
+                    self.trailing_stop_policy = trailing_descriptor.to_policy()
+                    self._trailing_stop_opt_in = True
+                else:
+                    logger.debug(
+                        "Skipping trailing-stop policy from component decision: trailing stops disabled"
+                    )
+        except Exception as exc:
+            logger.debug("Failed to hydrate trailing-stop policy from component decision: %s", exc)
+
+        try:
+            dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
+            if dynamic_descriptor is not None:
+                config = dynamic_descriptor.to_config()
+                self._component_dynamic_risk_config = config
+                if not getattr(self, "enable_dynamic_risk", False):
+                    self.enable_dynamic_risk = True
+                if self.db_manager is not None:
+                    manager = getattr(self, "dynamic_risk_manager", None)
+                    should_create = (
+                        manager is None or getattr(manager, "config", None) != config
+                    )
+                    if should_create:
+                        self.dynamic_risk_manager = DynamicRiskManager(
+                            config=config,
+                            db_manager=self.db_manager,
+                        )
+                    else:
+                        try:
+                            self.dynamic_risk_manager.config = config
+                        except AttributeError:
+                            pass
+                        self.dynamic_risk_manager.db_manager = self.db_manager
+        except Exception as exc:
+            logger.debug("Failed to hydrate dynamic risk manager from component decision: %s", exc)
 
     # Runtime integration helpers -------------------------------------------------
 
@@ -613,7 +871,7 @@ class LiveTradingEngine:
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Prepare dataframe for strategy processing.
-
+        
         For component-based strategies, prepare the runtime dataset.
         For legacy strategies, return the dataframe as-is (no indicator calculation).
         """
@@ -651,23 +909,17 @@ class LiveTradingEngine:
 
         return RuntimeContext(balance=float(balance), current_positions=positions or None)
 
-    def _compute_component_quantity(
-        self, position: Position, balance_basis: float | None = None
-    ) -> float:
+    def _compute_component_quantity(self, position: Position, balance_basis: float | None = None) -> float:
         """Translate a position's fractional size into asset quantity for component strategies."""
         entry_price = float(position.entry_price)
         if entry_price <= 0:
             return 0.0
 
-        basis = (
-            balance_basis if balance_basis is not None else getattr(position, "entry_balance", None)
-        )
+        basis = balance_basis if balance_basis is not None else getattr(position, "entry_balance", None)
         if basis is None or basis <= 0:
             basis = self.current_balance
 
-        size_fraction = float(
-            position.current_size if position.current_size is not None else position.size
-        )
+        size_fraction = float(position.current_size if position.current_size is not None else position.size)
         return (size_fraction * float(basis)) / entry_price
 
     def _runtime_process_decision(
@@ -688,6 +940,7 @@ class LiveTradingEngine:
         context = self._build_runtime_context(balance, current_price, current_time)
         try:
             decision = self._runtime.process(index, context)
+            self._apply_policies_from_decision(decision)
             return decision
         except Exception as exc:
             logger.warning("Runtime decision failed in live engine at index %s: %s", index, exc)
@@ -729,9 +982,7 @@ class LiveTradingEngine:
                 timestamp=candle.name if hasattr(candle, "name") else None,
             )
         except Exception:
-            market_data = ComponentMarketData(
-                symbol=position.symbol, price=float(current_price), volume=0.0
-            )
+            market_data = ComponentMarketData(symbol=position.symbol, price=float(current_price), volume=0.0)
 
         try:
             should_exit = self._component_strategy.should_exit_position(
@@ -778,6 +1029,7 @@ class LiveTradingEngine:
             return
 
         self.is_running = True
+        self._active_symbol = symbol
         self.timeframe = timeframe  # Store the trading timeframe
         # Set base logging context for this engine run
         set_context(
@@ -839,9 +1091,7 @@ class LiveTradingEngine:
                 initial_balance=self.current_balance,  # Use current balance (might be recovered)
                 strategy_config=getattr(self.strategy, "config", {}),
                 time_exit_config=tx_cfg,
-                market_timezone=(
-                    self.time_exit_policy.market_timezone if self.time_exit_policy else None
-                ),
+                market_timezone=(self.time_exit_policy.market_timezone if self.time_exit_policy else None),
             )
 
             # Update context with session id
@@ -948,11 +1198,7 @@ class LiveTradingEngine:
                         del self.positions[position.order_id]
 
         # Wait for main thread to finish (avoid joining current thread)
-        if (
-            self.main_thread
-            and self.main_thread.is_alive()
-            and self.main_thread != threading.current_thread()
-        ):
+        if self.main_thread and self.main_thread.is_alive() and self.main_thread != threading.current_thread():
             self.main_thread.join(timeout=30)
 
         # Print final statistics
@@ -977,6 +1223,7 @@ class LiveTradingEngine:
         logger.info("Trading loop started")
         steps = 0
         cfg = get_config()
+        self._active_symbol = symbol
         try:
             heartbeat_every = int(cfg.get("ENGINE_HEARTBEAT_STEPS", "60"))
         except Exception:
@@ -1082,9 +1329,7 @@ class LiveTradingEngine:
                 # Apply trailing stop adjustments and update MFE/MAE before exit checks
                 try:
                     if safety_mode:
-                        self._update_trailing_stops_with_fallback(
-                            df, current_index, float(current_price)
-                        )
+                        self._update_trailing_stops_with_fallback(df, current_index, float(current_price))
                     else:
                         self._update_trailing_stops(df, current_index, float(current_price))
                 except Exception as e:
@@ -1134,8 +1379,11 @@ class LiveTradingEngine:
                                 overrides = None
                             indicators = self._extract_indicators(df, current_index)
                             # Correlation context for short entries
-                            short_correlation_ctx = self._build_correlation_context(
-                                symbol, df, overrides
+                            short_correlation_ctx = self._get_correlation_context(
+                                symbol,
+                                df,
+                                overrides,
+                                index=current_index,
                             )
                             if overrides and overrides.get("position_sizer"):
                                 short_fraction = self.risk_manager.calculate_position_fraction(
@@ -1151,15 +1399,11 @@ class LiveTradingEngine:
                                 short_position_size = short_fraction
                             else:
                                 # All strategies should be component-based
-                                self.logger.error(
-                                    f"Strategy {self.strategy.name} does not support component-based position sizing"
-                                )
+                                self.logger.error(f"Strategy {self.strategy.name} does not support component-based position sizing")
                                 short_position_size = 0.0
-
+                            
                             # Apply dynamic risk adjustments
-                            short_position_size = self._get_dynamic_risk_adjusted_size(
-                                short_position_size
-                            )
+                            short_position_size = self._get_dynamic_risk_adjusted_size(short_position_size)
                             if short_position_size > 0:
                                 if overrides and (
                                     ("stop_loss_pct" in overrides)
@@ -1180,12 +1424,8 @@ class LiveTradingEngine:
                                         )
                                 else:
                                     # All strategies should be component-based
-                                    self.logger.error(
-                                        f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
-                                    )
-                                    short_stop_loss = (
-                                        current_price * 1.05
-                                    )  # Default 5% stop for short
+                                    self.logger.error(f"Strategy {self.strategy.name} does not support component-based stop loss calculation")
+                                    short_stop_loss = current_price * 1.05  # Default 5% stop for short
                                     short_take_profit = current_price * (
                                         1 - getattr(self.strategy, "take_profit_pct", 0.04)
                                     )
@@ -1305,9 +1545,7 @@ class LiveTradingEngine:
             logger.debug(f"Context readiness check failed: {e}")
             return False, "readiness_check_error"
 
-    def _update_trailing_stops_with_fallback(
-        self, df: pd.DataFrame, index: int, current_price: float
-    ):
+    def _update_trailing_stops_with_fallback(self, df: pd.DataFrame, index: int, current_price: float):
         """Apply trailing stops using ATR if available; fallback to fixed pct when missing."""
         try:
             atr_available = "atr" in df.columns and not pd.isna(df["atr"].iloc[index])
@@ -1320,9 +1558,7 @@ class LiveTradingEngine:
                     trailing_distance = float(DEFAULT_FALLBACK_TRAILING_PCT)
 
                 try:
-                    self.trailing_stop_policy.apply_trailing_update(
-                        position, current_price, trailing_distance
-                    )
+                    self.trailing_stop_policy.apply_trailing_update(position, current_price, trailing_distance)
                 except Exception:
                     # Approximate with direct stop adjustment
                     if position.side == PositionSide.LONG:
@@ -1336,9 +1572,7 @@ class LiveTradingEngine:
         except Exception as e:
             logger.debug(f"Trailing fallback failed: {e}")
 
-    def _check_protective_exits_only(
-        self, df: pd.DataFrame, current_index: int, current_price: float
-    ):
+    def _check_protective_exits_only(self, df: pd.DataFrame, current_index: int, current_price: float):
         """Enforce only non-strategy exits: hard SL/TP and time exits."""
         try:
             positions_to_close: list[tuple[Any, str]] = []
@@ -1414,9 +1648,7 @@ class LiveTradingEngine:
 
         return df
 
-    def _build_correlation_context(
-        self, symbol: str, df: pd.DataFrame, overrides: dict | None
-    ) -> dict | None:
+    def _build_correlation_context(self, symbol: str, df: pd.DataFrame, overrides: dict | None) -> dict | None:
         """
         Build correlation context dict for risk manager sizing, including corr matrix and optional exposure override.
         Returns None if correlation engine is unavailable or an error occurs.
@@ -1461,11 +1693,7 @@ class LiveTradingEngine:
                 "engine": self.correlation_engine,
                 "candidate_symbol": symbol,
                 "corr_matrix": corr_matrix,
-                "max_exposure_override": (
-                    overrides.get("correlation_control", {}).get("max_correlated_exposure")
-                    if overrides
-                    else None
-                ),
+                "max_exposure_override": overrides.get("correlation_control", {}).get("max_correlated_exposure") if overrides else None,
             }
         except Exception:
             return None
@@ -1588,15 +1816,11 @@ class LiveTradingEngine:
                     market_data = ComponentMarketData(
                         symbol=position.symbol,
                         price=float(current_price),
-                        volume=float(
-                            runtime_candle.get("volume", 0.0)
-                            if hasattr(runtime_candle, "get")
-                            else 0.0
-                        ),
+                        volume=float(runtime_candle.get("volume", 0.0) if hasattr(runtime_candle, "get") else 0.0),
                         timestamp=runtime_candle.name if hasattr(runtime_candle, "name") else None,
                     )
                     regime = runtime_decision.regime if runtime_decision else None
-
+                    
                     if self.strategy.should_exit_position(component_position, market_data, regime):
                         should_exit = True
                         exit_reason = "Strategy signal"
@@ -1604,25 +1828,15 @@ class LiveTradingEngine:
                     self.logger.debug(f"Component exit check failed: {e}")
             else:
                 # All strategies should be component-based
-                self.logger.warning(
-                    f"Strategy {self.strategy.name} does not support component-based exit checks"
-                )
+                self.logger.warning(f"Strategy {self.strategy.name} does not support component-based exit checks")
 
             # Check stop loss
-            if (
-                not should_exit
-                and position.stop_loss
-                and self._check_stop_loss(position, current_price)
-            ):
+            if not should_exit and position.stop_loss and self._check_stop_loss(position, current_price):
                 should_exit = True
                 exit_reason = "Stop loss"
 
             # Check take profit
-            elif (
-                not should_exit
-                and position.take_profit
-                and self._check_take_profit(position, current_price)
-            ):
+            elif not should_exit and position.take_profit and self._check_take_profit(position, current_price):
                 should_exit = True
                 exit_reason = "Take profit"
 
@@ -1658,39 +1872,23 @@ class LiveTradingEngine:
                     f"position_age_{(datetime.utcnow() - position.entry_time).total_seconds():.0f}s",
                     f"entry_price_{position.entry_price:.2f}",
                 ]
-
+                
                 # Add regime context if available from TradingDecision
-                if (
-                    runtime_decision
-                    and hasattr(runtime_decision, "regime")
-                    and runtime_decision.regime
-                ):
+                if runtime_decision and hasattr(runtime_decision, 'regime') and runtime_decision.regime:
                     regime = runtime_decision.regime
-                    log_reasons.append(
-                        f"regime_trend_{regime.trend.value if hasattr(regime.trend, 'value') else regime.trend}"
-                    )
-                    log_reasons.append(
-                        f"regime_volatility_{regime.volatility.value if hasattr(regime.volatility, 'value') else regime.volatility}"
-                    )
+                    log_reasons.append(f"regime_trend_{regime.trend.value if hasattr(regime.trend, 'value') else regime.trend}")
+                    log_reasons.append(f"regime_volatility_{regime.volatility.value if hasattr(regime.volatility, 'value') else regime.volatility}")
                     log_reasons.append(f"regime_confidence_{regime.confidence:.2f}")
-
+                
                 # Add risk metrics if available from TradingDecision
-                if (
-                    runtime_decision
-                    and hasattr(runtime_decision, "risk_metrics")
-                    and runtime_decision.risk_metrics
-                ):
+                if runtime_decision and hasattr(runtime_decision, 'risk_metrics') and runtime_decision.risk_metrics:
                     for key, value in runtime_decision.risk_metrics.items():
                         if isinstance(value, int | float):
                             log_reasons.append(f"risk_{key}_{value:.4f}")
-
+                
                 # Extract signal confidence from TradingDecision if available
                 confidence_score = indicators.get("prediction_confidence", 0.5)
-                if (
-                    runtime_decision
-                    and hasattr(runtime_decision, "signal")
-                    and runtime_decision.signal
-                ):
+                if runtime_decision and hasattr(runtime_decision, 'signal') and runtime_decision.signal:
                     confidence_score = runtime_decision.signal.confidence
 
                 self.db_manager.log_strategy_execution(
@@ -1758,9 +1956,8 @@ class LiveTradingEngine:
             # Note: runtime_decision should already be populated if this is a component strategy
             # This branch handles direct ComponentStrategy usage without StrategyRuntime wrapper
             try:
-                decision = self.strategy.process_candle(
-                    df, current_index, self.current_balance, None
-                )
+                decision = self.strategy.process_candle(df, current_index, self.current_balance, None)
+                self._apply_policies_from_decision(decision)
 
                 notional_size = float(decision.position_size or 0.0)
                 balance = float(self.current_balance or 0.0)
@@ -1790,7 +1987,7 @@ class LiveTradingEngine:
         if entry_signal and not use_runtime:
             # Component strategies supply their own sizing. Retain correlation context computation
             # for downstream consumers that expect it to be populated as part of the entry check.
-            self._build_correlation_context(symbol, df, None)
+            self._get_correlation_context(symbol, df, None, index=current_index)
 
         if position_size > 0:
             position_size = self._get_dynamic_risk_adjusted_size(position_size)
@@ -1798,12 +1995,14 @@ class LiveTradingEngine:
         if self.db_manager:
             # Prepare logging data - include TradingDecision data if available
             log_reasons = [
+                "runtime_entry"
+                if use_runtime
+                else "entry_conditions_met" if entry_signal else "entry_conditions_not_met",
                 (
-                    "runtime_entry"
-                    if use_runtime
-                    else "entry_conditions_met" if entry_signal else "entry_conditions_not_met"
+                    f"position_size_{position_size:.4f}"
+                    if position_size > 0
+                    else "no_position_size"
                 ),
-                (f"position_size_{position_size:.4f}" if position_size > 0 else "no_position_size"),
                 f"max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}",
                 (
                     f"enter_short_{bool(getattr(runtime_decision, 'metadata', {}).get('enter_short'))}"
@@ -1811,28 +2010,20 @@ class LiveTradingEngine:
                     else "enter_short_n/a"
                 ),
             ]
-
+            
             # Add regime context if available from TradingDecision
-            if runtime_decision and hasattr(runtime_decision, "regime") and runtime_decision.regime:
+            if runtime_decision and hasattr(runtime_decision, 'regime') and runtime_decision.regime:
                 regime = runtime_decision.regime
-                log_reasons.append(
-                    f"regime_trend_{regime.trend.value if hasattr(regime.trend, 'value') else regime.trend}"
-                )
-                log_reasons.append(
-                    f"regime_volatility_{regime.volatility.value if hasattr(regime.volatility, 'value') else regime.volatility}"
-                )
+                log_reasons.append(f"regime_trend_{regime.trend.value if hasattr(regime.trend, 'value') else regime.trend}")
+                log_reasons.append(f"regime_volatility_{regime.volatility.value if hasattr(regime.volatility, 'value') else regime.volatility}")
                 log_reasons.append(f"regime_confidence_{regime.confidence:.2f}")
-
+            
             # Add risk metrics if available from TradingDecision
-            if (
-                runtime_decision
-                and hasattr(runtime_decision, "risk_metrics")
-                and runtime_decision.risk_metrics
-            ):
+            if runtime_decision and hasattr(runtime_decision, 'risk_metrics') and runtime_decision.risk_metrics:
                 for key, value in runtime_decision.risk_metrics.items():
                     if isinstance(value, int | float):
                         log_reasons.append(f"risk_{key}_{value:.4f}")
-
+            
             self.db_manager.log_strategy_execution(
                 strategy_name=self._strategy_name(),
                 symbol=symbol,
@@ -1840,19 +2031,15 @@ class LiveTradingEngine:
                 action_taken=(
                     "opened_long"
                     if entry_signal and position_size > 0 and entry_side == PositionSide.LONG
-                    else (
-                        "opened_short"
-                        if entry_signal and position_size > 0 and entry_side == PositionSide.SHORT
-                        else "no_action"
-                    )
+                    else "opened_short"
+                    if entry_signal and position_size > 0 and entry_side == PositionSide.SHORT
+                    else "no_action"
                 ),
                 price=current_price,
                 timeframe="1m",
                 signal_strength=runtime_strength if use_runtime else (1.0 if entry_signal else 0.0),
                 confidence_score=(
-                    runtime_confidence
-                    if use_runtime
-                    else indicators.get("prediction_confidence", 0.5)
+                    runtime_confidence if use_runtime else indicators.get("prediction_confidence", 0.5)
                 ),
                 indicators=indicators,
                 sentiment_data=sentiment_data if sentiment_data else None,
@@ -1893,17 +2080,15 @@ class LiveTradingEngine:
             try:
                 # Create a signal from the decision
                 signal = Signal(
-                    direction=(
-                        SignalDirection.BUY
-                        if entry_side == PositionSide.LONG
-                        else SignalDirection.SELL
-                    ),
+                    direction=SignalDirection.BUY if entry_side == PositionSide.LONG else SignalDirection.SELL,
                     strength=runtime_strength,
                     confidence=runtime_confidence,
-                    metadata={},
+                    metadata={}
                 )
                 stop_loss = self.strategy.get_stop_loss_price(
-                    float(current_price), signal, None  # regime context
+                    float(current_price),
+                    signal,
+                    None  # regime context
                 )
             except Exception as e:
                 self.logger.debug(f"Component stop loss calculation failed: {e}")
@@ -1942,9 +2127,7 @@ class LiveTradingEngine:
                     take_profit = current_price * (1 + overrides.get("take_profit_pct", 0.04))
             else:
                 # All strategies should be component-based
-                self.logger.error(
-                    f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
-                )
+                self.logger.error(f"Strategy {self.strategy.name} does not support component-based stop loss calculation")
                 stop_loss = current_price * 0.95  # Default 5% stop for long
                 take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
             entry_side = PositionSide.LONG
@@ -2125,9 +2308,7 @@ class LiveTradingEngine:
                 current_price = float(position.entry_price)
 
             # Calculate P&L based on CURRENT remaining size
-            fraction = float(
-                position.current_size if position.current_size is not None else position.size
-            )
+            fraction = float(position.current_size if position.current_size is not None else position.size)
             if position.side == PositionSide.LONG:
                 pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
             else:
@@ -2239,9 +2420,7 @@ class LiveTradingEngine:
                 # Best-effort cleanup; ignore secondary errors
                 pass
 
-    def _check_partial_and_scale_ops(
-        self, df: pd.DataFrame, current_index: int, current_price: float
-    ):
+    def _check_partial_and_scale_ops(self, df: pd.DataFrame, current_index: int, current_price: float):
         """Evaluate partial exits and scale-ins for open positions."""
         if not self.partial_manager:
             return
@@ -2271,18 +2450,14 @@ class LiveTradingEngine:
                 cash_fraction = min(delta, state.current_size)
                 if cash_fraction <= 0:
                     continue
-                self._execute_partial_exit(
-                    position, cash_fraction, current_price, act["target_level"], exec_frac
-                )
+                self._execute_partial_exit(position, cash_fraction, current_price, act["target_level"], exec_frac)
                 # Update local state for cascade checks in the same tick
                 state.current_size = max(0.0, state.current_size - cash_fraction)
                 state.partial_exits_taken += 1
                 state.last_partial_exit_price = current_price
 
             # Scale-in (only if still open and under max)
-            scale = self.partial_manager.check_scale_in_opportunity(
-                state, current_price, indicators
-            )
+            scale = self.partial_manager.check_scale_in_opportunity(state, current_price, indicators)
             if scale is not None:
                 add_frac = float(scale["size"])  # fraction of ORIGINAL size
                 if add_frac > 0:
@@ -2291,22 +2466,9 @@ class LiveTradingEngine:
                     max_additional = max(0.0, self.max_position_size - float(position.size))
                     add_effective = min(delta_add, max_additional)
                     if add_effective > 0:
-                        self._execute_scale_in(
-                            position,
-                            add_effective,
-                            current_price,
-                            scale["threshold_level"],
-                            add_frac,
-                        )
+                        self._execute_scale_in(position, add_effective, current_price, scale["threshold_level"], add_frac)
 
-    def _execute_partial_exit(
-        self,
-        position: Position,
-        delta_fraction: float,
-        price: float,
-        target_level: int,
-        fraction_of_original: float,
-    ):
+    def _execute_partial_exit(self, position: Position, delta_fraction: float, price: float, target_level: int, fraction_of_original: float):
         # Adjust runtime position sizes
         if position.original_size is None:
             position.original_size = position.size
@@ -2334,9 +2496,7 @@ class LiveTradingEngine:
         # Risk manager: reduce exposure and daily risk
         if self.risk_manager:
             try:
-                self.risk_manager.adjust_position_after_partial_exit(
-                    position.symbol, delta_fraction
-                )
+                self.risk_manager.adjust_position_after_partial_exit(position.symbol, delta_fraction)
             except Exception as e:
                 logger.debug(f"Risk manager partial-exit accounting failed: {e}")
 
@@ -2357,14 +2517,7 @@ class LiveTradingEngine:
         if position.current_size <= 1e-9:
             self._close_position(position, reason=f"Partial exits complete @ level {target_level}")
 
-    def _execute_scale_in(
-        self,
-        position: Position,
-        delta_fraction: float,
-        price: float,
-        threshold_level: int,
-        fraction_of_original: float,
-    ):
+    def _execute_scale_in(self, position: Position, delta_fraction: float, price: float, threshold_level: int, fraction_of_original: float):
         # Increase runtime size within caps
         if position.original_size is None:
             position.original_size = position.size
@@ -2556,7 +2709,9 @@ class LiveTradingEngine:
 
     def _log_status(self, symbol: str, current_price: float):
         """Log current trading status"""
-        total_unrealized = sum(float(pos.unrealized_pnl) for pos in self.positions.values())
+        total_unrealized = sum(
+            float(pos.unrealized_pnl) for pos in self.positions.values()
+        )
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
 
         logger.info(
@@ -2908,11 +3063,7 @@ class LiveTradingEngine:
     def _build_trailing_policy(self) -> TrailingStopPolicy | None:
         """Construct trailing policy from risk parameters and strategy overrides if available."""
         try:
-            overrides = (
-                self.strategy.get_risk_overrides()
-                if hasattr(self.strategy, "get_risk_overrides")
-                else None
-            )
+            overrides = self.strategy.get_risk_overrides() if hasattr(self.strategy, "get_risk_overrides") else None
         except Exception:
             overrides = None
         cfg = None
@@ -2923,8 +3074,8 @@ class LiveTradingEngine:
             activation = (cfg.get("activation_threshold") if cfg else None) or (
                 params.trailing_activation_threshold if params else None
             )
-            dist_pct = cfg.get("trailing_distance_pct") if cfg else None
-            atr_mult = cfg.get("trailing_distance_atr_mult") if cfg else None
+            dist_pct = (cfg.get("trailing_distance_pct") if cfg else None)
+            atr_mult = (cfg.get("trailing_distance_atr_mult") if cfg else None)
             # Fallback to params trailing_atr_multiplier if not provided via overrides
             if atr_mult is None and params is not None:
                 atr_mult = params.trailing_atr_multiplier
@@ -2934,31 +3085,17 @@ class LiveTradingEngine:
             be_buf = (cfg.get("breakeven_buffer") if cfg else None) or (
                 params.breakeven_buffer if params else None
             )
-            if activation and (
-                dist_pct
-                or atr_mult
-                or (params and (params.trailing_distance_pct or params.trailing_atr_multiplier))
-            ):
+            if activation and (dist_pct or atr_mult or (params and (params.trailing_distance_pct or params.trailing_atr_multiplier))):
                 return TrailingStopPolicy(
                     activation_threshold=float(activation),
-                    trailing_distance_pct=(
-                        float(dist_pct)
-                        if dist_pct is not None
-                        else (
-                            float(params.trailing_distance_pct)
-                            if params and params.trailing_distance_pct is not None
-                            else None
-                        )
-                    ),
+                    trailing_distance_pct=float(dist_pct) if dist_pct is not None else (float(params.trailing_distance_pct) if params and params.trailing_distance_pct is not None else None),
                     atr_multiplier=float(atr_mult) if atr_mult is not None else None,
                     breakeven_threshold=float(be_thr) if be_thr is not None else 0.02,
                     breakeven_buffer=float(be_buf) if be_buf is not None else 0.001,
                 )
         return None
 
-    def _update_trailing_stops(
-        self, df: pd.DataFrame, current_index: int, current_price: float
-    ) -> None:
+    def _update_trailing_stops(self, df: pd.DataFrame, current_index: int, current_price: float) -> None:
         """Apply trailing stop policy to open positions and persist any changes."""
         if not self.trailing_stop_policy or not self.positions:
             return
@@ -2985,11 +3122,7 @@ class LiveTradingEngine:
                 breakeven_triggered=bool(pos.breakeven_triggered),
             )
             changed = False
-            if new_stop is not None and (
-                existing_sl is None
-                or (side_str == "long" and new_stop > float(existing_sl))
-                or (side_str == "short" and new_stop < float(existing_sl))
-            ):
+            if new_stop is not None and (existing_sl is None or (side_str == "long" and new_stop > float(existing_sl)) or (side_str == "short" and new_stop < float(existing_sl))):
                 pos.stop_loss = new_stop
                 pos.trailing_stop_price = new_stop
                 changed = True
@@ -3001,9 +3134,7 @@ class LiveTradingEngine:
             if changed:
                 # Persist to database if known
                 try:
-                    position_db_id = (
-                        self.position_db_ids.get(pos.order_id) if pos.order_id else None
-                    )
+                    position_db_id = self.position_db_ids.get(pos.order_id) if pos.order_id else None
                     if position_db_id is not None:
                         self.db_manager.update_position(
                             position_id=position_db_id,

@@ -336,7 +336,7 @@ Strategy orchestration with versioning capabilities for A/B testing and rollback
 
 **Usage**:
 ```python
-from src.strategies.components import StrategyManager
+    from src.strategies.components import ComponentStrategyManager
 
 # Create strategy manager
 manager = StrategyManager(
@@ -683,7 +683,7 @@ for i, result in enumerate(results, 1):
 ### Example 3: Strategy Version Management
 
 ```python
-from src.strategies.components import StrategyManager, StrategyRegistry
+    from src.strategies.components import ComponentStrategyManager, StrategyRegistry
 
 # Create strategy manager
 manager = StrategyManager(

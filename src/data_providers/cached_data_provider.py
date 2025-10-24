@@ -187,6 +187,30 @@ class CachedDataProvider(DataProvider):
 
         return ranges
 
+    @staticmethod
+    def _get_timeframe_timedelta(timeframe: str) -> Optional[timedelta]:
+        """Convert timeframe string (e.g. ``1h``) to a ``timedelta``."""
+
+        if not timeframe:
+            return None
+
+        try:
+            unit = timeframe[-1].lower()
+            value = int(timeframe[:-1]) if len(timeframe) > 1 else 1
+        except (ValueError, TypeError):
+            return None
+
+        if unit == "m":
+            return timedelta(minutes=value)
+        if unit == "h":
+            return timedelta(hours=value)
+        if unit == "d":
+            return timedelta(days=value)
+        if unit == "w":
+            return timedelta(weeks=value)
+
+        return None
+
     def _load_year_data(
         self, symbol: str, timeframe: str, year: int, year_start: datetime, year_end: datetime
     ) -> Optional[pd.DataFrame]:
@@ -225,8 +249,14 @@ class CachedDataProvider(DataProvider):
                     cache_start = cached_data.index.min()
                     cache_end = cached_data.index.max()
 
-                    # Check if cached data covers the requested range
-                    if cache_start <= year_start and cache_end >= year_end:
+                    # Expand the cached end by one timeframe interval to account for
+                    # candle timestamps representing the *start* of the interval.
+                    timeframe_delta = self._get_timeframe_timedelta(timeframe)
+                    effective_cache_end = cache_end
+                    if timeframe_delta is not None:
+                        effective_cache_end = cache_end + timeframe_delta - timedelta(seconds=1)
+
+                    if cache_start <= year_start and effective_cache_end >= year_end:
                         # Cached data fully covers the requested range
                         mask = (cached_data.index >= year_start) & (cached_data.index <= year_end)
                         filtered_data = cached_data[mask]
