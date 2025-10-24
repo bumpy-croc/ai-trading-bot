@@ -196,13 +196,7 @@ def create_app() -> "Flask":
     app = Flask(__name__)
     app.config["SECRET_KEY"] = app_secret_key
 
-    # SEC-008: Initialize CSRF Protection
-    csrf.init_app(app)
-
-    # SEC-009: Initialize Rate Limiting
-    limiter.init_app(app)
-
-    # Register global security extensions
+    # SEC-008/009: Register global security extensions once
     csrf.init_app(app)
     limiter.init_app(app)
 
