@@ -19,6 +19,7 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 from src.strategies import (
     create_ensemble_weighted_strategy,
     create_ml_adaptive_strategy,
+    create_ml_basic_simple_strategy,
     create_ml_basic_strategy,
     create_ml_sentiment_strategy,
     create_momentum_leverage_strategy,
@@ -33,6 +34,7 @@ def _load_strategy(strategy_name: str):
     # Define available strategies with their import paths and classes
     available_strategies = {
         "ml_basic": create_ml_basic_strategy,
+        "ml_basic_simple": create_ml_basic_simple_strategy,
         "ml_sentiment": create_ml_sentiment_strategy,
         "ml_adaptive": create_ml_adaptive_strategy,
         "ensemble_weighted": create_ensemble_weighted_strategy,

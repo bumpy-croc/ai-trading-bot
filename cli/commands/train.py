@@ -6,24 +6,18 @@ import os
 
 # * Conditionally import training commands only in non-Railway environments
 def is_railway_environment() -> bool:
-    """
-    Check if running in any Railway environment (development, staging, or production).
+    """Detect Railway deployments with a local override for training."""
 
-    Returns:
-        True if running in any Railway environment
-    """
+    if os.getenv("ATB_ALLOW_LOCAL_TRAINING") == "1":
+        return False
+
     try:
-        # Use the existing Railway provider for robust environment detection
         from src.config.providers.railway_provider import RailwayProvider
 
         railway_provider = RailwayProvider()
-
-        # If Railway provider is available, we're in a Railway environment
         return railway_provider.is_available()
 
     except ImportError:
-        # If Railway provider is not available, fall back to environment variables
-        # This should rarely happen but provides a safety net
         railway_indicators = [
             "RAILWAY_DEPLOYMENT_ID",
             "RAILWAY_PROJECT_ID",
