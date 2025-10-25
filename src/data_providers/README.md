@@ -1,6 +1,6 @@
 # Data Providers
 
-> **Last Updated**: 2025-10-24  
+> **Last Updated**: 2025-10-25  
 > **Related Documentation**: See [docs/data_pipeline.md](../../docs/data_pipeline.md) for detailed usage
 
 Abstractions and implementations for market and sentiment data.

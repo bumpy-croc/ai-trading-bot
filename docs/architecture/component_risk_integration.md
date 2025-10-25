@@ -47,7 +47,7 @@ This note summarises recommended architectural adjustments for aligning `positio
 
 - Add module docstrings describing the division of responsibilities and the shared helpers.
 - Update any developer onboarding docs referencing the old `StrategyManager` name.
-- Provide a short migration checklist in `docs/architecture/strategy_management.md` (or similar) so teams know which imports to update and how to plug the new helpers into custom strategies.
+- Consider documenting the migration path (recommended location: `docs/architecture/strategy_management.md`) so teams know which imports to update and how to plug the new helpers into custom strategies.
 
 ## Testing Implications
 
