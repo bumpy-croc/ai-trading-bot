@@ -9,9 +9,9 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 ## Progress
 
 - [x] (2025-10-25 19:10Z) Assessed current indicator usage across prediction, strategies, risk, dashboards, and trading engines; drafted this ExecPlan.
-- [ ] Establish `src/tech` package skeleton with `indicators`, `features`, and `adapters` subpackages plus re-exporting API, each with a README explaining its purpose.
-- [ ] Migrate existing indicator math from `src/indicators/technical.py` into `src/tech/indicators/core.py`, keeping backwards-compatible shims until all imports move.
-- [ ] Relocate duplicated extraction helpers from `src/trading/shared/indicators.py` and `src/backtesting/utils.py` into `src/tech/adapters/row_extractors.py` and update consumers.
+- [x] (2025-10-25 19:45Z) Established `src/tech` package skeleton with `indicators`, `features`, and `adapters` subpackages plus README files.
+- [x] (2025-10-25 20:05Z) Migrated indicator math into `src/tech/indicators/core.py` with shims under `src/indicators`.
+- [x] (2025-10-25 20:25Z) Relocated indicator/sentiment extraction helpers into `src/tech/adapters/row_extractors.py` and wired trading/backtesting consumers to it.
 - [ ] Update prediction feature extractors, risk manager, strategies, dashboards, and trading/backtesting engines to import from the new API; remove deprecated modules once tests pass.
 - [ ] Refresh documentation/tests (indicator README, prediction docs, unit tests) to reflect the new layout and ensure `make test` succeeds.
 

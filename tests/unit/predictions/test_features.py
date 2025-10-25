@@ -15,7 +15,7 @@ from src.prediction.features.market import MarketFeatureExtractor
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.schemas import TECHNICAL_FEATURES_SCHEMA
 from src.prediction.features.sentiment import SentimentFeatureExtractor
-from src.prediction.features.technical import TechnicalFeatureExtractor
+from src.tech.features.technical import TechnicalFeatureExtractor
 
 
 class TestTechnicalFeatureExtractor:
