@@ -21,7 +21,7 @@ from src.config.constants import (
     DEFAULT_RSI_PERIOD,
     DEFAULT_SEQUENCE_LENGTH,
 )
-from src.indicators.technical import (
+from src.tech.indicators.core import (
     calculate_atr,
     calculate_bollinger_bands,
     calculate_macd,

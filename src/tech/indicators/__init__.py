@@ -1,3 +1,5 @@
 """Low-level technical indicator functions shared across subsystems."""
 
-__all__: list[str] = []
+from . import core
+
+__all__ = ["core"]

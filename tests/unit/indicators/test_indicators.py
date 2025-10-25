@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.indicators.technical import (
+from src.tech.indicators.core import (
     calculate_atr,
     calculate_bollinger_bands,
     calculate_ema,
