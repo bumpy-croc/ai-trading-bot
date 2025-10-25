@@ -13,12 +13,14 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 - [x] (2025-10-25 20:05Z) Migrated indicator math into `src/tech/indicators/core.py` with shims under `src/indicators`.
 - [x] (2025-10-25 20:25Z) Relocated indicator/sentiment extraction helpers into `src/tech/adapters/row_extractors.py` and wired trading/backtesting consumers to it.
 - [x] (2025-10-25 20:50Z) Updated prediction feature extractors, risk/risk managers, dashboards, and trading/backtesting integrations to import from the `src.tech` API while leaving shims for compatibility.
-- [ ] Refresh documentation/tests (indicator README, prediction docs, unit tests) to reflect the new layout and ensure `make test` succeeds.
+- [ ] Refresh documentation/tests (indicator README updated, prediction docs refreshed; `make test` blocked on Python 3.9 due to union-type usage in multiple modules such as `src/prediction/models/registry.py`).
 
 ## Surprises & Discoveries
 
 - Observation: Moving `TechnicalFeatureExtractor` required relocating the base class and schemas into `src.tech.features` to avoid circular imports.
   Evidence: See commits 63a988a and related shims under `src/prediction/features/*` that now forward to the shared package (2025-10-25).
+- Observation: Test suite cannot run under the repo's available Python 3.9 interpreter because multiple modules (e.g., `src/prediction/models/registry.py`) use `list[...] | None` union syntax without `from __future__ import annotations`.
+  Evidence: `python3 -m pytest -n 4` fails with `TypeError: unsupported operand type(s) for |: 'types.GenericAlias' and 'NoneType'` before our changes (2025-10-25).
 
 ## Decision Log
 
