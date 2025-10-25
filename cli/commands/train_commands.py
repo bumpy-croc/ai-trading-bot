@@ -27,6 +27,7 @@ from tensorflow.keras.layers import (
 )
 from tensorflow.keras.models import Model
 
+from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.utils.symbol_factory import SymbolFactory
 
 
@@ -707,13 +708,202 @@ def train_model_main(args):
         return 1
 
 
+def _prepare_price_only_sequences(
+    df: pd.DataFrame,
+    sequence_length: int,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    extractor = PriceOnlyFeatureExtractor(normalization_window=sequence_length)
+    enriched = extractor.extract(df.copy())
+    feature_cols = [
+        "close_normalized",
+        "volume_normalized",
+        "high_normalized",
+        "low_normalized",
+        "open_normalized",
+    ]
+    missing = [col for col in feature_cols if col not in enriched.columns]
+    if missing:
+        raise ValueError(f"Missing normalized price columns: {missing}")
+
+    enriched = enriched.dropna(subset=feature_cols)
+    if len(enriched) <= sequence_length:
+        raise ValueError("Insufficient rows after normalization for sequence construction")
+
+    X_list: list[np.ndarray] = []
+    y_list: list[float] = []
+    values = enriched[feature_cols].to_numpy(dtype=np.float32)
+    targets = enriched["close_normalized"].to_numpy(dtype=np.float32)
+    for idx in range(sequence_length, len(enriched)):
+        X_list.append(values[idx - sequence_length : idx])
+        y_list.append(targets[idx])
+
+    X = np.stack(X_list).astype(np.float32)
+    y = np.array(y_list, dtype=np.float32)
+    return X, y, feature_cols
+
+
+def _build_price_only_model(sequence_length: int, num_features: int) -> tf.keras.Model:
+    inputs = tf.keras.layers.Input(shape=(sequence_length, num_features))
+    x = tf.keras.layers.LSTM(128, return_sequences=True)(inputs)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    x = tf.keras.layers.LSTM(64)(x)
+    x = tf.keras.layers.Dense(64, activation="relu")(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    outputs = tf.keras.layers.Dense(1, activation="sigmoid")(x)
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        loss="mse",
+        metrics=[tf.keras.metrics.RootMeanSquaredError(name="rmse")],
+    )
+    return model
+
+
+def _save_price_bundle(
+    model: tf.keras.Model,
+    metadata: dict,
+    output_dir: Path,
+    symbol: str,
+    version_id: str,
+):
+    bundle_dir = output_dir / symbol / "basic" / version_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    keras_path = bundle_dir / "model.keras"
+    model.save(keras_path)
+
+    onnx_path = bundle_dir / "model.onnx"
+    convert_to_onnx(model, str(onnx_path))
+
+    metadata_path = bundle_dir / "metadata.json"
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, default=str)
+
+    schema = {
+        "sequence_length": metadata["sequence_length"],
+        "features": [
+            {"name": "close_normalized", "required": True},
+            {"name": "volume_normalized", "required": True},
+            {"name": "high_normalized", "required": True},
+            {"name": "low_normalized", "required": True},
+            {"name": "open_normalized", "required": True},
+        ],
+    }
+    with open(bundle_dir / "feature_schema.json", "w", encoding="utf-8") as f:
+        json.dump(schema, f, indent=2)
+
+    latest_link = bundle_dir.parent / "latest"
+    if latest_link.exists() or latest_link.is_symlink():
+        try:
+            latest_link.unlink()
+        except OSError:
+            pass
+    latest_link.symlink_to(version_id)
+
+    print(f"✅ Saved bundle to {bundle_dir}")
+
+
 def train_price_model_main(args):
-    """Train price-only model"""
-    # Simplified version for price-only training
+    """Train price-only model with 5 normalized channels."""
+
     print(f"🚀 Price-Only Model Training for {args.symbol}")
-    # Implementation would be similar to train_model_main but without sentiment
-    print("Price-only training not yet implemented")
-    return 1
+
+    sequence_length = 120
+    try:
+        start_date = datetime.strptime(args.start_date, "%Y-%m-%d")
+        end_date = datetime.strptime(args.end_date, "%Y-%m-%d")
+    except ValueError as exc:
+        print(f"❌ Invalid date: {exc}")
+        return 1
+
+    if start_date >= end_date:
+        print("❌ start-date must be before end-date")
+        return 1
+
+    start_str = start_date.strftime("%Y-%m-%dT00:00:00Z")
+    end_str = end_date.strftime("%Y-%m-%dT23:59:59Z")
+
+    try:
+        price_df = get_price_data(args.symbol, args.timeframe, start_str, end_str)
+    except Exception as exc:
+        print(f"❌ Failed to download price data: {exc}")
+        return 1
+
+    if price_df.empty:
+        print("❌ No price data downloaded")
+        return 1
+
+    price_df = price_df.sort_index()
+    price_df = price_df.astype(float)
+
+    try:
+        X, y, feature_cols = _prepare_price_only_sequences(price_df, sequence_length)
+    except Exception as exc:
+        print(f"❌ Failed to prepare sequences: {exc}")
+        return 1
+
+    split_idx = int(len(X) * 0.8)
+    X_train, X_val = X[:split_idx], X[split_idx:]
+    y_train, y_val = y[:split_idx], y[split_idx:]
+
+    print(f"Training samples: {len(X_train)}, Validation samples: {len(X_val)}")
+
+    model = _build_price_only_model(sequence_length, len(feature_cols))
+
+    history = model.fit(
+        X_train,
+        y_train,
+        validation_data=(X_val, y_val),
+        epochs=100,
+        batch_size=256,
+        callbacks=[
+            callbacks.EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True),
+            callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=0.5, patience=5, min_lr=1e-5, verbose=1
+            ),
+        ],
+        verbose=1,
+    )
+
+    eval_results = evaluate_model_performance(model, X_train, y_train, X_val, y_val)
+
+    version_id = datetime.utcnow().strftime("%Y-%m-%d_%Hh_v1")
+    metadata = {
+        "model_id": f"{args.symbol.lower()}_price_v3",
+        "symbol": args.symbol,
+        "timeframe": args.timeframe,
+        "model_type": "basic",
+        "version_id": version_id,
+        "framework": "onnx",
+        "model_file": "model.onnx",
+        "created_at": datetime.utcnow().isoformat(),
+        "sequence_length": sequence_length,
+        "feature_names": feature_cols,
+        "feature_strategy": "price_only_minmax",
+        "training_params": {
+            "epochs": len(history.history.get("loss", [])),
+            "batch_size": 256,
+            "timeframe": args.timeframe,
+            "start_date": args.start_date,
+            "end_date": args.end_date,
+        },
+        "evaluation_results": eval_results,
+        "dataset": {
+            "row_count": int(len(price_df)),
+            "train_samples": int(len(X_train)),
+            "val_samples": int(len(X_val)),
+        },
+    }
+
+    registry_root = Path(__file__).parent.parent.parent / "src" / "ml" / "models"
+    try:
+        _save_price_bundle(model, metadata, registry_root, args.symbol, version_id)
+    except Exception as exc:
+        print(f"❌ Failed to save model bundle: {exc}")
+        return 1
+
+    print("✅ Price-only training complete")
+    return 0
 
 
 def train_price_only_model_main(args):
