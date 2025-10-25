@@ -33,7 +33,7 @@ Successfully implemented and tested all **3 critical security vulnerabilities**:
 - Require environment variable to be explicitly set
 - Exit with clear error if missing
 
-**Files:** `src/database_manager/app.py` (new helper function `_get_admin_credentials()`)
+**Files:** `src/database/admin_ui/app.py` (new helper function `_get_admin_credentials()`)
 
 ### SEC-002: Plain-Text Password Comparison  
 **Before:** `if password == ADMIN_PASSWORD:` (plain-text comparison)
@@ -45,7 +45,7 @@ Successfully implemented and tested all **3 critical security vulnerabilities**:
 - Replace plain comparison with `check_password_hash()`
 - Provides timing-attack resistant comparison
 
-**Files:** `src/database_manager/app.py` (lines with password authentication)
+**Files:** `src/database/admin_ui/app.py` (lines with password authentication)
 
 ### SEC-003: Inconsistent SECRET_KEY Handling
 **Before:** Mixed logic with early exits and fallback code in exception handler
@@ -58,7 +58,7 @@ Successfully implemented and tested all **3 critical security vulnerabilities**:
 - Production enforcement maintained
 - Development fallback preserved
 
-**Files:** `src/database_manager/app.py` (new helper function `_ensure_secret_key()`)
+**Files:** `src/database/admin_ui/app.py` (new helper function `_ensure_secret_key()`)
 
 ---
 
@@ -67,7 +67,7 @@ Successfully implemented and tested all **3 critical security vulnerabilities**:
 ### All 9 Tests Passing ✅
 
 ```
-tests/unit/database_manager/test_security_fixes.py::
+tests/unit/database/test_security_fixes.py::
 
   SEC-001 Tests (3 tests):
     ✓ test_sec_001_admin_password_required_from_env
@@ -102,9 +102,9 @@ Result: 9 passed in 1.35s
 
 ### Summary
 ```
- src/database_manager/app.py                              | 87 ++++++++-----
- tests/unit/database_manager/test_security_fixes.py      | 130 +++++++++++++++++++
- tests/unit/database_manager/__init__.py                 |   0
+ src/database/admin_ui/app.py                              | 87 ++++++++-----
+ tests/unit/database/test_security_fixes.py      | 130 +++++++++++++++++++
+ tests/unit/database/__init__.py                 |   0
 
  189 insertions(+), 14 deletions(-)
 ```
@@ -156,14 +156,14 @@ export ENV="production"  # or "development"/"test"
 ## 📋 Files Modified
 
 ```
-Modified:  src/database_manager/app.py
+Modified:  src/database/admin_ui/app.py
            ├─ New function: _ensure_secret_key()
            ├─ New function: _get_admin_credentials()
            ├─ Import: from werkzeug.security
            └─ Updated: create_app(), login route
 
-New:       tests/unit/database_manager/test_security_fixes.py (130 lines)
-New:       tests/unit/database_manager/__init__.py
+New:       tests/unit/database/test_security_fixes.py (130 lines)
+New:       tests/unit/database/__init__.py
 ```
 
 ---

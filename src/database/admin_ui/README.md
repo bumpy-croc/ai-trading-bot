@@ -24,7 +24,7 @@ export DB_MANAGER_ADMIN_USER=admin
 export DB_MANAGER_ADMIN_PASS=your-password
 
 # Run the admin UI
-python src/database_manager/app.py
+python src/database/admin_ui/app.py
 
 # Open browser
 # Navigate to http://localhost:8000/admin
@@ -46,7 +46,7 @@ Set these environment variables in Railway:
 
 Start command:
 ```bash
-python src/database_manager/app.py
+python src/database/admin_ui/app.py
 ```
 
 The admin UI will be accessible at your Railway deployment URL under `/admin`.
