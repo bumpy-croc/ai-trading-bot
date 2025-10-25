@@ -1,6 +1,6 @@
 # Development workflow
 
-> **Last Updated**: 2025-10-24
+> **Last Updated**: 2025-10-25
 
 This project ships a command-line interface and Makefile targets that standardise local setup, quality checks, and diagnostics.
 

@@ -1,6 +1,6 @@
 # Monitoring
 
-> **Last Updated**: 2025-10-24  
+> **Last Updated**: 2025-10-25  
 > **Related Documentation**: See [docs/monitoring.md](../../docs/monitoring.md) for operational guidance
 
 Real-time web dashboard for tracking live trading performance, system health, and risk metrics.
@@ -178,6 +178,8 @@ src/dashboards/monitoring/
 - Check browser console for errors
 - Verify firewall allows WebSocket connections
 - Try with `WEB_SERVER_USE_GEVENT=0` for debugging
+
+## Documentation
 
 ## Documentation
 
