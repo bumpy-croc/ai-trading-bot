@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
 # Ensure project root and src are in sys.path for absolute imports
 from src.utils.project_paths import get_project_root
@@ -217,28 +218,46 @@ def _install_python_dependencies() -> bool:
     """Install Python dependencies."""
     print("\n📦 Installing Python Dependencies...")
 
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
+    python311 = _find_python311()
+    if not python311:
+        print(
+            "❌ python3.11 not found. Install it (e.g. `brew install python@3.11`) or set the PYTHON311 env var."
         )
-
-        if result.returncode == 0:
-            print("✅ Python dependencies installed successfully")
-            return True
-        else:
-            print(f"❌ Failed to install dependencies: {result.stderr}")
-            print("\n💡 Try creating a virtual environment:")
-            print("   python3 -m venv venv")
-            print("   source venv/bin/activate  # On Windows: venv\\Scripts\\activate")
-            print("   pip install -r requirements.txt")
-            return False
-
-    except Exception as e:
-        print(f"❌ Error installing dependencies: {e}")
         return False
+
+    venv_python = _ensure_python311_venv(python311)
+    if not venv_python:
+        return False
+
+    print(f"✅ Using virtualenv interpreter: {venv_python}")
+
+    if not _run_cmd([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"], "pip upgrade"):
+        return False
+
+    return _run_cmd(
+        [str(venv_python), "-m", "pip", "install", "-r", str(PROJECT_ROOT / "requirements.txt")],
+        "dependency install",
+        cwd=None,
+    )
+
+
+def _run_cmd(cmd: list[str], description: str, cwd: Path | None = PROJECT_ROOT) -> bool:
+    try:
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    except Exception as exc:  # pragma: no cover - subprocess failures raise here
+        print(f"❌ {description} failed: {exc}")
+        return False
+
+    if result.returncode == 0:
+        print(f"✅ {description} completed")
+        if result.stdout:
+            print(result.stdout.strip())
+        return True
+
+    print(f"❌ {description} failed")
+    if result.stderr:
+        print(result.stderr.strip())
+    return False
 
 
 def _run_migrations() -> bool:
@@ -318,6 +337,64 @@ def _print_next_steps() -> None:
     print("=" * 40)
 
     print("\n🐘 PostgreSQL Development Environment Ready")
+
+
+def _find_python311() -> Path | None:
+    candidates: list[str] = []
+    explicit = os.environ.get("PYTHON311")
+    if explicit:
+        candidates.append(explicit)
+
+    which_candidate = shutil.which("python3.11")
+    if which_candidate:
+        candidates.append(which_candidate)
+
+    default_homebrew = Path("/opt/homebrew/opt/python@3.11/bin/python3.11")
+    candidates.append(str(default_homebrew))
+
+    for candidate in candidates:
+        if candidate:
+            path = Path(candidate)
+            if path.exists():
+                return path
+    return None
+
+
+def _ensure_python311_venv(python311: Path) -> Path | None:
+    venv_dir = PROJECT_ROOT / ".venv"
+    venv_python = _venv_python_path(venv_dir)
+
+    def _create_venv() -> bool:
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir)
+        print(f"📁 Creating .venv with {python311}")
+        result = subprocess.run([str(python311), "-m", "venv", str(venv_dir)], capture_output=True, text=True)
+        if result.returncode != 0:
+            print("❌ Failed to create virtualenv:")
+            print(result.stderr.strip())
+            return False
+        return True
+
+    if not venv_python.exists():
+        if not _create_venv():
+            return None
+    else:
+        version_result = subprocess.run(
+            [str(venv_python), "--version"], capture_output=True, text=True
+        )
+        version_str = version_result.stdout.strip()
+        if "3.11" not in version_str:
+            print("♻️ Existing .venv is not Python 3.11; recreating...")
+            if not _create_venv():
+                return None
+
+    return _venv_python_path(venv_dir)
+
+
+def _venv_python_path(venv_dir: Path) -> Path:
+    if os.name == "nt":
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
     print("\n📋 Useful Commands:")
     print("   # Start PostgreSQL")
     print("   docker-compose up -d postgres")
