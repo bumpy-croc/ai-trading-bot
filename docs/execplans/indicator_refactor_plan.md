@@ -12,18 +12,21 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 - [x] (2025-10-25 19:45Z) Established `src/tech` package skeleton with `indicators`, `features`, and `adapters` subpackages plus README files.
 - [x] (2025-10-25 20:05Z) Migrated indicator math into `src/tech/indicators/core.py` with shims under `src/indicators`.
 - [x] (2025-10-25 20:25Z) Relocated indicator/sentiment extraction helpers into `src/tech/adapters/row_extractors.py` and wired trading/backtesting consumers to it.
-- [ ] Update prediction feature extractors, risk manager, strategies, dashboards, and trading/backtesting engines to import from the new API; remove deprecated modules once tests pass.
+- [x] (2025-10-25 20:50Z) Updated prediction feature extractors, risk/risk managers, dashboards, and trading/backtesting integrations to import from the `src.tech` API while leaving shims for compatibility.
 - [ ] Refresh documentation/tests (indicator README, prediction docs, unit tests) to reflect the new layout and ensure `make test` succeeds.
 
 ## Surprises & Discoveries
 
-- Observation: None yet; this plan is baseline documentation prior to any implementation.
-  Evidence: Working tree unchanged as of 2025-10-25.
+- Observation: Moving `TechnicalFeatureExtractor` required relocating the base class and schemas into `src.tech.features` to avoid circular imports.
+  Evidence: See commits 63a988a and related shims under `src/prediction/features/*` that now forward to the shared package (2025-10-25).
 
 ## Decision Log
 
 - Decision: Consolidate all indicator math and wrappers under a new `src/tech` namespace, keeping `src/prediction/features` focused on orchestration rather than core indicator logic.
   Rationale: Multiple subsystems outside prediction (risk, dashboards, trading engines) need the same primitives, so a neutral package reduces duplication and clarifies ownership.
+  Date/Author: 2025-10-25 / Codex agent.
+- Decision: Relocate `FeatureExtractor`, feature schemas, and `TechnicalFeatureExtractor` to `src.tech.features` with shims under `src/prediction/features` to prevent circular dependencies.
+  Rationale: Keeping the core extractor API in `src.tech` lets non-prediction modules import it directly, while the shims avoid breaking older imports.
   Date/Author: 2025-10-25 / Codex agent.
 
 ## Outcomes & Retrospective

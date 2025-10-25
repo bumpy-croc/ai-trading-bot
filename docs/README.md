@@ -16,6 +16,7 @@ This folder contains reference guides for the main subsystems that make up the A
 - [Backtesting](backtesting.md) - Historical simulation engine and optimization
 - [Live trading](live_trading.md) - Real-time execution, risk controls, and safety features
 - [Prediction & models](prediction.md) - ML model registry, inference, and training
+- [Technical indicators](tech_indicators.md) - Shared indicator math and adapters
 
 ### Operations
 - [Database](database.md) - PostgreSQL setup, migrations, and backups
