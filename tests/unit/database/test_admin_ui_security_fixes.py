@@ -22,7 +22,7 @@ def test_sec_001_admin_password_required_from_env():
         os.environ.pop("DB_MANAGER_ADMIN_PASS", None)
         os.environ.pop("DB_MANAGER_ADMIN_USER", None)
         
-        from src.database_manager.app import _get_admin_credentials
+        from src.database.admin_ui.app import _get_admin_credentials
         
         with pytest.raises(SystemExit):
             _get_admin_credentials()
@@ -33,7 +33,7 @@ def test_sec_001_admin_username_has_default():
     with patch.dict(os.environ, {"DB_MANAGER_ADMIN_PASS": "test-password"}, clear=False):
         os.environ.pop("DB_MANAGER_ADMIN_USER", None)
         
-        from src.database_manager.app import _get_admin_credentials
+        from src.database.admin_ui.app import _get_admin_credentials
         
         username, password = _get_admin_credentials()
         
@@ -51,7 +51,7 @@ def test_sec_001_admin_credentials_from_env():
         },
         clear=False,
     ):
-        from src.database_manager.app import _get_admin_credentials
+        from src.database.admin_ui.app import _get_admin_credentials
         
         username, password = _get_admin_credentials()
         
@@ -90,7 +90,7 @@ def test_sec_003_secret_key_required_in_production():
     with patch.dict(os.environ, {"ENV": "production"}, clear=False):
         os.environ.pop("DB_MANAGER_SECRET_KEY", None)
         
-        from src.database_manager.app import _ensure_secret_key
+        from src.database.admin_ui.app import _ensure_secret_key
         
         with pytest.raises(SystemExit):
             _ensure_secret_key()
@@ -105,7 +105,7 @@ def test_sec_003_secret_key_from_env():
         {"DB_MANAGER_SECRET_KEY": expected_key, "ENV": "production"},
         clear=False,
     ):
-        from src.database_manager.app import _ensure_secret_key
+        from src.database.admin_ui.app import _ensure_secret_key
         
         key = _ensure_secret_key()
         assert key == expected_key
@@ -116,7 +116,7 @@ def test_sec_003_secret_key_fallback_in_development():
     with patch.dict(os.environ, {"ENV": "development"}, clear=False):
         os.environ.pop("DB_MANAGER_SECRET_KEY", None)
 
-        from src.database_manager.app import _ensure_secret_key
+        from src.database.admin_ui.app import _ensure_secret_key
 
         key = _ensure_secret_key()
         assert key == "dev-key-change-in-production"
@@ -127,7 +127,7 @@ def test_sec_003_secret_key_fallback_in_test():
     with patch.dict(os.environ, {"ENV": "test"}, clear=False):
         os.environ.pop("DB_MANAGER_SECRET_KEY", None)
 
-        from src.database_manager.app import _ensure_secret_key
+        from src.database.admin_ui.app import _ensure_secret_key
 
         key = _ensure_secret_key()
         assert key == "dev-key-change-in-production"
@@ -139,7 +139,7 @@ def test_sec_003_secret_key_defaults_to_production_when_env_missing():
         for variable in ("DB_MANAGER_SECRET_KEY", "ENV", "FLASK_ENV"):
             os.environ.pop(variable, None)
 
-        from src.database_manager.app import _ensure_secret_key
+        from src.database.admin_ui.app import _ensure_secret_key
 
         with pytest.raises(SystemExit):
             _ensure_secret_key()
@@ -151,7 +151,7 @@ def test_sec_003_secret_key_fallback_honours_flask_env_dev():
         os.environ.pop("DB_MANAGER_SECRET_KEY", None)
         os.environ.pop("ENV", None)
 
-        from src.database_manager.app import _ensure_secret_key
+        from src.database.admin_ui.app import _ensure_secret_key
 
         key = _ensure_secret_key()
         assert key == "dev-key-change-in-production"
@@ -163,7 +163,7 @@ def test_sec_003_secret_key_requires_flask_env_production():
         os.environ.pop("DB_MANAGER_SECRET_KEY", None)
         os.environ.pop("ENV", None)
 
-        from src.database_manager.app import _ensure_secret_key
+        from src.database.admin_ui.app import _ensure_secret_key
 
         with pytest.raises(SystemExit):
             _ensure_secret_key()
@@ -259,7 +259,7 @@ def test_sec_002_login_missing_password_graceful_failure(monkeypatch):
         flask_login_module.login_user = dummy_login_user
         flask_login_module.logout_user = dummy_logout_user
 
-        import src.database_manager.app as app_module
+        import src.database.admin_ui.app as app_module
 
         monkeypatch.setattr(app_module, "DatabaseManager", DummyDatabaseManager)
         monkeypatch.setattr(app_module, "scoped_session", lambda factory: DummyScopedSession())

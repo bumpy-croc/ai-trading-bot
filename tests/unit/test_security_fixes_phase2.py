@@ -145,7 +145,7 @@ def test_sec_006_logging_redaction_json():
 
 def test_sec_008_csrf_imports():
     """SEC-008: Verify CSRF protection is available."""
-    from src.database_manager.app import csrf
+    from src.database.admin_ui.app import csrf
     
     assert csrf is not None
     assert hasattr(csrf, "init_app")
@@ -153,7 +153,7 @@ def test_sec_008_csrf_imports():
 
 def test_sec_009_rate_limiter_imports():
     """SEC-009: Verify rate limiter is available."""
-    from src.database_manager.app import limiter
+    from src.database.admin_ui.app import limiter
     
     assert limiter is not None
     assert hasattr(limiter, "limit")

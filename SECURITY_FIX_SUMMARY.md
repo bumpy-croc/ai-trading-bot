@@ -15,7 +15,7 @@ Implemented critical security fixes for three vulnerabilities identified in the 
 
 ### 1. Fixed Weak Default Admin Password (SEC-001)
 
-**File:** `src/database_manager/app.py`
+**File:** `src/database/admin_ui/app.py`
 
 **Before:**
 ```python
@@ -40,7 +40,7 @@ def _get_admin_credentials() -> tuple[str, str]:
 
 ### 2. Implemented Password Hashing (SEC-002)
 
-**File:** `src/database_manager/app.py`
+**File:** `src/database/admin_ui/app.py`
 
 **Before:**
 ```python
@@ -64,7 +64,7 @@ if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, passw
 
 ### 3. Consolidated SECRET_KEY Handling (SEC-003)
 
-**File:** `src/database_manager/app.py`
+**File:** `src/database/admin_ui/app.py`
 
 **Before:**
 ```python
@@ -109,7 +109,7 @@ app_secret_key = _ensure_secret_key()
 ## Testing
 
 ### Test File
-**Location:** `tests/unit/database_manager/test_security_fixes.py`
+**Location:** `tests/unit/database/test_security_fixes.py`
 
 ### Test Coverage
 
@@ -131,7 +131,7 @@ app_secret_key = _ensure_secret_key()
 **Result:** ✅ **All 9 tests passing**
 
 ```
-tests/unit/database_manager/test_security_fixes.py::
+tests/unit/database/test_security_fixes.py::
   test_sec_001_admin_password_required_from_env PASSED
   test_sec_001_admin_username_has_default PASSED
   test_sec_001_admin_credentials_from_env PASSED
@@ -192,9 +192,9 @@ werkzeug (from Flask)      # Already installed (used for security)
 ## Files Modified
 
 ```
-src/database_manager/app.py                              (Modified)
-tests/unit/database_manager/test_security_fixes.py      (New)
-tests/unit/database_manager/__init__.py                 (New)
+src/database/admin_ui/app.py                              (Modified)
+tests/unit/database/test_security_fixes.py      (New)
+tests/unit/database/__init__.py                 (New)
 ```
 
 ## Next Steps for PR

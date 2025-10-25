@@ -139,8 +139,7 @@ src/
   dashboards/        # Web-based monitoring and analysis dashboards
   data/              # Data management and caching utilities
   data_providers/    # Market & sentiment providers (+ caching wrapper)
-  database/          # SQLAlchemy models + DatabaseManager (PostgreSQL-only)
-  database_manager/  # Flask-Admin UI for DB inspection
+  database/          # SQLAlchemy models + DatabaseManager + Flask-Admin UI
   examples/          # Minimal runnable examples demonstrating core features
   indicators/        # Technical indicators (pure functions)
   live/              # Live trading engine
@@ -169,7 +168,7 @@ src/
 - Risk: `risk.risk_manager.RiskManager`
 - Database: `database.manager.DatabaseManager` (PostgreSQL)
 - Monitoring: `dashboards.monitoring.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
-- Admin UI: `database_manager.app` (Flask-Admin), run `python src/database_manager/app.py`
+- Admin UI: `database.admin_ui.app` (Flask-Admin), run `python src/database/admin_ui/app.py`
 
 ---
 
