@@ -70,5 +70,3 @@ def test_mock_and_real_database_signatures_are_compatible(method_name: str):
     assert _is_signature_compatible(
         real_sig, mock_sig
     ), f"Signature mismatch for {method_name}: real={real_sig} mock={mock_sig}"
-
-

@@ -246,7 +246,7 @@ class FeaturePipeline:
         all_features = []
         for extractor in self.extractors.values():
             # Check if extractor has enabled attribute, otherwise assume it's enabled
-            if hasattr(extractor, 'enabled'):
+            if hasattr(extractor, "enabled"):
                 if extractor.enabled:
                     all_features.extend(extractor.get_feature_names())
             else:

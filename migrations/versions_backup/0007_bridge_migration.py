@@ -6,10 +6,9 @@ Create Date: 2024-01-01 00:00:00.000000
 
 """
 
-
 # revision identifiers, used by Alembic.
-revision = '0007'
-down_revision = '0006_partial_operations'
+revision = "0007"
+down_revision = "0006_partial_operations"
 branch_labels = None
 depends_on = None
 

@@ -42,10 +42,10 @@ def create_momentum_leverage_strategy(
 ) -> Strategy:
     """
     Create Momentum Leverage strategy using component composition.
-    
+
     This strategy uses aggressive momentum-based signals with volatility-adjusted
     risk management and confidence-weighted position sizing for maximum returns.
-    
+
     Args:
         name: Strategy name
         momentum_entry_threshold: Minimum momentum percentage to enter (default 1%)
@@ -55,7 +55,7 @@ def create_momentum_leverage_strategy(
         min_position_size_ratio: Minimum position fraction applied during drawdowns
         max_position_size_ratio: Maximum position fraction allowed during strong trends
         take_profit_pct: Target profit percentage for scaling out
-    
+
     Returns:
         Configured Strategy instance
     """
@@ -65,27 +65,27 @@ def create_momentum_leverage_strategy(
         momentum_entry_threshold=momentum_entry_threshold,
         strong_momentum_threshold=strong_momentum_threshold,
     )
-    
+
     # Create volatility-based risk manager with wide stop loss
     # This allows positions to breathe and capture full trend moves
     risk_manager = VolatilityRiskManager(
         base_risk=base_risk,  # 10% stop loss (very wide)
-        atr_multiplier=2.0,   # Volatility adjustment
-        min_risk=0.005,       # 0.5% minimum
-        max_risk=0.15,        # 15% maximum
+        atr_multiplier=2.0,  # Volatility adjustment
+        min_risk=0.005,  # 0.5% minimum
+        max_risk=0.15,  # 15% maximum
     )
-    
+
     # Create aggressive position sizer
     # ConfidenceWeightedSizer caps at 50% base_fraction for safety
     effective_base_fraction = min(base_fraction, 0.5)
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=effective_base_fraction,  # 50% base allocation cap for safety
-        min_confidence=0.2,           # Lower threshold for aggressive trading
+        min_confidence=0.2,  # Lower threshold for aggressive trading
     )
-    
+
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
-    
+
     strategy = Strategy(
         name=name,
         signal_generator=signal_generator,

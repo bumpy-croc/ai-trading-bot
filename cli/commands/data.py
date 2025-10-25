@@ -150,17 +150,17 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     # Setup logging
     configure_logging(level_name="INFO")
     logger = logging.getLogger("atb.data.preload")
-    
+
     # Determine cache directory
-    cache_dir = getattr(ns, 'cache_dir', None) or str(get_cache_dir())
+    cache_dir = getattr(ns, "cache_dir", None) or str(get_cache_dir())
     ensure_dir_exists(Path(cache_dir))
     logger.info(f"Using cache directory: {cache_dir}")
-    
+
     # Get years to download
     current_year = datetime.now().year
     years = list(range(current_year - ns.years_back + 1, current_year + 1))
     logger.info(f"Pre-loading data for years: {years}")
-    
+
     # Normalize symbols
     def _normalize_symbols(raw):
         normalized = []
@@ -170,31 +170,31 @@ def _preload_offline(ns: argparse.Namespace) -> int:
                 s = SymbolFactory.to_exchange_symbol(s, "binance")
             normalized.append(s)
         return normalized
-    
+
     symbols = _normalize_symbols(ns.symbols)
     timeframes = [tf.strip() for tf in ns.timeframes]
-    
+
     # Create providers with extended TTL for offline preloading
     # Use very long TTL (10 years) to treat preloaded data as permanently valid
     try:
         binance_provider = BinanceProvider()
         cached_provider = CachedDataProvider(
-            binance_provider, 
+            binance_provider,
             cache_dir=cache_dir,
-            cache_ttl_hours=87600  # 10 years = 10 * 365 * 24 hours
+            cache_ttl_hours=87600,  # 10 years = 10 * 365 * 24 hours
         )
     except Exception as e:
         logger.error(f"Failed to initialize providers: {e}")
         return 1
-    
+
     # Pre-load data
     total_combinations = len(symbols) * len(timeframes) * len(years)
     successful_combinations = 0
-    
+
     logger.info(f"Starting pre-load for {total_combinations} symbol/timeframe/year combinations")
     logger.info(f"Symbols: {symbols}")
     logger.info(f"Timeframes: {timeframes}")
-    
+
     with tqdm(total=total_combinations, desc="Pre-loading cache") as pbar:
         for symbol in symbols:
             for timeframe in timeframes:
@@ -203,39 +203,47 @@ def _preload_offline(ns: argparse.Namespace) -> int:
                         # Define year boundaries
                         year_start = datetime(year, 1, 1)
                         year_end = datetime(year + 1, 1, 1) - timedelta(seconds=1)
-                        
+
                         # Don't fetch beyond current time
                         current_time = datetime.now()
                         if year_end > current_time:
                             year_end = current_time
-                        
+
                         # Check if cache already exists and is valid (unless force refresh)
                         if not ns.force_refresh:
-                            cache_key = cached_provider._generate_year_cache_key(symbol, timeframe, year)
+                            cache_key = cached_provider._generate_year_cache_key(
+                                symbol, timeframe, year
+                            )
                             cache_path = cached_provider._get_cache_path(cache_key)
                             if cache_path and cached_provider._is_cache_valid(cache_path, year):
-                                logger.debug(f"Cache already exists for {symbol} {timeframe} {year}")
+                                logger.debug(
+                                    f"Cache already exists for {symbol} {timeframe} {year}"
+                                )
                                 successful_combinations += 1
                                 pbar.update(1)
                                 continue
-                        
+
                         # Fetch data for this year
-                        data = cached_provider.get_historical_data(symbol, timeframe, year_start, year_end)
-                        
+                        data = cached_provider.get_historical_data(
+                            symbol, timeframe, year_start, year_end
+                        )
+
                         if data is not None and not data.empty:
-                            logger.debug(f"Successfully cached {len(data)} candles for {symbol} {timeframe} {year}")
+                            logger.debug(
+                                f"Successfully cached {len(data)} candles for {symbol} {timeframe} {year}"
+                            )
                             successful_combinations += 1
                         else:
                             logger.warning(f"No data retrieved for {symbol} {timeframe} {year}")
-                            
+
                     except Exception as e:
                         logger.error(f"Failed to preload {symbol} {timeframe} {year}: {e}")
-                    
+
                     pbar.update(1)
-    
+
     # Summary
     logger.info(f"Pre-loading completed: {successful_combinations}/{total_combinations} successful")
-    
+
     # Test offline access if requested
     if ns.test_offline:
         logger.info("Testing offline access...")
@@ -243,22 +251,24 @@ def _preload_offline(ns: argparse.Namespace) -> int:
         if not success:
             logger.warning("Offline test failed - cache may not be working properly")
             return 1
-    
+
     # Check cache directory size
     try:
         cache_path = Path(cache_dir)
         if cache_path.exists():
-            total_size = sum(f.stat().st_size for f in cache_path.rglob('*') if f.is_file())
+            total_size = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
             logger.info(f"Total cache size: {total_size / (1024*1024):.1f} MB")
     except Exception as e:
         logger.warning(f"Could not calculate cache size: {e}")
-    
+
     # Return appropriate exit code based on success/failure
     if successful_combinations == total_combinations:
         logger.info("✓ All data successfully pre-loaded!")
         return 0
     else:
-        logger.warning(f"⚠ Some data failed to pre-load ({successful_combinations}/{total_combinations})")
+        logger.warning(
+            f"⚠ Some data failed to pre-load ({successful_combinations}/{total_combinations})"
+        )
         return 1  # Return non-zero exit code to indicate partial failure
 
 
@@ -266,38 +276,38 @@ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str
     """Test that cached data can be accessed in offline mode."""
     import logging
     from datetime import datetime, timedelta
-    
+
     from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
-    
+
     logger = logging.getLogger("atb.data.preload")
     logger.info(f"Testing offline access for {symbol} {timeframe}")
-    
+
     try:
         # Create an offline provider (stub that returns empty data)
         offline_provider = BinanceProvider()
         offline_provider._client = offline_provider._create_offline_client()
-        
+
         # Wrap with cached provider using extended TTL for offline testing
         cached_provider = CachedDataProvider(
-            offline_provider, 
+            offline_provider,
             cache_dir=cache_dir,
-            cache_ttl_hours=87600  # 10 years = 10 * 365 * 24 hours
+            cache_ttl_hours=87600,  # 10 years = 10 * 365 * 24 hours
         )
-        
+
         # Try to fetch recent data (should come from cache)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=30)
-        
+
         data = cached_provider.get_historical_data(symbol, timeframe, start_date, end_date)
-        
+
         if data is not None and not data.empty:
             logger.info(f"✓ Offline test successful: Retrieved {len(data)} candles from cache")
             return True
         else:
             logger.warning("✗ Offline test failed: No data retrieved from cache")
             return False
-            
+
     except Exception as e:
         logger.error(f"✗ Offline test failed with error: {e}")
         return False
@@ -547,35 +557,41 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_prefill.add_argument("--cache_ttl_hours", type=int, default=24)
     p_prefill.set_defaults(func=_prefill)
 
-    p_preload = sub.add_parser("preload-offline", help="Pre-load cache with 10 years of data for offline backtesting")
+    p_preload = sub.add_parser(
+        "preload-offline", help="Pre-load cache with 10 years of data for offline backtesting"
+    )
     p_preload.add_argument(
         "--symbols",
         nargs="+",
-        default=["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "SOLUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT", "AVAXUSDT"],
-        help="Trading pair symbols to download (default: top 10 coins)"
+        default=[
+            "BTCUSDT",
+            "ETHUSDT",
+            "BNBUSDT",
+            "ADAUSDT",
+            "SOLUSDT",
+            "XRPUSDT",
+            "DOTUSDT",
+            "LINKUSDT",
+            "LTCUSDT",
+            "AVAXUSDT",
+        ],
+        help="Trading pair symbols to download (default: top 10 coins)",
     )
     p_preload.add_argument(
-        "--timeframes", 
+        "--timeframes",
         nargs="+",
         default=["1h", "4h", "1d"],
-        help="Timeframes to download (default: 1h, 4h, 1d)"
+        help="Timeframes to download (default: 1h, 4h, 1d)",
     )
     p_preload.add_argument(
-        "--years-back",
-        type=int,
-        default=10,
-        help="Number of years back to download (default: 10)"
+        "--years-back", type=int, default=10, help="Number of years back to download (default: 10)"
     )
     p_preload.add_argument("--cache-dir", help="Cache directory override")
     p_preload.add_argument(
-        "--force-refresh",
-        action="store_true",
-        help="Force refresh existing cache entries"
+        "--force-refresh", action="store_true", help="Force refresh existing cache entries"
     )
     p_preload.add_argument(
-        "--test-offline",
-        action="store_true", 
-        help="Test offline access after pre-loading"
+        "--test-offline", action="store_true", help="Test offline access after pre-loading"
     )
     p_preload.set_defaults(func=_preload_offline)
 

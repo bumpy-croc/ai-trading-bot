@@ -9,5 +9,3 @@ class ModelLoadError(Exception):
 
 class ModelNotAvailableError(Exception):
     """Raised when a requested model bundle is not available for selection."""
-
-

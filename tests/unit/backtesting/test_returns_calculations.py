@@ -93,7 +93,9 @@ class PassThroughSizer(PositionSizer):
     def __init__(self):
         super().__init__("pass_through_sizer")
 
-    def calculate_size(self, signal: Signal, balance: float, risk_amount: float, regime=None) -> float:
+    def calculate_size(
+        self, signal: Signal, balance: float, risk_amount: float, regime=None
+    ) -> float:
         self.validate_inputs(balance, risk_amount)
         if signal.direction == SignalDirection.HOLD:
             return 0.0

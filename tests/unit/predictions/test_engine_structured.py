@@ -50,7 +50,11 @@ def test_predict_uses_feature_selector_with_schema(mock_pipeline, mock_registry)
         feature_schema={
             "sequence_length": 120,
             "features": [
-                {"name": "close_normalized", "required": True, "normalization": {"mean": 0, "std": 1}},
+                {
+                    "name": "close_normalized",
+                    "required": True,
+                    "normalization": {"mean": 0, "std": 1},
+                },
                 {"name": "rsi", "required": True},
             ],
         },
@@ -68,4 +72,3 @@ def test_predict_uses_feature_selector_with_schema(mock_pipeline, mock_registry)
     args, _ = mock_runner.predict.call_args
     assert isinstance(args[0], np.ndarray)
     assert args[0].ndim == 3 and args[0].shape[1] == 120 and args[0].shape[2] == 2
-

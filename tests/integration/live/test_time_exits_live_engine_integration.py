@@ -19,5 +19,7 @@ def test_live_engine_accepts_time_exit_policy_unique_name():
     )
     policy = TimeExitPolicy(end_of_day_flat=True, market_session=session)
 
-    engine = LiveTradingEngine(strategy=strategy, data_provider=dp, enable_live_trading=False, time_exit_policy=policy)
+    engine = LiveTradingEngine(
+        strategy=strategy, data_provider=dp, enable_live_trading=False, time_exit_policy=policy
+    )
     assert engine.time_exit_policy is policy

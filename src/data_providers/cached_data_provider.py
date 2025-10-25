@@ -49,8 +49,11 @@ class CachedDataProvider(DataProvider):
             except (PermissionError, OSError):
                 # Fallback to a temporary directory if we can't access the default location
                 import tempfile
+
                 self.cache_dir = os.path.join(tempfile.gettempdir(), "ai_trading_bot_cache")
-                logger.warning(f"Could not access default cache directory, using fallback: {self.cache_dir}")
+                logger.warning(
+                    f"Could not access default cache directory, using fallback: {self.cache_dir}"
+                )
 
         # Create cache directory if it doesn't exist
         try:
@@ -59,6 +62,7 @@ class CachedDataProvider(DataProvider):
             logger.warning(f"Could not create cache directory {self.cache_dir}: {e}")
             # Use a temporary directory as final fallback
             import tempfile
+
             self.cache_dir = os.path.join(tempfile.gettempdir(), "ai_trading_bot_cache_fallback")
             try:
                 os.makedirs(self.cache_dir, exist_ok=True)
@@ -149,7 +153,7 @@ class CachedDataProvider(DataProvider):
         """
         if cache_path is None:
             return
-            
+
         try:
             with open(cache_path, "wb") as f:
                 pickle.dump(data, f)  # nosec B301: writing trusted, locally-used cache files
@@ -239,7 +243,7 @@ class CachedDataProvider(DataProvider):
             cached_data = self._load_from_cache(cache_path)
             if cached_data is not None and not cached_data.empty:
                 logger.debug(f"Loaded {year} data from cache for {symbol} {timeframe}")
-                
+
                 # Check if cached data covers the requested range
                 if hasattr(cached_data.index, "to_pydatetime"):
                     cache_start = cached_data.index.min()
@@ -252,7 +256,6 @@ class CachedDataProvider(DataProvider):
                     if timeframe_delta is not None:
                         effective_cache_end = cache_end + timeframe_delta - timedelta(seconds=1)
 
-                    # Check if cached data covers the requested range
                     if cache_start <= year_start and effective_cache_end >= year_end:
                         # Cached data fully covers the requested range
                         mask = (cached_data.index >= year_start) & (cached_data.index <= year_end)
@@ -261,7 +264,9 @@ class CachedDataProvider(DataProvider):
                         return filtered_data
                     else:
                         # Cached data doesn't cover the requested range - need to fetch
-                        logger.info(f"Cache doesn't cover requested range. Cache: {cache_start} to {cache_end}, Requested: {year_start} to {year_end}")
+                        logger.info(
+                            f"Cache doesn't cover requested range. Cache: {cache_start} to {cache_end}, Requested: {year_start} to {year_end}"
+                        )
                 else:
                     # Fallback for non-datetime index
                     return cached_data
@@ -291,16 +296,22 @@ class CachedDataProvider(DataProvider):
                 if hasattr(year_data.index, "to_pydatetime"):
                     mask = (year_data.index >= year_start) & (year_data.index <= year_end)
                     filtered_data = year_data[mask]
-                    logger.info(f"Returning {len(filtered_data)} candles for {symbol} {timeframe} in {year} (range: {year_start} to {year_end})")
+                    logger.info(
+                        f"Returning {len(filtered_data)} candles for {symbol} {timeframe} in {year} (range: {year_start} to {year_end})"
+                    )
                     return filtered_data
                 return year_data
             else:
                 # Check if this is expected (future data) or an actual error
                 current_time = datetime.now()
                 if fetch_end > current_time - timedelta(hours=1):  # Within last hour
-                    logger.info(f"No recent data available for {symbol} {timeframe} in {year} (fetch_end: {fetch_end}, current_time: {current_time})")
+                    logger.info(
+                        f"No recent data available for {symbol} {timeframe} in {year} (fetch_end: {fetch_end}, current_time: {current_time})"
+                    )
                 else:
-                    logger.warning(f"No data returned for {symbol} {timeframe} in {year} (fetch range: {fetch_start} to {fetch_end})")
+                    logger.warning(
+                        f"No data returned for {symbol} {timeframe} in {year} (fetch range: {fetch_start} to {fetch_end})"
+                    )
                 return None
 
         except Exception as e:

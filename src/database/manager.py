@@ -169,9 +169,7 @@ class DatabaseManager:
             # Allow SQLite if running unit tests (detected by pytest current item markers)
             is_unit_test = self._is_running_unit_tests()
             if not is_unit_test:
-                raise ValueError(
-                    "SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL."
-                )
+                raise ValueError("SQLite URL provided in CI. Use a PostgreSQL DATABASE_URL.")
 
         # Helper for creating a SQLite engine config
         def _sqlite_engine_config(url: str) -> tuple[str, dict[str, Any]]:
@@ -215,7 +213,7 @@ class DatabaseManager:
             if is_postgres:
                 # Integration tests must always use PostgreSQL - no fallback allowed
                 is_unit_test = self._is_running_unit_tests()
-                
+
                 if is_unit_test:
                     logger.warning(
                         "PostgreSQL connection failed (%s). Falling back to in-memory SQLite for unit tests.",
@@ -788,14 +786,18 @@ class DatabaseManager:
                 session.add(entry_order)
                 session.commit()  # Commit the order
 
-                logger.info(f"Auto-created ENTRY order #{entry_order.id} for position #{position.id}")
+                logger.info(
+                    f"Auto-created ENTRY order #{entry_order.id} for position #{position.id}"
+                )
 
             except Exception as exc:
                 # Don't fail position creation if order creation fails
                 # Position is already committed, so we log the failure but don't rollback
-                logger.warning(f"Failed to auto-create ENTRY order for position #{position.id}: {exc}")
+                logger.warning(
+                    f"Failed to auto-create ENTRY order for position #{position.id}: {exc}"
+                )
                 # Note: No rollback needed since position was committed separately
-            
+
             return position.id
 
     def update_position(
@@ -900,11 +902,11 @@ class DatabaseManager:
             session.commit()
 
     def close_position(
-        self, 
-        position_id: int, 
-        exit_price: float | None = None, 
-        exit_time: datetime | None = None, 
-        pnl: float | None = None
+        self,
+        position_id: int,
+        exit_price: float | None = None,
+        exit_time: datetime | None = None,
+        pnl: float | None = None,
     ) -> bool:
         """Mark a position as closed with optional exit details."""
         with self.get_session() as session:
@@ -915,13 +917,13 @@ class DatabaseManager:
 
             position.status = PositionStatus.CLOSED
             position.last_update = exit_time or datetime.utcnow()
-            
+
             # Update position with exit details if provided
             if exit_price is not None:
                 position.current_price = exit_price
             if pnl is not None:
                 position.unrealized_pnl = pnl
-                
+
             session.commit()
 
             logger.info(f"Closed position #{position_id}")
@@ -967,24 +969,27 @@ class DatabaseManager:
                 order.status = normalized
                 order.last_update = datetime.utcnow()
                 session.commit()
-                logger.info(f"Updated order {order_id} status from {old_status.value} to {normalized.value}")
+                logger.info(
+                    f"Updated order {order_id} status from {old_status.value} to {normalized.value}"
+                )
                 return True
             except ValueError as exc:
                 logger.error(f"Invalid order status: {status} ({exc})")
                 return False
-
 
     def validate_position_status_consistency(self) -> dict[str, int]:
         """Validate and report position status consistency issues."""
         with self.get_session() as session:
             # * Find positions that might have inconsistent data
             orphaned_positions = session.execute(
-                sa.text("""
+                sa.text(
+                    """
                     SELECT COUNT(*) as count
                     FROM positions
                     WHERE status = 'OPEN'
                     AND (entry_price IS NULL OR quantity IS NULL OR quantity <= 0)
-                """)
+                """
+                )
             ).fetchone()
 
             total_open = session.execute(
@@ -1006,12 +1011,14 @@ class DatabaseManager:
         with self.get_session() as session:
             # * Fix positions marked as OPEN but missing data (mark as CLOSED)
             result_orphaned = session.execute(
-                sa.text("""
+                sa.text(
+                    """
                     UPDATE positions
                     SET status = 'CLOSED', last_update = NOW()
                     WHERE status = 'OPEN'
                     AND (entry_price IS NULL OR quantity IS NULL OR quantity <= 0)
-                """)
+                """
+                )
             )
 
             session.commit()
@@ -1021,7 +1028,9 @@ class DatabaseManager:
             }
 
             if fixes_applied["orphaned_to_closed"] > 0:
-                logger.info(f"Fixed {fixes_applied['orphaned_to_closed']} orphaned positions to CLOSED")
+                logger.info(
+                    f"Fixed {fixes_applied['orphaned_to_closed']} orphaned positions to CLOSED"
+                )
 
             return fixes_applied
 
@@ -1233,7 +1242,7 @@ class DatabaseManager:
                     .order_by(Order.created_at.asc())
                     .all()
                 )
-                
+
                 orders_data = [
                     {
                         "id": order.id,
@@ -1244,53 +1253,59 @@ class DatabaseManager:
                         "side": order.side.value,
                         "quantity": float(order.quantity),
                         "price": float(order.price) if order.price else None,
-                        "filled_quantity": float(order.filled_quantity) if order.filled_quantity else 0.0,
+                        "filled_quantity": (
+                            float(order.filled_quantity) if order.filled_quantity else 0.0
+                        ),
                         "filled_price": float(order.filled_price) if order.filled_price else None,
                         "commission": float(order.commission) if order.commission else 0.0,
                         "created_at": order.created_at,
                         "filled_at": order.filled_at,
                         "cancelled_at": order.cancelled_at,
                         "target_level": order.target_level,
-                        "size_fraction": float(order.size_fraction) if order.size_fraction else None,
+                        "size_fraction": (
+                            float(order.size_fraction) if order.size_fraction else None
+                        ),
                     }
                     for order in orders
                 ]
 
-                result.append({
-                    "id": p.id,
-                    "symbol": p.symbol,
-                    "side": p.side.value,
-                    "entry_price": p.entry_price,
-                    "current_price": p.current_price,
-                    "size": p.size,
-                    "quantity": p.quantity,
-                    "entry_balance": self._to_optional_float(getattr(p, "entry_balance", None)),
-                    "unrealized_pnl": p.unrealized_pnl,
-                    "unrealized_pnl_percent": p.unrealized_pnl_percent,
-                    "stop_loss": p.stop_loss,
-                    "take_profit": p.take_profit,
-                    "entry_time": p.entry_time,
-                    "strategy": p.strategy_name,
-                    "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
-                    "trailing_stop_price": getattr(p, "trailing_stop_price", None),
-                    "breakeven_triggered": getattr(p, "breakeven_triggered", False),
-                    "mfe": p.mfe,
-                    "mae": p.mae,
-                    "mfe_price": p.mfe_price,
-                    "mae_price": p.mae_price,
-                    "mfe_time": p.mfe_time,
-                    "mae_time": p.mae_time,
-                    # * Include order information for consistency with dashboard
-                    "orders": orders_data,
-                    # * Include partial operations tracking
-                    "original_size": p.original_size,
-                    "current_size": p.current_size,
-                    "partial_exits_taken": p.partial_exits_taken,
-                    "scale_ins_taken": p.scale_ins_taken,
-                    "last_partial_exit_price": p.last_partial_exit_price,
-                    "last_scale_in_price": p.last_scale_in_price,
-                })
-            
+                result.append(
+                    {
+                        "id": p.id,
+                        "symbol": p.symbol,
+                        "side": p.side.value,
+                        "entry_price": p.entry_price,
+                        "current_price": p.current_price,
+                        "size": p.size,
+                        "quantity": p.quantity,
+                        "entry_balance": self._to_optional_float(getattr(p, "entry_balance", None)),
+                        "unrealized_pnl": p.unrealized_pnl,
+                        "unrealized_pnl_percent": p.unrealized_pnl_percent,
+                        "stop_loss": p.stop_loss,
+                        "take_profit": p.take_profit,
+                        "entry_time": p.entry_time,
+                        "strategy": p.strategy_name,
+                        "trailing_stop_activated": getattr(p, "trailing_stop_activated", False),
+                        "trailing_stop_price": getattr(p, "trailing_stop_price", None),
+                        "breakeven_triggered": getattr(p, "breakeven_triggered", False),
+                        "mfe": p.mfe,
+                        "mae": p.mae,
+                        "mfe_price": p.mfe_price,
+                        "mae_price": p.mae_price,
+                        "mfe_time": p.mfe_time,
+                        "mae_time": p.mae_time,
+                        # * Include order information for consistency with dashboard
+                        "orders": orders_data,
+                        # * Include partial operations tracking
+                        "original_size": p.original_size,
+                        "current_size": p.current_size,
+                        "partial_exits_taken": p.partial_exits_taken,
+                        "scale_ins_taken": p.scale_ins_taken,
+                        "last_partial_exit_price": p.last_partial_exit_price,
+                        "last_scale_in_price": p.last_scale_in_price,
+                    }
+                )
+
             return result
 
     def get_recent_trades(self, limit: int = 50, session_id: int | None = None) -> list[dict]:
@@ -1803,7 +1818,7 @@ class DatabaseManager:
             raise ValueError(f"Invalid order status: {value}") from exc
 
     # Dynamic Risk Management Methods
-    
+
     def log_dynamic_performance_metrics(
         self,
         session_id: int,
@@ -1816,11 +1831,11 @@ class DatabaseManager:
         risk_adjustment_factor: float = 1.0,
         profit_factor: float = None,
         expectancy: float = None,
-        avg_trade_duration_hours: float = None
+        avg_trade_duration_hours: float = None,
     ) -> int:
         """
         Log dynamic performance metrics for adaptive risk management.
-        
+
         Args:
             session_id: Trading session ID
             rolling_win_rate: Recent win rate (0.0 to 1.0)
@@ -1833,7 +1848,7 @@ class DatabaseManager:
             profit_factor: Gross profit / gross loss ratio
             expectancy: Expected value per trade
             avg_trade_duration_hours: Average trade duration in hours
-            
+
         Returns:
             ID of the created record
         """
@@ -1842,24 +1857,40 @@ class DatabaseManager:
                 metrics = DynamicPerformanceMetrics(
                     timestamp=datetime.utcnow(),
                     session_id=session_id,
-                    rolling_win_rate=Decimal(str(rolling_win_rate)) if rolling_win_rate is not None else None,
-                    rolling_sharpe_ratio=Decimal(str(rolling_sharpe_ratio)) if rolling_sharpe_ratio is not None else None,
-                    current_drawdown=Decimal(str(current_drawdown)) if current_drawdown is not None else None,
-                    volatility_30d=Decimal(str(volatility_30d)) if volatility_30d is not None else None,
+                    rolling_win_rate=(
+                        Decimal(str(rolling_win_rate)) if rolling_win_rate is not None else None
+                    ),
+                    rolling_sharpe_ratio=(
+                        Decimal(str(rolling_sharpe_ratio))
+                        if rolling_sharpe_ratio is not None
+                        else None
+                    ),
+                    current_drawdown=(
+                        Decimal(str(current_drawdown)) if current_drawdown is not None else None
+                    ),
+                    volatility_30d=(
+                        Decimal(str(volatility_30d)) if volatility_30d is not None else None
+                    ),
                     consecutive_losses=consecutive_losses,
                     consecutive_wins=consecutive_wins,
                     risk_adjustment_factor=Decimal(str(risk_adjustment_factor)),
-                    profit_factor=Decimal(str(profit_factor)) if profit_factor is not None else None,
+                    profit_factor=(
+                        Decimal(str(profit_factor)) if profit_factor is not None else None
+                    ),
                     expectancy=Decimal(str(expectancy)) if expectancy is not None else None,
-                    avg_trade_duration_hours=Decimal(str(avg_trade_duration_hours)) if avg_trade_duration_hours is not None else None
+                    avg_trade_duration_hours=(
+                        Decimal(str(avg_trade_duration_hours))
+                        if avg_trade_duration_hours is not None
+                        else None
+                    ),
                 )
-                
+
                 session.add(metrics)
                 session.commit()
-                
+
                 logger.debug(f"Logged dynamic performance metrics for session {session_id}")
                 return metrics.id
-                
+
         except Exception as e:
             logger.error(f"Failed to log dynamic performance metrics: {e}")
             raise
@@ -1878,11 +1909,11 @@ class DatabaseManager:
         volatility_level: float = None,
         duration_minutes: int = None,
         trades_during_adjustment: int = 0,
-        pnl_during_adjustment: float = None
+        pnl_during_adjustment: float = None,
     ) -> int:
         """
         Log a risk parameter adjustment for tracking and analysis.
-        
+
         Args:
             session_id: Trading session ID
             adjustment_type: Type of adjustment ('drawdown', 'performance', 'volatility')
@@ -1897,7 +1928,7 @@ class DatabaseManager:
             duration_minutes: How long this adjustment was active
             trades_during_adjustment: Number of trades executed during adjustment
             pnl_during_adjustment: P&L accumulated during adjustment period
-            
+
         Returns:
             ID of the created record
         """
@@ -1912,38 +1943,47 @@ class DatabaseManager:
                     original_value=Decimal(str(original_value)),
                     adjusted_value=Decimal(str(adjusted_value)),
                     adjustment_factor=Decimal(str(adjustment_factor)),
-                    current_drawdown=Decimal(str(current_drawdown)) if current_drawdown is not None else None,
-                    performance_score=Decimal(str(performance_score)) if performance_score is not None else None,
-                    volatility_level=Decimal(str(volatility_level)) if volatility_level is not None else None,
+                    current_drawdown=(
+                        Decimal(str(current_drawdown)) if current_drawdown is not None else None
+                    ),
+                    performance_score=(
+                        Decimal(str(performance_score)) if performance_score is not None else None
+                    ),
+                    volatility_level=(
+                        Decimal(str(volatility_level)) if volatility_level is not None else None
+                    ),
                     duration_minutes=duration_minutes,
                     trades_during_adjustment=trades_during_adjustment,
-                    pnl_during_adjustment=Decimal(str(pnl_during_adjustment)) if pnl_during_adjustment is not None else None
+                    pnl_during_adjustment=(
+                        Decimal(str(pnl_during_adjustment))
+                        if pnl_during_adjustment is not None
+                        else None
+                    ),
                 )
-                
+
                 session.add(adjustment)
                 session.commit()
-                
-                logger.debug(f"Logged risk adjustment {adjustment_type} for session {session_id}: {parameter_name} {original_value} -> {adjusted_value}")
+
+                logger.debug(
+                    f"Logged risk adjustment {adjustment_type} for session {session_id}: {parameter_name} {original_value} -> {adjusted_value}"
+                )
                 return adjustment.id
-                
+
         except Exception as e:
             logger.error(f"Failed to log risk adjustment: {e}")
             raise
 
     def get_dynamic_risk_performance_metrics(
-        self,
-        session_id: int,
-        start_date: datetime = None,
-        end_date: datetime = None
+        self, session_id: int, start_date: datetime = None, end_date: datetime = None
     ) -> dict[str, Any]:
         """
         Get recent performance metrics for dynamic risk calculation.
-        
+
         Args:
             session_id: Trading session ID
             start_date: Start date for metrics calculation (defaults to 30 days ago)
             end_date: End date for metrics calculation (defaults to now)
-            
+
         Returns:
             Dictionary containing calculated performance metrics
         """
@@ -1952,7 +1992,7 @@ class DatabaseManager:
                 end_date = datetime.utcnow()
             if start_date is None:
                 start_date = end_date - timedelta(days=30)
-                
+
             with self.get_session() as session:
                 # Get trades in the specified period
                 trades = (
@@ -1963,7 +2003,7 @@ class DatabaseManager:
                     .filter(Trade.pnl.isnot(None))
                     .all()
                 )
-                
+
                 if not trades:
                     return {
                         "total_trades": 0,
@@ -1977,43 +2017,47 @@ class DatabaseManager:
                         "max_drawdown": 0.0,
                         "gross_profit": 0.0,
                         "gross_loss": 0.0,
-                        "total_pnl": 0.0
+                        "total_pnl": 0.0,
                     }
-                
+
                 # Calculate basic metrics
                 total_trades = len(trades)
                 winning_trades = [t for t in trades if float(t.pnl) > 0]
                 losing_trades = [t for t in trades if float(t.pnl) < 0]
-                
+
                 win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0.0
-                
+
                 gross_profit = sum(float(t.pnl) for t in winning_trades)
                 gross_loss = abs(sum(float(t.pnl) for t in losing_trades))
-                
-                profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf') if gross_profit > 0 else 1.0
-                if profit_factor == float('inf'):
+
+                profit_factor = (
+                    gross_profit / gross_loss
+                    if gross_loss > 0
+                    else float("inf") if gross_profit > 0 else 1.0
+                )
+                if profit_factor == float("inf"):
                     profit_factor = 10.0  # Cap at reasonable value
-                    
+
                 # Calculate expectancy
                 total_pnl = sum(float(t.pnl) for t in trades)
                 expectancy = total_pnl / total_trades if total_trades > 0 else 0.0
-                
+
                 # Calculate average trade duration
                 durations = []
                 for trade in trades:
                     if trade.entry_time and trade.exit_time:
                         duration = (trade.exit_time - trade.entry_time).total_seconds() / 3600
                         durations.append(duration)
-                        
+
                 avg_trade_duration_hours = sum(durations) / len(durations) if durations else 0.0
-                
+
                 # Calculate consecutive streaks (from most recent trades)
                 consecutive_wins = 0
                 consecutive_losses = 0
-                
+
                 # Sort by exit time descending to get most recent first
                 recent_trades = sorted(trades, key=lambda t: t.exit_time, reverse=True)
-                
+
                 for trade in recent_trades:
                     pnl = float(trade.pnl)
                     if pnl > 0:
@@ -2035,27 +2079,28 @@ class DatabaseManager:
                     sorted_trades = sorted(trades, key=lambda t: t.exit_time)
                     running_balance = 0.0
                     peak_balance = 0.0
-                    
+
                     for trade in sorted_trades:
                         running_balance += float(trade.pnl)
                         if running_balance > peak_balance:
                             peak_balance = running_balance
-                        
+
                         # Calculate drawdown from peak
                         if peak_balance > 0:
                             drawdown = (peak_balance - running_balance) / peak_balance
                             max_drawdown = max(max_drawdown, drawdown)
-                
+
                 # Calculate Sharpe ratio (simplified)
                 if len(trades) > 1:
                     pnls = [float(t.pnl) for t in trades]
                     import numpy as np
+
                     returns_std = np.std(pnls)
                     mean_return = np.mean(pnls)
                     sharpe_ratio = mean_return / returns_std if returns_std > 0 else 0.0
                 else:
                     sharpe_ratio = 0.0
-                
+
                 # Calculate max drawdown using account history
                 max_drawdown = 0.0
                 try:
@@ -2065,9 +2110,9 @@ class DatabaseManager:
                         history_query = history_query.filter(AccountHistory.timestamp >= start_date)
                     if end_date:
                         history_query = history_query.filter(AccountHistory.timestamp <= end_date)
-                    
+
                     account_history = history_query.order_by(AccountHistory.timestamp).all()
-                    
+
                     if account_history and len(account_history) > 0:
                         peak_balance = account_history[0].balance
                         for record in account_history:
@@ -2080,7 +2125,7 @@ class DatabaseManager:
                 except Exception:
                     # If account history is not available or fails, default to 0
                     max_drawdown = 0.0
-                
+
                 return {
                     "total_trades": total_trades,
                     "win_rate": win_rate,
@@ -2093,9 +2138,9 @@ class DatabaseManager:
                     "max_drawdown": max_drawdown,
                     "gross_profit": gross_profit,
                     "gross_loss": gross_loss,
-                    "total_pnl": total_pnl
+                    "total_pnl": total_pnl,
                 }
-                
+
         except Exception as e:
             logger.error(f"Failed to get performance metrics: {e}")
             # Return safe defaults
@@ -2111,7 +2156,7 @@ class DatabaseManager:
                 "max_drawdown": 0.0,
                 "gross_profit": 0.0,
                 "gross_loss": 0.0,
-                "total_pnl": 0.0
+                "total_pnl": 0.0,
             }
 
     def log_partial_trade(
@@ -2232,7 +2277,7 @@ class DatabaseManager:
         size_fraction: float | None = None,
     ) -> int:
         """Create a new order record associated with a position.
-        
+
         Args:
             position_id: ID of the position this order belongs to
             order_type: Type of order (ENTRY, PARTIAL_EXIT, SCALE_IN, FULL_EXIT)
@@ -2246,7 +2291,7 @@ class DatabaseManager:
             internal_order_id: Our internal order reference (generated if not provided)
             target_level: For partial exits/scale-ins, which level this targets
             size_fraction: For partial operations, fraction of original position
-            
+
         Returns:
             Order ID
         """
@@ -2256,12 +2301,12 @@ class DatabaseManager:
                 order_type = OrderType[order_type.upper()]
             if isinstance(side, str):
                 side = PositionSide[side.upper()]
-                
+
             # * Generate internal order ID if not provided
             if internal_order_id is None:
                 timestamp = int(datetime.utcnow().timestamp() * 1000)
                 internal_order_id = f"{order_type.value.lower()}_{position_id}_{timestamp}"
-            
+
             order = Order(
                 position_id=position_id,
                 order_type=order_type,
@@ -2277,7 +2322,7 @@ class DatabaseManager:
                 target_level=target_level,
                 size_fraction=Decimal(str(size_fraction)) if size_fraction is not None else None,
             )
-            
+
             session.add(order)
             try:
                 session.commit()
@@ -2290,7 +2335,9 @@ class DatabaseManager:
                 if "internal_order_id" in str(exc).lower():
                     # * Handle duplicate internal order ID
                     retry_timestamp = int(datetime.utcnow().timestamp() * 1000000)  # microseconds
-                    order.internal_order_id = f"{order_type.value.lower()}_{position_id}_{retry_timestamp}"
+                    order.internal_order_id = (
+                        f"{order_type.value.lower()}_{position_id}_{retry_timestamp}"
+                    )
                     session.add(order)
                     session.commit()
                     logger.info(f"Created order #{order.id} with retry internal_order_id")
@@ -2308,7 +2355,7 @@ class DatabaseManager:
         commission: float | None = None,
     ) -> bool:
         """Update an order's status and execution details.
-        
+
         Args:
             order_id: Order ID to update
             status: New order status
@@ -2316,7 +2363,7 @@ class DatabaseManager:
             filled_price: Price at which order was filled (optional)
             exchange_order_id: Exchange order ID if not set before (optional)
             commission: Trading commission/fees (optional)
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -2325,16 +2372,16 @@ class DatabaseManager:
             if not order:
                 logger.error(f"Order {order_id} not found")
                 return False
-                
+
             try:
                 # * Convert string enum if necessary
                 if isinstance(status, str):
                     status = OrderStatus[status.upper()]
-                    
+
                 old_status = order.status
                 order.status = status
                 order.last_update = datetime.utcnow()
-                
+
                 # * Update execution details if provided
                 if filled_quantity is not None:
                     order.filled_quantity = Decimal(str(filled_quantity))
@@ -2344,19 +2391,17 @@ class DatabaseManager:
                     order.exchange_order_id = exchange_order_id
                 if commission is not None:
                     order.commission = Decimal(str(commission))
-                    
+
                 # * Set timestamps based on status
                 if status == OrderStatus.FILLED and order.filled_at is None:
                     order.filled_at = datetime.utcnow()
                 elif status == OrderStatus.CANCELLED and order.cancelled_at is None:
                     order.cancelled_at = datetime.utcnow()
-                    
+
                 session.commit()
-                logger.info(
-                    f"Updated order {order_id} status: {old_status.value} → {status.value}"
-                )
+                logger.info(f"Updated order {order_id} status: {old_status.value} → {status.value}")
                 return True
-                
+
             except ValueError as exc:
                 logger.error(f"Invalid order status: {status} ({exc})")
                 return False
@@ -2367,10 +2412,10 @@ class DatabaseManager:
 
     def get_orders_for_position(self, position_id: int) -> list[dict]:
         """Get all orders associated with a position.
-        
+
         Args:
             position_id: Position ID to get orders for
-            
+
         Returns:
             List of order dictionaries
         """
@@ -2381,7 +2426,7 @@ class DatabaseManager:
                 .order_by(Order.created_at.asc())
                 .all()
             )
-            
+
             return [
                 {
                     "id": order.id,
@@ -2393,7 +2438,9 @@ class DatabaseManager:
                     "side": order.side.value,
                     "quantity": float(order.quantity),
                     "price": float(order.price) if order.price else None,
-                    "filled_quantity": float(order.filled_quantity) if order.filled_quantity else 0.0,
+                    "filled_quantity": (
+                        float(order.filled_quantity) if order.filled_quantity else 0.0
+                    ),
                     "filled_price": float(order.filled_price) if order.filled_price else None,
                     "commission": float(order.commission) if order.commission else 0.0,
                     "created_at": order.created_at,
@@ -2407,28 +2454,25 @@ class DatabaseManager:
 
     def get_pending_orders_new(self, session_id: int | None = None) -> list[dict]:
         """Get all pending orders for a session (using new Order table).
-        
+
         Args:
             session_id: Trading session ID (uses current if not provided)
-            
+
         Returns:
             List of pending order dictionaries
         """
         session_id = session_id or self._current_session_id
         if not session_id:
             return []
-            
+
         with self.get_session() as session:
             orders = (
                 session.query(Order)
-                .filter(
-                    Order.session_id == session_id,
-                    Order.status == OrderStatus.PENDING
-                )
+                .filter(Order.session_id == session_id, Order.status == OrderStatus.PENDING)
                 .order_by(Order.created_at.asc())
                 .all()
             )
-            
+
             return [
                 {
                     "id": order.id,

@@ -15,8 +15,12 @@ class TradeMFERecord:
 
 
 class MFEMAEAnalyzer:
-    def calculate_avg_mfe_mae_by_strategy(self, trades: Iterable[dict], strategy_name: str | None = None) -> dict:
-        records = [t for t in trades if (strategy_name is None or t.get("strategy") == strategy_name)]
+    def calculate_avg_mfe_mae_by_strategy(
+        self, trades: Iterable[dict], strategy_name: str | None = None
+    ) -> dict:
+        records = [
+            t for t in trades if (strategy_name is None or t.get("strategy") == strategy_name)
+        ]
         if not records:
             return {"avg_mfe": 0.0, "avg_mae": 0.0}
         mfe_vals = [float(t.get("mfe", 0.0) or 0.0) for t in records]
@@ -45,7 +49,9 @@ class MFEMAEAnalyzer:
             if mfe > 0:
                 eff = max(0.0, min(1.0, pnl / mfe))
                 efficiencies.append(eff)
-        return {"avg_exit_efficiency": (sum(efficiencies) / len(efficiencies)) if efficiencies else 0.0}
+        return {
+            "avg_exit_efficiency": (sum(efficiencies) / len(efficiencies)) if efficiencies else 0.0
+        }
 
     def identify_optimal_exit_points(self, trades: Iterable[dict]) -> list[TradeMFERecord]:
         out: list[TradeMFERecord] = []

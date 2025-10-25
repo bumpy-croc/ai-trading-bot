@@ -52,7 +52,7 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
     # Calculate coverage - ensure timezone consistency
     price_start, price_end = price_df.index.min(), price_df.index.max()
     sentiment_start, sentiment_end = sentiment_df.index.min(), sentiment_df.index.max()
-    
+
     # Convert to timezone-naive for comparison if needed
     if price_start.tzinfo is not None and sentiment_start.tzinfo is None:
         price_start = price_start.tz_localize(None)
@@ -80,7 +80,7 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
     current_time = pd.Timestamp.now()
     # Make current_time timezone-aware if sentiment_end is timezone-aware
     if sentiment_end.tzinfo is not None and current_time.tzinfo is None:
-        current_time = current_time.tz_localize('UTC')
+        current_time = current_time.tz_localize("UTC")
     elif sentiment_end.tzinfo is None and current_time.tzinfo is not None:
         current_time = current_time.tz_localize(None)
     assessment["data_freshness_days"] = (current_time - sentiment_end).days
@@ -380,6 +380,7 @@ def convert_to_onnx(model, onnx_path):
 
         # Convert SavedModel to ONNX
         import sys
+
         python_executable = sys.executable
         result = subprocess.run(
             [
@@ -439,14 +440,14 @@ def get_price_data(
 
     # Handle both CSV and feather files
     csv_file_str = str(csv_file)
-    if csv_file_str.endswith('.feather'):
+    if csv_file_str.endswith(".feather"):
         df = pd.read_feather(csv_file)
     else:
-        df = pd.read_csv(csv_file, encoding='utf-8')
-    
+        df = pd.read_csv(csv_file, encoding="utf-8")
+
     # Set timestamp as index and parse dates
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = df.set_index('timestamp')
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.set_index("timestamp")
     return df
 
 
@@ -504,15 +505,18 @@ def train_model_main(args):
             print("\n📈 Loading sentiment data...")
             try:
                 from src.data_providers.feargreed_provider import FearGreedProvider
+
                 sentiment_provider = FearGreedProvider()
-                sentiment_df = sentiment_provider.get_historical_sentiment(args.symbol, start_date, end_date)
+                sentiment_df = sentiment_provider.get_historical_sentiment(
+                    args.symbol, start_date, end_date
+                )
                 print(f"Downloaded {len(sentiment_df)} sentiment data points")
-                
+
                 # Fix timezone mismatch: make price data timezone-aware (UTC) to match sentiment data
                 if not sentiment_df.empty and price_df.index.tz is None:
-                    price_df.index = price_df.index.tz_localize('UTC')
+                    price_df.index = price_df.index.tz_localize("UTC")
                     print("✅ Fixed timezone mismatch: price data now UTC-aware")
-                
+
                 sentiment_assessment = assess_sentiment_data_quality(sentiment_df, price_df)
                 print(f"Sentiment quality score: {sentiment_assessment['quality_score']:.3f}")
                 print(f"Recommendation: {sentiment_assessment['recommendation']}")

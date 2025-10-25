@@ -14,7 +14,7 @@ class PositionState:
     entry_price: float
     side: str  # 'long' | 'short'
     original_size: float  # fraction of balance at entry
-    current_size: float   # fraction of balance remaining
+    current_size: float  # fraction of balance remaining
     partial_exits_taken: int = 0
     scale_ins_taken: int = 0
     last_partial_exit_price: float | None = None
@@ -108,13 +108,17 @@ class PartialExitPolicy:
         return None
 
     # Helpers to update state post execution
-    def apply_partial_exit(self, position: PositionState, executed_size_fraction_of_original: float, price: float):
+    def apply_partial_exit(
+        self, position: PositionState, executed_size_fraction_of_original: float, price: float
+    ):
         delta = executed_size_fraction_of_original * float(position.original_size)
         position.current_size = max(0.0, float(position.current_size) - delta)
         position.partial_exits_taken = min(position.partial_exits_taken + 1, len(self.exit_targets))
         position.last_partial_exit_price = price
 
-    def apply_scale_in(self, position: PositionState, add_size_fraction_of_original: float, price: float):
+    def apply_scale_in(
+        self, position: PositionState, add_size_fraction_of_original: float, price: float
+    ):
         delta = add_size_fraction_of_original * float(position.original_size)
         position.current_size = min(1.0, float(position.current_size) + delta)
         position.scale_ins_taken = min(position.scale_ins_taken + 1, self.max_scale_ins)

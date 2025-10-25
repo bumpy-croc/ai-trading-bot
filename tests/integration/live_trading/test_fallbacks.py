@@ -21,7 +21,7 @@ except ImportError:
             self.positions = {}
             self.completed_trades = []
             self.trading_session_id = 42
-            self.max_position_size = kwargs.get('max_position_size', 0.1)
+            self.max_position_size = kwargs.get("max_position_size", 0.1)
 
 
 class TestLiveTradingFallbacks:
@@ -48,19 +48,19 @@ class TestLiveTradingFallbacks:
                 FixedRiskManager,
                 ConfidenceWeightedSizer,
             )
-            
+
             # Create a component-based strategy
             signal_generator = MLBasicSignalGenerator(name="test_fallback_sg")
             risk_manager = FixedRiskManager(risk_per_trade=0.02)
             position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-            
+
             strategy = Strategy(
                 name="test_fallback",
                 signal_generator=signal_generator,
                 risk_manager=risk_manager,
-                position_sizer=position_sizer
+                position_sizer=position_sizer,
             )
-            
+
             # Create engine with component strategy
             engine = LiveTradingEngine(
                 strategy=strategy,
@@ -68,7 +68,7 @@ class TestLiveTradingFallbacks:
                 enable_live_trading=False,
                 max_position_size=0.1,
             )
-            
+
             # Create test data with enough history
             market_data = pd.DataFrame(
                 {
@@ -81,15 +81,15 @@ class TestLiveTradingFallbacks:
                 index=pd.date_range("2024-01-01", periods=150, freq="1h"),
             )
             mock_data_provider.get_live_data.return_value = market_data
-            
+
             # Get a trading decision using component strategy
             decision = strategy.process_candle(market_data, 149, 10000)
-            
+
             # Verify decision was created (this is what gets logged)
             assert decision is not None
-            assert hasattr(decision, 'signal')
-            assert hasattr(decision, 'position_size')
-            
+            assert hasattr(decision, "signal")
+            assert hasattr(decision, "position_size")
+
         except ImportError:
             # If component strategies not available, skip this test
             pytest.skip("Component strategies not available")

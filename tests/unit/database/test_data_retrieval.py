@@ -52,7 +52,9 @@ class TestDataRetrieval:
                 return mock_positions_query
             if model.__name__ == "Order":
                 mock_orders_query = Mock()
-                mock_orders_query.filter.return_value.order_by.return_value.all.return_value = [mock_order]
+                mock_orders_query.filter.return_value.order_by.return_value.all.return_value = [
+                    mock_order
+                ]
                 return mock_orders_query
             return Mock()
 

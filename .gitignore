@@ -15,6 +15,7 @@ __pycache__/
 .vscode/
 .claude/
 .cursor/mcp.json
+.codex/workflows/
 
 # OS generated files
 .DS_Store

@@ -20,14 +20,21 @@ class SimpleMockProvider(MockDataProvider):
 
     def get_historical_data(self, symbol, timeframe, start=None, end=None):
         # Build minimal OHLCV DataFrame
-        idx = pd.date_range(start=datetime.utcnow() - timedelta(minutes=len(self.prices)), periods=len(self.prices), freq="T")
-        df = pd.DataFrame({
-            "open": self.prices,
-            "high": self.prices,
-            "low": self.prices,
-            "close": self.prices,
-            "volume": [1.0] * len(self.prices),
-        }, index=idx)
+        idx = pd.date_range(
+            start=datetime.utcnow() - timedelta(minutes=len(self.prices)),
+            periods=len(self.prices),
+            freq="T",
+        )
+        df = pd.DataFrame(
+            {
+                "open": self.prices,
+                "high": self.prices,
+                "low": self.prices,
+                "close": self.prices,
+                "volume": [1.0] * len(self.prices),
+            },
+            index=idx,
+        )
         # Add minimal columns used by strategy
         df["onnx_pred"] = df["close"] * 1.001
         df["prediction_confidence"] = 0.8

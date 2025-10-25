@@ -314,13 +314,25 @@ class TestOnnxRunner:
 class TestPredictionModelRegistry:
     """Structured-only PredictionModelRegistry tests"""
 
-    def _write_bundle(self, root, symbol: str, model_type: str, version: str, timeframe: str = "1h"):
+    def _write_bundle(
+        self, root, symbol: str, model_type: str, version: str, timeframe: str = "1h"
+    ):
         import json
+
         base = root / symbol / model_type / version
         base.mkdir(parents=True, exist_ok=True)
         # empty onnx file (stub runner will handle failures)
         (base / "model.onnx").write_bytes(b"")
-        (base / "metadata.json").write_text(json.dumps({"symbol": symbol, "model_type": model_type, "timeframe": timeframe, "version_id": version}))
+        (base / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "symbol": symbol,
+                    "model_type": model_type,
+                    "timeframe": timeframe,
+                    "version_id": version,
+                }
+            )
+        )
         return base
 
     def test_loading_structured_bundles(self, tmp_path):

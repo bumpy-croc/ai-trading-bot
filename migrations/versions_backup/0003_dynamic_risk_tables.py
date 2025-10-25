@@ -38,62 +38,88 @@ def upgrade():
     # Create dynamic_performance_metrics table if missing
     if not _table_exists("dynamic_performance_metrics"):
         op.create_table(
-            'dynamic_performance_metrics',
-            sa.Column('id', sa.Integer(), nullable=False),
-            sa.Column('timestamp', sa.DateTime(), nullable=False),
-            sa.Column('rolling_win_rate', sa.Numeric(18, 8), nullable=True),
-            sa.Column('rolling_sharpe_ratio', sa.Numeric(18, 8), nullable=True),
-            sa.Column('current_drawdown', sa.Numeric(18, 8), nullable=True),
-            sa.Column('volatility_30d', sa.Numeric(18, 8), nullable=True),
-            sa.Column('consecutive_losses', sa.Integer(), nullable=True, default=0),
-            sa.Column('consecutive_wins', sa.Integer(), nullable=True, default=0),
-            sa.Column('risk_adjustment_factor', sa.Numeric(18, 8), nullable=True, default=1.0),
-            sa.Column('profit_factor', sa.Numeric(18, 8), nullable=True),
-            sa.Column('expectancy', sa.Numeric(18, 8), nullable=True),
-            sa.Column('avg_trade_duration_hours', sa.Numeric(18, 8), nullable=True),
-            sa.Column('session_id', sa.Integer(), nullable=False),
-            sa.Column('created_at', sa.DateTime(), nullable=True),
-            sa.ForeignKeyConstraint(['session_id'], ['trading_sessions.id'], ),
-            sa.PrimaryKeyConstraint('id')
+            "dynamic_performance_metrics",
+            sa.Column("id", sa.Integer(), nullable=False),
+            sa.Column("timestamp", sa.DateTime(), nullable=False),
+            sa.Column("rolling_win_rate", sa.Numeric(18, 8), nullable=True),
+            sa.Column("rolling_sharpe_ratio", sa.Numeric(18, 8), nullable=True),
+            sa.Column("current_drawdown", sa.Numeric(18, 8), nullable=True),
+            sa.Column("volatility_30d", sa.Numeric(18, 8), nullable=True),
+            sa.Column("consecutive_losses", sa.Integer(), nullable=True, default=0),
+            sa.Column("consecutive_wins", sa.Integer(), nullable=True, default=0),
+            sa.Column("risk_adjustment_factor", sa.Numeric(18, 8), nullable=True, default=1.0),
+            sa.Column("profit_factor", sa.Numeric(18, 8), nullable=True),
+            sa.Column("expectancy", sa.Numeric(18, 8), nullable=True),
+            sa.Column("avg_trade_duration_hours", sa.Numeric(18, 8), nullable=True),
+            sa.Column("session_id", sa.Integer(), nullable=False),
+            sa.Column("created_at", sa.DateTime(), nullable=True),
+            sa.ForeignKeyConstraint(
+                ["session_id"],
+                ["trading_sessions.id"],
+            ),
+            sa.PrimaryKeyConstraint("id"),
         )
 
     # Create indexes for dynamic_performance_metrics if missing (PostgreSQL-specific)
-    if _table_exists("dynamic_performance_metrics") and not _index_exists("dynamic_performance_metrics", "idx_dynamic_perf_timestamp"):
-        op.execute("CREATE INDEX IF NOT EXISTS idx_dynamic_perf_timestamp ON dynamic_performance_metrics (timestamp)")
-    if _table_exists("dynamic_performance_metrics") and not _index_exists("dynamic_performance_metrics", "idx_dynamic_perf_session"):
-        op.execute("CREATE INDEX IF NOT EXISTS idx_dynamic_perf_session ON dynamic_performance_metrics (session_id)")
+    if _table_exists("dynamic_performance_metrics") and not _index_exists(
+        "dynamic_performance_metrics", "idx_dynamic_perf_timestamp"
+    ):
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dynamic_perf_timestamp ON dynamic_performance_metrics (timestamp)"
+        )
+    if _table_exists("dynamic_performance_metrics") and not _index_exists(
+        "dynamic_performance_metrics", "idx_dynamic_perf_session"
+    ):
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dynamic_perf_session ON dynamic_performance_metrics (session_id)"
+        )
 
     # Create risk_adjustments table if missing
     if not _table_exists("risk_adjustments"):
         op.create_table(
-            'risk_adjustments',
-            sa.Column('id', sa.Integer(), nullable=False),
-            sa.Column('timestamp', sa.DateTime(), nullable=False),
-            sa.Column('adjustment_type', sa.String(50), nullable=False),
-            sa.Column('trigger_reason', sa.String(200), nullable=True),
-            sa.Column('parameter_name', sa.String(100), nullable=False),
-            sa.Column('original_value', sa.Numeric(18, 8), nullable=False),
-            sa.Column('adjusted_value', sa.Numeric(18, 8), nullable=False),
-            sa.Column('adjustment_factor', sa.Numeric(18, 8), nullable=False),
-            sa.Column('current_drawdown', sa.Numeric(18, 8), nullable=True),
-            sa.Column('performance_score', sa.Numeric(18, 8), nullable=True),
-            sa.Column('volatility_level', sa.Numeric(18, 8), nullable=True),
-            sa.Column('duration_minutes', sa.Integer(), nullable=True),
-            sa.Column('trades_during_adjustment', sa.Integer(), nullable=True, default=0),
-            sa.Column('pnl_during_adjustment', sa.Numeric(18, 8), nullable=True),
-            sa.Column('session_id', sa.Integer(), nullable=False),
-            sa.Column('created_at', sa.DateTime(), nullable=True),
-            sa.ForeignKeyConstraint(['session_id'], ['trading_sessions.id'], ),
-            sa.PrimaryKeyConstraint('id')
+            "risk_adjustments",
+            sa.Column("id", sa.Integer(), nullable=False),
+            sa.Column("timestamp", sa.DateTime(), nullable=False),
+            sa.Column("adjustment_type", sa.String(50), nullable=False),
+            sa.Column("trigger_reason", sa.String(200), nullable=True),
+            sa.Column("parameter_name", sa.String(100), nullable=False),
+            sa.Column("original_value", sa.Numeric(18, 8), nullable=False),
+            sa.Column("adjusted_value", sa.Numeric(18, 8), nullable=False),
+            sa.Column("adjustment_factor", sa.Numeric(18, 8), nullable=False),
+            sa.Column("current_drawdown", sa.Numeric(18, 8), nullable=True),
+            sa.Column("performance_score", sa.Numeric(18, 8), nullable=True),
+            sa.Column("volatility_level", sa.Numeric(18, 8), nullable=True),
+            sa.Column("duration_minutes", sa.Integer(), nullable=True),
+            sa.Column("trades_during_adjustment", sa.Integer(), nullable=True, default=0),
+            sa.Column("pnl_during_adjustment", sa.Numeric(18, 8), nullable=True),
+            sa.Column("session_id", sa.Integer(), nullable=False),
+            sa.Column("created_at", sa.DateTime(), nullable=True),
+            sa.ForeignKeyConstraint(
+                ["session_id"],
+                ["trading_sessions.id"],
+            ),
+            sa.PrimaryKeyConstraint("id"),
         )
 
     # Create indexes for risk_adjustments if missing (PostgreSQL-specific)
-    if _table_exists("risk_adjustments") and not _index_exists("risk_adjustments", "idx_risk_adj_timestamp"):
-        op.execute("CREATE INDEX IF NOT EXISTS idx_risk_adj_timestamp ON risk_adjustments (timestamp)")
-    if _table_exists("risk_adjustments") and not _index_exists("risk_adjustments", "idx_risk_adj_type"):
-        op.execute("CREATE INDEX IF NOT EXISTS idx_risk_adj_type ON risk_adjustments (adjustment_type)")
-    if _table_exists("risk_adjustments") and not _index_exists("risk_adjustments", "idx_risk_adj_session"):
-        op.execute("CREATE INDEX IF NOT EXISTS idx_risk_adj_session ON risk_adjustments (session_id)")
+    if _table_exists("risk_adjustments") and not _index_exists(
+        "risk_adjustments", "idx_risk_adj_timestamp"
+    ):
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS idx_risk_adj_timestamp ON risk_adjustments (timestamp)"
+        )
+    if _table_exists("risk_adjustments") and not _index_exists(
+        "risk_adjustments", "idx_risk_adj_type"
+    ):
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS idx_risk_adj_type ON risk_adjustments (adjustment_type)"
+        )
+    if _table_exists("risk_adjustments") and not _index_exists(
+        "risk_adjustments", "idx_risk_adj_session"
+    ):
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS idx_risk_adj_session ON risk_adjustments (session_id)"
+        )
 
 
 def downgrade():
@@ -107,7 +133,7 @@ def downgrade():
     op.execute("DROP INDEX IF EXISTS idx_dynamic_perf_timestamp")
 
     # Drop tables if they exist
-    if _table_exists('risk_adjustments'):
-        op.drop_table('risk_adjustments')
-    if _table_exists('dynamic_performance_metrics'):
-        op.drop_table('dynamic_performance_metrics')
+    if _table_exists("risk_adjustments"):
+        op.drop_table("risk_adjustments")
+    if _table_exists("dynamic_performance_metrics"):
+        op.drop_table("dynamic_performance_metrics")

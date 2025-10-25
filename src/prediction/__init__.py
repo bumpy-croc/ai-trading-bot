@@ -69,9 +69,7 @@ def create_engine(
 def create_minimal_engine() -> PredictionEngine:
     """Create a minimal prediction engine with basic configuration."""
 
-    return create_engine(
-        enable_sentiment=False, enable_market_microstructure=False
-    )
+    return create_engine(enable_sentiment=False, enable_market_microstructure=False)
 
 
 def predict(data, model_name=None) -> PredictionResult:

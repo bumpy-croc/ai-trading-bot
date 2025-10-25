@@ -10,7 +10,9 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.mock_only
-def test_engine_survives_update_position_failure(mock_strategy, mock_data_provider, tmp_path, caplog):
+def test_engine_survives_update_position_failure(
+    mock_strategy, mock_data_provider, tmp_path, caplog
+):
     from src.live.trading_engine import LiveTradingEngine, PositionSide
 
     idx = pd.date_range(datetime.utcnow(), periods=2, freq="1min")
@@ -43,7 +45,9 @@ def test_engine_survives_update_position_failure(mock_strategy, mock_data_provid
 
 
 @pytest.mark.mock_only
-def test_engine_survives_log_trade_and_close_position_failure(mock_strategy, mock_data_provider, tmp_path, caplog):
+def test_engine_survives_log_trade_and_close_position_failure(
+    mock_strategy, mock_data_provider, tmp_path, caplog
+):
     from unittest.mock import MagicMock
 
     from src.live.trading_engine import LiveTradingEngine, PositionSide
@@ -80,5 +84,3 @@ def test_engine_survives_log_trade_and_close_position_failure(mock_strategy, moc
     engine.positions.pop(position.order_id, None)
     assert position.order_id not in engine.positions
     engine.is_running = False
-
-

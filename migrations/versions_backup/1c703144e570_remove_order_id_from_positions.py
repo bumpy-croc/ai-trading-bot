@@ -5,12 +5,13 @@ Revises: b673f791db9f
 Create Date: 2025-09-04 12:03:39.624101
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = '1c703144e570'
-down_revision = 'b673f791db9f'
+revision = "1c703144e570"
+down_revision = "b673f791db9f"
 branch_labels = None
 depends_on = None
 
@@ -28,4 +29,6 @@ def downgrade() -> None:
     op.add_column("positions", sa.Column("order_id", sa.String(100)))
 
     # Recreate the unique constraint
-    op.create_unique_constraint("uq_position_order_session", "positions", ["order_id", "session_id"])
+    op.create_unique_constraint(
+        "uq_position_order_session", "positions", ["order_id", "session_id"]
+    )

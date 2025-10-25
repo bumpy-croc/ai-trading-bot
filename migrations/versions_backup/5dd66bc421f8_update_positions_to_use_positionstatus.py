@@ -5,11 +5,12 @@ Revises: 0013_add_order_table
 Create Date: 2025-09-02 21:41:42.310634
 
 """
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = '5dd66bc421f8'
-down_revision = '0013_add_order_table'
+revision = "5dd66bc421f8"
+down_revision = "0013_add_order_table"
 branch_labels = None
 depends_on = None
 
@@ -22,7 +23,8 @@ def upgrade() -> None:
     op.execute("ALTER TABLE positions DROP CONSTRAINT IF EXISTS positions_status_fkey")
 
     # Change the status column to use positionstatus enum
-    op.execute("""
+    op.execute(
+        """
         ALTER TABLE positions
         ALTER COLUMN status TYPE positionstatus
         USING CASE
@@ -30,7 +32,8 @@ def upgrade() -> None:
             WHEN status = 'CLOSED' THEN 'CLOSED'::positionstatus
             ELSE 'OPEN'::positionstatus
         END
-    """)
+    """
+    )
 
 
 def downgrade() -> None:
@@ -38,7 +41,8 @@ def downgrade() -> None:
     op.execute("ALTER TABLE positions DROP CONSTRAINT IF EXISTS positions_status_fkey")
 
     # Change back to orderstatus enum
-    op.execute("""
+    op.execute(
+        """
         ALTER TABLE positions
         ALTER COLUMN status TYPE orderstatus
         USING CASE
@@ -46,4 +50,5 @@ def downgrade() -> None:
             WHEN status = 'CLOSED' THEN 'CLOSED'::orderstatus
             ELSE 'OPEN'::orderstatus
         END
-    """)
+    """
+    )

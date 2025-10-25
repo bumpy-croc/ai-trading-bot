@@ -328,9 +328,7 @@ class TestAccountSynchronizer:
         result = synchronizer._sync_orders([])
         assert result["synced"] is True
         assert result["cancelled_orders"] == 1
-        mock_db_manager.update_order_status_new.assert_called_with(
-            order_id=1, status="CANCELLED"
-        )
+        mock_db_manager.update_order_status_new.assert_called_with(order_id=1, status="CANCELLED")
 
     def test_recover_missing_trades_comprehensive(
         self, synchronizer, mock_exchange, mock_db_manager
@@ -486,7 +484,7 @@ class TestAccountSynchronizer:
                 "quantity": 0.001,
                 "price": 50000.0,
                 "created_at": datetime.utcnow(),
-            }
+            },
         ]
 
         # * Mock both orders on exchange
@@ -508,7 +506,7 @@ class TestAccountSynchronizer:
                 commission=0.0,
                 commission_asset="USDT",
                 create_time=datetime.utcnow(),
-                update_time=datetime.utcnow()
+                update_time=datetime.utcnow(),
             ),
             ExchangeOrder(
                 order_id="new_order_555",
@@ -523,16 +521,18 @@ class TestAccountSynchronizer:
                 commission=0.0,
                 commission_asset="USDT",
                 create_time=datetime.utcnow(),
-                update_time=datetime.utcnow()
-            )
+                update_time=datetime.utcnow(),
+            ),
         ]
 
-        synchronizer.exchange.sync_account_data = Mock(return_value={
-            "sync_successful": True,
-            "balances": [],
-            "positions": [],
-            "open_orders": mock_orders
-        })
+        synchronizer.exchange.sync_account_data = Mock(
+            return_value={
+                "sync_successful": True,
+                "balances": [],
+                "positions": [],
+                "open_orders": mock_orders,
+            }
+        )
 
         # * Perform sync
         result = synchronizer.sync_account_data()
@@ -636,7 +636,6 @@ class TestAccountSynchronizerIntegration:
         assert "emergency_trade_recovery" in result.data
         assert mock_recover.call_count == 4  # BTCUSDT, ETHUSDT, SOLUSDT, AVAXUSDT
 
-
     def test_sync_handles_mixed_legacy_and_new_orders(self, real_synchronizer, mock_db_manager):
         """Test sync with a mix of legacy positions and new Order table records."""
         # * This test simulates the transition period where some positions
@@ -652,7 +651,7 @@ class TestAccountSynchronizerIntegration:
             quantity=0.01,
             strategy_name="legacy_strategy",
             entry_order_id="legacy_order_444",
-            session_id=1
+            session_id=1,
         )
 
         # * Create a new position with Order table (normal flow)
@@ -664,7 +663,7 @@ class TestAccountSynchronizerIntegration:
             quantity=0.001,
             strategy_name="new_strategy",
             entry_order_id="new_order_555",
-            session_id=1
+            session_id=1,
         )
 
         # * Mock both orders on exchange
@@ -686,7 +685,7 @@ class TestAccountSynchronizerIntegration:
                 commission=0.0,
                 commission_asset="USDT",
                 create_time=datetime.utcnow(),
-                update_time=datetime.utcnow()
+                update_time=datetime.utcnow(),
             ),
             ExchangeOrder(
                 order_id="new_order_555",
@@ -701,8 +700,8 @@ class TestAccountSynchronizerIntegration:
                 commission=0.0,
                 commission_asset="USDT",
                 create_time=datetime.utcnow(),
-                update_time=datetime.utcnow()
-            )
+                update_time=datetime.utcnow(),
+            ),
         ]
 
         # * Mock database to return pending orders for sync comparison
@@ -730,15 +729,17 @@ class TestAccountSynchronizerIntegration:
                 "side": "BUY",
                 "quantity": 0.001,
                 "price": 50000.0,
-            }
+            },
         ]
 
-        real_synchronizer.exchange.sync_account_data = Mock(return_value={
-            "sync_successful": True,
-            "balances": [],
-            "positions": [],
-            "open_orders": mock_orders
-        })
+        real_synchronizer.exchange.sync_account_data = Mock(
+            return_value={
+                "sync_successful": True,
+                "balances": [],
+                "positions": [],
+                "open_orders": mock_orders,
+            }
+        )
 
         # * Perform sync
         result = real_synchronizer.sync_account_data()

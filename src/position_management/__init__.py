@@ -1,4 +1,5 @@
 """Position management module for dynamic risk and position sizing."""
+
 from .dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 
 # Re-export new MFE/MAE modules if present

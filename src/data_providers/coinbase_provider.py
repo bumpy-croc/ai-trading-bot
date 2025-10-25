@@ -597,15 +597,15 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     def _convert_order_status(self, status: str, done_reason: str = None) -> OrderStatus:
         """Convert Coinbase order status to internal OrderStatus enum.
-        
+
         Args:
             status: Coinbase order status
             done_reason: For 'done' orders, the reason (filled, cancelled, etc.)
         """
         if status == "open":
-            return OrderStatus.PENDING           # Order is live but not filled
+            return OrderStatus.PENDING  # Order is live but not filled
         elif status == "pending":
-            return OrderStatus.PENDING           # Order submission pending  
+            return OrderStatus.PENDING  # Order submission pending
         elif status == "active":
             return OrderStatus.PARTIALLY_FILLED  # Order partially executed
         elif status == "done":
