@@ -9,9 +9,8 @@ import pandas as pd
 
 from src.config.constants import DEFAULT_ENABLE_SENTIMENT
 from src.data_providers.feargreed_provider import FearGreedProvider
-
-from .base import FeatureExtractor
-from .schemas import SENTIMENT_FEATURES_SCHEMA
+from src.tech.features.base import FeatureExtractor
+from src.tech.features.schemas import SENTIMENT_FEATURES_SCHEMA
 
 
 class SentimentFeatureExtractor(FeatureExtractor):

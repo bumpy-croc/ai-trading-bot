@@ -5,10 +5,8 @@ This package provides feature extraction and engineering capabilities
 for the prediction engine.
 """
 
-from .base import FeatureExtractor
-from .market import MarketFeatureExtractor
-from .pipeline import FeaturePipeline
-from .schemas import (
+from src.tech.features.base import FeatureExtractor
+from src.tech.features.schemas import (
     SENTIMENT_FEATURES_SCHEMA,
     TECHNICAL_FEATURES_SCHEMA,
     FeatureDefinition,
@@ -16,8 +14,11 @@ from .schemas import (
     FeatureType,
     NormalizationMethod,
 )
+from src.tech.features.technical import TechnicalFeatureExtractor
+
+from .market import MarketFeatureExtractor
+from .pipeline import FeaturePipeline
 from .sentiment import SentimentFeatureExtractor
-from .technical import TechnicalFeatureExtractor
 
 __all__ = [
     "FeatureExtractor",

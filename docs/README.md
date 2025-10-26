@@ -1,6 +1,6 @@
 # Documentation
 
-> **Last Updated**: 2025-10-25  
+> **Last Updated**: 2025-10-26  
 > **Maintained By**: AI Trading Bot Team
 
 This folder contains reference guides for the main subsystems that make up the AI trading platform. Each document focuses on how the runtime works today and includes links to relevant code and operational commands.
@@ -16,6 +16,7 @@ This folder contains reference guides for the main subsystems that make up the A
 - [Backtesting](backtesting.md) - Historical simulation engine and optimization
 - [Live trading](live_trading.md) - Real-time execution, risk controls, and safety features
 - [Prediction & models](prediction.md) - ML model registry, inference, and training
+- [Technical indicators](tech_indicators.md) - Shared indicator math and adapters
 
 ### Operations
 - [Database](database.md) - PostgreSQL setup, migrations, and backups

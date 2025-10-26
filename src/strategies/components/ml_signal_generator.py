@@ -18,7 +18,7 @@ from src.config.constants import DEFAULT_USE_PREDICTION_ENGINE
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
-from src.prediction.features.technical import TechnicalFeatureExtractor
+from src.tech.features.technical import TechnicalFeatureExtractor
 from src.regime.detector import TrendLabel, VolLabel
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
