@@ -10,6 +10,7 @@
     - `src/dashboards` - Dashboards
     - `src/data_providers` - Data providers for communicating with crypto exchanges
     - `src/database` - Database manager and ui
+    - `src/platform` - Cross-cutting logging/config/runtime helpers (logging config/context/events, path+geo+secret utilities)
     - `src/live` - Live trading engine
     - `src/ml` - ML models
     - `src/optimizer` - Parameter optimization and strategy tuning tools for systematic strategy improvement.
@@ -17,9 +18,12 @@
     - `src/prediction` - ONNX model registry and caching
     - `src/risk` - Global risk management applied across entire system
     - `src/regime` - Regime detection
+    - `src/sentiment` - Sentiment adapters that merge provider data onto market series
+    - `src/tech` - Shared indicator math, adapters, and feature builders (feeds prediction, risk, dashboards)
+    - `src/trading` - Trading-specific helpers (strategies, symbols, etc.)
 - `tests`
     - `unit` - Unit tests. Keep fast and robust.
-    - `integration` - Integration tests for larger surfaces area.
+    - `integration` - Integration tests for larger surface area.
 
 ## Operational Guidelines
 
