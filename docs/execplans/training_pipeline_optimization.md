@@ -6,7 +6,7 @@ Researchers use the `atb train` CLI command to produce updated price and sentime
 
 ## Scope and Non-Goals
 
-The scope is limited to the training pipeline implemented in `cli/commands/train_commands.py` and any helper modules created to support it. The ONNX conversion step must remain available because every strategy currently references `.onnx` files and the live inference layer uses `onnxruntime`. Engines under `src/live`, `src/backtesting`, and `src/prediction` are out of scope for code modifications. The plan does not remove TensorFlow; it restructures how the trainer feeds it. Any optional shortcuts introduced here must default to the current behavior so that unattended jobs keep producing identical artifacts.
+The scope is limited to the training pipeline implemented in `cli/commands/train_commands.py` and any helper modules created to support it. The ONNX conversion step must remain available because every strategy currently references `.onnx` files and the live inference layer uses `onnxruntime`. Engines under `src/live`, `src/backtesting`, and `src/prediction` are out of scope for code modifications. The plan does not remove TensorFlow; it restructures how the trainer feeds it. To guarantee data freshness we will download both OHLCV candles and sentiment every time the trainer runs; only downstream processing can be optimized. Any optional shortcuts introduced here must default to the current behavior so that unattended jobs keep producing identical artifacts.
 
 ## Context and Definitions
 
@@ -18,7 +18,7 @@ Caching means storing previously downloaded data locally so that subsequent runs
 
 - [x] (2025-10-26 23:35Z) Captured initial scope, goals, and constraints in this ExecPlan.
 - [ ] Record baseline timings for the current trainer by running `atb train model BTCUSDT --timeframe 1d --start-date 2019-01-01 --end-date 2024-12-01` and logging durations for ingestion, feature prep, dataset creation, training, evaluation, diagnostics, and ONNX export.
-- [ ] Implement deterministic caching for price data and sentiment data plus a `--force-refresh` flag; add unit tests for the new logic.
+- [ ] Profile the ingestion logic and add instrumentation so that repeated downloads are at least observable even though they must always occur for freshness.
 - [ ] Refactor the monolithic trainer into modules (ingestion, feature engineering, dataset building, training runner, artifact writer) with docstrings and tests.
 - [ ] Replace the Python sequence builder with a vectorized or `tf.data` based approach, ensuring shapes and order remain stable.
 - [ ] Add CLI flags for epochs, batch size, sequence length, and toggles (`--skip-plots`, `--skip-robustness`, `--skip-onnx`) while keeping ONNX export on by default; mutate metadata to record which steps ran.
@@ -45,7 +45,7 @@ Begin by capturing the baseline so that improvements are measurable. Instrument 
 
 The current execution can take between one and two hours for the full BTCUSDT training window, so expect the baseline run (and the later validation run) to monopolize the machine for that long. To keep development feedback loops tight, use shorter date ranges when testing individual pipeline stages and reserve the full-length command for the initial benchmark and the final confirmation step.
 
-Next, tackle ingestion caching. Before calling `cli.commands.data._download`, compute the expected filename pattern `{symbol}_{timeframe}_{start}_{end}` inside the `data/` directory. If the file exists (CSV or Feather), log that it will be reused and skip the download. Expose a new CLI flag `--force-refresh` (default false) that deletes or bypasses cached artifacts when the user needs fresh candles. For sentiment, reuse a single `FearGreedProvider` instance per run and persist its DataFrame into `cache/sentiment/feargreed.parquet` along with the last timestamp. On subsequent runs, read from that file when it covers the requested date range and remains within `freshness_days`. Write unit tests that simulate existing files and assert that downloads occur only when necessary or when `--force-refresh` is true.
+For ingestion, keep the logic simple and transparent: always invoke `cli.commands.data._download` to fetch OHLCV candles for the requested range, and always instantiate a fresh `FearGreedProvider` so that sentiment data reflects the latest Alternative.me index. Even though this means each end-to-end run performs network I/O, log the duration of these steps so you can see their contribution to total runtime. The performance gains in this plan come from streamlining feature preparation, dataset construction, and TensorFlow execution rather than skipping downloads.
 
 With ingestion addressed, refactor the pipeline into discrete helpers. Create a `TrainingConfig` dataclass that captures symbol, timeframe, date range, epochs, batch size, sequence length, flags for diagnostics and exports, and whether mixed precision is allowed. Move ingestion logic to a module such as `src/ml/training_pipeline/ingestion.py`, feature engineering to `features.py`, dataset preparation to `datasets.py`, trainer orchestration to `runner.py`, and artifact writing (including ONNX conversion and metadata emission) to `artifacts.py`. Each module must expose functions that accept explicit inputs and return well-defined outputs so they can be unit tested in isolation. Update `cli/commands/train.py` to parse the new flags and instantiate `TrainingConfig`, then call a top-level `run_training_pipeline(config: TrainingConfig) -> TrainingResult` function that coordinates the modules.
 
@@ -64,3 +64,4 @@ Finally, validate the improvements. Re-run the original command after the refact
 ## Revision History
 
 2025-10-26: Reformatted and expanded the plan to comply with `.agents/PLANS.md`, clarified scope, added definitions, and detailed execution steps.
+2025-10-27: Updated ingestion strategy to always download both candles and sentiment data for freshness per stakeholder guidance.
