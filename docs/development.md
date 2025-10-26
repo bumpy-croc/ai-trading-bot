@@ -16,6 +16,13 @@ make deps               # install development dependencies (pytest, ruff, mypy, 
 
 Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) used by maintainers; the helper now looks up `python3.11` (or `PYTHON311`) and recreates `.venv` with that interpreter if needed, so you never end up running tests on the macOS 3.9 default.
 
+## Key shared directories
+
+- `src/infrastructure/logging`: centralized logging config, context propagation, structured event helpers, and database decision logging.
+- `src/infrastructure/runtime`: process bootstrap helpers (project paths, geo detection, cache TTL overrides, secret resolution).
+- `src/sentiment`: adapters that merge provider sentiment data into OHLCV frames.
+- `src/trading/symbols`: utilities for converting symbols between exchanges (e.g., `BTCUSDT` ↔ `BTC-USD`).
+
 **Related**: See [Configuration](configuration.md) for environment variable setup.
 
 ## Railway deployment quick start

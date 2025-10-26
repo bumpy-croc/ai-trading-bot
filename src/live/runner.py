@@ -17,7 +17,7 @@ from src.risk.risk_manager import RiskParameters
 
 # Import strategies
 from src.strategies.ml_basic import create_ml_basic_strategy
-from src.utils.logging_config import configure_logging
+from src.infrastructure.logging.config import configure_logging
 
 # Configure logging
 configure_logging()

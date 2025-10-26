@@ -16,7 +16,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from src.config import get_config
-from src.utils.symbol_factory import SymbolFactory
+from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
 from .exchange_interface import (
@@ -49,7 +49,7 @@ except ImportError:
     BINANCE_AVAILABLE = False
 
 # Import geo-detection utilities
-from src.utils.geo_detection import get_binance_api_endpoint, is_us_location
+from src.infrastructure.runtime.geo import get_binance_api_endpoint, is_us_location
 
 
 class BinanceProvider(DataProvider, ExchangeInterface):

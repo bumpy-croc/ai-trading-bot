@@ -63,8 +63,8 @@ from src.strategies.components import (
 from src.strategies.components import (
     Strategy as ComponentStrategy,
 )
-from src.utils.logging_context import set_context, update_context
-from src.utils.logging_events import log_engine_event
+from src.infrastructure.logging.context import set_context, update_context
+from src.infrastructure.logging.events import log_engine_event
 
 logger = logging.getLogger(__name__)
 

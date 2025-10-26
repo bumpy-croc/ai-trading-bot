@@ -10,7 +10,7 @@
     - `src/dashboards` - Dashboards
     - `src/data_providers` - Data providers for communicating with crypto exchanges
     - `src/database` - Database manager and ui
-    - `src/platform` - Cross-cutting logging/config/runtime helpers (logging config/context/events, path+geo+secret utilities)
+    - `src/infrastructure` - Cross-cutting logging/config/runtime helpers (logging config/context/events, path+geo+secret utilities)
     - `src/live` - Live trading engine
     - `src/ml` - ML models
     - `src/optimizer` - Parameter optimization and strategy tuning tools for systematic strategy improvement.

@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 
 from src.config import get_config
-from src.utils.symbol_factory import SymbolFactory
+from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
 from .exchange_interface import (

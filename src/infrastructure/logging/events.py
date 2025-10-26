@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.utils.logging_context import get_context
+from src.infrastructure.logging.context import get_context
 
 _logger = logging.getLogger(__name__)
 

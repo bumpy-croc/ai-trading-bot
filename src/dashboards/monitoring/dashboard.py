@@ -46,7 +46,7 @@ from flask_socketio import SocketIO, emit
 
 # Ensure absolute imports resolve when running as a module or script
 # This must happen after monkey patching to avoid RLock issues
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 project_root = get_project_root()
 if str(project_root) not in sys.path:
@@ -122,7 +122,7 @@ class MonitoringDashboard:
         self.app = Flask(
             __name__, template_folder=str(templates_path), static_folder=str(static_path)
         )
-        from src.utils.secrets import get_secret_key
+        from src.infrastructure.runtime.secrets import get_secret_key
 
         self.app.config["SECRET_KEY"] = get_secret_key()
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)

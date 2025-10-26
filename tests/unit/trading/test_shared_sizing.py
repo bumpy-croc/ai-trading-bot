@@ -1,4 +1,4 @@
-from src.trading.shared.sizing import normalize_position_size
+from src.position_management.sizing import normalize_position_size
 
 
 def test_normalize_fraction_mode():

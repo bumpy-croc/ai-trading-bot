@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 # Ensure project root and src are importable when the command is packaged
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 

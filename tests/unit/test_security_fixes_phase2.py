@@ -105,7 +105,7 @@ def test_sec_005_database_ssl_override():
 
 def test_sec_006_logging_redaction_expanded():
     """SEC-006: Verify expanded sensitive keys are redacted."""
-    from src.utils.logging_config import SensitiveDataFilter
+    from src.infrastructure.logging.config import SensitiveDataFilter
     
     filter_obj = SensitiveDataFilter()
     
@@ -128,7 +128,7 @@ def test_sec_006_logging_redaction_expanded():
 
 def test_sec_006_logging_redaction_json():
     """SEC-006: Verify JSON-style redaction works."""
-    from src.utils.logging_config import SensitiveDataFilter
+    from src.infrastructure.logging.config import SensitiveDataFilter
     
     filter_obj = SensitiveDataFilter()
     

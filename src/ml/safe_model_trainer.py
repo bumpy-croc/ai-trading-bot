@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.live.strategy_manager import StrategyManager
-from src.utils.logging_config import configure_logging
+from src.infrastructure.logging.config import configure_logging
 
 configure_logging()
 logger = logging.getLogger(__name__)

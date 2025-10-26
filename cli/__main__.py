@@ -31,7 +31,7 @@ def _apply_very_early_gevent_patching() -> None:
 # Apply gevent patching immediately if needed
 _apply_very_early_gevent_patching()
 
-from src.utils.logging_config import configure_logging
+from src.infrastructure.logging.config import configure_logging
 
 
 def load_env_file_to_environment() -> None:

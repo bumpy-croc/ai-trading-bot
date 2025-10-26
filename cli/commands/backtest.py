@@ -7,7 +7,7 @@ import sys
 from datetime import datetime, timedelta
 
 # Ensure project root and src are in sys.path for absolute imports
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -23,8 +23,8 @@ from src.strategies import (
     create_ml_sentiment_strategy,
     create_momentum_leverage_strategy,
 )
-from src.utils.logging_config import configure_logging
-from src.utils.symbol_factory import SymbolFactory
+from src.infrastructure.logging.config import configure_logging
+from src.trading.symbols.factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")
 
@@ -97,7 +97,7 @@ def _handle(ns: argparse.Namespace) -> int:
             from src.data_providers.cached_data_provider import CachedDataProvider
 
             # Determine appropriate cache TTL based on provider state
-            from src.utils.cache_utils import get_cache_ttl_for_provider
+            from src.infrastructure.runtime.cache import get_cache_ttl_for_provider
 
             cache_ttl = get_cache_ttl_for_provider(provider, ns.cache_ttl)
             data_provider = CachedDataProvider(provider, cache_ttl_hours=cache_ttl)

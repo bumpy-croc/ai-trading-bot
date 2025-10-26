@@ -27,7 +27,7 @@ from tensorflow.keras.layers import (
 )
 from tensorflow.keras.models import Model
 
-from src.utils.symbol_factory import SymbolFactory
+from src.trading.symbols.factory import SymbolFactory
 
 
 def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:

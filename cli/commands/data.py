@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # Ensure project root and src are in sys.path for absolute imports
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -18,8 +18,8 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 import ccxt
 import pandas as pd
 
-from src.utils.logging_config import configure_logging
-from src.utils.symbol_factory import SymbolFactory
+from src.infrastructure.logging.config import configure_logging
+from src.trading.symbols.factory import SymbolFactory
 
 
 def _download(ns: argparse.Namespace) -> int:
@@ -145,7 +145,7 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     from src.config.paths import ensure_dir_exists, get_cache_dir
     from src.data_providers.binance_provider import BinanceProvider
     from src.data_providers.cached_data_provider import CachedDataProvider
-    from src.utils.logging_config import configure_logging
+    from src.infrastructure.logging.config import configure_logging
 
     # Setup logging
     configure_logging(level_name="INFO")

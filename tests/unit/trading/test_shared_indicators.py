@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.trading.shared.indicators import (
+from src.tech.adapters.row_extractors import (
     extract_indicators,
     extract_ml_predictions,
     extract_sentiment_data,
