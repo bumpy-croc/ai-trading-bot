@@ -6,15 +6,15 @@ This project ships a command-line interface and Makefile targets that standardis
 
 ## Environment setup
 
-**Requirements**: Python 3.9+ (Python 3.11+ recommended)
+**Requirements**: Python 3.11 (the repo relies on 3.11-only typing features and the dev tooling now enforces it)
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate
 make install            # install the CLI in editable mode
 make deps               # install development dependencies (pytest, ruff, mypy, etc.)
 ```
 
-Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) used by maintainers.
+Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) used by maintainers; the helper now looks up `python3.11` (or `PYTHON311`) and recreates `.venv` with that interpreter if needed, so you never end up running tests on the macOS 3.9 default.
 
 **Related**: See [Configuration](configuration.md) for environment variable setup.
 

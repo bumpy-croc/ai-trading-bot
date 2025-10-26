@@ -14,11 +14,12 @@ import pandas as pd
 from src.config.constants import DEFAULT_FEATURE_CACHE_TTL
 from src.prediction.utils.caching import FeatureCache
 
-from .base import FeatureExtractor
+from src.tech.features.base import FeatureExtractor
+from src.tech.features.technical import TechnicalFeatureExtractor
+
 from .market import MarketFeatureExtractor
 from .price_only import PriceOnlyFeatureExtractor
 from .sentiment import SentimentFeatureExtractor
-from .technical import TechnicalFeatureExtractor
 
 # Default threshold for NaN values in features
 DEFAULT_NAN_THRESHOLD = 0.5

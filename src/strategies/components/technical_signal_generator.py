@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from src.indicators.technical import (
+from src.tech.indicators.core import (
     calculate_atr,
     calculate_bollinger_bands,
     calculate_macd,

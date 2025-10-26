@@ -992,7 +992,7 @@ class MonitoringDashboard:
     def _get_current_rsi(self) -> float:
         """Get current RSI value"""
         try:
-            from indicators.technical import calculate_rsi
+            from src.tech.indicators.core import calculate_rsi
 
             df = self.data_provider.get_historical_data(
                 "BTCUSDT", "1h", datetime.now() - timedelta(days=30), datetime.now()
@@ -1008,7 +1008,7 @@ class MonitoringDashboard:
     def _get_ema_trend(self) -> str:
         """Get EMA trend direction"""
         try:
-            from indicators.technical import calculate_ema
+            from src.tech.indicators.core import calculate_ema
 
             df = self.data_provider.get_historical_data(
                 "BTCUSDT", "1h", datetime.now() - timedelta(days=30), datetime.now()

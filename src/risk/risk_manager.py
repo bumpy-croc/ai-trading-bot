@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -20,7 +22,7 @@ from src.config.constants import (
     DEFAULT_TRAILING_DISTANCE_ATR_MULT,
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
-from src.indicators.technical import calculate_atr
+from src.tech.indicators.core import calculate_atr
 
 
 @dataclass
