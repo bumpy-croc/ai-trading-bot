@@ -19,10 +19,10 @@ Caching means storing previously downloaded data locally so that subsequent runs
 - [x] (2025-10-26 23:35Z) Captured initial scope, goals, and constraints in this ExecPlan.
 - [ ] Record baseline timings for the current trainer by running `atb train model BTCUSDT --timeframe 1d --start-date 2019-01-01 --end-date 2024-12-01` and logging durations for ingestion, feature prep, dataset creation, training, evaluation, diagnostics, and ONNX export.
 - [ ] Profile the ingestion logic and add instrumentation so that repeated downloads are at least observable even though they must always occur for freshness.
-- [ ] Refactor the monolithic trainer into modules (ingestion, feature engineering, dataset building, training runner, artifact writer) with docstrings and tests.
-- [ ] Replace the Python sequence builder with a vectorized or `tf.data` based approach, ensuring shapes and order remain stable.
-- [ ] Add CLI flags for epochs, batch size, sequence length, and toggles (`--skip-plots`, `--skip-robustness`, `--skip-onnx`) while keeping ONNX export on by default; mutate metadata to record which steps ran.
-- [ ] Detect GPUs and optionally enable mixed precision and XLA, with documentation on how to opt out when debugging.
+- [x] (2025-10-27) Refactored the monolithic trainer into modular packages (`src/ml/training_pipeline/*`) and added unit tests for the dataset builder.
+- [x] (2025-10-27) Replaced the Python sequence builder with a vectorized NumPy implementation plus `tf.data` datasets for training/validation.
+- [x] (2025-10-27) Added CLI flags for epochs, batch size, sequence length, skip toggles, and mixed-precision controls; documented them in `docs/prediction.md`.
+- [x] (2025-10-27) Enabled optional mixed precision/XLA activation when GPUs are available.
 - [ ] Re-run the baseline command, capture new timings, confirm RMSE parity (≤1% delta), and update this plan’s Outcomes section before closing.
 
 ## Surprises & Discoveries
@@ -65,3 +65,4 @@ Finally, validate the improvements. Re-run the original command after the refact
 
 2025-10-26: Reformatted and expanded the plan to comply with `.agents/PLANS.md`, clarified scope, added definitions, and detailed execution steps.
 2025-10-27: Updated ingestion strategy to always download both candles and sentiment data for freshness per stakeholder guidance.
+2025-10-27: Implemented modular training pipeline (`src/ml/training_pipeline`), tf.data datasets, CLI flags, GPU mixed-precision toggle, and documentation/test updates.

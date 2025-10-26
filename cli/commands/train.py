@@ -73,6 +73,26 @@ def _handle_model(ns: argparse.Namespace) -> int:
     parser.add_argument("--timeframe", type=str, default="1d", help="Timeframe")
     parser.add_argument("--force-sentiment", action="store_true", help="Force sentiment inclusion")
     parser.add_argument("--force-price-only", action="store_true", help="Train price-only model")
+    parser.add_argument("--epochs", type=int, default=300, help="Training epochs")
+    parser.add_argument("--batch-size", type=int, default=32, help="Training batch size")
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        default=120,
+        help="Sequence length for dataset windows",
+    )
+    parser.add_argument("--skip-plots", action="store_true", help="Skip generating training plots")
+    parser.add_argument(
+        "--skip-robustness",
+        action="store_true",
+        help="Skip robustness evaluation",
+    )
+    parser.add_argument("--skip-onnx", action="store_true", help="Skip ONNX export")
+    parser.add_argument(
+        "--disable-mixed-precision",
+        action="store_true",
+        help="Disable mixed precision even when a GPU is available",
+    )
 
     # Parse the arguments from ns.args
     args = parser.parse_args(ns.args or [])
@@ -91,6 +111,14 @@ def _handle_price(ns: argparse.Namespace) -> int:
     )
     parser.add_argument("--end-date", type=str, default="2024-12-01", help="End date (YYYY-MM-DD)")
     parser.add_argument("--timeframe", type=str, default="1d", help="Timeframe")
+    parser.add_argument("--epochs", type=int, default=100, help="Training epochs")
+    parser.add_argument("--batch-size", type=int, default=256, help="Training batch size")
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        default=120,
+        help="Sequence length for dataset windows",
+    )
 
     # Parse the arguments from ns.args
     args = parser.parse_args(ns.args or [])
