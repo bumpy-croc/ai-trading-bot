@@ -337,6 +337,29 @@ def _print_next_steps() -> None:
     print("=" * 40)
 
     print("\n🐘 PostgreSQL Development Environment Ready")
+    print("\n📋 Useful Commands:")
+    print("   # Start PostgreSQL")
+    print("   docker-compose up -d postgres")
+    print()
+    print("   # Stop PostgreSQL")
+    print("   docker-compose down")
+    print()
+    print("   # View PostgreSQL logs")
+    print("   docker-compose logs postgres")
+    print()
+    print("   # Connect to PostgreSQL")
+    print("   docker-compose exec postgres psql -U trading_bot -d ai_trading_bot")
+    print()
+
+    print("🚀 Run Your First Backtest:")
+    print("   atb backtest ml_basic --days 30 --no-db")
+    print()
+    print("🔧 Verify Database Connection:")
+    print("   atb db verify")
+    print()
+    print("📊 Start Live Trading (Paper Mode):")
+    print("   atb live ml_basic")
+    print()
 
 
 def _find_python311() -> Path | None:
@@ -395,29 +418,6 @@ def _venv_python_path(venv_dir: Path) -> Path:
     if os.name == "nt":
         return venv_dir / "Scripts" / "python.exe"
     return venv_dir / "bin" / "python"
-    print("\n📋 Useful Commands:")
-    print("   # Start PostgreSQL")
-    print("   docker-compose up -d postgres")
-    print()
-    print("   # Stop PostgreSQL")
-    print("   docker-compose down")
-    print()
-    print("   # View PostgreSQL logs")
-    print("   docker-compose logs postgres")
-    print()
-    print("   # Connect to PostgreSQL")
-    print("   docker-compose exec postgres psql -U trading_bot -d ai_trading_bot")
-    print()
-
-    print("🚀 Run Your First Backtest:")
-    print("   atb backtest ml_basic --days 30 --no-db")
-    print()
-    print("🔧 Verify Database Connection:")
-    print("   atb db verify")
-    print()
-    print("📊 Start Live Trading (Paper Mode):")
-    print("   atb live ml_basic")
-    print()
     print("📈 Start Dashboard:")
     print("   atb dev dashboard")
 
