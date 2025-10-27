@@ -114,18 +114,28 @@ def create_robust_features(
             scalers[feature] = scaler
 
     if "close" in data.columns:
+        # Calculate rolling features (produces NaNs for initial window)
         for window in [7, 14, 30]:
             col = f"sma_{window}"
             data[col] = data["close"].rolling(window=window).mean()
-            scaled = f"{col}_scaled"
-            data[scaled] = MinMaxScaler().fit_transform(data[[col]])
-            feature_names.append(scaled)
 
+        # Calculate RSI (produces NaNs for initial window)
         delta = data["close"].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
         data["rsi"] = 100 - (100 / (1 + rs))
+
+        # Drop NaNs before scaling to avoid MinMaxScaler ValueError
+        data = data.dropna()
+
+        # Now scale the technical indicators (NaN-free data)
+        for window in [7, 14, 30]:
+            col = f"sma_{window}"
+            scaled = f"{col}_scaled"
+            data[scaled] = MinMaxScaler().fit_transform(data[[col]])
+            feature_names.append(scaled)
+
         data["rsi_scaled"] = MinMaxScaler().fit_transform(data[["rsi"]])
         feature_names.append("rsi_scaled")
 
@@ -140,5 +150,6 @@ def create_robust_features(
                 feature_names.append(scaled)
                 scalers[feature] = scaler
 
-    data = data.dropna()
+    # NaNs already dropped after technical indicator calculation (line 130)
+    # Sentiment features use fillna(0), so no additional NaNs expected
     return data, scalers, feature_names
