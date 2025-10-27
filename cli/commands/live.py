@@ -58,9 +58,20 @@ def _list_registry() -> dict[str, dict[str, dict[str, list[str] | str | None]]]:
 
 
 def _resolve_version_path(path_str: str) -> Path:
+    """
+    Resolve and validate a model version path.
+
+    Security: Always resolves paths (including absolute ones) before validation
+    to prevent symlink-based path traversal attacks. A crafted symlink inside
+    the registry could otherwise redirect to directories outside the boundary.
+    """
     candidate = Path(path_str)
     if not candidate.is_absolute():
-        candidate = (MODEL_REGISTRY / candidate).resolve()
+        candidate = MODEL_REGISTRY / candidate
+
+    # Resolve ALL paths (including absolute) to follow symlinks and normalize
+    candidate = candidate.resolve()
+
     if not candidate.exists():
         raise FileNotFoundError(f"Model path does not exist: {candidate}")
     if MODEL_REGISTRY not in candidate.parents:
