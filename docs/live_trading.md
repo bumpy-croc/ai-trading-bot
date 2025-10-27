@@ -73,7 +73,7 @@ Useful flags:
 
 The control surface lives under `atb live-control`:
 
-- `atb live-control train --symbol BTCUSDT --days 365 --auto-deploy` – trains a model via `SafeModelTrainer` and optionally deploys
+- `atb live-control train --symbol BTCUSDT --days 365` – runs the standard `atb train` pipeline from the live console and updates the registry’s `latest` symlink
   it.
 - `atb live-control deploy-model --model-path <staging-dir> --close-positions` – promote a staged bundle into the live strategy
   directory.

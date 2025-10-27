@@ -43,20 +43,12 @@ if not is_railway_environment():
             train_price_model_main,
             train_price_only_model_main,
         )
-        from cli.core.forward import forward_to_module_main
-
         _TRAINING_AVAILABLE = True
     except ImportError as e:
         print(f"Warning: Training commands not available: {e}")
         _TRAINING_AVAILABLE = False
 else:
     _TRAINING_AVAILABLE = False
-
-
-def _handle_safe(ns: argparse.Namespace) -> int:
-    if not _TRAINING_AVAILABLE:
-        return _handle_railway_error("safe model trainer")
-    return forward_to_module_main("src.ml.safe_model_trainer", ns.args or [])
 
 
 def _handle_model(ns: argparse.Namespace) -> int:
@@ -169,10 +161,6 @@ def _handle_railway_error(command_name: str) -> int:
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("train", help="Model training and validation")
     sub = p.add_subparsers(dest="train_cmd", required=True)
-
-    p_safe = sub.add_parser("safe", help="Safe model trainer")
-    p_safe.add_argument("args", nargs=argparse.REMAINDER)
-    p_safe.set_defaults(func=_handle_safe)
 
     p_model = sub.add_parser("model", help="Train combined model")
     p_model.add_argument("args", nargs=argparse.REMAINDER)

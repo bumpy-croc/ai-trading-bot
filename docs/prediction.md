@@ -63,16 +63,21 @@ Helper commands under `atb models` provide operational visibility:
 
 ## Training and deployment
 
-`SafeModelTrainer` (`src/ml/safe_model_trainer.py`) wraps training scripts so new models are prepared in `/tmp/ai-trading-bot-staging`
-before being deployed:
+`atb train` now writes models directly into the registry at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}` and refreshes the `latest`
+symlink used by the prediction engine. Operations teams can still trigger training from the live-control CLI, which simply wraps the
+same pipeline:
 
 ```bash
-# Train a price-only model on 365 days of data
-atb live-control train --symbol BTCUSDT --days 365 --epochs 50 --auto-deploy
+# Train a price-only model on the last 365 days and update the latest bundle
+atb live-control train --symbol BTCUSDT --days 365 --epochs 50
 ```
 
-The trainer performs backups of the current live bundle, runs validation, and creates a deployment package. `atb live-control deploy-model`
-promotes the staged bundle to the live models directory and can optionally close open positions before the swap.
+To roll back, repoint the `latest` symlink with either `atb models promote …` or `atb live-control deploy-model --model-path BTCUSDT/basic/2025-09-17_1h_v1`.
+Listing available bundles uses the same registry information:
+
+```bash
+atb live-control list-models
+```
 
 Models are stored in `src/ml/models` by default. Metadata JSON files capture training parameters so dashboards and audits can tie
 strategy performance back to the model version in use.

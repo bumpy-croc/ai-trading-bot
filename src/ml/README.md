@@ -9,7 +9,7 @@ Models are organized in two formats:
 ### Flat Structure (Legacy)
 Located at `src/ml/` root:
 - `*.onnx` - Legacy ONNX inference models (e.g., `btcusdt_price.onnx`, `btcusdt_sentiment.onnx`)
-- `*.keras` / `*.h5` - Keras training artifacts
+- `*.keras` - Legacy Keras training artifacts (retained as symlinks to the registry)
 - `*_metadata.json` - Model metadata files consumed by the prediction engine
 - `*_training.png` - Training performance visualizations
 
