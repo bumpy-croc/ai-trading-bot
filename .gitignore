@@ -78,5 +78,3 @@ mcp.json
 # Cache directory - only allow market_data subdirectory
 .ruff_cache/
 cache/*
-!cache/market_data/
-!cache/market_data/*.pkl
