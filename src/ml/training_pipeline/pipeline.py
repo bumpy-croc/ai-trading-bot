@@ -60,7 +60,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
     try:
         price_df = download_price_data(ctx)
         sentiment_df = load_sentiment_data(ctx)
-        if sentiment_df is None:
+        if sentiment_df is None or sentiment_df.empty:
             sentiment_assessment = {
                 "recommendation": "price_only",
                 "quality_score": 0.0,
@@ -68,6 +68,9 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             }
             merged_df = price_df.copy()
         else:
+            if sentiment_df.index.tz is not None and price_df.index.tz is None:
+                logger.info("Localizing price data to UTC to match sentiment index")
+                price_df = price_df.tz_localize("UTC")
             sentiment_assessment = assess_sentiment_data_quality(sentiment_df, price_df)
             merged_df = merge_price_sentiment_data(price_df, sentiment_df, ctx.config.timeframe)
 

@@ -17,7 +17,7 @@ from src.infrastructure.runtime.paths import get_project_root
 from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext
 from src.ml.training_pipeline.pipeline import TrainingResult, run_training_pipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
-from src.utils.symbol_factory import SymbolFactory
+from src.trading.symbols.factory import SymbolFactory
 
 PROJECT_ROOT = get_project_root()
 MODELS_DIR = PROJECT_ROOT / "src" / "ml"

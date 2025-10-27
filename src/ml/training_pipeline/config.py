@@ -65,7 +65,7 @@ class TrainingContext:
 
     @property
     def symbol_exchange(self) -> str:
-        from src.utils.symbol_factory import SymbolFactory
+        from src.trading.symbols.factory import SymbolFactory
 
         return SymbolFactory.to_exchange_symbol(self.config.symbol, "binance")
 
