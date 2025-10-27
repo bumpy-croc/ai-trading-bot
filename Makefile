@@ -31,7 +31,6 @@ help:
 	@echo "  make startup              # run migrations and start application"
 
 install:
-	python -m pip install --upgrade pip
 	pip install -e .
 
 deps: install

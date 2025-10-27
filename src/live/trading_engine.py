@@ -54,8 +54,8 @@ from src.strategies.components import MarketData as ComponentMarketData
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, Signal, SignalDirection, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
-from src.utils.logging_context import set_context, update_context
-from src.utils.logging_events import (
+from src.infrastructure.logging.context import set_context, update_context
+from src.infrastructure.logging.events import (
     log_data_event,
     log_engine_event,
     log_order_event,

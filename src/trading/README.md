@@ -4,11 +4,11 @@ Base classes and shared utilities for trading strategies and components.
 
 ## Overview
 
-This module provides the foundational interfaces and shared functionality used across the trading system. It defines base strategy classes, component interfaces, and common utilities for backtesting and live trading.
+This module provides the foundational interfaces and shared functionality used across the trading system. It defines base strategy classes, component interfaces, and common helpers for backtesting and live trading, including symbol utilities under `symbols/`.
 
 ## Modules
 
-- `shared/`: Common trading interfaces and utilities used across the system
+- `symbols/`: Symbol normalization helpers for exchange-specific formats.
 
 ## Key Components
 
@@ -28,9 +28,6 @@ Common helpers used by strategies and engines including validation, error handli
 ## Usage
 
 ```python
-# Import shared trading interfaces
-from src.trading.shared import TradingInterface
-
 # Import base strategy class
 from src.strategies.base import BaseStrategy
 

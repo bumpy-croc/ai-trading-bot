@@ -8,7 +8,7 @@ same visibility during backtests, paper trading, and live execution.
 
 ## Logging configuration
 
-- Call `src.utils.logging_config.configure_logging()` in every entrypoint (already done in CLI modules).
+- Call `src.infrastructure.logging.config.configure_logging()` in every entrypoint (already done in CLI modules).
 - Set `LOG_LEVEL` to control verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`).
 - Enable JSON output with `LOG_JSON=1` (auto-enabled on Railway or when `ENV=production`). Disable with `LOG_JSON=0`.
 - Per-library overrides: `LOG_SQLALCHEMY_LEVEL`, `LOG_URLLIB3_LEVEL`, `LOG_BINANCE_LEVEL`, `LOG_CCXT_LEVEL`.

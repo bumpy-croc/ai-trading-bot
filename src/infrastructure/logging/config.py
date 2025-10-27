@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from src.config import get_config
-from src.utils.logging_context import get_context
+from src.infrastructure.logging.context import get_context
 
 
 class SensitiveDataFilter(logging.Filter):
@@ -270,7 +270,7 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
     # * Use custom JSON formatter for structured logging
     if json:
         formatter = {
-            "()": "src.utils.logging_config.SimpleJsonFormatter",
+            "()": "src.infrastructure.logging.config.SimpleJsonFormatter",
         }
     else:
         formatter = {
@@ -280,11 +280,11 @@ def build_logging_config(level_name: str | None = None, json: bool = False) -> d
         "version": 1,
         "disable_existing_loggers": False,
         "filters": {
-            "redact": {"()": "src.utils.logging_config.SensitiveDataFilter"},
-            "ns": {"()": "src.utils.logging_config.NamespacePrefixFilter"},
-            "ctx": {"()": "src.utils.logging_config.ContextInjectorFilter"},
-            "sample": {"()": "src.utils.logging_config.SamplingFilter"},
-            "truncate": {"()": "src.utils.logging_config.MaxMessageLengthFilter"},
+            "redact": {"()": "src.infrastructure.logging.config.SensitiveDataFilter"},
+            "ns": {"()": "src.infrastructure.logging.config.NamespacePrefixFilter"},
+            "ctx": {"()": "src.infrastructure.logging.config.ContextInjectorFilter"},
+            "sample": {"()": "src.infrastructure.logging.config.SamplingFilter"},
+            "truncate": {"()": "src.infrastructure.logging.config.MaxMessageLengthFilter"},
         },
         "formatters": {
             "default": formatter,

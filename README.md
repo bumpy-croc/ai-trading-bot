@@ -235,7 +235,7 @@ Sentiment data and ML training are supported. Pretrained models live in `src/ml`
 - Do not commit secrets. Use `.env` (see `.env.example`) and environment variables.
 
 ## Logging
-- Centralized logging via `src.utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
+- Centralized logging via `src.infrastructure.logging.config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
 - JSON logs default to enabled in production-like environments (Railway or ENV/APP_ENV=production).
 - See `docs/monitoring.md` for structured events, context, and operations guidance.
 

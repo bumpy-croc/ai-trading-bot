@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 # Ensure project root and src are in sys.path for absolute imports
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -483,7 +483,7 @@ def _venv(ns: argparse.Namespace) -> int:
 def _dashboard(ns: argparse.Namespace) -> int:
     """Run the monitoring dashboard."""
     from src.dashboards.monitoring.dashboard import MonitoringDashboard
-    from src.utils.logging_config import configure_logging
+    from src.infrastructure.logging.config import configure_logging
 
     # Configure logging
     configure_logging(use_json=True)

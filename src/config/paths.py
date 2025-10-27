@@ -8,7 +8,7 @@ subdirectories.
 
 from pathlib import Path
 
-from src.utils.project_paths import get_project_root as get_project_root_utils
+from src.infrastructure.runtime.paths import get_project_root as get_project_root_utils
 
 
 def get_project_root() -> Path:
