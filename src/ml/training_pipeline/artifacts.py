@@ -18,13 +18,14 @@ import tensorflow as tf
 
 @dataclass
 class ArtifactPaths:
+    directory: Path
     keras_path: Path
     onnx_path: Optional[Path]
     metadata_path: Path
     plot_path: Optional[Path]
 
 
-def create_training_plots(history, model, X_test, y_test, feature_names, symbol, model_type, output_dir, enable_plots: bool) -> Optional[Path]:
+def create_training_plots(history, model, X_test, y_test, feature_names, symbol, model_type, output_dir: Path, enable_plots: bool) -> Optional[Path]:
     if not enable_plots:
         return None
     try:
@@ -142,23 +143,42 @@ def convert_to_onnx(model: tf.keras.Model, output_path: Path) -> Optional[Path]:
 
 def save_artifacts(
     model: tf.keras.Model,
-    ctx_symbol: str,
+    symbol: str,
     model_type: str,
-    output_dir: Path,
+    registry_root: Path,
     metadata: dict,
+    version_id: str,
     enable_onnx: bool,
 ) -> ArtifactPaths:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    keras_path = output_dir / f"{ctx_symbol}_{model_type}.keras"
+    symbol_dir = registry_root / symbol.upper()
+    type_dir = symbol_dir / model_type
+    version_dir = type_dir / version_id
+    version_dir.mkdir(parents=True, exist_ok=True)
+
+    keras_path = version_dir / "model.keras"
     model.save(keras_path)
 
-    onnx_path = None
+    onnx_path: Optional[Path] = None
     if enable_onnx:
-        candidate = output_dir / f"{ctx_symbol}_{model_type}.onnx"
+        candidate = version_dir / "model.onnx"
         onnx_path = convert_to_onnx(model, candidate)
 
-    metadata_path = output_dir / f"{ctx_symbol}_{model_type}_metadata.json"
+    metadata_path = version_dir / "metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, default=str)
 
-    return ArtifactPaths(keras_path=keras_path, onnx_path=onnx_path, metadata_path=metadata_path, plot_path=None)
+    latest_link = type_dir / "latest"
+    if latest_link.exists() or latest_link.is_symlink():
+        try:
+            latest_link.unlink()
+        except OSError:
+            pass
+    latest_link.symlink_to(version_dir.name)
+
+    return ArtifactPaths(
+        directory=version_dir,
+        keras_path=keras_path,
+        onnx_path=onnx_path,
+        metadata_path=metadata_path,
+        plot_path=None,
+    )

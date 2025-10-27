@@ -20,7 +20,7 @@ from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.trading.symbols.factory import SymbolFactory
 
 PROJECT_ROOT = get_project_root()
-MODELS_DIR = PROJECT_ROOT / "src" / "ml"
+MODEL_REGISTRY_ROOT = PROJECT_ROOT / "src" / "ml" / "models"
 
 
 def _parse_dates(start: str, end: str) -> Tuple[datetime, datetime]:
@@ -246,7 +246,7 @@ def train_price_model_main(args) -> int:
         },
     }
 
-    registry_root = MODELS_DIR / "models"
+    registry_root = MODEL_REGISTRY_ROOT
     bundle_dir = registry_root / args.symbol / "basic" / version_id
     bundle_dir.mkdir(parents=True, exist_ok=True)
     model.save(bundle_dir / "model.keras")

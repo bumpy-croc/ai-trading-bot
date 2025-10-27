@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Optional
@@ -155,12 +156,15 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         }
 
         output_dir = ctx.paths.models_dir
+        version_id = datetime.utcnow().strftime("%Y-%m-%d_%Hh_v1")
+        metadata["version_id"] = version_id
         artifact_paths = save_artifacts(
             model,
-            ctx.config.symbol.lower(),
+            ctx.config.symbol,
             metadata["model_type"],
             output_dir,
             metadata,
+            version_id,
             ctx.config.diagnostics.convert_to_onnx,
         )
 
@@ -172,7 +176,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             feature_names,
             ctx.config.symbol,
             metadata["model_type"],
-            Path(output_dir),
+            artifact_paths.directory,
             ctx.config.diagnostics.generate_plots,
         )
 

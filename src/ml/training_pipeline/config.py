@@ -30,7 +30,7 @@ class TrainingPaths:
     def default(cls) -> "TrainingPaths":
         root = get_project_root()
         data_dir = root / "data"
-        models_dir = root / "src" / "ml"
+        models_dir = root / "src" / "ml" / "models"
         data_dir.mkdir(parents=True, exist_ok=True)
         models_dir.mkdir(parents=True, exist_ok=True)
         return cls(project_root=root, data_dir=data_dir, models_dir=models_dir)
