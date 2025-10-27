@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Allow Claude to publish review comments on pull requests
       pull-requests: write
       issues: write
       id-token: write

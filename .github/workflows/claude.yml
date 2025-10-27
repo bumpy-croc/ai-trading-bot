@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Allow Claude to respond to mentions by posting updates
       pull-requests: write
       issues: write
       id-token: write
