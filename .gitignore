@@ -74,7 +74,5 @@ mcp.json
 # =============================================================================
 # Cache Management
 # =============================================================================
-
-# Cache directory - only allow market_data subdirectory
 .ruff_cache/
 cache/*
