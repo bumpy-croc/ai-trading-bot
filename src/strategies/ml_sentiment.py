@@ -35,37 +35,31 @@ from src.strategies.components import (
 
 def create_ml_sentiment_strategy(
     name: str = "MlSentiment",
-    model_path: str = "src/ml/btcusdt_sentiment.onnx",
     sequence_length: int = 120,
-    use_prediction_engine: bool | None = None,
     model_name: str | None = None,
     model_type: str | None = None,
     timeframe: str | None = None,
 ) -> Strategy:
     """
     Create ML Sentiment strategy using component composition.
-    
+
     This strategy uses sentiment-aware signal generation to enhance
     prediction accuracy with market sentiment data.
-    
+
     Args:
         name: Strategy name
-        model_path: Path to ONNX model file (sentiment model)
         sequence_length: Number of candles for sequence prediction
-        use_prediction_engine: Whether to use centralized prediction engine
         model_name: Model name for prediction engine
         model_type: Model type (e.g., "sentiment")
         timeframe: Model timeframe (e.g., "1h")
-    
+
     Returns:
         Configured Strategy instance
     """
     # Create signal generator with ML Sentiment parameters (sentiment model)
     signal_generator = MLSignalGenerator(
         name=f"{name}_signals",
-        model_path=model_path,
         sequence_length=sequence_length,
-        use_prediction_engine=use_prediction_engine,
         model_name=model_name,
     )
     

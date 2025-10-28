@@ -33,9 +33,9 @@ class StrategyModel:
         model_type: str,
         version_id: str,
         directory: Path,
-        metadata: dict[str, Any] | None,
-        feature_schema: dict[str, Any] | None,
-        metrics: dict[str, Any] | None,
+        metadata: Optional[dict[str, Any]],
+        feature_schema: Optional[dict[str, Any]],
+        metrics: Optional[dict[str, Any]],
         runner: OnnxRunner,
     ) -> None:
         self.symbol = symbol
@@ -152,7 +152,7 @@ class PredictionModelRegistry:
                 timeframe = parts[1]
 
         # Optional schema/metrics
-        def _load_json(p: Path) -> dict[str, Any] | None:
+        def _load_json(p: Path) -> Optional[dict[str, Any]]:
             if not p.exists():
                 return None
             import json
@@ -200,7 +200,7 @@ class PredictionModelRegistry:
         symbol: str,
         model_type: str,
         timeframe: str,
-        stage: str | None = None,
+        stage: Optional[str] = None,
     ) -> StrategyModel:
         """Select a bundle for symbol/model_type/timeframe.
 

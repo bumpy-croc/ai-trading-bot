@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import argparse
 
+import json
+import logging
+import os
+from datetime import datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+
+from cli.commands.train_commands import train_model_main, train_price_model_main
 from cli.core.forward import forward_to_module_main
+from src.infrastructure.runtime.paths import get_project_root
+
+logger = logging.getLogger(__name__)
+
+MODEL_REGISTRY = get_project_root() / "src" / "ml" / "models"
 
 
 def _handle(ns: argparse.Namespace) -> int:
@@ -10,47 +23,193 @@ def _handle(ns: argparse.Namespace) -> int:
     return forward_to_module_main("src.live.runner", tail)
 
 
+def _date_range(days: int) -> tuple[str, str]:
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=days)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+
+def _latest_metadata(symbol: str, model_type: str) -> Path:
+    return MODEL_REGISTRY / symbol.upper() / model_type / "latest" / "metadata.json"
+
+
+def _list_registry() -> dict[str, dict[str, dict[str, list[str] | str | None]]]:
+    catalog: dict[str, dict[str, dict[str, list[str] | str | None]]] = {}
+    if not MODEL_REGISTRY.exists():
+        return catalog
+
+    for symbol_dir in sorted(p for p in MODEL_REGISTRY.iterdir() if p.is_dir()):
+        symbol_entry: dict[str, dict[str, list[str] | str | None]] = {}
+        for model_type_dir in sorted(p for p in symbol_dir.iterdir() if p.is_dir()):
+            versions = sorted(
+                d.name for d in model_type_dir.iterdir() if d.is_dir() and d.name != "latest"
+            )
+            latest_target = None
+            latest_path = model_type_dir / "latest"
+            if latest_path.exists() or latest_path.is_symlink():
+                try:
+                    latest_target = Path(os.readlink(latest_path)).name
+                except OSError:
+                    latest_target = None
+            symbol_entry[model_type_dir.name] = {
+                "latest": latest_target,
+                "versions": versions,
+            }
+        if symbol_entry:
+            catalog[symbol_dir.name] = symbol_entry
+    return catalog
+
+
+def _resolve_version_path(path_str: str) -> Path:
+    """
+    Resolve and validate a model version path.
+
+    Security: Always resolves paths (including absolute ones) before validation
+    to prevent symlink-based path traversal attacks. A crafted symlink inside
+    the registry could otherwise redirect to directories outside the boundary.
+    """
+    candidate = Path(path_str)
+    if not candidate.is_absolute():
+        candidate = MODEL_REGISTRY / candidate
+
+    # Resolve ALL paths (including absolute) to follow symlinks and normalize
+    candidate = candidate.resolve()
+
+    if not candidate.exists():
+        raise FileNotFoundError(f"Model path does not exist: {candidate}")
+    if MODEL_REGISTRY not in candidate.parents:
+        raise ValueError("Model path must be inside the registry")
+    return candidate
+
+
+def _repoint_latest(version_dir: Path) -> None:
+    """Update 'latest' symlink to point to the specified version directory.
+
+    Uses atomic temp+replace pattern to avoid race conditions (consistent with artifacts.py).
+
+    Args:
+        version_dir: Path to version directory (e.g., .../BTCUSDT/basic/2025-10-27_14h_v1)
+
+    Raises:
+        OSError: If symlink operations fail due to permissions or platform limitations
+        FileNotFoundError: If parent directory doesn't exist
+    """
+    model_type_dir = version_dir.parent
+    latest_link = model_type_dir / "latest"
+    temp_link = model_type_dir / f".latest.{version_dir.name}.tmp"
+
+    try:
+        # Clean up any stale temp symlink
+        if temp_link.exists() or temp_link.is_symlink():
+            temp_link.unlink()
+
+        # Create new symlink with temporary name
+        temp_link.symlink_to(version_dir.name)
+
+        # Atomically replace old symlink (rename is atomic on POSIX systems)
+        temp_link.replace(latest_link)
+
+        logger.info(f"Updated 'latest' symlink to point to {version_dir.name}")
+
+    except PermissionError as e:
+        # Clean up temp symlink on failure
+        if temp_link.exists() or temp_link.is_symlink():
+            try:
+                temp_link.unlink()
+            except OSError:
+                pass
+        logger.error(f"Permission denied when updating symlink at {latest_link}: {e}")
+        raise OSError(f"Failed to update 'latest' symlink: insufficient permissions") from e
+    except OSError as e:
+        # Clean up temp symlink on failure
+        if temp_link.exists() or temp_link.is_symlink():
+            try:
+                temp_link.unlink()
+            except OSError:
+                pass
+        # Catch platform-specific errors (e.g., Windows without symlink privileges)
+        logger.error(f"Failed to create symlink at {latest_link}: {e}")
+        raise OSError(
+            f"Failed to update 'latest' symlink at {latest_link}. "
+            f"On Windows, ensure Developer Mode is enabled or run with admin privileges."
+        ) from e
+    except FileNotFoundError as e:
+        logger.error(f"Parent directory not found: {model_type_dir}")
+        raise FileNotFoundError(f"Model type directory does not exist: {model_type_dir}") from e
+
+
 def _control(ns: argparse.Namespace) -> int:
-    # Minimal inline controller using SafeModelTrainer
-    import json
-
-    from src.ml.safe_model_trainer import SafeModelTrainer
-
-    trainer = SafeModelTrainer()
-
     if ns.control_cmd == "train":
-        result = trainer.train_model_safe(
-            symbol=ns.symbol, with_sentiment=ns.sentiment, days=ns.days, epochs=ns.epochs
-        )
-        if not result.get("success"):
-            print(f"❌ Model training failed: {result.get('error')}")
-            return 1
-        pkg = result["deployment_package"]
-        print(f"✅ Model training completed. Staged at: {pkg['staging_path']}")
+        start_date, end_date = _date_range(ns.days)
+        if ns.sentiment:
+            args = SimpleNamespace(
+                symbol=ns.symbol,
+                start_date=start_date,
+                end_date=end_date,
+                timeframe="1d",
+                force_sentiment=True,
+                force_price_only=False,
+                epochs=ns.epochs,
+                batch_size=32,
+                sequence_length=120,
+                skip_plots=False,
+                skip_robustness=False,
+                skip_onnx=False,
+                disable_mixed_precision=False,
+            )
+            code = train_model_main(args)
+            model_type = "sentiment"
+        else:
+            args = SimpleNamespace(
+                symbol=ns.symbol,
+                start_date=start_date,
+                end_date=end_date,
+                timeframe="1d",
+                epochs=ns.epochs,
+                batch_size=256,
+                sequence_length=120,
+            )
+            code = train_price_model_main(args)
+            model_type = "basic"
+
+        if code != 0:
+            print("❌ Model training failed")
+            return code
+
+        meta_path = _latest_metadata(ns.symbol, model_type)
+        if meta_path.exists():
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                metadata = json.load(fh)
+            print("✅ Model training complete")
+            print(
+                json.dumps({"latest": metadata.get("version_id"), "metadata": metadata}, indent=2)
+            )
+        else:
+            print("✅ Model training complete (metadata unavailable)")
+
         if ns.auto_deploy:
-            ok = trainer.deploy_model_to_live(pkg)
-            print("✅ Model deployed" if ok else "❌ Model deployment failed")
-            return 0 if ok else 1
+            print("✅ Auto-deploy: latest symlink already updated; live components will pick it up")
         return 0
 
     if ns.control_cmd == "deploy-model":
-        ok = trainer.deploy_model_to_live(
-            {
-                "staging_path": ns.model_path,
-                "strategy_name": "ml_basic",
-                "ready_for_deployment": True,
-            },
-            close_positions=ns.close_positions,
+        try:
+            version_dir = _resolve_version_path(ns.model_path)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"❌ {exc}")
+            return 1
+        _repoint_latest(version_dir)
+        print(
+            f"✅ Latest model for {version_dir.parent.parent.name}/{version_dir.parent.name} set to {version_dir.name}"
         )
-        print("✅ Model deployment successful!" if ok else "❌ Model deployment failed!")
-        return 0 if ok else 1
+        if ns.close_positions:
+            print("⚠️ close-positions requested (no-op in CLI helper)")
+        return 0
 
     if ns.control_cmd == "list-models":
-        print(json.dumps(trainer.list_available_models(), indent=2))
+        print(json.dumps(_list_registry(), indent=2))
         return 0
 
     if ns.control_cmd == "status":
-        # Placeholder until wired into running engine
         status = {
             "connected": False,
             "running": False,

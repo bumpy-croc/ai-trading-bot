@@ -34,7 +34,7 @@ class StrategyManager:
     def __init__(
         self,
         strategies_dir: str = "strategies",
-        models_dir: str = "src/ml",
+        models_dir: str = "src/ml/models",
         staging_dir: str | None = None,
     ):
         self.strategies_dir = Path(strategies_dir)
