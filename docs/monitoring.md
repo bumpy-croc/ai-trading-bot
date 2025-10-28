@@ -12,10 +12,10 @@ same visibility during backtests, paper trading, and live execution.
 - Set `LOG_LEVEL` to control verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`).
 - Enable JSON output with `LOG_JSON=1` (auto-enabled on Railway or when `ENV=production`). Disable with `LOG_JSON=0`.
 - Per-library overrides: `LOG_SQLALCHEMY_LEVEL`, `LOG_URLLIB3_LEVEL`, `LOG_BINANCE_LEVEL`, `LOG_CCXT_LEVEL`.
-- Context helpers in `src/utils/logging_context.py` inject `component`, `strategy`, `symbol`, and `session_id` so that logs can be
+- Context helpers in `src/infrastructure/logging/context.py` inject `component`, `strategy`, `symbol`, and `session_id` so that logs can be
   filtered downstream.
 - Structured event emitters (`log_engine_event`, `log_order_event`, `log_risk_event`, `log_data_event`) live in
-  `src/utils/logging_events.py` and are used by both engines.
+  `src/infrastructure/logging/events.py` and are used by both engines.
 
 Sensitive fields (API keys, secrets, tokens) are redacted automatically before logs hit stdout.
 

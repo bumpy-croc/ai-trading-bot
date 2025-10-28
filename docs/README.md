@@ -26,5 +26,5 @@ This folder contains reference guides for the main subsystems that make up the A
 
 - **First time setup**: Start with [Development workflow](development.md#environment-setup)
 - **Running backtests**: See [Backtesting](backtesting.md#cli-usage)
-- **Live trading**: Review [Live trading](live_trading.md#safety-first) safety controls
+- **Live trading**: Review [Live trading](live_trading.md#engine-highlights) safety controls
 - **Troubleshooting**: Check [Database](database.md#cli-tooling) diagnostics
