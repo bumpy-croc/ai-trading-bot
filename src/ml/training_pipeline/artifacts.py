@@ -9,11 +9,38 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
+
+
+class PerformanceMetrics(TypedDict):
+    """Performance metrics with MSE and RMSE."""
+
+    mse: float
+    rmse: float
+
+
+class SentimentPerformanceMetrics(TypedDict):
+    """Sentiment ablation metrics with degradation percentage."""
+
+    mse: float
+    rmse: float
+    degradation_pct: float
+
+
+class RobustnessValidationResult(TypedDict, total=False):
+    """Result of model robustness validation.
+
+    Attributes:
+        base_performance: Baseline metrics with all features
+        no_sentiment_performance: Optional metrics without sentiment features
+    """
+
+    base_performance: PerformanceMetrics
+    no_sentiment_performance: SentimentPerformanceMetrics
 
 
 @dataclass
@@ -88,7 +115,7 @@ def validate_model_robustness(
     y_test: np.ndarray,
     feature_names: List[str],
     has_sentiment: bool,
-) -> Dict[str, Any]:
+) -> RobustnessValidationResult:
     results = {"base_performance": {}}
     base_pred = model.predict(X_test)
     base_mse = np.mean((base_pred.flatten() - y_test) ** 2)
