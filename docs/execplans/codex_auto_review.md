@@ -28,8 +28,8 @@ Ship a repeatable command-line workflow that pairs the local Codex CLI with our 
 - Decision: Manage the workflow through a new `python -m cli codex auto-review` command instead of an ad-hoc shell script so it benefits from existing CLI ergonomics.
   Rationale: Keeps tooling discoverable, reuses logging, and aligns with how other automation lives under `cli/`.
   Date/Author: 2025-10-23, Codex agent.
-- Decision: Default validation commands to `make test` and `make code-quality`, with `--check` extensions when contributors need a tighter loop.
-  Rationale: Matches the repository’s standard pre-flight checks while remaining overridable for fast paths.
+- Decision: Default validation commands to `atb test unit` and `atb dev quality`, with `--check` extensions when contributors need a tighter loop.
+  Rationale: Matches the repository's standard pre-flight checks while remaining overridable for fast paths.
   Date/Author: 2025-10-23, Codex agent.
 - Decision: Persist all validation transcripts and review payloads under `.codex/workflows/<timestamp>/`.
   Rationale: Provides auditable artefacts per run without polluting the repository root and mirrors existing Codex conventions.
@@ -50,7 +50,7 @@ The automated loop now lives under `python -m cli codex auto-review`, storing ar
 
 ## Context and Orientation
 
-The Codex CLI is available via the `codex` binary configured under `.codex/`. Project automation commands live under `cli/commands/`, with shared helpers in `cli/core/`. There is no existing Codex-specific subcommand today. Documentation for developers resides in `docs/`, with agent-specific guidance in `AGENTS.md`. Tests run through `make test` (parallel pytest) and linting through `make code-quality`. Our implementation will introduce:
+The Codex CLI is available via the `codex` binary configured under `.codex/`. Project automation commands live under `cli/commands/`, with shared helpers in `cli/core/`. There is no existing Codex-specific subcommand today. Documentation for developers resides in `docs/`, with agent-specific guidance in `AGENTS.md`. Tests run through `atb test unit` (parallel pytest) and linting through `atb dev quality`. Our implementation will introduce:
 
 - A new subcommand module under `cli/commands/` to expose the workflow.
 - Supporting logic under `cli/core/` to orchestrate validation, review, and fix loops.

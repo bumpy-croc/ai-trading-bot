@@ -519,6 +519,131 @@ def _dashboard(ns: argparse.Namespace) -> int:
         return 1
 
 
+def _quality(ns: argparse.Namespace) -> int:
+    """Run code quality checks (black, ruff, mypy, bandit)."""
+    print("🔍 Running Code Quality Checks")
+    print("=" * 60)
+    print()
+
+    tools = [
+        {
+            "name": "Black (code formatter)",
+            "cmd": ["black", "."],
+            "description": "Checking code formatting",
+        },
+        {
+            "name": "Ruff (linter)",
+            "cmd": ["ruff", "check", "."],
+            "description": "Running linter checks",
+        },
+        {
+            "name": "MyPy (type checker)",
+            "cmd": [sys.executable, "bin/run_mypy.py"],
+            "description": "Running type checks",
+        },
+        {
+            "name": "Bandit (security scanner)",
+            "cmd": ["bandit", "-c", "pyproject.toml", "-r", "src"],
+            "description": "Running security checks",
+        },
+    ]
+
+    results = {}
+
+    for tool in tools:
+        print(f"\n{tool['description']}...")
+        print(f"Command: {' '.join(tool['cmd'])}")
+
+        try:
+            result = subprocess.run(
+                tool["cmd"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            if result.returncode == 0:
+                print(f"✅ {tool['name']} passed")
+                results[tool['name']] = True
+            else:
+                print(f"❌ {tool['name']} failed")
+                if result.stdout:
+                    print("Output:")
+                    print(result.stdout)
+                if result.stderr:
+                    print("Errors:")
+                    print(result.stderr)
+                results[tool['name']] = False
+
+        except FileNotFoundError:
+            print(f"⚠️ {tool['name']} not found - skipping")
+            results[tool['name']] = None
+        except Exception as e:
+            print(f"❌ {tool['name']} failed with exception: {e}")
+            results[tool['name']] = False
+
+    # Print summary
+    print("\n" + "=" * 60)
+    print("Code Quality Summary")
+    print("=" * 60)
+
+    for tool_name, status in results.items():
+        if status is True:
+            print(f"✅ {tool_name}")
+        elif status is False:
+            print(f"❌ {tool_name}")
+        else:
+            print(f"⚠️ {tool_name} (skipped)")
+
+    # Return non-zero if any tool failed
+    if any(status is False for status in results.values()):
+        print("\n❌ Some quality checks failed")
+        return 1
+
+    print("\n✅ All quality checks passed!")
+    return 0
+
+
+def _clean(ns: argparse.Namespace) -> int:
+    """Remove caches and build artifacts."""
+    print("🧹 Cleaning Project")
+    print("=" * 60)
+    print()
+
+    items_to_remove = [
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "build",
+        "dist",
+    ]
+
+    # Remove specific directories
+    for item in items_to_remove:
+        path = PROJECT_ROOT / item
+        if path.exists():
+            shutil.rmtree(path)
+            print(f"✅ Removed {item}/")
+
+    # Remove egg-info directories
+    for egg_info in PROJECT_ROOT.glob("*.egg-info"):
+        shutil.rmtree(egg_info)
+        print(f"✅ Removed {egg_info.name}/")
+
+    # Remove __pycache__ directories
+    pycache_count = 0
+    for pycache in PROJECT_ROOT.rglob("__pycache__"):
+        shutil.rmtree(pycache)
+        pycache_count += 1
+
+    if pycache_count > 0:
+        print(f"✅ Removed {pycache_count} __pycache__ directories")
+
+    print("\n✅ Clean complete!")
+    return 0
+
+
 def register(parser: argparse._SubParsersAction) -> None:
     """Register development commands."""
     dev_parser = parser.add_parser("dev", help="Local development utilities")
@@ -535,3 +660,11 @@ def register(parser: argparse._SubParsersAction) -> None:
     # Dashboard command
     dashboard_parser = dev_subparsers.add_parser("dashboard", help="Run monitoring dashboard")
     dashboard_parser.set_defaults(func=_dashboard)
+
+    # Quality command
+    quality_parser = dev_subparsers.add_parser("quality", help="Run code quality checks")
+    quality_parser.set_defaults(func=_quality)
+
+    # Clean command
+    clean_parser = dev_subparsers.add_parser("clean", help="Remove caches and build artifacts")
+    clean_parser.set_defaults(func=_clean)

@@ -163,7 +163,7 @@ When writing complex features or significant refactors, use an ExecPlan (as desc
 
 ## Pull Request Guidelines
 - Always follow the `.github/pull_request_template.md`.
-- Reference issues or tickets with `(#123)` when relevant. - - Each PR should describe user-facing impact, outline testing (`make test`, `make code-quality`), and attach strategy metrics or dashboard screenshots when behaviour changes. 
+- Reference issues or tickets with `(#123)` when relevant. - - Each PR should describe user-facing impact, outline testing (`atb test unit`, `atb dev quality`), and attach strategy metrics or dashboard screenshots when behaviour changes.
 - Request review only after CI is green and migrations or scripts are documented in `docs/` if they change operational steps.
 
 ## GitHub Interaction Guidelines
@@ -171,4 +171,4 @@ When writing complex features or significant refactors, use an ExecPlan (as desc
 - If available prefer the GitHub MCP server for interacting with GitHub. Otherwise use the `gh` cli command (authenticated with the GITHUB_TOKEN env variable).
 
 ## Security & Configuration Tips
-Never commit API keys or live trading credentials; load them via environment variables consumed by `src/config` loaders. Keep `.env` files out of version control and document required settings in PRs. For local databases, run `make migrate` after schema updates and ensure backups in `backups/` are encrypted or excluded from commits.
+Never commit API keys or live trading credentials; load them via environment variables consumed by `src/config` loaders. Keep `.env` files out of version control and document required settings in PRs. For local databases, run `atb db migrate` after schema updates and ensure backups in `backups/` are encrypted or excluded from commits.

@@ -82,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
         optimizer,
         regime,
         strategies,
+        test,
         tests,
         train,
     )
@@ -99,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     db.register(subparsers)
     dev.register(subparsers)
     train.register(subparsers)
+    test.register(subparsers)
     tests.register(subparsers)
     migration.register(subparsers)
     docs_cmd.register(subparsers)
