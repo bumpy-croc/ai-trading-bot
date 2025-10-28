@@ -67,7 +67,13 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
 
 
 def enable_mixed_precision(enabled: bool) -> None:
+    """Enable mixed precision training for faster GPU performance.
+
+    Args:
+        enabled: Whether to enable mixed precision training
+    """
     if not enabled:
+        logger.info("Mixed precision explicitly disabled via configuration")
         return
     gpus = tf.config.list_physical_devices("GPU")
     if not gpus:
