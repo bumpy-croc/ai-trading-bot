@@ -120,7 +120,9 @@ def validate_model_robustness(
     has_sentiment: bool,
 ) -> RobustnessValidationResult:
     # Validate input tensor shape
-    assert len(X_test.shape) == 3, f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}"
+    assert (
+        len(X_test.shape) == 3
+    ), f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}"
 
     results = {"base_performance": {}}
     base_pred = model.predict(X_test)
@@ -132,8 +134,9 @@ def validate_model_robustness(
         if sentiment_indices:
             X_no_sentiment = X_test.copy()
             # Safely set sentiment features to zero with bounds check
-            assert all(i < X_test.shape[2] for i in sentiment_indices), \
-                f"Sentiment feature indices {sentiment_indices} exceed feature dimension {X_test.shape[2]}"
+            assert all(
+                i < X_test.shape[2] for i in sentiment_indices
+            ), f"Sentiment feature indices {sentiment_indices} exceed feature dimension {X_test.shape[2]}"
             X_no_sentiment[:, :, sentiment_indices] = 0
             no_sentiment_pred = model.predict(X_no_sentiment)
             no_sentiment_mse = np.mean((no_sentiment_pred.flatten() - y_test) ** 2)
@@ -159,14 +162,22 @@ def evaluate_model_performance(
 
     if close_scaler is not None:
         y_test_denorm = close_scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
-        pred_denorm = close_scaler.inverse_transform(test_predictions.flatten().reshape(-1, 1)).flatten()
-        # Guard against division by zero in MAPE calculation
-        denominator = np.where(y_test_denorm == 0, 1e-8, y_test_denorm)
+        pred_denorm = close_scaler.inverse_transform(
+            test_predictions.flatten().reshape(-1, 1)
+        ).flatten()
+        # Guard against division by near-zero values in MAPE calculation
+        # Use max(abs(actual), threshold) to avoid unrealistic MAPE values (>10^10%)
+        # when actual values are very small relative to prediction errors
+        denominator = np.maximum(np.abs(y_test_denorm), 1e-8)
         percentage_errors = np.abs((y_test_denorm - pred_denorm) / denominator) * 100
+        # Cap individual errors at 1000% to prevent extreme outliers from dominating MAPE
+        percentage_errors = np.minimum(percentage_errors, 1000.0)
     else:
-        # Guard against division by zero in MAPE calculation
-        denominator = np.where(y_test == 0, 1e-8, y_test)
+        # Guard against division by near-zero values in MAPE calculation
+        denominator = np.maximum(np.abs(y_test), 1e-8)
         percentage_errors = np.abs((y_test - test_predictions.flatten()) / denominator) * 100
+        # Cap individual errors at 1000% to prevent extreme outliers from dominating MAPE
+        percentage_errors = np.minimum(percentage_errors, 1000.0)
     mape = np.mean(percentage_errors)
 
     return {

@@ -8,10 +8,54 @@ import numpy as np
 import tensorflow as tf
 from numpy.lib.stride_tricks import sliding_window_view
 
+# Training dataset constants
+DEFAULT_SHUFFLE_BUFFER_SIZE = (
+    2048  # Buffer size for shuffle operation (balances memory vs randomness)
+)
 
-def create_sequences(feature_data: np.ndarray, target_data: np.ndarray, sequence_length: int) -> Tuple[np.ndarray, np.ndarray]:
+
+def create_sequences(
+    feature_data: np.ndarray, target_data: np.ndarray, sequence_length: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Create sequences from feature and target data using sliding windows.
+
+    Args:
+        feature_data: 2D array of features (rows=timesteps, cols=features)
+        target_data: 1D array of targets aligned with feature_data
+        sequence_length: Number of timesteps in each sequence (must be positive)
+
+    Returns:
+        Tuple of (sequences, targets) as float32 arrays
+
+    Raises:
+        ValueError: If inputs are invalid (mismatched lengths, wrong shapes, non-positive sequence_length)
+    """
+    # Validate sequence_length is positive
+    if sequence_length <= 0:
+        raise ValueError(f"sequence_length must be positive, got {sequence_length}")
+
+    # Validate feature_data is 2D
+    if feature_data.ndim != 2:
+        raise ValueError(
+            f"feature_data must be 2D (timesteps, features), got shape {feature_data.shape}"
+        )
+
+    # Validate target_data is 1D
+    if target_data.ndim != 1:
+        raise ValueError(f"target_data must be 1D, got shape {target_data.shape}")
+
+    # Validate matching lengths
+    if len(feature_data) != len(target_data):
+        raise ValueError(
+            f"feature_data and target_data must have same length, "
+            f"got {len(feature_data)} and {len(target_data)}"
+        )
+
+    # Validate sufficient data for sequences
     if len(feature_data) <= sequence_length:
-        raise ValueError("Insufficient rows for the requested sequence length")
+        raise ValueError(
+            f"Insufficient data: need at least {sequence_length + 1} rows, got {len(feature_data)}"
+        )
 
     window_shape = (sequence_length, feature_data.shape[1])
     sequences = sliding_window_view(feature_data, window_shape)
@@ -44,7 +88,12 @@ def build_tf_datasets(
     batch_size: int,
 ) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
     train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-    train_ds = train_ds.cache().shuffle(min(len(X_train), 2048)).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    train_ds = (
+        train_ds.cache()
+        .shuffle(min(len(X_train), DEFAULT_SHUFFLE_BUFFER_SIZE))
+        .batch(batch_size)
+        .prefetch(tf.data.AUTOTUNE)
+    )
 
     val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val))
     val_ds = val_ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)

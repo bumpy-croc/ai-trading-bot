@@ -85,6 +85,8 @@ def _resolve_version_path(path_str: str) -> Path:
 def _repoint_latest(version_dir: Path) -> None:
     """Update 'latest' symlink to point to the specified version directory.
 
+    Uses atomic temp+replace pattern to avoid race conditions (consistent with artifacts.py).
+
     Args:
         version_dir: Path to version directory (e.g., .../BTCUSDT/basic/2025-10-27_14h_v1)
 
@@ -94,20 +96,37 @@ def _repoint_latest(version_dir: Path) -> None:
     """
     model_type_dir = version_dir.parent
     latest_link = model_type_dir / "latest"
+    temp_link = model_type_dir / f".latest.{version_dir.name}.tmp"
 
     try:
-        # Remove existing symlink or file if present
-        if latest_link.exists() or latest_link.is_symlink():
-            latest_link.unlink()
+        # Clean up any stale temp symlink
+        if temp_link.exists() or temp_link.is_symlink():
+            temp_link.unlink()
 
-        # Create new symlink pointing to version directory name (not full path)
-        latest_link.symlink_to(version_dir.name)
+        # Create new symlink with temporary name
+        temp_link.symlink_to(version_dir.name)
+
+        # Atomically replace old symlink (rename is atomic on POSIX systems)
+        temp_link.replace(latest_link)
+
         logger.info(f"Updated 'latest' symlink to point to {version_dir.name}")
 
     except PermissionError as e:
+        # Clean up temp symlink on failure
+        if temp_link.exists() or temp_link.is_symlink():
+            try:
+                temp_link.unlink()
+            except OSError:
+                pass
         logger.error(f"Permission denied when updating symlink at {latest_link}: {e}")
         raise OSError(f"Failed to update 'latest' symlink: insufficient permissions") from e
     except OSError as e:
+        # Clean up temp symlink on failure
+        if temp_link.exists() or temp_link.is_symlink():
+            try:
+                temp_link.unlink()
+            except OSError:
+                pass
         # Catch platform-specific errors (e.g., Windows without symlink privileges)
         logger.error(f"Failed to create symlink at {latest_link}: {e}")
         raise OSError(
@@ -162,7 +181,9 @@ def _control(ns: argparse.Namespace) -> int:
             with open(meta_path, "r", encoding="utf-8") as fh:
                 metadata = json.load(fh)
             print("✅ Model training complete")
-            print(json.dumps({"latest": metadata.get("version_id"), "metadata": metadata}, indent=2))
+            print(
+                json.dumps({"latest": metadata.get("version_id"), "metadata": metadata}, indent=2)
+            )
         else:
             print("✅ Model training complete (metadata unavailable)")
 
@@ -177,7 +198,9 @@ def _control(ns: argparse.Namespace) -> int:
             print(f"❌ {exc}")
             return 1
         _repoint_latest(version_dir)
-        print(f"✅ Latest model for {version_dir.parent.parent.name}/{version_dir.parent.name} set to {version_dir.name}")
+        print(
+            f"✅ Latest model for {version_dir.parent.parent.name}/{version_dir.parent.name} set to {version_dir.name}"
+        )
         if ns.close_positions:
             print("⚠️ close-positions requested (no-op in CLI helper)")
         return 0

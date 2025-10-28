@@ -86,7 +86,9 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
 
     coverage_score = min(assessment["coverage_ratio"] * 2, 1.0)
     freshness_score = max(0, 1 - (assessment["data_freshness_days"] / DAYS_PER_YEAR))
-    assessment["quality_score"] = coverage_score * COVERAGE_WEIGHT + freshness_score * FRESHNESS_WEIGHT
+    assessment["quality_score"] = (
+        coverage_score * COVERAGE_WEIGHT + freshness_score * FRESHNESS_WEIGHT
+    )
 
     if assessment["quality_score"] >= QUALITY_THRESHOLD_HIGH:
         assessment["recommendation"] = "full_sentiment"
@@ -98,7 +100,9 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
     return assessment
 
 
-def merge_price_sentiment_data(price_df: pd.DataFrame, sentiment_df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+def merge_price_sentiment_data(
+    price_df: pd.DataFrame, sentiment_df: pd.DataFrame, timeframe: str
+) -> pd.DataFrame:
     if sentiment_df.empty:
         return price_df
     if timeframe != "1d":
@@ -140,6 +144,14 @@ def create_robust_features(
         # Drop NaNs before scaling to avoid MinMaxScaler ValueError
         data = data.dropna()
 
+        # Validate sufficient data remains after dropping NaNs
+        min_required_rows = max(SMA_WINDOWS) * 2  # Need enough data for meaningful training
+        if len(data) < min_required_rows:
+            raise ValueError(
+                f"Insufficient data after dropping NaNs: {len(data)} rows remaining, "
+                f"need at least {min_required_rows} for training with SMA windows {SMA_WINDOWS}"
+            )
+
         # Now scale the technical indicators (NaN-free data)
         for window in SMA_WINDOWS:
             col = f"sma_{window}"
@@ -161,6 +173,6 @@ def create_robust_features(
                 feature_names.append(scaled)
                 scalers[feature] = scaler
 
-    # NaNs already dropped after technical indicator calculation (line 130)
-    # Sentiment features use fillna(0), so no additional NaNs expected
+    # NaNs are dropped after technical indicator calculation (line 141)
+    # Sentiment features use fillna(0), so no additional NaNs are expected
     return data, scalers, feature_names

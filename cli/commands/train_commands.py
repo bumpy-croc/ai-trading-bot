@@ -20,7 +20,7 @@ from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.trading.symbols.factory import SymbolFactory
 
 PROJECT_ROOT = get_project_root()
-MODEL_REGISTRY_ROOT = PROJECT_ROOT / "src" / "ml" / "models"
+MODEL_REGISTRY = PROJECT_ROOT / "src" / "ml" / "models"
 
 
 def _parse_dates(start: str, end: str) -> Tuple[datetime, datetime]:
@@ -168,7 +168,9 @@ def _download_price_frame(symbol: str, timeframe: str, start: str, end: str) -> 
     if status != 0:
         raise RuntimeError("Failed to download price data")
     pattern = f"{symbol_exchange}_{timeframe}_{start}_{end}.*"
-    files = sorted((PROJECT_ROOT / "data").glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(
+        (PROJECT_ROOT / "data").glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     if not files:
         raise FileNotFoundError("Downloaded file not found")
     latest = files[0]
@@ -246,7 +248,7 @@ def train_price_model_main(args) -> int:
         },
     }
 
-    registry_root = MODEL_REGISTRY_ROOT
+    registry_root = MODEL_REGISTRY
     bundle_dir = registry_root / args.symbol / "basic" / version_id
     bundle_dir.mkdir(parents=True, exist_ok=True)
     model.save(bundle_dir / "model.keras")
