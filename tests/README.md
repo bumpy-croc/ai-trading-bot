@@ -10,7 +10,7 @@ Comprehensive tests for reliability and correctness across components, including
 ### Component System Tests
 ```bash
 # Test individual components
-pytest tests/strategies/components/ -v
+pytest tests/unit/strategies/components/ -v
 
 # Test complete trading workflows
 pytest tests/integration/test_component_trading_workflows.py -v
@@ -19,7 +19,7 @@ pytest tests/integration/test_component_trading_workflows.py -v
 pytest tests/performance/test_component_performance_regression.py -v -m performance
 
 # Full component test suite
-pytest tests/strategies/components/ tests/integration/test_component_trading_workflows.py -v
+pytest tests/unit/strategies/components/ tests/integration/test_component_trading_workflows.py -v
 ```
 
 ### Legacy Compatibility Tests (archived)
@@ -43,7 +43,7 @@ pytest tests/unit/strategies/migration/ -v
 
 ## Test Categories
 
-### Component Tests (`tests/strategies/components/`)
+### Component Tests (`tests/unit/strategies/components/`)
 - **Signal Generators**: `test_signal_generator.py`, `test_ml_signal_generator.py`, `test_technical_signal_generator.py`
 - **Risk Managers**: `test_risk_manager.py`
 - **Position Sizers**: `test_position_sizer.py`
@@ -118,10 +118,10 @@ python tests/performance/performance_baseline_manager.py --cleanup 30
 ### Component-Focused Commands
 ```bash
 # All component tests
-pytest tests/strategies/components/ -v
+pytest tests/unit/strategies/components/ -v
 
 # Specific component type
-pytest tests/strategies/components/test_signal_generator.py -v
+pytest tests/unit/strategies/components/test_signal_generator.py -v
 
 # Integration workflows
 pytest tests/integration/test_component_trading_workflows.py -v
@@ -142,7 +142,7 @@ python tests/run_tests.py -m "strategy and not slow"
 ### Parallel Execution
 ```bash
 # Run component tests in parallel
-pytest tests/strategies/components/ -n auto
+pytest tests/unit/strategies/components/ -n auto
 
 # Parallel integration tests
 pytest tests/integration/ -n 4
@@ -153,13 +153,13 @@ pytest tests/integration/ -n 4
 ### Component System Coverage
 ```bash
 # Component coverage
-pytest tests/strategies/components/ --cov=src/strategies/components --cov-report=html
+pytest tests/unit/strategies/components/ --cov=src/strategies/components --cov-report=html
 
 # Integration coverage
 pytest tests/integration/ --cov=src/strategies/components --cov-report=html
 
 # Combined coverage
-pytest tests/strategies/components/ tests/integration/ --cov=src/strategies/components --cov-report=html
+pytest tests/unit/strategies/components/ tests/integration/ --cov=src/strategies/components --cov-report=html
 ```
 
 ### Legacy Coverage (compatibility)
@@ -191,10 +191,10 @@ python tests/run_tests.py --coverage
 ### Debug Commands
 ```bash
 # Verbose output with full tracebacks
-pytest tests/strategies/components/test_strategy.py -v -s --tb=long
+pytest tests/unit/strategies/components/test_strategy.py -v -s --tb=long
 
 # Drop into debugger on failure
-pytest tests/strategies/components/test_signal_generator.py --pdb
+pytest tests/unit/strategies/components/test_signal_generator.py --pdb
 
 # Show performance timing
 pytest tests/performance/ --durations=10
@@ -206,7 +206,7 @@ pytest tests/performance/ --durations=10
 ```yaml
 - name: Run Component Tests
   run: |
-    pytest tests/strategies/components/ -v --cov=src/strategies/components
+    pytest tests/unit/strategies/components/ -v --cov=src/strategies/components
     pytest tests/integration/test_component_trading_workflows.py -v
     python tests/performance/automated_performance_monitor.py --full-cycle
 ```

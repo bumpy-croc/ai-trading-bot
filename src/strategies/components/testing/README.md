@@ -1082,7 +1082,7 @@ For questions or issues with the testing framework:
 
 1. Check this README and the examples
 2. Review the design documentation in `.kiro/specs/strategy-system-redesign/`
-3. Look at existing tests in `tests/strategies/components/test_component_testing_framework.py`
+3. Look at existing tests in `tests/unit/strategies/components/test_component_testing_framework.py`
 4. Check the main strategy system documentation
 
 ---

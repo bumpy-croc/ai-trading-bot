@@ -51,10 +51,10 @@ This note summarises recommended architectural adjustments for aligning `positio
 
 ## Testing Implications
 
-1. **Unit coverage** – Add focused tests under `tests/strategies/components/test_risk_adapter.py` that mock `RiskManager` responses and assert that the adapter forwards calls, propagates exceptions, and preserves policy descriptors.
+1. **Unit coverage** – Add focused tests under `tests/unit/strategies/components/test_risk_adapter.py` that mock `RiskManager` responses and assert that the adapter forwards calls, propagates exceptions, and preserves policy descriptors.
 2. **Integration scenarios** – Extend `tests/integration/live/test_trading_engine.py` (or create a new file) to execute a full decision lifecycle where components emit policy descriptors and the engine enforces them. Include regression cases for trailing stops and partial exits.
 3. **Backtest parity** – Add a regression test in `tests/integration/backtesting` ensuring backtest results match live-engine calculations when the adapter is in place.
-4. **Automation** – Update CI pipelines or local scripts to run `make code-quality` and `pytest tests/strategies -k risk_adapter` during development. For full verification, run `pytest tests/integration/live -k policy_descriptor` before release.
+4. **Automation** – Update CI pipelines or local scripts to run `make code-quality` and `pytest tests/unit/strategies -k risk_adapter` during development. For full verification, run `pytest tests/integration/live -k policy_descriptor` before release.
 
 Document the expected command sequence in team runbooks so engineers know how to validate risk-control changes consistently.
 
