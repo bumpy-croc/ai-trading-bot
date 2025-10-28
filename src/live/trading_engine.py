@@ -423,6 +423,10 @@ class LiveTradingEngine:
         self.peak_balance = initial_balance
         self.max_drawdown = 0.0
 
+        # Daily P&L tracking
+        self.day_start_balance = initial_balance
+        self.current_trading_date = None
+
         # MFE/MAE tracker
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
         self._last_mfe_mae_persist: datetime | None = None
@@ -1058,6 +1062,7 @@ class LiveTradingEngine:
             recovered_balance = self._recover_existing_session()
             if recovered_balance is not None:
                 self.current_balance = recovered_balance
+                self.day_start_balance = recovered_balance  # Initialize day_start_balance
                 logger.info(
                     f"💾 Recovered balance from previous session: ${recovered_balance:,.2f}"
                 )
@@ -1123,6 +1128,7 @@ class LiveTradingEngine:
                     if balance_sync.get("corrected", False):
                         corrected_balance = balance_sync.get("new_balance", self.current_balance)
                         self.current_balance = corrected_balance
+                        self.day_start_balance = corrected_balance  # Initialize day_start_balance
                         logger.info(
                             f"💰 Balance corrected from exchange: ${corrected_balance:,.2f}"
                         )
@@ -2659,9 +2665,29 @@ class LiveTradingEngine:
 
         return ml_data
 
+    def _check_and_update_trading_date(self):
+        """Check if a new trading day has started and reset day_start_balance if so"""
+        current_date = datetime.now().date()
+
+        if self.current_trading_date is None:
+            # First time running - initialize with current date
+            self.current_trading_date = current_date
+            self.day_start_balance = self.current_balance
+            logger.info(f"📅 Trading date initialized: {current_date}, day start balance: ${self.day_start_balance:,.2f}")
+        elif current_date != self.current_trading_date:
+            # New day has started - reset day_start_balance
+            logger.info(
+                f"📅 New trading day: {current_date} (previous: {self.current_trading_date})"
+            )
+            self.current_trading_date = current_date
+            self.day_start_balance = self.current_balance
+            logger.info(f"💰 Day start balance reset to: ${self.day_start_balance:,.2f}")
+
     def _log_account_snapshot(self):
         """Log current account state to database"""
         try:
+            # Check and update trading date for daily P&L tracking
+            self._check_and_update_trading_date()
             # Calculate total exposure using the active fraction per position
             total_exposure = sum(
                 float(pos.current_size if pos.current_size is not None else pos.size)
@@ -2684,8 +2710,8 @@ class LiveTradingEngine:
                     (self.peak_balance - self.current_balance) / self.peak_balance * 100
                 )
 
-            # TODO: Calculate daily P&L (requires tracking of day start balance)
-            daily_pnl = 0  # Placeholder
+            # Calculate daily P&L (current balance - day start balance)
+            daily_pnl = float(self.current_balance) - float(self.day_start_balance)
 
             # Log snapshot to database
             if self.trading_session_id is not None:
