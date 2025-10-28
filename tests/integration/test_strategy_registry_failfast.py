@@ -48,7 +48,6 @@ def test_strategy_uses_registry_predictions(tmp_path: Path, monkeypatch):
 
     # Initialize strategy with registry-enabled engine
     strategy = create_ml_basic_strategy(
-        use_prediction_engine=True,
         model_type="basic",
         timeframe="1h",
     )
