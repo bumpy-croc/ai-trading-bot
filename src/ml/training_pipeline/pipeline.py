@@ -41,6 +41,31 @@ class TrainingResult:
     duration_seconds: float
 
 
+def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
+    """Generate auto-incrementing version ID to prevent collisions.
+
+    Checks if version directory exists and increments counter until finding
+    a unique version ID. Format: YYYY-MM-DD_HHh_vN where N starts at 1.
+
+    Args:
+        models_dir: Root models directory
+        symbol: Trading symbol (e.g., BTCUSDT)
+        model_type: Model type (e.g., basic, sentiment)
+
+    Returns:
+        Unique version ID string
+    """
+    base_timestamp = datetime.utcnow().strftime("%Y-%m-%d_%Hh")
+    version_counter = 1
+
+    while True:
+        version_id = f"{base_timestamp}_v{version_counter}"
+        target_dir = models_dir / symbol.upper() / model_type / version_id
+        if not target_dir.exists():
+            return version_id
+        version_counter += 1
+
+
 def enable_mixed_precision(enabled: bool) -> None:
     if not enabled:
         return
@@ -156,7 +181,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         }
 
         output_dir = ctx.paths.models_dir
-        version_id = datetime.utcnow().strftime("%Y-%m-%d_%Hh_v1")
+        version_id = _generate_version_id(output_dir, ctx.config.symbol, metadata["model_type"])
         metadata["version_id"] = version_id
         artifact_paths = save_artifacts(
             model,
