@@ -222,9 +222,7 @@ class StrategyFactory:
     @staticmethod
     def create_ml_basic_strategy(
         name: str = "MLBasic",
-        model_path: str = "src/ml/btcusdt_price.onnx",
         sequence_length: int = 120,
-        use_prediction_engine: bool = False,
         model_name: Optional[str] = None,
         model_type: str = "basic",
         timeframe: str = "1h",
@@ -234,9 +232,7 @@ class StrategyFactory:
 
         Args:
             name: Strategy name
-            model_path: Path to ONNX model
             sequence_length: Sequence length for LSTM
-            use_prediction_engine: Whether to use prediction engine
             model_name: Model name for registry
             model_type: Model type
             timeframe: Model timeframe
@@ -246,9 +242,7 @@ class StrategyFactory:
         """
         signal_generator = MLBasicSignalGenerator(
             name=f"{name}_signals",
-            model_path=model_path,
             sequence_length=sequence_length,
-            use_prediction_engine=use_prediction_engine,
             model_name=model_name,
             model_type=model_type,
             timeframe=timeframe,
@@ -275,9 +269,7 @@ class StrategyFactory:
     @staticmethod
     def create_ml_adaptive_strategy(
         name: str = "MLAdaptive",
-        model_path: str = "src/ml/btcusdt_price.onnx",
         sequence_length: int = 120,
-        use_prediction_engine: bool = False,
         model_name: Optional[str] = None,
     ) -> Strategy:
         """
@@ -285,9 +277,7 @@ class StrategyFactory:
 
         Args:
             name: Strategy name
-            model_path: Path to ONNX model
             sequence_length: Sequence length for LSTM
-            use_prediction_engine: Whether to use prediction engine
             model_name: Model name for registry
 
         Returns:
@@ -295,9 +285,7 @@ class StrategyFactory:
         """
         signal_generator = MLSignalGenerator(
             name=f"{name}_signals",
-            model_path=model_path,
             sequence_length=sequence_length,
-            use_prediction_engine=use_prediction_engine,
             model_name=model_name,
         )
 
@@ -321,9 +309,7 @@ class StrategyFactory:
     @staticmethod
     def create_ml_sentiment_strategy(
         name: str = "MLSentiment",
-        model_path: str = "src/ml/btcusdt_sentiment.onnx",
         sequence_length: int = 120,
-        use_prediction_engine: bool = False,
         model_name: Optional[str] = None,
         model_type: str = "sentiment",
         timeframe: str = "1h",
@@ -333,9 +319,7 @@ class StrategyFactory:
 
         Args:
             name: Strategy name
-            model_path: Path to ONNX model
             sequence_length: Sequence length for LSTM
-            use_prediction_engine: Whether to use prediction engine
             model_name: Model name for registry
             model_type: Model type
             timeframe: Model timeframe
@@ -345,9 +329,7 @@ class StrategyFactory:
         """
         signal_generator = MLSignalGenerator(
             name=f"{name}_signals",
-            model_path=model_path,
             sequence_length=sequence_length,
-            use_prediction_engine=use_prediction_engine,
             model_name=model_name,
         )
 

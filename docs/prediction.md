@@ -1,6 +1,6 @@
 # Prediction & models
 
-> **Last Updated**: 2025-10-27  
+> **Last Updated**: 2025-10-28
 > **Related Documentation**: [Backtesting](backtesting.md), [Live trading](live_trading.md)
 
 Machine-learning inference and model lifecycle management live under `src/prediction` and `src/ml`. The goal is to keep training
@@ -43,14 +43,15 @@ Each bundle stores weights, metadata, and optional metrics.
 
 ### Model Storage Locations
 
-Models are stored in two locations:
-- **Legacy location**: `src/ml/*.onnx` (root level) - Currently used by strategies
-- **Structured registry**: `src/ml/models/SYMBOL/TYPE/VERSION/model.onnx` - New versioned model structure
+All models are now stored exclusively in the **structured registry**:
+- `src/ml/models/SYMBOL/TYPE/VERSION/model.onnx` - Versioned model structure
 
-Available models include:
-- `btcusdt_price.onnx`, `btcusdt_price_v2.onnx` - BTC price prediction
-- `btcusdt_sentiment.onnx` - BTC with sentiment analysis
-- `ethusdt_sentiment.onnx` - ETH with sentiment analysis
+Example models:
+- `BTCUSDT/basic/2025-09-17_1h_v1/` - BTC price prediction (basic)
+- `BTCUSDT/sentiment/2025-09-17_1h_v1/` - BTC with sentiment analysis
+- `ETHUSDT/sentiment/2025-09-17_1h_v1/` - ETH with sentiment analysis
+
+The `latest/` symlink in each type directory (e.g., `BTCUSDT/basic/latest/`) points to the current production version. All strategies now load models exclusively through the `PredictionModelRegistry`.
 
 ### Model Management Commands
 

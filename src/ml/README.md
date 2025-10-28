@@ -4,16 +4,9 @@ Pretrained models and training artifacts used by strategies and the prediction e
 
 ## Structure
 
-Models are organized in two formats:
+All models are now managed through the **PredictionModelRegistry** using a structured versioned layout:
 
-### Flat Structure (Legacy)
-Located at `src/ml/` root:
-- `*.onnx` - Legacy ONNX inference models (e.g., `btcusdt_price.onnx`, `btcusdt_sentiment.onnx`)
-- `*.keras` - Legacy Keras training artifacts (retained as symlinks to the registry)
-- `*_metadata.json` - Model metadata files consumed by the prediction engine
-- `*_training.png` - Training performance visualizations
-
-### Nested Structure (Current)
+### Registry Structure
 Located at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/` for versioned model management:
 - `BTCUSDT/basic/2025-09-17_1h_v1/` - Bitcoin basic model with metadata
 - `BTCUSDT/sentiment/2025-09-17_1h_v1/` - Bitcoin sentiment model with metadata
@@ -24,38 +17,83 @@ Example registry layout:
 models/
 ├── BTCUSDT/
 │   ├── basic/
-│   │   └── 2025-09-17_1h_v1/
-│   │       └── model.onnx
+│   │   ├── 2025-09-17_1h_v1/
+│   │   │   ├── model.onnx
+│   │   │   ├── metadata.json
+│   │   │   └── feature_schema.json
+│   │   └── latest/ -> 2025-09-17_1h_v1/
 │   └── sentiment/
-│       └── 2025-09-17_1h_v1/
-│           └── model.onnx
+│       ├── 2025-09-17_1h_v1/
+│       │   ├── model.onnx
+│       │   ├── metadata.json
+│       │   └── feature_schema.json
+│       └── latest/ -> 2025-09-17_1h_v1/
 └── ETHUSDT/
     └── sentiment/
-        └── 2025-09-17_1h_v1/
-            └── model.onnx
+        ├── 2025-09-17_1h_v1/
+        │   ├── model.onnx
+        │   ├── metadata.json
+        │   └── feature_schema.json
+        └── latest/ -> 2025-09-17_1h_v1/
 ```
 
 Each versioned directory contains:
 - `model.onnx` - ONNX inference model
+- `model.keras` - Original Keras model (optional)
 - `metadata.json` - Model metadata (training params, metrics, features)
+- `feature_schema.json` - Feature schema for validation
 
-## Notes
-- The prediction engine auto-discovers models in both structures
-- Nested structure is preferred for new models
-- See [docs/prediction.md](../../docs/prediction.md) for training details
+The `latest/` symlink points to the current production version for each model type.
 
 ## Available Models
 
-### BTC Models
-- `btcusdt_price.onnx` - Basic price prediction
-- `btcusdt_price_v2.onnx` - Enhanced price prediction (v2)
-- `btcusdt_sentiment.onnx` - Price prediction with sentiment features
-
-### ETH Models
-- `ethusdt_sentiment.onnx` - ETH price prediction with sentiment features
+All models are discovered automatically by the PredictionModelRegistry. Use the registry to select models by:
+- Symbol (e.g., "BTCUSDT", "ETHUSDT")
+- Type (e.g., "basic", "sentiment")
+- Timeframe (e.g., "1h", "1d")
+- Version (optional - defaults to "latest")
 
 ## Usage
 
-The prediction engine auto-discovers models in this folder. Both legacy (root-level) and structured registry models are supported.
+### Via Prediction Engine
+```python
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
+
+config = PredictionConfig()
+registry = PredictionModelRegistry(config)
+
+# Get the latest BTCUSDT basic model
+bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+result = registry.predict("BTCUSDT/basic/latest", price_data)
+```
+
+### Via Strategy Components
+All ML strategies now automatically use the registry:
+```python
+from src.strategies.ml_basic import create_ml_basic_strategy
+
+strategy = create_ml_basic_strategy(
+    name="MlBasic",
+    sequence_length=120,
+    model_name=None,  # Auto-discovers from registry
+    model_type="basic",
+    timeframe="1h"
+)
+```
+
+## Training New Models
+
+Use the CLI to train and register new models:
+```bash
+# Train a new model (automatically registers in the nested structure)
+atb train model BTCUSDT --timeframe 1h --start-date 2023-01-01 --end-date 2024-12-01
+
+# The trainer creates a new version directory and updates the latest symlink
+```
 
 See [docs/prediction.md](../../docs/prediction.md) for training details and model deployment workflows.
+
+## Migration Notes
+
+As of October 2025, all legacy flat-structure files (symlinks in `src/ml/` root) have been removed. All strategies now exclusively use the PredictionModelRegistry to load models from the `models/` subdirectory.

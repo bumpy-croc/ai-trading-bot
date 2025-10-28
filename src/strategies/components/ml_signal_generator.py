@@ -14,7 +14,6 @@ import onnxruntime as ort
 import pandas as pd
 
 from src.config.config_manager import get_config
-from src.config.constants import DEFAULT_USE_PREDICTION_ENGINE
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
@@ -53,9 +52,7 @@ class MLSignalGenerator(SignalGenerator):
     def __init__(
         self,
         name: str = "ml_signal_generator",
-        model_path: str = "src/ml/btcusdt_price.onnx",
         sequence_length: int = 120,
-        use_prediction_engine: Optional[bool] = None,
         model_name: Optional[str] = None,
     ):
         """
@@ -63,37 +60,18 @@ class MLSignalGenerator(SignalGenerator):
 
         Args:
             name: Name for this signal generator
-            model_path: Path to ONNX model file
             sequence_length: Sequence length for model input
-            use_prediction_engine: Whether to use prediction engine (optional)
             model_name: Model name for prediction engine (optional)
         """
         super().__init__(name)
 
-        self.model_path = model_path
         self.sequence_length = sequence_length
 
-        # Defer ONNX session initialization to enable dual-backend support
-        self.ort_session = None
-        self.input_name = None
-
-        # Prediction engine configuration
-        cfg = get_config()
-        self.use_prediction_engine = (
-            use_prediction_engine
-            if use_prediction_engine is not None
-            else cfg.get_bool("USE_PREDICTION_ENGINE", default=DEFAULT_USE_PREDICTION_ENGINE)
-        )
-
         # Model name configuration
+        cfg = get_config()
         self.model_name = model_name
         if self.model_name is None:
             self.model_name = cfg.get("PREDICTION_ENGINE_MODEL_NAME", default=None)
-        if self.model_name is None:
-            try:
-                self.model_name = Path(self.model_path).stem
-            except Exception:
-                self.model_name = None
 
         self.prediction_engine = None
         self._engine_warning_emitted = False
@@ -102,40 +80,23 @@ class MLSignalGenerator(SignalGenerator):
         # Initialize feature pipeline
         self._setup_feature_pipeline()
 
-        # Initialize prediction engine if enabled
-        if self.use_prediction_engine:
-            self._initialize_prediction_engine()
+        # Initialize prediction engine (always enabled)
+        self._initialize_prediction_engine()
 
     def _setup_feature_pipeline(self):
         """Setup feature pipeline for data preprocessing"""
-        if self.use_prediction_engine:
-            # Use price-only extractor for prediction engine
-            price_only = PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
-            config = {
-                "technical_features": {"enabled": False},
-                "sentiment_features": {"enabled": False},
-                "market_features": {"enabled": False},
-                "price_only_features": {"enabled": False},
-            }
-            self.feature_pipeline = FeaturePipeline(
-                config=config,
-                custom_extractors=[price_only],
-            )
-        else:
-            # Use technical extractor for local ONNX
-            technical_extractor = TechnicalFeatureExtractor(
-                sequence_length=self.sequence_length, normalization_window=self.sequence_length
-            )
-            config = {
-                "technical_features": {"enabled": False},
-                "sentiment_features": {"enabled": False},
-                "market_features": {"enabled": False},
-                "price_only_features": {"enabled": False},
-            }
-            self.feature_pipeline = FeaturePipeline(
-                config=config,
-                custom_extractors=[technical_extractor],
-            )
+        # Use price-only extractor for prediction engine
+        price_only = PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
+        config = {
+            "technical_features": {"enabled": False},
+            "sentiment_features": {"enabled": False},
+            "market_features": {"enabled": False},
+            "price_only_features": {"enabled": False},
+        }
+        self.feature_pipeline = FeaturePipeline(
+            config=config,
+            custom_extractors=[price_only],
+        )
 
     def _initialize_prediction_engine(self):
         """Initialize prediction engine with health check"""
@@ -237,8 +198,9 @@ class MLSignalGenerator(SignalGenerator):
             "current_price": current_price,
             "predicted_return": predicted_return,
             "index": index,
-            "model_path": self.model_path,
             "sequence_length": self.sequence_length,
+            "engine_model_name": self.model_name,
+            "engine_batch": self.use_engine_batch,
         }
 
         # Add regime information if available
@@ -249,16 +211,6 @@ class MLSignalGenerator(SignalGenerator):
                     "regime_volatility": regime.volatility.value,
                     "regime_confidence": regime.confidence,
                     "dynamic_threshold": self._calculate_dynamic_short_threshold(regime),
-                }
-            )
-
-        # Add prediction engine metadata
-        if self.use_prediction_engine and self.prediction_engine is not None:
-            metadata.update(
-                {
-                    "engine_enabled": True,
-                    "engine_model_name": self.model_name,
-                    "engine_batch": self.use_engine_batch,
                 }
             )
 
@@ -319,50 +271,19 @@ class MLSignalGenerator(SignalGenerator):
             else:
                 input_data = df[feature_columns].iloc[index - self.sequence_length : index].values
 
-            # Reshape for ONNX model: (batch_size, sequence_length, features)
-            input_data = input_data.astype(np.float32)
-            input_data = np.expand_dims(input_data, axis=0)
+            # Get prediction from prediction engine
+            if self.prediction_engine is None:
+                print(f"[MLSignalGenerator] Prediction engine not initialized")
+                return None
 
-            # Get prediction
-            if (
-                self.use_prediction_engine
-                and self.prediction_engine is not None
-                and self.model_name
-            ):
-                window_df = df[["open", "high", "low", "close", "volume"]].iloc[
-                    index - self.sequence_length : index
-                ]
-                result = self.prediction_engine.predict(window_df, model_name=self.model_name)
-                pred = float(result.price)
+            window_df = df[["open", "high", "low", "close", "volume"]].iloc[
+                index - self.sequence_length : index
+            ]
+            result = self.prediction_engine.predict(window_df, model_name=self.model_name)
+            pred = float(result.price)
 
-                # Prediction engine returns real prices, return directly
-                return pred
-            else:
-                # Use local ONNX session; initialize lazily
-                if self.ort_session is None:
-                    self.ort_session = ort.InferenceSession(self.model_path)
-                    self.input_name = self.ort_session.get_inputs()[0].name
-
-                output = self.ort_session.run(None, {self.input_name: input_data})
-                pred = output[0][0][0]
-
-                # Ensure pred is a scalar value
-                if isinstance(pred, (list, tuple, np.ndarray)):
-                    pred = float(np.array(pred).flatten()[0])
-                else:
-                    pred = float(pred)
-
-                # Denormalize prediction (only for ONNX model outputs)
-                recent_close = df["close"].iloc[index - self.sequence_length : index].values
-                min_close = np.min(recent_close)
-                max_close = np.max(recent_close)
-
-                if max_close != min_close:
-                    pred_denormalized = pred * (max_close - min_close) + min_close
-                else:
-                    pred_denormalized = df["close"].iloc[index - 1]
-
-                return pred_denormalized
+            # Prediction engine returns real prices
+            return pred
 
         except Exception as e:
             print(f"[MLSignalGenerator] Prediction error at index {index}: {e}")
@@ -445,9 +366,7 @@ class MLSignalGenerator(SignalGenerator):
         params = super().get_parameters()
         params.update(
             {
-                "model_path": self.model_path,
                 "sequence_length": self.sequence_length,
-                "use_prediction_engine": self.use_prediction_engine,
                 "model_name": self.model_name,
                 "short_entry_threshold": self.SHORT_ENTRY_THRESHOLD,
                 "confidence_multiplier": self.CONFIDENCE_MULTIPLIER,
@@ -477,9 +396,7 @@ class MLBasicSignalGenerator(SignalGenerator):
     def __init__(
         self,
         name: str = "ml_basic_signal_generator",
-        model_path: str = "src/ml/btcusdt_price.onnx",
         sequence_length: int = 120,
-        use_prediction_engine: Optional[bool] = None,
         model_name: Optional[str] = None,
         model_type: Optional[str] = None,
         timeframe: Optional[str] = None,
@@ -489,43 +406,24 @@ class MLBasicSignalGenerator(SignalGenerator):
 
         Args:
             name: Name for this signal generator
-            model_path: Path to ONNX model file
             sequence_length: Sequence length for model input
-            use_prediction_engine: Whether to use prediction engine (optional)
             model_name: Model name for prediction engine (optional)
             model_type: Model type for registry selection (optional)
             timeframe: Timeframe for registry selection (optional)
         """
         super().__init__(name)
 
-        self.model_path = model_path
         self.sequence_length = sequence_length
 
         # Registry model selection preferences
         self.model_type = model_type or "basic"
         self.model_timeframe = timeframe or "1h"
 
-        # Defer ONNX session init if prediction engine/registry is used
-        self.ort_session = None
-        self.input_name = None
-
-        # Prediction engine configuration
-        cfg = get_config()
-        self.use_prediction_engine = (
-            use_prediction_engine
-            if use_prediction_engine is not None
-            else cfg.get_bool("USE_PREDICTION_ENGINE", default=DEFAULT_USE_PREDICTION_ENGINE)
-        )
-
         # Model name configuration
+        cfg = get_config()
         self.model_name = model_name
         if self.model_name is None:
             self.model_name = cfg.get("PREDICTION_ENGINE_MODEL_NAME", default=None)
-        if self.model_name is None:
-            try:
-                self.model_name = Path(self.model_path).stem
-            except Exception:
-                self.model_name = None
 
         self.prediction_engine = None
         self._registry = None
@@ -535,40 +433,23 @@ class MLBasicSignalGenerator(SignalGenerator):
         # Initialize feature pipeline
         self._setup_feature_pipeline()
 
-        # Initialize prediction engine if enabled
-        if self.use_prediction_engine:
-            self._initialize_prediction_engine()
+        # Initialize prediction engine (always enabled)
+        self._initialize_prediction_engine()
 
     def _setup_feature_pipeline(self):
         """Setup feature pipeline for data preprocessing"""
-        if self.use_prediction_engine:
-            # Use price-only extractor for prediction engine
-            price_only = PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
-            config = {
-                "technical_features": {"enabled": False},
-                "sentiment_features": {"enabled": False},
-                "market_features": {"enabled": False},
-                "price_only_features": {"enabled": False},
-            }
-            self.feature_pipeline = FeaturePipeline(
-                config=config,
-                custom_extractors=[price_only],
-            )
-        else:
-            # Use technical extractor for local ONNX
-            technical_extractor = TechnicalFeatureExtractor(
-                sequence_length=self.sequence_length, normalization_window=self.sequence_length
-            )
-            config = {
-                "technical_features": {"enabled": False},
-                "sentiment_features": {"enabled": False},
-                "market_features": {"enabled": False},
-                "price_only_features": {"enabled": False},
-            }
-            self.feature_pipeline = FeaturePipeline(
-                config=config,
-                custom_extractors=[technical_extractor],
-            )
+        # Use price-only extractor for prediction engine
+        price_only = PriceOnlyFeatureExtractor(normalization_window=self.sequence_length)
+        config = {
+            "technical_features": {"enabled": False},
+            "sentiment_features": {"enabled": False},
+            "market_features": {"enabled": False},
+            "price_only_features": {"enabled": False},
+        }
+        self.feature_pipeline = FeaturePipeline(
+            config=config,
+            custom_extractors=[price_only],
+        )
 
     def _initialize_prediction_engine(self):
         """Initialize prediction engine with health check and registry support"""
@@ -676,22 +557,13 @@ class MLBasicSignalGenerator(SignalGenerator):
             "current_price": current_price,
             "predicted_return": predicted_return,
             "index": index,
-            "model_path": self.model_path,
             "sequence_length": self.sequence_length,
             "short_threshold": self.SHORT_ENTRY_THRESHOLD,
+            "engine_model_name": self.model_name,
+            "engine_batch": self.use_engine_batch,
+            "model_type": self.model_type,
+            "model_timeframe": self.model_timeframe,
         }
-
-        # Add prediction engine metadata
-        if self.use_prediction_engine and self.prediction_engine is not None:
-            metadata.update(
-                {
-                    "engine_enabled": True,
-                    "engine_model_name": self.model_name,
-                    "engine_batch": self.use_engine_batch,
-                    "model_type": self.model_type,
-                    "model_timeframe": self.model_timeframe,
-                }
-            )
 
         return Signal(
             direction=direction, strength=strength, confidence=confidence, metadata=metadata
@@ -725,7 +597,7 @@ class MLBasicSignalGenerator(SignalGenerator):
 
     def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> Optional[float]:
         """
-        Get ML prediction for the given index with registry support
+        Get ML prediction for the given index using prediction engine
 
         Args:
             df: DataFrame with processed features
@@ -735,28 +607,19 @@ class MLBasicSignalGenerator(SignalGenerator):
             Predicted price or None if prediction fails
         """
         try:
-            # Prepare input features
-            price_features = ["close", "volume", "high", "low", "open"]
-            feature_columns = [f"{feature}_normalized" for feature in price_features]
+            # Get prediction from prediction engine
+            if self.prediction_engine is None:
+                print("[MLBasicSignalGenerator] Prediction engine not initialized")
+                return None
 
-            # Check if features exist
-            missing_features = [col for col in feature_columns if col not in df.columns]
-            if missing_features:
-                # Apply feature pipeline if features are missing
-                df_processed = self.feature_pipeline.transform(df.copy())
-                input_data = (
-                    df_processed[feature_columns].iloc[index - self.sequence_length : index].values
-                )
-            else:
-                input_data = df[feature_columns].iloc[index - self.sequence_length : index].values
+            # Use prediction engine with registry selection
+            window_df = df[["open", "high", "low", "close", "volume"]].iloc[
+                index - self.sequence_length : index
+            ]
 
-            # Reshape for ONNX model: (batch_size, sequence_length, features)
-            input_data = input_data.astype(np.float32)
-            input_data = np.expand_dims(input_data, axis=0)
-
-            # Try to bind bundle session if using registry
+            # Try to select bundle using registry
             selected_bundle_key = None
-            if self.use_prediction_engine and self._registry is not None:
+            if self._registry is not None:
                 try:
                     bundle = self._registry.select_bundle(
                         symbol="BTCUSDT",  # Default trading pair
@@ -764,62 +627,24 @@ class MLBasicSignalGenerator(SignalGenerator):
                         timeframe=self.model_timeframe,
                     )
                     selected_bundle_key = bundle.key
-                    if getattr(bundle.runner, "session", None) is not None:
-                        self.ort_session = bundle.runner.session
-                        self.input_name = self.ort_session.get_inputs()[0].name
                 except Exception:
                     selected_bundle_key = None
 
-            # Get prediction
-            if self.use_prediction_engine and self.prediction_engine is not None:
-                # Use prediction engine - returns real price, no denormalization needed
-                window_df = df[["open", "high", "low", "close", "volume"]].iloc[
-                    index - self.sequence_length : index
-                ]
-
-                # Prefer registry selection by symbol/type/timeframe when available
-                engine_model_name = selected_bundle_key or self.model_name
-                try:
-                    if engine_model_name:
-                        result = self.prediction_engine.predict(
-                            window_df, model_name=engine_model_name
-                        )
-                    else:
-                        result = self.prediction_engine.predict(window_df)
-                except Exception:
-                    # Fall back to default registry resolution if explicit lookup fails
+            # Prefer registry selection by symbol/type/timeframe when available
+            engine_model_name = selected_bundle_key or self.model_name
+            try:
+                if engine_model_name:
+                    result = self.prediction_engine.predict(window_df, model_name=engine_model_name)
+                else:
                     result = self.prediction_engine.predict(window_df)
+            except Exception:
+                # Fall back to default registry resolution if explicit lookup fails
+                result = self.prediction_engine.predict(window_df)
 
-                pred = float(result.price)
+            pred = float(result.price)
 
-                # Prediction engine returns real prices, return directly
-                return pred
-            else:
-                # Use local ONNX session; initialize lazily
-                if self.ort_session is None:
-                    self.ort_session = ort.InferenceSession(self.model_path)
-                    self.input_name = self.ort_session.get_inputs()[0].name
-
-                output = self.ort_session.run(None, {self.input_name: input_data})
-                pred = output[0][0][0]
-
-                # Ensure pred is a scalar value
-                if isinstance(pred, (list, tuple, np.ndarray)):
-                    pred = float(np.array(pred).flatten()[0])
-                else:
-                    pred = float(pred)
-
-                # Denormalize prediction (only for ONNX model outputs)
-                recent_close = df["close"].iloc[index - self.sequence_length : index].values
-                min_close = np.min(recent_close)
-                max_close = np.max(recent_close)
-
-                if max_close != min_close:
-                    pred_denormalized = pred * (max_close - min_close) + min_close
-                else:
-                    pred_denormalized = df["close"].iloc[index - 1]
-
-                return pred_denormalized
+            # Prediction engine returns real prices
+            return pred
 
         except Exception as e:
             print(f"[MLBasicSignalGenerator] Prediction error at index {index}: {e}")
@@ -843,9 +668,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         params = super().get_parameters()
         params.update(
             {
-                "model_path": self.model_path,
                 "sequence_length": self.sequence_length,
-                "use_prediction_engine": self.use_prediction_engine,
                 "model_name": self.model_name,
                 "model_type": self.model_type,
                 "model_timeframe": self.model_timeframe,

@@ -39,9 +39,7 @@ from src.strategies.components import (
 
 def create_ml_basic_strategy(
     name: str = "MlBasic",
-    model_path: str = "src/ml/btcusdt_price.onnx",
     sequence_length: int = 120,
-    use_prediction_engine: bool | None = None,
     model_name: str | None = None,
     model_type: str | None = None,
     timeframe: str | None = None,
@@ -49,16 +47,15 @@ def create_ml_basic_strategy(
 ) -> Strategy:
     """
     Create ML Basic strategy using component composition.
-    
+
     Args:
         name: Strategy name
-        model_path: Path to ONNX model file
         sequence_length: Number of candles for sequence prediction
-        use_prediction_engine: Whether to use centralized prediction engine
         model_name: Model name for prediction engine
         model_type: Model type (e.g., "basic")
         timeframe: Model timeframe (e.g., "1h")
-    
+        fast_mode: Enable fast mode for testing (disables ML)
+
     Returns:
         Configured Strategy instance
     """
@@ -104,9 +101,7 @@ def create_ml_basic_strategy(
         # Create signal generator with ML Basic parameters
         signal_generator = MLBasicSignalGenerator(
             name=f"{name}_signals",
-            model_path=model_path,
             sequence_length=sequence_length,
-            use_prediction_engine=use_prediction_engine,
             model_name=model_name,
             model_type=model_type,
             timeframe=timeframe,
