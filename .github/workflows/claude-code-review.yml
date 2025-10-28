@@ -48,7 +48,7 @@ jobs:
             - Security concerns
             - Test coverage
 
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+            Use the repository's CLAUDE.md and AGENTS.md for guidance on style and conventions. Be concise in your feedback. Only list actionable items. Keep your comment minimal so that it doesn't spam the PR thread.
 
             Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
 
