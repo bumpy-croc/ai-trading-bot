@@ -194,13 +194,31 @@ def save_artifacts(
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, default=str)
 
+    # Atomic symlink update to avoid race conditions (TOCTOU vulnerability)
+    # Create temporary symlink, then atomically replace the old one
     latest_link = type_dir / "latest"
-    if latest_link.exists() or latest_link.is_symlink():
-        try:
-            latest_link.unlink()
-        except OSError:
-            pass
-    latest_link.symlink_to(version_dir.name)
+    temp_link = type_dir / f".latest.{version_dir.name}.tmp"
+
+    try:
+        # Clean up any stale temp symlink
+        if temp_link.exists() or temp_link.is_symlink():
+            temp_link.unlink()
+
+        # Create new symlink with temporary name
+        temp_link.symlink_to(version_dir.name)
+
+        # Atomically replace old symlink (rename is atomic on POSIX systems)
+        temp_link.replace(latest_link)
+
+    except OSError as e:
+        # Clean up temp symlink on failure
+        if temp_link.exists() or temp_link.is_symlink():
+            try:
+                temp_link.unlink()
+            except OSError:
+                pass
+        logger.error(f"Failed to update 'latest' symlink: {e}")
+        raise RuntimeError(f"Failed to update 'latest' symlink at {latest_link}") from e
 
     return ArtifactPaths(
         directory=version_dir,
