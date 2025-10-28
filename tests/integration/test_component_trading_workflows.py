@@ -210,6 +210,96 @@ class TestEndToEndTradingWorkflows:
         if position_sizes:
             assert all(0 < size <= balance * 0.5 for size in position_sizes)
 
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_ml_signal_generation_integration(self, mock_config_class, mock_engine_class):
+        """Test ML signal generation integrates with strategy components
+
+        This test validates that the ML signal generator works end-to-end with
+        other strategy components when the prediction engine is properly mocked.
+        """
+        # Mock prediction engine
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+
+        # Create market scenario first to get reference price
+        df = self.create_market_scenario("trending_up", 50)
+        balance = 10000.0
+
+        # Mock prediction result for bullish scenario
+        # Use a callback to make prediction always 5% higher than current price
+        def mock_predict(window_df, model_name=None):
+            current_price = window_df["close"].iloc[-1]
+            mock_result = Mock(spec=PredictionResult)
+            mock_result.price = current_price * 1.05  # 5% higher = bullish
+            mock_result.confidence = 0.85
+            mock_result.metadata = {"model": "test_model"}
+            return mock_result
+
+        mock_engine.predict.side_effect = mock_predict
+        mock_engine_class.return_value = mock_engine
+
+        # Create strategy with ML signal generator
+        strategy = Strategy(
+            name="ml_integration_test",
+            signal_generator=MLBasicSignalGenerator(sequence_length=120),
+            risk_manager=VolatilityRiskManager(),
+            position_sizer=KellySizer(),
+        )
+
+        decisions = []
+        positions = []
+
+        # Simulate trading session
+        for i in range(120, len(df)):  # Start after sequence_length warm-up
+            decision = strategy.process_candle(df, i, balance)
+            decisions.append(decision)
+
+            # Simulate position management for buy signals
+            if decision.signal.direction == SignalDirection.BUY and decision.position_size > 0:
+                position = Position(
+                    symbol="BTCUSDT",
+                    side="long",
+                    size=decision.position_size / df.iloc[i]["close"],
+                    entry_price=df.iloc[i]["close"],
+                    current_price=df.iloc[i]["close"],
+                    entry_time=df.index[i],
+                )
+                positions.append(position)
+
+        # Validate trading session results
+        assert len(decisions) > 0
+        assert all(isinstance(d, TradingDecision) for d in decisions)
+
+        # Verify prediction engine was called
+        assert mock_engine.predict.call_count > 0
+
+        # Check that strategy generated signals
+        signal_counts = {
+            "buy": sum(1 for d in decisions if d.signal.direction == SignalDirection.BUY),
+            "sell": sum(1 for d in decisions if d.signal.direction == SignalDirection.SELL),
+            "hold": sum(1 for d in decisions if d.signal.direction == SignalDirection.HOLD),
+        }
+
+        # Should have some signals (not all holds)
+        assert signal_counts["buy"] + signal_counts["sell"] > 0
+
+        # With bullish predictions, should generate some buy signals
+        assert signal_counts["buy"] > 0
+
+        # Validate ML metadata is present in decisions
+        for decision in decisions:
+            if decision.signal.direction != SignalDirection.HOLD:
+                # Check that ML-related metadata is in signal metadata
+                assert "prediction" in decision.signal.metadata or "generator" in decision.signal.metadata
+                # Verify it's using the ML generator
+                assert decision.metadata["components"]["signal_generator"] == "ml_basic_signal_generator"
+
+        # Validate position sizes are reasonable
+        position_sizes = [d.position_size for d in decisions if d.position_size > 0]
+        if position_sizes:
+            assert all(0 < size <= balance * 0.5 for size in position_sizes)
+
     def test_multi_component_integration(self):
         """Test integration between multiple components"""
         df = self.create_market_scenario("volatile", 30)
