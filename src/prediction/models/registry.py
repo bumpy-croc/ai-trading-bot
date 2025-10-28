@@ -33,9 +33,9 @@ class StrategyModel:
         model_type: str,
         version_id: str,
         directory: Path,
-        metadata: dict[str, Any] | None,
-        feature_schema: dict[str, Any] | None,
-        metrics: dict[str, Any] | None,
+        metadata: Optional[dict[str, Any]],
+        feature_schema: Optional[dict[str, Any]],
+        metrics: Optional[dict[str, Any]],
         runner: OnnxRunner,
     ) -> None:
         self.symbol = symbol
