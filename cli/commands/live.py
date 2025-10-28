@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,6 +12,8 @@ from types import SimpleNamespace
 from cli.commands.train_commands import train_model_main, train_price_model_main
 from cli.core.forward import forward_to_module_main
 from src.infrastructure.runtime.paths import get_project_root
+
+logger = logging.getLogger(__name__)
 
 MODEL_REGISTRY = get_project_root() / "src" / "ml" / "models"
 
@@ -80,11 +83,40 @@ def _resolve_version_path(path_str: str) -> Path:
 
 
 def _repoint_latest(version_dir: Path) -> None:
+    """Update 'latest' symlink to point to the specified version directory.
+
+    Args:
+        version_dir: Path to version directory (e.g., .../BTCUSDT/basic/2025-10-27_14h_v1)
+
+    Raises:
+        OSError: If symlink operations fail due to permissions or platform limitations
+        FileNotFoundError: If parent directory doesn't exist
+    """
     model_type_dir = version_dir.parent
     latest_link = model_type_dir / "latest"
-    if latest_link.exists() or latest_link.is_symlink():
-        latest_link.unlink()
-    latest_link.symlink_to(version_dir.name)
+
+    try:
+        # Remove existing symlink or file if present
+        if latest_link.exists() or latest_link.is_symlink():
+            latest_link.unlink()
+
+        # Create new symlink pointing to version directory name (not full path)
+        latest_link.symlink_to(version_dir.name)
+        logger.info(f"Updated 'latest' symlink to point to {version_dir.name}")
+
+    except PermissionError as e:
+        logger.error(f"Permission denied when updating symlink at {latest_link}: {e}")
+        raise OSError(f"Failed to update 'latest' symlink: insufficient permissions") from e
+    except OSError as e:
+        # Catch platform-specific errors (e.g., Windows without symlink privileges)
+        logger.error(f"Failed to create symlink at {latest_link}: {e}")
+        raise OSError(
+            f"Failed to update 'latest' symlink at {latest_link}. "
+            f"On Windows, ensure Developer Mode is enabled or run with admin privileges."
+        ) from e
+    except FileNotFoundError as e:
+        logger.error(f"Parent directory not found: {model_type_dir}")
+        raise FileNotFoundError(f"Model type directory does not exist: {model_type_dir}") from e
 
 
 def _control(ns: argparse.Namespace) -> int:

@@ -11,6 +11,19 @@ from sklearn.preprocessing import MinMaxScaler
 
 logger = logging.getLogger(__name__)
 
+# Sentiment quality assessment constants
+MAX_DATA_FRESHNESS_DAYS = 999  # Indicates stale or missing sentiment data
+COVERAGE_WEIGHT = 0.6  # Weight for temporal coverage in quality score
+FRESHNESS_WEIGHT = 0.4  # Weight for data freshness in quality score
+DAYS_PER_YEAR = 365  # Days in a year for freshness calculation
+QUALITY_THRESHOLD_HIGH = 0.8  # Threshold for full sentiment recommendation
+QUALITY_THRESHOLD_MEDIUM = 0.4  # Threshold for hybrid sentiment recommendation
+
+# Technical indicator window sizes
+SMA_WINDOWS = [7, 14, 30]  # Simple moving average window sizes (days)
+RSI_WINDOW = 14  # Relative Strength Index window size (days)
+RSI_MAX = 100  # Maximum RSI value for normalization
+
 
 def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:
     """Assess coverage and freshness of sentiment data relative to price data."""
@@ -19,7 +32,7 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
         "total_sentiment_points": len(sentiment_df),
         "total_price_points": len(price_df),
         "coverage_ratio": 0.0,
-        "data_freshness_days": 999,
+        "data_freshness_days": MAX_DATA_FRESHNESS_DAYS,
         "missing_periods": [],
         "quality_score": 0.0,
         "recommendation": "price_only" if sentiment_df.empty else "unknown",
@@ -71,15 +84,13 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
         gap_starts.append((current_gap_start, missing_dates[-1]))
         assessment["missing_periods"] = gap_starts
 
-    coverage_weight = 0.6
-    freshness_weight = 0.4
     coverage_score = min(assessment["coverage_ratio"] * 2, 1.0)
-    freshness_score = max(0, 1 - (assessment["data_freshness_days"] / 365))
-    assessment["quality_score"] = coverage_score * coverage_weight + freshness_score * freshness_weight
+    freshness_score = max(0, 1 - (assessment["data_freshness_days"] / DAYS_PER_YEAR))
+    assessment["quality_score"] = coverage_score * COVERAGE_WEIGHT + freshness_score * FRESHNESS_WEIGHT
 
-    if assessment["quality_score"] >= 0.8:
+    if assessment["quality_score"] >= QUALITY_THRESHOLD_HIGH:
         assessment["recommendation"] = "full_sentiment"
-    elif assessment["quality_score"] >= 0.4:
+    elif assessment["quality_score"] >= QUALITY_THRESHOLD_MEDIUM:
         assessment["recommendation"] = "hybrid_with_fallback"
     else:
         assessment["recommendation"] = "price_only"
@@ -115,22 +126,22 @@ def create_robust_features(
 
     if "close" in data.columns:
         # Calculate rolling features (produces NaNs for initial window)
-        for window in [7, 14, 30]:
+        for window in SMA_WINDOWS:
             col = f"sma_{window}"
             data[col] = data["close"].rolling(window=window).mean()
 
         # Calculate RSI (produces NaNs for initial window)
         delta = data["close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = (delta.where(delta > 0, 0)).rolling(window=RSI_WINDOW).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=RSI_WINDOW).mean()
         rs = gain / loss
-        data["rsi"] = 100 - (100 / (1 + rs))
+        data["rsi"] = RSI_MAX - (RSI_MAX / (1 + rs))
 
         # Drop NaNs before scaling to avoid MinMaxScaler ValueError
         data = data.dropna()
 
         # Now scale the technical indicators (NaN-free data)
-        for window in [7, 14, 30]:
+        for window in SMA_WINDOWS:
             col = f"sma_{window}"
             scaled = f"{col}_scaled"
             data[scaled] = MinMaxScaler().fit_transform(data[[col]])

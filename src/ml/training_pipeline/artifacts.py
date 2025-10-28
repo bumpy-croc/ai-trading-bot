@@ -9,7 +9,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,7 +25,17 @@ class ArtifactPaths:
     plot_path: Optional[Path]
 
 
-def create_training_plots(history, model, X_test, y_test, feature_names, symbol, model_type, output_dir: Path, enable_plots: bool) -> Optional[Path]:
+def create_training_plots(
+    history: Any,
+    model: tf.keras.Model,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    feature_names: List[str],
+    symbol: str,
+    model_type: str,
+    output_dir: Path,
+    enable_plots: bool,
+) -> Optional[Path]:
     if not enable_plots:
         return None
     try:
@@ -66,11 +76,19 @@ def create_training_plots(history, model, X_test, y_test, feature_names, symbol,
         plt.savefig(plot_path, dpi=300, bbox_inches="tight")
         plt.close()
         return plot_path
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - Catch all matplotlib/display errors
+        # Plot generation is diagnostic only - training should continue if plotting fails
+        # (e.g., missing display, matplotlib backend issues, file write errors)
         return None
 
 
-def validate_model_robustness(model, X_test, y_test, feature_names, has_sentiment: bool) -> Dict:
+def validate_model_robustness(
+    model: tf.keras.Model,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    feature_names: List[str],
+    has_sentiment: bool,
+) -> Dict[str, Any]:
     results = {"base_performance": {}}
     base_pred = model.predict(X_test)
     base_mse = np.mean((base_pred.flatten() - y_test) ** 2)
@@ -91,7 +109,14 @@ def validate_model_robustness(model, X_test, y_test, feature_names, has_sentimen
     return results
 
 
-def evaluate_model_performance(model, X_train, y_train, X_test, y_test, close_scaler=None) -> Dict[str, float]:
+def evaluate_model_performance(
+    model: tf.keras.Model,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    close_scaler: Optional[Any] = None,
+) -> Dict[str, float]:
     train_loss, train_rmse = model.evaluate(X_train, y_train, verbose=0)
     test_loss, test_rmse = model.evaluate(X_test, y_test, verbose=0)
     test_predictions = model.predict(X_test, verbose=0)
@@ -137,7 +162,9 @@ def convert_to_onnx(model: tf.keras.Model, output_path: Path) -> Optional[Path]:
         if result.returncode == 0:
             return output_path
         return None
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - Catch all ONNX conversion errors
+        # ONNX export is optional - training should continue with Keras model if conversion fails
+        # (e.g., missing tf2onnx, unsupported ops, file system errors)
         return None
 
 

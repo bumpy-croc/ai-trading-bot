@@ -41,8 +41,39 @@ class TrainingResult:
     duration_seconds: float
 
 
+def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
+    """Generate auto-incrementing version ID to prevent collisions.
+
+    Checks if version directory exists and increments counter until finding
+    a unique version ID. Format: YYYY-MM-DD_HHh_vN where N starts at 1.
+
+    Args:
+        models_dir: Root models directory
+        symbol: Trading symbol (e.g., BTCUSDT)
+        model_type: Model type (e.g., basic, sentiment)
+
+    Returns:
+        Unique version ID string
+    """
+    base_timestamp = datetime.utcnow().strftime("%Y-%m-%d_%Hh")
+    version_counter = 1
+
+    while True:
+        version_id = f"{base_timestamp}_v{version_counter}"
+        target_dir = models_dir / symbol.upper() / model_type / version_id
+        if not target_dir.exists():
+            return version_id
+        version_counter += 1
+
+
 def enable_mixed_precision(enabled: bool) -> None:
+    """Enable mixed precision training for faster GPU performance.
+
+    Args:
+        enabled: Whether to enable mixed precision training
+    """
     if not enabled:
+        logger.info("Mixed precision explicitly disabled via configuration")
         return
     gpus = tf.config.list_physical_devices("GPU")
     if not gpus:
@@ -52,7 +83,9 @@ def enable_mixed_precision(enabled: bool) -> None:
         tf.keras.mixed_precision.set_global_policy("mixed_float16")
         tf.config.optimizer.set_jit(True)
         logger.info("Enabled mixed precision and XLA")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - Catch all TensorFlow configuration errors
+        # Mixed precision is an optimization - training should continue with regular precision
+        # if setup fails (e.g., GPU driver issues, TensorFlow version incompatibility)
         logger.warning("Failed to enable mixed precision: %s", exc)
 
 
@@ -156,7 +189,7 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         }
 
         output_dir = ctx.paths.models_dir
-        version_id = datetime.utcnow().strftime("%Y-%m-%d_%Hh_v1")
+        version_id = _generate_version_id(output_dir, ctx.config.symbol, metadata["model_type"])
         metadata["version_id"] = version_id
         artifact_paths = save_artifacts(
             model,
@@ -182,6 +215,8 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
 
         duration = perf_counter() - start_time
         return TrainingResult(True, metadata, artifact_paths, duration)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - Catch all pipeline errors for graceful degradation
+        # Top-level handler ensures pipeline always returns TrainingResult instead of crashing
+        # Enables proper cleanup, error reporting, and CLI error handling for any failure
         logger.error("Training pipeline failed: %s", exc)
         return TrainingResult(False, {"error": str(exc)}, None, perf_counter() - start_time)
