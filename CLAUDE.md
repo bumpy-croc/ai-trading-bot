@@ -358,6 +358,26 @@ Follow `.github/pull_request_template.md`:
 - Prefer GitHub MCP server if available
 - Otherwise use `gh` CLI (authenticated with GITHUB_TOKEN env variable)
 
+### Handling PR Review Comments
+
+**Efficient Comment Retrieval**:
+When addressing review comments from a PR link:
+1. Extract the PR number from the URL (e.g., `https://github.com/user/repo/pull/123` → PR #123)
+2. Use the GitHub MCP server `pull_request_read` with `method: "get_review_comments"` to fetch only review comments
+3. Do NOT retrieve the entire PR contents - this wastes tokens
+4. If given a direct comment link with `#comment-ID`, use the `gh` CLI to extract just that comment:
+   ```bash
+   gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID
+   ```
+
+**Example Workflow**:
+- User provides: `https://github.com/user/repo/pull/123#discussion_r123456789`
+- Extract: PR #123, comment ID `r123456789`
+- Fetch: Use MCP `pull_request_read` method `get_review_comments` with appropriate pagination
+- Address the specific feedback identified in the comment
+- Commit changes with clear message referencing the issue
+- Do not fetch the full PR diff or all comments unless necessary
+
 ## Important Context
 
 ### Model Training & Deployment Flow
