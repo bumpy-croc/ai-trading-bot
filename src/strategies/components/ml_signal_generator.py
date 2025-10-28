@@ -6,12 +6,15 @@ These components generate trading signals using machine learning models with
 regime-aware threshold adjustments and confidence calculations.
 """
 
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import onnxruntime as ort
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from src.config.config_manager import get_config
 from src.prediction import PredictionConfig, PredictionEngine
@@ -273,7 +276,7 @@ class MLSignalGenerator(SignalGenerator):
 
             # Get prediction from prediction engine
             if self.prediction_engine is None:
-                print(f"[MLSignalGenerator] Prediction engine not initialized")
+                logger.error("Prediction engine not initialized for symbol prediction")
                 return None
 
             window_df = df[["open", "high", "low", "close", "volume"]].iloc[

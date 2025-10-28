@@ -54,16 +54,25 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
 
     Returns:
         Unique version ID string
+
+    Raises:
+        RuntimeError: If unable to generate unique version ID after max retries
     """
     base_timestamp = datetime.utcnow().strftime("%Y-%m-%d_%Hh")
     version_counter = 1
+    max_retries = 1000
 
-    while True:
+    while version_counter <= max_retries:
         version_id = f"{base_timestamp}_v{version_counter}"
         target_dir = models_dir / symbol.upper() / model_type / version_id
         if not target_dir.exists():
             return version_id
         version_counter += 1
+
+    raise RuntimeError(
+        f"Failed to generate unique version ID after {max_retries} attempts "
+        f"for {symbol} {model_type}. Check disk space and permissions."
+    )
 
 
 def enable_mixed_precision(enabled: bool) -> None:
@@ -83,10 +92,11 @@ def enable_mixed_precision(enabled: bool) -> None:
         tf.keras.mixed_precision.set_global_policy("mixed_float16")
         tf.config.optimizer.set_jit(True)
         logger.info("Enabled mixed precision and XLA")
-    except Exception as exc:  # noqa: BLE001 - Catch all TensorFlow configuration errors
+    except (RuntimeError, ValueError) as exc:
         # Mixed precision is an optimization - training should continue with regular precision
         # if setup fails (e.g., GPU driver issues, TensorFlow version incompatibility)
         logger.warning("Failed to enable mixed precision: %s", exc)
+        logger.debug("Full exception trace:", exc_info=True)
 
 
 def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
@@ -104,7 +114,11 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         else:
             if sentiment_df.index.tz is not None and price_df.index.tz is None:
                 logger.info("Localizing price data to UTC to match sentiment index")
-                price_df = price_df.tz_localize("UTC")
+                try:
+                    price_df = price_df.tz_localize("UTC")
+                except ValueError as exc:
+                    logger.error("Failed to localize price data: %s", exc)
+                    raise ValueError("Price data timezone localization failed") from exc
             sentiment_assessment = assess_sentiment_data_quality(sentiment_df, price_df)
             merged_df = merge_price_sentiment_data(price_df, sentiment_df, ctx.config.timeframe)
 
@@ -114,6 +128,13 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
         if sentiment_assessment["recommendation"] not in ["full_sentiment", "hybrid_with_fallback"]:
             logger.info("Using price-only dataset based on sentiment assessment")
             merged_df = price_df.copy()
+
+        # Validate that merged data is non-empty before proceeding
+        if merged_df.empty:
+            raise ValueError(
+                f"No data available after merging price and sentiment data for {ctx.config.symbol}. "
+                "Check data availability and timeframe alignment."
+            )
 
         feature_data, scalers, feature_names = create_robust_features(
             merged_df.copy(), sentiment_assessment, ctx.config.sequence_length

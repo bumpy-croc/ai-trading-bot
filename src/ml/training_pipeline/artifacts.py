@@ -119,6 +119,9 @@ def validate_model_robustness(
     feature_names: List[str],
     has_sentiment: bool,
 ) -> RobustnessValidationResult:
+    # Validate input tensor shape
+    assert len(X_test.shape) == 3, f"Expected 3D tensor (batch, sequence, features), got shape {X_test.shape}"
+
     results = {"base_performance": {}}
     base_pred = model.predict(X_test)
     base_mse = np.mean((base_pred.flatten() - y_test) ** 2)
@@ -128,6 +131,9 @@ def validate_model_robustness(
         sentiment_indices = [i for i, name in enumerate(feature_names) if "sentiment" in name]
         if sentiment_indices:
             X_no_sentiment = X_test.copy()
+            # Safely set sentiment features to zero with bounds check
+            assert all(i < X_test.shape[2] for i in sentiment_indices), \
+                f"Sentiment feature indices {sentiment_indices} exceed feature dimension {X_test.shape[2]}"
             X_no_sentiment[:, :, sentiment_indices] = 0
             no_sentiment_pred = model.predict(X_no_sentiment)
             no_sentiment_mse = np.mean((no_sentiment_pred.flatten() - y_test) ** 2)
@@ -154,9 +160,13 @@ def evaluate_model_performance(
     if close_scaler is not None:
         y_test_denorm = close_scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
         pred_denorm = close_scaler.inverse_transform(test_predictions.flatten().reshape(-1, 1)).flatten()
-        percentage_errors = np.abs((y_test_denorm - pred_denorm) / y_test_denorm) * 100
+        # Guard against division by zero in MAPE calculation
+        denominator = np.where(y_test_denorm == 0, 1e-8, y_test_denorm)
+        percentage_errors = np.abs((y_test_denorm - pred_denorm) / denominator) * 100
     else:
-        percentage_errors = np.abs((y_test - test_predictions.flatten()) / y_test) * 100
+        # Guard against division by zero in MAPE calculation
+        denominator = np.where(y_test == 0, 1e-8, y_test)
+        percentage_errors = np.abs((y_test - test_predictions.flatten()) / denominator) * 100
     mape = np.mean(percentage_errors)
 
     return {
@@ -169,6 +179,16 @@ def evaluate_model_performance(
 
 
 def convert_to_onnx(model: tf.keras.Model, output_path: Path) -> Optional[Path]:
+    """Convert Keras model to ONNX format.
+
+    Args:
+        model: Keras model to convert
+        output_path: Path where ONNX model will be saved
+
+    Returns:
+        Path to ONNX file if successful, None otherwise
+    """
+    tmp_dir = None
     try:
         tmp_dir = tempfile.mkdtemp()
         saved_model_path = Path(tmp_dir) / "saved_model"
@@ -187,15 +207,28 @@ def convert_to_onnx(model: tf.keras.Model, output_path: Path) -> Optional[Path]:
             ],
             capture_output=True,
             text=True,
+            timeout=300,
         )
-        shutil.rmtree(tmp_dir)
         if result.returncode == 0:
             return output_path
+        logger.warning("ONNX conversion failed: %s", result.stderr)
         return None
-    except Exception:  # noqa: BLE001 - Catch all ONNX conversion errors
+    except subprocess.TimeoutExpired:
+        # ONNX conversion timeout - training should continue with Keras model
+        logger.warning("ONNX conversion timed out after 300 seconds")
+        return None
+    except Exception as exc:  # noqa: BLE001 - Catch all ONNX conversion errors
         # ONNX export is optional - training should continue with Keras model if conversion fails
         # (e.g., missing tf2onnx, unsupported ops, file system errors)
+        logger.warning("ONNX conversion failed: %s", exc)
         return None
+    finally:
+        # Always clean up temporary directory
+        if tmp_dir and Path(tmp_dir).exists():
+            try:
+                shutil.rmtree(tmp_dir)
+            except Exception as exc:
+                logger.warning("Failed to clean up temporary ONNX directory: %s", exc)
 
 
 def save_artifacts(
