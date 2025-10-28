@@ -77,7 +77,9 @@ def enable_mixed_precision(enabled: bool) -> None:
         tf.keras.mixed_precision.set_global_policy("mixed_float16")
         tf.config.optimizer.set_jit(True)
         logger.info("Enabled mixed precision and XLA")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - Catch all TensorFlow configuration errors
+        # Mixed precision is an optimization - training should continue with regular precision
+        # if setup fails (e.g., GPU driver issues, TensorFlow version incompatibility)
         logger.warning("Failed to enable mixed precision: %s", exc)
 
 
@@ -207,6 +209,8 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
 
         duration = perf_counter() - start_time
         return TrainingResult(True, metadata, artifact_paths, duration)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - Catch all pipeline errors for graceful degradation
+        # Top-level handler ensures pipeline always returns TrainingResult instead of crashing
+        # Enables proper cleanup, error reporting, and CLI error handling for any failure
         logger.error("Training pipeline failed: %s", exc)
         return TrainingResult(False, {"error": str(exc)}, None, perf_counter() - start_time)

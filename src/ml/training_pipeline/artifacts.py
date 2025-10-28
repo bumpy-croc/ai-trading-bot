@@ -66,7 +66,9 @@ def create_training_plots(history, model, X_test, y_test, feature_names, symbol,
         plt.savefig(plot_path, dpi=300, bbox_inches="tight")
         plt.close()
         return plot_path
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - Catch all matplotlib/display errors
+        # Plot generation is diagnostic only - training should continue if plotting fails
+        # (e.g., missing display, matplotlib backend issues, file write errors)
         return None
 
 
@@ -137,7 +139,9 @@ def convert_to_onnx(model: tf.keras.Model, output_path: Path) -> Optional[Path]:
         if result.returncode == 0:
             return output_path
         return None
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - Catch all ONNX conversion errors
+        # ONNX export is optional - training should continue with Keras model if conversion fails
+        # (e.g., missing tf2onnx, unsupported ops, file system errors)
         return None
 
 

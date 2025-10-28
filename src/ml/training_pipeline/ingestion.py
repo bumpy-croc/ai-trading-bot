@@ -70,6 +70,8 @@ def load_sentiment_data(ctx: TrainingContext) -> Optional[pd.DataFrame]:
         )
         logger.info("Loaded %d sentiment points", len(df))
         return df
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - Catch all provider errors (network, API changes, parsing)
+        # Sentiment data is optional - allow training to continue with price-only features
+        # if sentiment download fails for any reason
         logger.warning("Sentiment download failed: %s", exc)
         return None
