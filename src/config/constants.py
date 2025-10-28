@@ -54,9 +54,6 @@ DEFAULT_WIN_RATE_THRESHOLD = 0.45
 DEFAULT_SHARPE_RATIO_THRESHOLD = 0.5
 DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 
-# Strategy/Engine integration flags
-DEFAULT_USE_PREDICTION_ENGINE = False  # MVP: disabled
-
 # Error Handling Constants
 DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
 

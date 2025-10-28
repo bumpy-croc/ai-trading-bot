@@ -43,20 +43,12 @@ if not is_railway_environment():
             train_price_model_main,
             train_price_only_model_main,
         )
-        from cli.core.forward import forward_to_module_main
-
         _TRAINING_AVAILABLE = True
     except ImportError as e:
         print(f"Warning: Training commands not available: {e}")
         _TRAINING_AVAILABLE = False
 else:
     _TRAINING_AVAILABLE = False
-
-
-def _handle_safe(ns: argparse.Namespace) -> int:
-    if not _TRAINING_AVAILABLE:
-        return _handle_railway_error("safe model trainer")
-    return forward_to_module_main("src.ml.safe_model_trainer", ns.args or [])
 
 
 def _handle_model(ns: argparse.Namespace) -> int:
@@ -73,6 +65,26 @@ def _handle_model(ns: argparse.Namespace) -> int:
     parser.add_argument("--timeframe", type=str, default="1d", help="Timeframe")
     parser.add_argument("--force-sentiment", action="store_true", help="Force sentiment inclusion")
     parser.add_argument("--force-price-only", action="store_true", help="Train price-only model")
+    parser.add_argument("--epochs", type=int, default=300, help="Training epochs")
+    parser.add_argument("--batch-size", type=int, default=32, help="Training batch size")
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        default=120,
+        help="Sequence length for dataset windows",
+    )
+    parser.add_argument("--skip-plots", action="store_true", help="Skip generating training plots")
+    parser.add_argument(
+        "--skip-robustness",
+        action="store_true",
+        help="Skip robustness evaluation",
+    )
+    parser.add_argument("--skip-onnx", action="store_true", help="Skip ONNX export")
+    parser.add_argument(
+        "--disable-mixed-precision",
+        action="store_true",
+        help="Disable mixed precision even when a GPU is available",
+    )
 
     # Parse the arguments from ns.args
     args = parser.parse_args(ns.args or [])
@@ -91,6 +103,14 @@ def _handle_price(ns: argparse.Namespace) -> int:
     )
     parser.add_argument("--end-date", type=str, default="2024-12-01", help="End date (YYYY-MM-DD)")
     parser.add_argument("--timeframe", type=str, default="1d", help="Timeframe")
+    parser.add_argument("--epochs", type=int, default=100, help="Training epochs")
+    parser.add_argument("--batch-size", type=int, default=256, help="Training batch size")
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        default=120,
+        help="Sequence length for dataset windows",
+    )
 
     # Parse the arguments from ns.args
     args = parser.parse_args(ns.args or [])
@@ -141,10 +161,6 @@ def _handle_railway_error(command_name: str) -> int:
 def register(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("train", help="Model training and validation")
     sub = p.add_subparsers(dest="train_cmd", required=True)
-
-    p_safe = sub.add_parser("safe", help="Safe model trainer")
-    p_safe.add_argument("args", nargs=argparse.REMAINDER)
-    p_safe.set_defaults(func=_handle_safe)
 
     p_model = sub.add_parser("model", help="Train combined model")
     p_model.add_argument("args", nargs=argparse.REMAINDER)

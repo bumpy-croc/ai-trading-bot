@@ -1,0 +1,30 @@
+{
+  "model_id": "btcusdt_price_v3",
+  "symbol": "BTCUSDT",
+  "timeframe": "1d",
+  "model_type": "basic",
+  "version_id": "2025-10-27_14h_v1",
+  "framework": "onnx",
+  "model_file": "model.onnx",
+  "created_at": "2025-10-27T14:07:38.987632",
+  "sequence_length": 120,
+  "feature_names": [
+    "close_normalized",
+    "volume_normalized",
+    "high_normalized",
+    "low_normalized",
+    "open_normalized"
+  ],
+  "training_params": {
+    "epochs": 100,
+    "batch_size": 256,
+    "timeframe": "1d",
+    "start_date": "2019-01-01",
+    "end_date": "2024-12-01"
+  },
+  "dataset": {
+    "row_count": 2492,
+    "train_samples": 1897,
+    "val_samples": 475
+  }
+}

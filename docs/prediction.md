@@ -1,6 +1,6 @@
 # Prediction & models
 
-> **Last Updated**: 2025-10-27  
+> **Last Updated**: 2025-10-28
 > **Related Documentation**: [Backtesting](backtesting.md), [Live trading](live_trading.md)
 
 Machine-learning inference and model lifecycle management live under `src/prediction` and `src/ml`. The goal is to keep training
@@ -43,14 +43,15 @@ Each bundle stores weights, metadata, and optional metrics.
 
 ### Model Storage Locations
 
-Models are stored in two locations:
-- **Legacy location**: `src/ml/*.onnx` (root level) - Currently used by strategies
-- **Structured registry**: `src/ml/models/SYMBOL/TYPE/VERSION/model.onnx` - New versioned model structure
+All models are now stored exclusively in the **structured registry**:
+- `src/ml/models/SYMBOL/TYPE/VERSION/model.onnx` - Versioned model structure
 
-Available models include:
-- `btcusdt_price.onnx`, `btcusdt_price_v2.onnx` - BTC price prediction
-- `btcusdt_sentiment.onnx` - BTC with sentiment analysis
-- `ethusdt_sentiment.onnx` - ETH with sentiment analysis
+Example models:
+- `BTCUSDT/basic/2025-09-17_1h_v1/` - BTC price prediction (basic)
+- `BTCUSDT/sentiment/2025-09-17_1h_v1/` - BTC with sentiment analysis
+- `ETHUSDT/sentiment/2025-09-17_1h_v1/` - ETH with sentiment analysis
+
+The `latest/` symlink in each type directory (e.g., `BTCUSDT/basic/latest/`) points to the current production version. All strategies now load models exclusively through the `PredictionModelRegistry`.
 
 ### Model Management Commands
 
@@ -63,16 +64,31 @@ Helper commands under `atb models` provide operational visibility:
 
 ## Training and deployment
 
-`SafeModelTrainer` (`src/ml/safe_model_trainer.py`) wraps training scripts so new models are prepared in `/tmp/ai-trading-bot-staging`
-before being deployed:
+`atb train` now writes models directly into the registry at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}` and refreshes the `latest`
+symlink used by the prediction engine. Operations teams can still trigger training from the live-control CLI, which simply wraps the
+same pipeline:
 
 ```bash
-# Train a price-only model on 365 days of data
-atb live-control train --symbol BTCUSDT --days 365 --epochs 50 --auto-deploy
+# Train a price-only model on the last 365 days and update the latest bundle
+atb live-control train --symbol BTCUSDT --days 365 --epochs 50
 ```
 
-The trainer performs backups of the current live bundle, runs validation, and creates a deployment package. `atb live-control deploy-model`
-promotes the staged bundle to the live models directory and can optionally close open positions before the swap.
+To roll back, repoint the `latest` symlink with either `atb models promote …` or `atb live-control deploy-model --model-path BTCUSDT/basic/2025-09-17_1h_v1`.
+Listing available bundles uses the same registry information:
+
+```bash
+atb live-control list-models
+```
 
 Models are stored in `src/ml/models` by default. Metadata JSON files capture training parameters so dashboards and audits can tie
 strategy performance back to the model version in use.
+
+### Training CLI options
+
+Use the following knobs when running `atb train model` locally:
+
+- `--epochs`, `--batch-size`, and `--sequence-length` adjust hyperparameters without editing code.
+- `--skip-plots`, `--skip-robustness`, and `--skip-onnx` let you bypass the slowest diagnostics when you only need a quick experiment. Leave them off for production artifacts so the metadata and ONNX bundle stay in sync.
+- `--disable-mixed-precision` falls back to float32 math if you encounter GPU/MPS precision glitches. Mixed precision remains enabled by default when a GPU is present to speed up long jobs.
+
+The defaults remain equivalent to the legacy behavior (300 epochs, batch size 32, sequence length 120, diagnostics on, ONNX on), so unattended jobs continue to produce identical artifacts unless you override the flags explicitly.

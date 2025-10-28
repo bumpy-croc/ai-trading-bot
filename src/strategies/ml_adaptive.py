@@ -33,9 +33,7 @@ from src.strategies.components import (
 
 def create_ml_adaptive_strategy(
     name: str = "MlAdaptive",
-    model_path: str = "src/ml/btcusdt_price.onnx",
     sequence_length: int = 120,
-    use_prediction_engine: Optional[bool] = None,
     model_name: Optional[str] = None,
 ) -> Strategy:
     """
@@ -46,9 +44,7 @@ def create_ml_adaptive_strategy(
 
     Args:
         name: Strategy name
-        model_path: Path to ONNX model file
         sequence_length: Number of candles for sequence prediction
-        use_prediction_engine: Whether to use centralized prediction engine
         model_name: Model name for prediction engine
 
     Returns:
@@ -57,9 +53,7 @@ def create_ml_adaptive_strategy(
     # Create signal generator with ML Adaptive parameters (regime-aware thresholds)
     signal_generator = MLSignalGenerator(
         name=f"{name}_signals",
-        model_path=model_path,
         sequence_length=sequence_length,
-        use_prediction_engine=use_prediction_engine,
         model_name=model_name,
     )
 
