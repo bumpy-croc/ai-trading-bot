@@ -60,8 +60,8 @@ class TestMLSignalGenerator:
             strength=0.7,
         )
 
-    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
-    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
     def test_ml_signal_generator_initialization(self, mock_config_class, mock_engine_class):
         """Test MLSignalGenerator initialization with prediction engine"""
         mock_engine = MagicMock()
@@ -78,8 +78,8 @@ class TestMLSignalGenerator:
         # Prediction engine should be initialized
         assert generator.prediction_engine is not None
 
-    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
-    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
     def test_lazy_onnx_session_initialization(self, mock_config_class, mock_engine_class):
         """Test that prediction engine is properly initialized"""
         # This test was originally for ONNX lazy loading,
@@ -108,8 +108,8 @@ class TestMLSignalGenerator:
         # Generate signal - should use prediction engine
         signal = generator.generate_signal(df, 150)
 
-        # Verify prediction was called
-        assert mock_engine.predict.called
+        # Verify prediction was called with correct arguments
+        mock_engine.predict.assert_called_once()
         assert signal is not None
 
     @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
@@ -249,8 +249,8 @@ class TestMLSignalGenerator:
             perfect_threshold > high_conf_threshold > low_conf_threshold > no_conf_threshold
         ), "Thresholds should be ordered by confidence level (higher confidence = more aggressive)"
 
-    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
-    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
     def test_prediction_engine_no_denormalization(self, mock_config_class, mock_engine_class):
         """Test that prediction engine results are not denormalized"""
         # Mock prediction engine
@@ -318,8 +318,8 @@ class TestMLSignalGenerator:
         assert 0.0 <= confidence <= 1.0
         assert isinstance(confidence, float)
 
-    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
-    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
     def test_get_parameters(self, mock_config_class, mock_engine_class):
         """Test get_parameters method"""
         mock_engine = MagicMock()
@@ -337,8 +337,8 @@ class TestMLSignalGenerator:
         assert "short_entry_threshold" in params
         assert "confidence_multiplier" in params
 
-    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
-    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
     def test_prediction_failure_handling(self, mock_config_class, mock_engine_class):
         """Test handling of prediction failures"""
         mock_engine = MagicMock()
@@ -600,8 +600,8 @@ class TestMLBasicSignalGenerator:
         assert signal.metadata["engine_model_name"] == "test_model"
         assert "engine_batch" in signal.metadata
 
-    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
-    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
     def test_mlbasic_prediction_engine_no_denormalization(self, mock_config_class, mock_engine_class):
         """Test that MLBasicSignalGenerator prediction engine results are not denormalized"""
         # Mock prediction engine

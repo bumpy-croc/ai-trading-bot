@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
@@ -1058,9 +1058,20 @@ class LiveTradingEngine:
             recovered_balance = self._recover_existing_session()
             if recovered_balance is not None:
                 self.current_balance = recovered_balance
+                # Try to recover day_start_balance from first snapshot of current day
+                day_start = self._get_day_start_balance_from_db()
+                self.day_start_balance = day_start if day_start is not None else recovered_balance
                 logger.info(
                     f"💾 Recovered balance from previous session: ${recovered_balance:,.2f}"
                 )
+                if day_start is not None:
+                    logger.info(
+                        f"📅 Recovered day start balance: ${day_start:,.2f} (daily P&L: ${recovered_balance - day_start:+,.2f})"
+                    )
+                else:
+                    logger.info(
+                        f"📅 No day start balance found, initializing to current balance (daily P&L tracking reset)"
+                    )
                 # Also recover active positions
                 self._recover_active_positions()
             else:
@@ -2659,6 +2670,24 @@ class LiveTradingEngine:
 
         return ml_data
 
+    def _check_and_update_trading_date(self):
+        """Check if a new trading day has started and reset day_start_balance if so"""
+        current_date = datetime.now(timezone.utc).date()
+
+        if self.current_trading_date is None:
+            # First time running - initialize with current date
+            self.current_trading_date = current_date
+            self.day_start_balance = self.current_balance
+            logger.info(f"📅 Trading date initialized: {current_date} UTC, day start balance: ${self.day_start_balance:,.2f}")
+        elif current_date != self.current_trading_date:
+            # New day has started - reset day_start_balance
+            logger.info(
+                f"📅 New trading day: {current_date} UTC (previous: {self.current_trading_date})"
+            )
+            self.current_trading_date = current_date
+            self.day_start_balance = self.current_balance
+            logger.info(f"💰 Day start balance reset to: ${self.day_start_balance:,.2f}")
+
     def _log_account_snapshot(self):
         """Log current account state to database"""
         try:
@@ -2868,6 +2897,44 @@ class LiveTradingEngine:
             "last_update": self.last_data_update.isoformat() if self.last_data_update else None,
             "is_running": self.is_running,
         }
+
+    def _get_day_start_balance_from_db(self) -> float | None:
+        """Get the balance from the first account snapshot of the current trading day
+
+        Returns:
+            The balance from the first snapshot of the day, or None if not found
+        """
+        if not self.trading_session_id:
+            return None
+
+        try:
+            # Get start of current day in UTC
+            current_date = datetime.now(timezone.utc).date()
+            day_start = datetime.combine(current_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+            # Query for the first account snapshot of the current day
+            with self.db_manager.Session() as session:
+                from src.database.models import AccountHistory
+
+                first_snapshot = (
+                    session.query(AccountHistory)
+                    .filter(AccountHistory.session_id == self.trading_session_id)
+                    .filter(AccountHistory.timestamp >= day_start)
+                    .order_by(AccountHistory.timestamp.asc())
+                    .first()
+                )
+
+                if first_snapshot:
+                    balance = float(first_snapshot.balance)
+                    logger.debug(
+                        f"📊 Found day start balance from snapshot at {first_snapshot.timestamp}: ${balance:,.2f}"
+                    )
+                    return balance
+
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️  Could not retrieve day start balance from database: {e}")
+            return None
 
     def _recover_existing_session(self) -> float | None:
         """Try to recover from an existing active session"""
