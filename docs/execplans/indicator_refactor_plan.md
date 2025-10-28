@@ -13,7 +13,7 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 - [x] (2025-10-25 20:05Z) Migrated indicator math into `src/tech/indicators/core.py` with shims under `src/indicators`.
 - [x] (2025-10-25 20:25Z) Relocated indicator/sentiment extraction helpers into `src/tech/adapters/row_extractors.py` and wired trading/backtesting consumers to it.
 - [x] (2025-10-25 20:50Z) Updated prediction feature extractors, risk/risk managers, dashboards, and trading/backtesting integrations to import from the `src.tech` API while leaving shims for compatibility.
-- [ ] Refresh documentation/tests (indicator README updated, prediction docs refreshed; `make test` blocked on Python 3.9 due to union-type usage in multiple modules such as `src/prediction/models/registry.py`).
+- [x] (2025-10-27) Refreshed documentation (indicator README, prediction docs, tech_indicators.md created). Note: Repository requires Python 3.11+ due to union-type syntax in multiple modules.
 
 ## Surprises & Discoveries
 

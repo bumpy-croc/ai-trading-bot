@@ -137,7 +137,7 @@ When writing complex features or significant refactors, use an ExecPlan (as desc
 
 ### Documentation 
 
-- Maintain a `CONTRIBUTING.md` and `ARCHITECTURE.md` to guide team practices.
+- Maintain documentation in `docs/` to guide team practices and architecture decisions.
 
 ### Tests
 - **Keep tests stateless**: Use fixtures, avoid global state.

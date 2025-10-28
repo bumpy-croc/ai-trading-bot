@@ -4,7 +4,7 @@ A modular cryptocurrency trading system focused on long-term, risk-balanced tren
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
-> **Requirements**: Python 3.9+ (Python 3.11+ recommended for development)
+> **Requirements**: Python 3.11+ (the repository uses 3.11+ typing features)
 
 ---
 
@@ -137,23 +137,22 @@ src/
   backtesting/       # Vectorised simulation engine
   config/            # Typed configuration loader + constants + feature flags  
   dashboards/        # Web-based monitoring and analysis dashboards
-  data/              # Data management and caching utilities
   data_providers/    # Market & sentiment providers (+ caching wrapper)
   database/          # SQLAlchemy models + DatabaseManager + Flask-Admin UI
-  examples/          # Minimal runnable examples demonstrating core features
   indicators/        # Technical indicators (pure functions)
+  infrastructure/    # Cross-cutting logging/config/runtime helpers
   live/              # Live trading engine
   ml/                # Trained models (.onnx/.keras) + metadata
-  monitoring/        # Real-time monitoring dashboard (Flask + Socket.IO)
   optimizer/         # Parameter optimization and strategy tuning
   performance/       # Performance metrics utilities
   position_management/  # Position sizing and portfolio management
   prediction/        # Centralized model registry, ONNX runtime, caching
   regime/            # Market regime detection and analysis
   risk/              # Risk parameters and position sizing utilities
+  sentiment/         # Sentiment adapters
   strategies/        # Built-in strategies (ML basic, sentiment, adaptive, bull/bear)
+  tech/              # Shared indicator math, adapters, and feature builders
   trading/           # Core trading interfaces and shared functionality
-  utils/             # Shared utilities (paths, symbols, etc.)
 ```
 
 ---
