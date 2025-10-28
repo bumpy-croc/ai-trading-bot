@@ -25,6 +25,27 @@ RSI_WINDOW = 14  # Relative Strength Index window size (days)
 RSI_MAX = 100  # Maximum RSI value for normalization
 
 
+def normalize_timezone(ts1: pd.Timestamp, ts2: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """
+    Normalize two timestamps to have compatible timezone information.
+
+    If one timestamp is tz-aware and the other is tz-naive, removes timezone
+    info from the tz-aware timestamp to enable comparison operations.
+
+    Args:
+        ts1: First timestamp
+        ts2: Second timestamp
+
+    Returns:
+        Tuple of normalized timestamps that can be compared
+    """
+    if ts1.tzinfo is not None and ts2.tzinfo is None:
+        return ts1.tz_localize(None), ts2
+    if ts1.tzinfo is None and ts2.tzinfo is not None:
+        return ts1, ts2.tz_localize(None)
+    return ts1, ts2
+
+
 def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:
     """Assess coverage and freshness of sentiment data relative to price data."""
 
@@ -45,12 +66,9 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
     price_start, price_end = price_df.index.min(), price_df.index.max()
     sentiment_start, sentiment_end = sentiment_df.index.min(), sentiment_df.index.max()
 
-    if price_start.tzinfo is not None and sentiment_start.tzinfo is None:
-        price_start = price_start.tz_localize(None)
-        price_end = price_end.tz_localize(None)
-    elif price_start.tzinfo is None and sentiment_start.tzinfo is not None:
-        sentiment_start = sentiment_start.tz_localize(None)
-        sentiment_end = sentiment_end.tz_localize(None)
+    # Normalize timezone info to enable timestamp comparisons
+    price_start, sentiment_start = normalize_timezone(price_start, sentiment_start)
+    price_end, sentiment_end = normalize_timezone(price_end, sentiment_end)
 
     overlap_start = max(price_start, sentiment_start)
     overlap_end = min(price_end, sentiment_end)
@@ -64,11 +82,8 @@ def assess_sentiment_data_quality(sentiment_df: pd.DataFrame, price_df: pd.DataF
     assessment["coverage_ratio"] = overlap_period / total_period if total_period > 0 else 0
 
     current_time = pd.Timestamp.now()
-    if sentiment_end.tzinfo is not None and current_time.tzinfo is None:
-        current_time = current_time.tz_localize("UTC")
-    elif sentiment_end.tzinfo is None and current_time.tzinfo is not None:
-        current_time = current_time.tz_localize(None)
-    assessment["data_freshness_days"] = (current_time - sentiment_end).days
+    current_time, sentiment_end_normalized = normalize_timezone(current_time, sentiment_end)
+    assessment["data_freshness_days"] = (current_time - sentiment_end_normalized).days
 
     sentiment_dates = pd.date_range(sentiment_start, sentiment_end, freq="D")
     available_dates = set(sentiment_df.index.date)
@@ -142,7 +157,20 @@ def create_robust_features(
         data["rsi"] = RSI_MAX - (RSI_MAX / (1 + rs))
 
         # Drop NaNs before scaling to avoid MinMaxScaler ValueError
+        rows_before = len(data)
+        nan_counts = data.isna().sum()
         data = data.dropna()
+        rows_dropped = rows_before - len(data)
+
+        if rows_dropped > 0:
+            logger.info(
+                "Dropped %d rows with NaNs from %d total rows (%.1f%%). "
+                "Features with NaNs: %s",
+                rows_dropped,
+                rows_before,
+                (rows_dropped / rows_before) * 100,
+                {col: int(count) for col, count in nan_counts[nan_counts > 0].items()},
+            )
 
         # Validate sufficient data remains after dropping NaNs
         min_required_rows = max(SMA_WINDOWS) * 2  # Need enough data for meaningful training

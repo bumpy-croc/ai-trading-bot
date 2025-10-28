@@ -109,6 +109,7 @@ def create_training_plots(
     except Exception:  # noqa: BLE001 - Catch all matplotlib/display errors
         # Plot generation is diagnostic only - training should continue if plotting fails
         # (e.g., missing display, matplotlib backend issues, file write errors)
+        logger.warning("Failed to generate training plots", exc_info=True)
         return None
 
 
