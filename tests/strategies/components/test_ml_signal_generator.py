@@ -2,12 +2,13 @@
 Unit tests for ML Signal Generator components
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from src.prediction import PredictionResult
 from src.regime.detector import TrendLabel, VolLabel
 from src.strategies.components.ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
 from src.strategies.components.regime_context import RegimeContext
@@ -59,60 +60,65 @@ class TestMLSignalGenerator:
             strength=0.7,
         )
 
-    def test_ml_signal_generator_initialization(self):
-        """Test MLSignalGenerator initialization with lazy ONNX session loading"""
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_ml_signal_generator_initialization(self, mock_config_class, mock_engine_class):
+        """Test MLSignalGenerator initialization with prediction engine"""
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
+
         generator = MLSignalGenerator(
             name="test_ml_generator",
-            model_path="test_model.onnx",
             sequence_length=120,
-            use_prediction_engine=True,  # This should prevent ONNX session initialization
         )
 
         assert generator.name == "test_ml_generator"
-        assert generator.model_path == "test_model.onnx"
         assert generator.sequence_length == 120
-        # ONNX session should be None initially for dual-backend support
-        assert generator.ort_session is None
-        assert generator.input_name is None
-        assert generator.use_prediction_engine is True
+        # Prediction engine should be initialized
+        assert generator.prediction_engine is not None
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_lazy_onnx_session_initialization(self, mock_ort):
-        """Test that ONNX session is initialized lazily when needed"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.5]]]]
-        mock_ort.return_value = mock_session
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_lazy_onnx_session_initialization(self, mock_config_class, mock_engine_class):
+        """Test that prediction engine is properly initialized"""
+        # This test was originally for ONNX lazy loading,
+        # but the new architecture always uses prediction engine
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
-        # Create generator without prediction engine
+        # Create generator
         generator = MLSignalGenerator(
             name="test_ml_generator",
-            model_path="test_model.onnx",
             sequence_length=120,
-            use_prediction_engine=False,
         )
 
-        # Initially, session should be None
-        assert generator.ort_session is None
-        assert generator.input_name is None
+        # Prediction engine should be initialized during construction
+        assert generator.prediction_engine is not None
 
         # Create test data
         df = self.create_test_dataframe(200)
 
-        # Generate signal - this should trigger lazy initialization
+        # Mock prediction result
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 51000.0
+        mock_engine.predict.return_value = mock_result
+
+        # Generate signal - should use prediction engine
         signal = generator.generate_signal(df, 150)
 
-        # Now session should be initialized
-        assert generator.ort_session is not None
-        assert generator.input_name is not None
-        mock_ort.assert_called_once_with("test_model.onnx")
+        # Verify prediction was called
+        assert mock_engine.predict.called
+        assert signal is not None
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_generate_signal_insufficient_history(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_generate_signal_insufficient_history(self, mock_config_class, mock_engine_class):
         """Test signal generation with insufficient history"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(50)  # Less than sequence_length
@@ -124,14 +130,17 @@ class TestMLSignalGenerator:
         assert signal.confidence == 0.0
         assert signal.metadata["reason"] == "insufficient_history"
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_generate_signal_prediction_success(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_generate_signal_prediction_success(self, mock_config_class, mock_engine_class):
         """Test successful signal generation with ML prediction"""
-        # Mock ONNX session
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.6]]]]  # Normalized prediction
-        mock_ort.return_value = mock_session
+        # Mock prediction engine
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 51000.0  # Predicted price higher than current
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(150)
@@ -144,14 +153,17 @@ class TestMLSignalGenerator:
         assert "prediction" in signal.metadata
         assert "predicted_return" in signal.metadata
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_generate_signal_with_regime_awareness(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_generate_signal_with_regime_awareness(self, mock_config_class, mock_engine_class):
         """Test signal generation with regime-aware threshold adjustment"""
-        # Mock ONNX session to return negative prediction (short signal)
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.4]]]]  # Prediction lower than current price
-        mock_ort.return_value = mock_session
+        # Mock prediction engine to return lower prediction (potential short signal)
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 49500.0  # Prediction lower than current price
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(150)
@@ -164,12 +176,13 @@ class TestMLSignalGenerator:
         assert "regime_confidence" in signal.metadata
         assert "dynamic_threshold" in signal.metadata
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_calculate_dynamic_short_threshold(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_calculate_dynamic_short_threshold(self, mock_config_class, mock_engine_class):
         """Test dynamic short threshold calculation"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator()
 
@@ -187,12 +200,13 @@ class TestMLSignalGenerator:
             assert -0.01 <= threshold <= -0.0001
             assert isinstance(threshold, float)
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_confidence_scaling_for_short_threshold(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_confidence_scaling_for_short_threshold(self, mock_config_class, mock_engine_class):
         """Test that confidence scaling works correctly for short thresholds"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator()
 
@@ -236,20 +250,19 @@ class TestMLSignalGenerator:
         ), "Thresholds should be ordered by confidence level (higher confidence = more aggressive)"
 
     @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
-    def test_prediction_engine_no_denormalization(self, mock_engine_class):
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_prediction_engine_no_denormalization(self, mock_config_class, mock_engine_class):
         """Test that prediction engine results are not denormalized"""
         # Mock prediction engine
-        mock_engine = Mock()
-        mock_result = Mock()
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
         real_price = 50000.0  # Real price from prediction engine
         mock_result.price = real_price
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
         mock_engine_class.return_value = mock_engine
 
-        generator = MLSignalGenerator(
-            model_path="dummy.onnx", use_prediction_engine=True, model_name="test_model"
-        )
+        generator = MLSignalGenerator(model_name="test_model")
         generator.prediction_engine = mock_engine
 
         # Create test data
@@ -263,12 +276,13 @@ class TestMLSignalGenerator:
             prediction == real_price
         ), f"Prediction engine result should not be denormalized: expected {real_price}, got {prediction}"
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_confidence_calculation(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_confidence_calculation(self, mock_config_class, mock_engine_class):
         """Test confidence calculation based on predicted return"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator()
 
@@ -285,13 +299,16 @@ class TestMLSignalGenerator:
             if predicted_return > 0.01:
                 assert confidence > 0.1
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_get_confidence(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_get_confidence(self, mock_config_class, mock_engine_class):
         """Test get_confidence method"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.55]]]]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 50500.0  # Slight price increase
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(150)
@@ -301,34 +318,37 @@ class TestMLSignalGenerator:
         assert 0.0 <= confidence <= 1.0
         assert isinstance(confidence, float)
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_get_parameters(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_get_parameters(self, mock_config_class, mock_engine_class):
         """Test get_parameters method"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator(
-            name="test_generator", model_path="test.onnx", sequence_length=100
+            name="test_generator", sequence_length=100
         )
 
         params = generator.get_parameters()
 
         assert params["name"] == "test_generator"
-        assert params["model_path"] == "test.onnx"
         assert params["sequence_length"] == 100
         assert "short_entry_threshold" in params
         assert "confidence_multiplier" in params
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_prediction_failure_handling(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_prediction_failure_handling(self, mock_config_class, mock_engine_class):
         """Test handling of prediction failures"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.side_effect = Exception("Prediction failed")
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        # Simulate prediction engine initialization failure
+        mock_engine.predict.side_effect = Exception("Prediction failed")
+        mock_engine_class.return_value = mock_engine
 
-        generator = MLSignalGenerator(sequence_length=120, use_prediction_engine=False)
+        generator = MLSignalGenerator(sequence_length=120)
+        generator.prediction_engine = mock_engine
         df = self.create_test_dataframe(150)
 
         signal = generator.generate_signal(df, 130)
@@ -374,35 +394,39 @@ class TestMLBasicSignalGenerator:
 
         return df
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_ml_basic_signal_generator_initialization(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_ml_basic_signal_generator_initialization(self, mock_config_class, mock_engine_class):
         """Test MLBasicSignalGenerator initialization"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLBasicSignalGenerator(
             name="test_basic_generator",
-            model_path="test_model.onnx",
             sequence_length=120,
             model_type="basic",
             timeframe="1h",
         )
 
         assert generator.name == "test_basic_generator"
-        assert generator.model_path == "test_model.onnx"
         assert generator.sequence_length == 120
         assert generator.model_type == "basic"
         assert generator.model_timeframe == "1h"
+        # Prediction engine should be initialized
+        assert generator.prediction_engine is not None
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_generate_signal_basic_logic(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_generate_signal_basic_logic(self, mock_config_class, mock_engine_class):
         """Test basic signal generation without regime awareness"""
-        # Mock ONNX session
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.6]]]]  # Normalized prediction
-        mock_ort.return_value = mock_session
+        # Mock prediction engine
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 51000.0  # Predicted price higher than current
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLBasicSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(150)
@@ -426,16 +450,19 @@ class TestMLBasicSignalGenerator:
         # Should not have regime-specific metadata
         assert "dynamic_threshold" not in signal.metadata
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_generate_signal_buy_condition(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_generate_signal_buy_condition(self, mock_config_class, mock_engine_class):
         """Test buy signal generation"""
-        # Mock ONNX session to return higher prediction than current price
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.9]]]]  # Very high normalized prediction
-        mock_ort.return_value = mock_session
+        # Mock prediction engine to return higher prediction than current price
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 55000.0  # Very high predicted price
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
-        generator = MLBasicSignalGenerator(sequence_length=120, use_prediction_engine=False)
+        generator = MLBasicSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(150)
 
         signal = generator.generate_signal(df, 130)
@@ -445,33 +472,46 @@ class TestMLBasicSignalGenerator:
         assert signal.strength > 0.0
         assert signal.confidence > 0.0
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_generate_signal_sell_condition(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_generate_signal_sell_condition(self, mock_config_class, mock_engine_class):
         """Test sell signal generation"""
-        # Mock ONNX session to return much lower prediction than current price
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.1]]]]  # Very low normalized prediction
-        mock_ort.return_value = mock_session
+        # Get current price first to ensure we predict below it
+        df = self.create_test_dataframe(150)
+        current_price = df["close"].iloc[130]
+
+        # Create a custom prediction function that returns a price below current
+        def mock_predict(window_df, model_name=None):
+            # Return a price 1% below the actual current price (well below -0.05% threshold)
+            mock_result = Mock(spec=PredictionResult)
+            mock_result.price = current_price * 0.99  # 1% below current
+            return mock_result
+
+        mock_engine = MagicMock()
+        mock_engine.predict.side_effect = mock_predict
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLBasicSignalGenerator(sequence_length=120)
-        df = self.create_test_dataframe(150)
 
         signal = generator.generate_signal(df, 130)
 
         # Should generate sell signal if predicted return is below threshold
-        assert signal.direction in [SignalDirection.SELL, SignalDirection.HOLD]
-        if signal.direction == SignalDirection.SELL:
-            assert signal.strength > 0.0
+        # The -0.0005 threshold means we need at least -0.05% return
+        assert signal.direction == SignalDirection.SELL
+        assert signal.strength > 0.0
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_generate_signal_hold_condition(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_generate_signal_hold_condition(self, mock_config_class, mock_engine_class):
         """Test hold signal generation"""
-        # Mock ONNX session to return prediction close to current price
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.5]]]]  # Neutral prediction
-        mock_ort.return_value = mock_session
+        # Mock prediction engine to return prediction close to current price
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 50000.0  # Neutral prediction (close to current price)
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLBasicSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(150)
@@ -482,12 +522,13 @@ class TestMLBasicSignalGenerator:
         if signal.direction == SignalDirection.HOLD:
             assert signal.strength == 0.0
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_insufficient_history(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_insufficient_history(self, mock_config_class, mock_engine_class):
         """Test behavior with insufficient history"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLBasicSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(50)  # Less than sequence_length
@@ -499,13 +540,16 @@ class TestMLBasicSignalGenerator:
         assert signal.confidence == 0.0
         assert signal.metadata["reason"] == "insufficient_history"
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_get_confidence_basic(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_get_confidence_basic(self, mock_config_class, mock_engine_class):
         """Test get_confidence method for basic generator"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.7]]]]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 51500.0  # Price prediction showing positive return
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLBasicSignalGenerator(sequence_length=120)
         df = self.create_test_dataframe(150)
@@ -515,12 +559,13 @@ class TestMLBasicSignalGenerator:
         assert 0.0 <= confidence <= 1.0
         assert isinstance(confidence, float)
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_get_parameters_basic(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_get_parameters_basic(self, mock_config_class, mock_engine_class):
         """Test get_parameters method for basic generator"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLBasicSignalGenerator(name="test_basic", model_type="advanced", timeframe="4h")
 
@@ -532,41 +577,43 @@ class TestMLBasicSignalGenerator:
         assert "short_entry_threshold" in params
         assert "confidence_multiplier" in params
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_prediction_engine_metadata(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_prediction_engine_metadata(self, mock_config_class, mock_engine_class):
         """Test prediction engine metadata inclusion"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.6]]]]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 51000.0
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLBasicSignalGenerator(
-            sequence_length=120, use_prediction_engine=True, model_name="test_model"
+            sequence_length=120, model_name="test_model"
         )
         df = self.create_test_dataframe(150)
 
         signal = generator.generate_signal(df, 130)
 
-        # Should include engine metadata even if engine is not actually initialized
-        assert "engine_enabled" in signal.metadata
+        # Should include engine metadata
         assert "engine_model_name" in signal.metadata
+        assert signal.metadata["engine_model_name"] == "test_model"
         assert "engine_batch" in signal.metadata
 
     @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
-    def test_mlbasic_prediction_engine_no_denormalization(self, mock_engine_class):
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_mlbasic_prediction_engine_no_denormalization(self, mock_config_class, mock_engine_class):
         """Test that MLBasicSignalGenerator prediction engine results are not denormalized"""
         # Mock prediction engine
-        mock_engine = Mock()
-        mock_result = Mock()
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
         real_price = 45000.0  # Real price from prediction engine
         mock_result.price = real_price
         mock_engine.predict.return_value = mock_result
         mock_engine.health_check.return_value = {"status": "healthy"}
         mock_engine_class.return_value = mock_engine
 
-        generator = MLBasicSignalGenerator(
-            model_path="dummy.onnx", use_prediction_engine=True, model_name="test_model"
-        )
+        generator = MLBasicSignalGenerator(model_name="test_model")
         generator.prediction_engine = mock_engine
 
         # Create test data
@@ -596,12 +643,13 @@ class TestMLSignalGeneratorEdgeCases:
         }
         return pd.DataFrame(data, index=dates)
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_invalid_dataframe(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_invalid_dataframe(self, mock_config_class, mock_engine_class):
         """Test behavior with invalid DataFrame"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator()
 
@@ -615,12 +663,13 @@ class TestMLSignalGeneratorEdgeCases:
         with pytest.raises(ValueError, match="DataFrame missing required columns"):
             generator.generate_signal(invalid_df, 0)
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_invalid_index(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_invalid_index(self, mock_config_class, mock_engine_class):
         """Test behavior with invalid index"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator()
         df = self.create_test_dataframe(100)
@@ -633,15 +682,18 @@ class TestMLSignalGeneratorEdgeCases:
         with pytest.raises(IndexError, match="Index 100 is out of bounds"):
             generator.generate_signal(df, 100)
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_nan_prediction_handling(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_nan_prediction_handling(self, mock_config_class, mock_engine_class):
         """Test handling of NaN predictions"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.side_effect = Exception("NaN prediction error")
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        # Simulate prediction failure
+        mock_engine.predict.side_effect = Exception("NaN prediction error")
+        mock_engine_class.return_value = mock_engine
 
-        generator = MLSignalGenerator(sequence_length=50, use_prediction_engine=False)
+        generator = MLSignalGenerator(sequence_length=50)
+        generator.prediction_engine = mock_engine
         df = self.create_test_dataframe(100)
 
         # Add normalized features
@@ -658,13 +710,16 @@ class TestMLSignalGeneratorEdgeCases:
         assert signal.confidence == 0.0
         assert signal.metadata["reason"] == "prediction_failed"
 
-    @patch("src.strategies.components.ml_signal_generator.ort.InferenceSession")
-    def test_zero_price_handling(self, mock_ort):
+    @patch("src.strategies.components.ml_signal_generator.PredictionEngine")
+    @patch("src.strategies.components.ml_signal_generator.PredictionConfig")
+    def test_zero_price_handling(self, mock_config_class, mock_engine_class):
         """Test handling of zero prices"""
-        mock_session = Mock()
-        mock_session.get_inputs.return_value = [Mock(name="input")]
-        mock_session.run.return_value = [[[[0.5]]]]
-        mock_ort.return_value = mock_session
+        mock_engine = MagicMock()
+        mock_result = Mock(spec=PredictionResult)
+        mock_result.price = 50000.0
+        mock_engine.predict.return_value = mock_result
+        mock_engine.health_check.return_value = {"status": "healthy"}
+        mock_engine_class.return_value = mock_engine
 
         generator = MLSignalGenerator(sequence_length=50)
         df = self.create_test_dataframe(100)

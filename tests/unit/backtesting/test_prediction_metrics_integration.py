@@ -22,7 +22,7 @@ class DummyProvider:
 
 
 def test_backtester_reports_prediction_metrics(monkeypatch):
-    strategy = create_ml_basic_strategy(use_prediction_engine=False)
+    strategy = create_ml_basic_strategy()
     provider = DummyProvider()
     bt = Backtester(
         strategy=strategy, data_provider=provider, initial_balance=1000, log_to_database=False
