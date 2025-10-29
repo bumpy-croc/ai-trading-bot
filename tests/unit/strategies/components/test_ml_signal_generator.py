@@ -326,9 +326,7 @@ class TestMLSignalGenerator:
         mock_engine.health_check.return_value = {"status": "healthy"}
         mock_engine_class.return_value = mock_engine
 
-        generator = MLSignalGenerator(
-            name="test_generator", sequence_length=100
-        )
+        generator = MLSignalGenerator(name="test_generator", sequence_length=100)
 
         params = generator.get_parameters()
 
@@ -588,9 +586,7 @@ class TestMLBasicSignalGenerator:
         mock_engine.health_check.return_value = {"status": "healthy"}
         mock_engine_class.return_value = mock_engine
 
-        generator = MLBasicSignalGenerator(
-            sequence_length=120, model_name="test_model"
-        )
+        generator = MLBasicSignalGenerator(sequence_length=120, model_name="test_model")
         df = self.create_test_dataframe(150)
 
         signal = generator.generate_signal(df, 130)
@@ -602,7 +598,9 @@ class TestMLBasicSignalGenerator:
 
     @patch("src.strategies.components.ml_signal_generator.PredictionEngine", autospec=True)
     @patch("src.strategies.components.ml_signal_generator.PredictionConfig", autospec=True)
-    def test_mlbasic_prediction_engine_no_denormalization(self, mock_config_class, mock_engine_class):
+    def test_mlbasic_prediction_engine_no_denormalization(
+        self, mock_config_class, mock_engine_class
+    ):
         """Test that MLBasicSignalGenerator prediction engine results are not denormalized"""
         # Mock prediction engine
         mock_engine = MagicMock()

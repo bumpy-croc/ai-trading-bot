@@ -248,7 +248,7 @@ class DatabaseManager:
 
     def _get_engine_config(self) -> dict[str, Any]:
         """Get PostgreSQL engine configuration with SSL enforcement.
-        
+
         SEC-005 Fix: Enforce SSL for database connections in production.
         """
         config = get_config()
@@ -256,7 +256,7 @@ class DatabaseManager:
         # Determine SSL mode based on environment (config manager honors .env and env vars)
         env = (config.get("ENV", "development") or "development").strip().lower()
         db_ssl_mode = config.get("DATABASE_SSL_MODE")
-        
+
         # Default based on environment
         if db_ssl_mode:
             ssl_mode = db_ssl_mode

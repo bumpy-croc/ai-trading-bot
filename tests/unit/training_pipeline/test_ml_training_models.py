@@ -84,6 +84,7 @@ class TestCreateAdaptiveModel:
         assert len(model.metrics) >= 1  # Should have loss and at least one metric
         # Verify model can run (which validates metrics work)
         import numpy as np
+
         test_input = np.random.rand(1, 120, 15).astype(np.float32)
         test_target = np.array([[0.5]])
         result = model.evaluate(test_input, test_target, verbose=0)
@@ -190,6 +191,7 @@ class TestBuildPriceOnlyModel:
         assert len(model.metrics) >= 1  # Should have loss and at least one metric
         # Verify model can run (which validates metrics work)
         import numpy as np
+
         test_input = np.random.rand(1, 120, 10).astype(np.float32)
         test_target = np.array([[0.5]])
         result = model.evaluate(test_input, test_target, verbose=0)

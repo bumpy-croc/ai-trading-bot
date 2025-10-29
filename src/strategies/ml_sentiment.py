@@ -62,7 +62,7 @@ def create_ml_sentiment_strategy(
         sequence_length=sequence_length,
         model_name=model_name,
     )
-    
+
     risk_parameters = RiskParameters(
         base_risk_per_trade=0.02,
         default_take_profit_pct=0.04,
@@ -78,16 +78,16 @@ def create_ml_sentiment_strategy(
     }
     risk_manager = CoreRiskAdapter(core_risk_manager)
     risk_manager.set_strategy_overrides(risk_overrides)
-    
+
     # Create position sizer with confidence weighting (20% base)
     position_sizer = ConfidenceWeightedSizer(
         base_fraction=0.2,
         min_confidence=0.3,
     )
-    
+
     # Create regime detector
     regime_detector = EnhancedRegimeDetector()
-    
+
     strategy = Strategy(
         name=name,
         signal_generator=signal_generator,

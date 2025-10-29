@@ -1,4 +1,5 @@
 """Unit tests for the CoreRiskAdapter."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -27,7 +28,9 @@ def buy_signal() -> Signal:
     return Signal(direction=SignalDirection.BUY, strength=1.0, confidence=1.0, metadata={})
 
 
-def test_calculate_position_size_uses_core_fraction(sample_dataframe: pd.DataFrame, buy_signal: Signal) -> None:
+def test_calculate_position_size_uses_core_fraction(
+    sample_dataframe: pd.DataFrame, buy_signal: Signal
+) -> None:
     params = RiskParameters(base_risk_per_trade=0.02, max_position_size=0.2)
     core_manager = EngineRiskManager(params)
     adapter = CoreRiskAdapter(core_manager)
@@ -55,7 +58,9 @@ def test_get_stop_loss_uses_overrides_without_dataframe(buy_signal: Signal) -> N
     assert pytest.approx(stop, rel=1e-6) == 98.0
 
 
-def test_policy_bundle_reflects_risk_parameters(sample_dataframe: pd.DataFrame, buy_signal: Signal) -> None:
+def test_policy_bundle_reflects_risk_parameters(
+    sample_dataframe: pd.DataFrame, buy_signal: Signal
+) -> None:
     params = RiskParameters(
         partial_exit_targets=[0.02, 0.04],
         partial_exit_sizes=[0.5, 0.5],

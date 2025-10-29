@@ -236,5 +236,7 @@ class TestRegister:
         register(mock_subparsers)
 
         mock_subparsers.add_parser.assert_called_once_with(
-            "test", help="Run test suite", description="Run the test suite using the project's test runner"
+            "test",
+            help="Run test suite",
+            description="Run the test suite using the project's test runner",
         )

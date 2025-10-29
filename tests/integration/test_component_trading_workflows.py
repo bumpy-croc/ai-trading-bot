@@ -291,9 +291,15 @@ class TestEndToEndTradingWorkflows:
         for decision in decisions:
             if decision.signal.direction != SignalDirection.HOLD:
                 # Check that ML-related metadata is in signal metadata
-                assert "prediction" in decision.signal.metadata or "generator" in decision.signal.metadata
+                assert (
+                    "prediction" in decision.signal.metadata
+                    or "generator" in decision.signal.metadata
+                )
                 # Verify it's using the ML generator
-                assert decision.metadata["components"]["signal_generator"] == "ml_basic_signal_generator"
+                assert (
+                    decision.metadata["components"]["signal_generator"]
+                    == "ml_basic_signal_generator"
+                )
 
         # Validate position sizes are reasonable
         position_sizes = [d.position_size for d in decisions if d.position_size > 0]

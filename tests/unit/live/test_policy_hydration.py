@@ -55,7 +55,9 @@ def _build_engine(
     return engine
 
 
-def test_component_policy_hydration_respects_disabled_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_component_policy_hydration_respects_disabled_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     risk_params = RiskParameters(
         partial_exit_targets=[],
         partial_exit_sizes=[],
@@ -200,12 +202,8 @@ def test_dynamic_risk_policy_recreates_when_config_changes(
         trailing_stop_policy=None,
     )
 
-    first_bundle = PolicyBundle(
-        dynamic_risk=DynamicRiskDescriptor(performance_window_days=30)
-    )
-    second_bundle = PolicyBundle(
-        dynamic_risk=DynamicRiskDescriptor(performance_window_days=60)
-    )
+    first_bundle = PolicyBundle(dynamic_risk=DynamicRiskDescriptor(performance_window_days=30))
+    second_bundle = PolicyBundle(dynamic_risk=DynamicRiskDescriptor(performance_window_days=60))
 
     engine._apply_policies_from_decision(SimpleNamespace(policies=first_bundle))
     first_manager = engine.dynamic_risk_manager

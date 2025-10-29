@@ -74,6 +74,7 @@ def create_ml_basic_strategy(
     }
 
     if fast_mode:
+
         class _FastRegimeDetector:
             """Lightweight regime detector for fast test execution."""
 
@@ -106,17 +107,17 @@ def create_ml_basic_strategy(
             model_type=model_type,
             timeframe=timeframe,
         )
-        
+
         risk_manager = CoreRiskAdapter(core_risk_manager)
         risk_manager.set_strategy_overrides(risk_overrides)
-        
+
         # Create position sizer with confidence weighting (20% base)
         position_sizer = ConfidenceWeightedSizer(
             base_fraction=0.2,
             min_confidence=0.3,
         )
         regime_detector = EnhancedRegimeDetector()
-    
+
     strategy = Strategy(
         name=name,
         signal_generator=signal_generator,

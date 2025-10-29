@@ -43,6 +43,7 @@ if not is_railway_environment():
             train_price_model_main,
             train_price_only_model_main,
         )
+
         _TRAINING_AVAILABLE = True
     except ImportError as e:
         print(f"Warning: Training commands not available: {e}")

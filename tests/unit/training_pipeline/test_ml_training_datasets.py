@@ -18,9 +18,7 @@ class TestCreateSequences:
 
     def test_basic_sequence_creation(self):
         # Arrange
-        feature_data = np.array(
-            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]
-        )
+        feature_data = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]])
         target_data = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
         sequence_length = 2
 

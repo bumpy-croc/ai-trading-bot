@@ -146,7 +146,9 @@ class TestValidateModelRobustness:
         feature_names = ["close_scaled", "volume_scaled", "rsi_scaled"]
 
         # Act
-        result = validate_model_robustness(mock_model, X_test, y_test, feature_names, has_sentiment=False)
+        result = validate_model_robustness(
+            mock_model, X_test, y_test, feature_names, has_sentiment=False
+        )
 
         # Assert
         assert "base_performance" in result
@@ -168,7 +170,9 @@ class TestValidateModelRobustness:
         feature_names = ["close_scaled", "volume_scaled", "sentiment_score", "sentiment_volume"]
 
         # Act
-        result = validate_model_robustness(mock_model, X_test, y_test, feature_names, has_sentiment=True)
+        result = validate_model_robustness(
+            mock_model, X_test, y_test, feature_names, has_sentiment=True
+        )
 
         # Assert
         assert "no_sentiment_performance" in result
@@ -185,7 +189,9 @@ class TestValidateModelRobustness:
         feature_names = ["close_scaled", "volume_scaled"]
 
         # Act
-        result = validate_model_robustness(mock_model, X_test, y_test, feature_names, has_sentiment=False)
+        result = validate_model_robustness(
+            mock_model, X_test, y_test, feature_names, has_sentiment=False
+        )
 
         # Assert
         assert "no_sentiment_performance" not in result
@@ -211,7 +217,9 @@ class TestEvaluateModelPerformance:
         y_test = np.array([100, 101, 102])
 
         # Act
-        result = evaluate_model_performance(mock_model, X_train, y_train, X_test, y_test, close_scaler=None)
+        result = evaluate_model_performance(
+            mock_model, X_train, y_train, X_test, y_test, close_scaler=None
+        )
 
         # Assert - check for actual returned metrics
         assert "train_loss" in result
@@ -237,7 +245,9 @@ class TestEvaluateModelPerformance:
         y_test = np.array([0.5, 0.55, 0.6])
 
         # Act
-        result = evaluate_model_performance(mock_model, X_train, y_train, X_test, y_test, close_scaler=mock_scaler)
+        result = evaluate_model_performance(
+            mock_model, X_train, y_train, X_test, y_test, close_scaler=mock_scaler
+        )
 
         # Assert
         assert mock_scaler.inverse_transform.called
@@ -256,7 +266,9 @@ class TestEvaluateModelPerformance:
         y_test = np.array([100, 101, 102])
 
         # Act
-        result = evaluate_model_performance(mock_model, X_train, y_train, X_test, y_test, close_scaler=None)
+        result = evaluate_model_performance(
+            mock_model, X_train, y_train, X_test, y_test, close_scaler=None
+        )
 
         # Assert - function calculates MAPE (Mean Absolute Percentage Error)
         assert "mape" in result

@@ -391,7 +391,9 @@ def _ensure_python311_venv(python311: Path) -> Path | None:
         if venv_dir.exists():
             shutil.rmtree(venv_dir)
         print(f"📁 Creating .venv with {python311}")
-        result = subprocess.run([str(python311), "-m", "venv", str(venv_dir)], capture_output=True, text=True)
+        result = subprocess.run(
+            [str(python311), "-m", "venv", str(venv_dir)], capture_output=True, text=True
+        )
         if result.returncode != 0:
             print("❌ Failed to create virtualenv:")
             print(result.stderr.strip())
@@ -563,21 +565,21 @@ def _quality(ns: argparse.Namespace) -> int:
 
             if result.returncode == 0:
                 print(f"✅ {tool['name']} passed")
-                results[tool['name']] = True
+                results[tool["name"]] = True
             else:
                 print(f"❌ {tool['name']} failed")
                 # Only show stderr for failed tools (stdout is often just normal output)
                 if result.stderr:
                     print(f"\n{tool['name']} errors:")
                     print(result.stderr)
-                results[tool['name']] = False
+                results[tool["name"]] = False
 
         except FileNotFoundError:
             print(f"⚠️ {tool['name']} not found - skipping")
-            results[tool['name']] = None
+            results[tool["name"]] = None
         except Exception as e:
             print(f"❌ {tool['name']} failed with exception: {e}")
-            results[tool['name']] = False
+            results[tool["name"]] = False
 
     # Print summary
     print("\n" + "=" * 60)

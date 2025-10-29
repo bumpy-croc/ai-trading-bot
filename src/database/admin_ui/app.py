@@ -10,13 +10,12 @@ from sqlalchemy.orm import scoped_session  # type: ignore
 try:  # pragma: no cover - exercised indirectly in tests
     from flask_wtf.csrf import CSRFProtect  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
+
     class _CSRFProtectStub:  # type: ignore[too-many-ancestors]
         """Fallback stub that keeps module importable without Flask-WTF."""
 
         def init_app(self, app):  # type: ignore[no-untyped-def]
-            raise ModuleNotFoundError(
-                "Flask-WTF must be installed to enable CSRF protection"
-            )
+            raise ModuleNotFoundError("Flask-WTF must be installed to enable CSRF protection")
 
         def exempt(self, view):  # type: ignore[no-untyped-def]
             return view
@@ -27,6 +26,7 @@ try:  # pragma: no cover - exercised indirectly in tests
     from flask_limiter import Limiter  # type: ignore
     from flask_limiter.util import get_remote_address  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
+
     class _LimiterStub:  # type: ignore[too-many-ancestors]
         """Fallback stub that keeps module importable without Flask-Limiter."""
 
@@ -35,9 +35,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
             self._kwargs = kwargs
 
         def init_app(self, app):  # type: ignore[no-untyped-def]
-            raise ModuleNotFoundError(
-                "Flask-Limiter must be installed to enable rate limiting"
-            )
+            raise ModuleNotFoundError("Flask-Limiter must be installed to enable rate limiting")
 
         def limit(self, *dargs, **dkwargs):  # type: ignore[no-untyped-def]
             def decorator(func):  # type: ignore[no-untyped-def]
@@ -62,13 +60,13 @@ logger = logging.getLogger(__name__)
 
 def _ensure_secret_key() -> str:
     """Ensure SECRET_KEY is set, exit if not in production.
-    
+
     SEC-003 Fix: Consolidate SECRET_KEY handling for consistent security logic.
     """
     secret_key = os.environ.get("DB_MANAGER_SECRET_KEY")
     if secret_key:
         return secret_key
-    
+
     # Allow fallback only in development-style environments
     env_value = os.getenv("ENV")
     flask_env_value = os.getenv("FLASK_ENV")
@@ -80,9 +78,7 @@ def _ensure_secret_key() -> str:
             break
 
     if normalized_env in {"development", "dev", "test", "testing"}:
-        logger.warning(
-            "⚠️  Using default SECRET_KEY - set DB_MANAGER_SECRET_KEY in production"
-        )
+        logger.warning("⚠️  Using default SECRET_KEY - set DB_MANAGER_SECRET_KEY in production")
         return "dev-key-change-in-production"
 
     if normalized_env is None:
@@ -91,31 +87,29 @@ def _ensure_secret_key() -> str:
             "treating as production"
         )
     else:
-        logger.error(
-            "❌ DB_MANAGER_SECRET_KEY required in %s environment", normalized_env
-        )
+        logger.error("❌ DB_MANAGER_SECRET_KEY required in %s environment", normalized_env)
     raise SystemExit(1)
 
 
 def _get_admin_credentials() -> tuple[str, str]:
     """Get and validate admin credentials from environment.
-    
+
     SEC-001 Fix: Require DB_MANAGER_ADMIN_PASS environment variable (no fallback).
     """
     admin_username = os.environ.get("DB_MANAGER_ADMIN_USER")
     admin_password = os.environ.get("DB_MANAGER_ADMIN_PASS")
-    
+
     if not admin_username:
         admin_username = "admin"
         logger.info("Using default admin username: 'admin'")
-    
+
     if not admin_password:
         logger.error(
             "❌ DB_MANAGER_ADMIN_PASS environment variable must be set. "
             "Please set a strong password to secure the database manager."
         )
         raise SystemExit(1)
-    
+
     return admin_username, admin_password
 
 
@@ -228,7 +222,7 @@ def create_app() -> "Flask":
 
     # Get and validate admin credentials (SEC-001 Fix)
     ADMIN_USERNAME, ADMIN_PASSWORD = _get_admin_credentials()
-    
+
     # Hash password for secure storage (SEC-002 Fix)
     ADMIN_PASSWORD_HASH = generate_password_hash(ADMIN_PASSWORD, method="pbkdf2:sha256")
     logger.info(f"✅ Database manager admin authentication configured for user: {ADMIN_USERNAME}")
@@ -256,7 +250,7 @@ def create_app() -> "Flask":
                 login_user(user)
                 logger.info(f"✅ Admin login successful for user: {username}")
                 return redirect(request.args.get("next") or url_for("admin.index"))
-            
+
             logger.warning(f"⚠️  Failed admin login attempt for user: {username}")
             return render_template_string(
                 """
