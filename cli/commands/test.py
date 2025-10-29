@@ -43,7 +43,7 @@ def _handle_test(ns: argparse.Namespace) -> int:
 
     # Run the test runner
     try:
-        result = subprocess.run(cmd, check=False)
+        result = subprocess.run(cmd, cwd=project_root, check=False)
         return result.returncode
     except KeyboardInterrupt:
         print("\nTest run interrupted by user", file=sys.stderr)
