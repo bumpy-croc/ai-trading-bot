@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from cli.commands.dev import _clean, _quality
+from cli.commands.dev import _clean, _quality, _setup, _venv, _dashboard
 
 
 class TestQualityCommand:
@@ -252,3 +252,148 @@ class TestCleanCommand:
                 assert result == 0
                 # Directory outside project root should still exist
                 assert outside_cache.exists()
+
+
+class TestSetupCommand:
+    """Tests for the _setup function."""
+
+    def test_runs_setup_successfully(self):
+        """Test that setup runs successfully."""
+        # Arrange
+        ns = argparse.Namespace()
+
+        # Act
+        with (
+            patch("cli.commands.dev._check_requirements") as mock_check,
+            patch("cli.commands.dev._setup_environment_file") as mock_setup_env,
+            patch("cli.commands.dev._install_python_dependencies") as mock_install,
+            patch("cli.commands.dev._setup_postgresql") as mock_setup_pg,
+            patch("cli.commands.dev._run_migrations") as mock_migrate,
+            patch("cli.commands.dev._test_setup") as mock_test,
+            patch("cli.commands.dev._print_next_steps") as mock_print_steps,
+        ):
+
+            mock_check.return_value = True
+            mock_install.return_value = True
+            mock_setup_pg.return_value = True
+            mock_migrate.return_value = True
+            mock_test.return_value = True
+
+            result = _setup(ns)
+
+            # Assert
+            assert result == 0
+            mock_check.assert_called_once()
+            mock_setup_env.assert_called_once()
+            mock_install.assert_called_once()
+            mock_setup_pg.assert_called_once()
+            mock_migrate.assert_called_once()
+            mock_test.assert_called_once()
+            mock_print_steps.assert_called_once()
+
+    def test_returns_error_when_requirements_missing(self):
+        """Test that error is returned when requirements are missing."""
+        # Arrange
+        ns = argparse.Namespace()
+
+        # Act
+        with patch("cli.commands.dev._check_requirements") as mock_check:
+            mock_check.return_value = False
+
+            result = _setup(ns)
+
+            # Assert
+            assert result == 1
+
+
+class TestVenvCommand:
+    """Tests for the _venv function."""
+
+    def test_creates_venv_successfully(self):
+        """Test that venv is created successfully."""
+        # Arrange
+        ns = argparse.Namespace()
+
+        # Act
+        with (
+            patch("cli.commands.dev.subprocess.run") as mock_run,
+            patch("cli.commands.dev.PROJECT_ROOT") as mock_root,
+        ):
+
+            mock_root.__truediv__ = lambda self, other: Path(f"/tmp/{other}")
+            mock_run.return_value = Mock(returncode=0)
+
+            result = _venv(ns)
+
+            # Assert
+            assert result == 0
+            # Should be called multiple times (venv creation, pip upgrade, install -e ., install requirements)
+            assert mock_run.call_count >= 4
+
+    def test_returns_error_when_venv_creation_fails(self):
+        """Test that error is returned when venv creation fails."""
+        # Arrange
+        ns = argparse.Namespace()
+
+        # Act
+        with (
+            patch("cli.commands.dev.subprocess.run") as mock_run,
+            patch("cli.commands.dev.PROJECT_ROOT") as mock_root,
+            patch("cli.commands.dev.Path") as mock_path_class,
+        ):
+
+            mock_venv_path = Mock()
+            mock_venv_path.exists.return_value = False
+            mock_root.__truediv__ = lambda self, other: mock_venv_path
+
+            mock_run.return_value = Mock(returncode=1)
+
+            result = _venv(ns)
+
+            # Assert
+            assert result == 1
+
+
+class TestDashboardCommand:
+    """Tests for the _dashboard function."""
+
+    def test_starts_dashboard_successfully(self):
+        """Test that dashboard starts successfully."""
+        # Arrange
+        ns = argparse.Namespace()
+
+        # Act
+        with (
+            patch("cli.commands.dev.MonitoringDashboard") as mock_dashboard_class,
+            patch("cli.commands.dev.configure_logging"),
+            patch.dict("os.environ", {"PORT": "8090", "HOST": "0.0.0.0"}),
+        ):
+
+            mock_dashboard = Mock()
+            mock_dashboard.run.return_value = None
+            mock_dashboard_class.return_value = mock_dashboard
+
+            result = _dashboard(ns)
+
+            # Assert
+            assert result == 0
+            mock_dashboard.run.assert_called_once()
+
+    def test_returns_error_when_dashboard_fails(self):
+        """Test that error is returned when dashboard fails to start."""
+        # Arrange
+        ns = argparse.Namespace()
+
+        # Act
+        with (
+            patch("cli.commands.dev.MonitoringDashboard") as mock_dashboard_class,
+            patch("cli.commands.dev.configure_logging"),
+            patch.dict("os.environ", {"PORT": "8090", "HOST": "0.0.0.0"}),
+        ):
+
+            mock_dashboard_class.side_effect = Exception("Failed to start")
+
+            result = _dashboard(ns)
+
+            # Assert
+            assert result == 1
