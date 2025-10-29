@@ -24,12 +24,7 @@ def _handle_test(ns: argparse.Namespace) -> int:
     if ns.category:
         cmd.append(ns.category)
 
-    # Add pytest args if provided
-    if ns.pytest_args:
-        cmd.append("--pytest-args")
-        cmd.extend(ns.pytest_args)
-
-    # Add other flags
+    # Add other flags first (before pytest args)
     if ns.file:
         cmd.extend(["--file", ns.file])
     if ns.markers:
@@ -40,6 +35,11 @@ def _handle_test(ns: argparse.Namespace) -> int:
         cmd.append("--verbose")
     if ns.quiet:
         cmd.append("--quiet")
+
+    # Add pytest args last (REMAINDER consumes everything after it)
+    if ns.pytest_args:
+        cmd.append("--pytest-args")
+        cmd.extend(ns.pytest_args)
 
     # Run the test runner
     try:
