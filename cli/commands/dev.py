@@ -596,9 +596,13 @@ def _quality(ns: argparse.Namespace) -> int:
         else:
             print(f"⚠️ {tool_name} (skipped)")
 
-    # Return non-zero if any tool failed
+    # Return non-zero if any tool failed or was missing
     if any(status is False for status in results.values()):
         print("\n❌ Some quality checks failed")
+        return 1
+
+    if any(status is None for status in results.values()):
+        print("\n❌ Some quality tools are missing - please install them")
         return 1
 
     print("\n✅ All quality checks passed!")
