@@ -32,7 +32,7 @@ class TestCoinbaseProvider:
         mock_response.status_code = 200
         mock_response.json.return_value = sample_candles
         mock_get.return_value = mock_response
-        
+
         with patch.dict(os.environ, {"ENV": "test"}, clear=False):
             # Ensure no Coinbase credentials are set
             for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:
@@ -55,7 +55,7 @@ class TestCoinbaseProvider:
         mock_response.status_code = 200
         mock_response.json.return_value = {"price": "12345.67"}
         mock_get.return_value = mock_response
-        
+
         with patch.dict(os.environ, {"ENV": "test"}, clear=False):
             # Ensure no Coinbase credentials are set
             for key in ["COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_API_PASSPHRASE"]:

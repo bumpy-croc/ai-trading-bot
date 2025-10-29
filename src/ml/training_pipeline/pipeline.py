@@ -161,7 +161,9 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             "full_sentiment",
             "hybrid_with_fallback",
         ]
-        model = create_adaptive_model((ctx.config.sequence_length, len(feature_names)), has_sentiment)
+        model = create_adaptive_model(
+            (ctx.config.sequence_length, len(feature_names)), has_sentiment
+        )
 
         history = model.fit(
             train_ds,

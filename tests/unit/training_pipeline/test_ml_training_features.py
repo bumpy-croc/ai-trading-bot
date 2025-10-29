@@ -431,7 +431,13 @@ class TestCreateRobustFeatures:
         )
 
         # Assert - all expected price features should be present
-        expected_features = ["open_scaled", "high_scaled", "low_scaled", "close_scaled", "volume_scaled"]
+        expected_features = [
+            "open_scaled",
+            "high_scaled",
+            "low_scaled",
+            "close_scaled",
+            "volume_scaled",
+        ]
         for feature in expected_features:
             assert feature in feature_names
             assert feature in result_df.columns

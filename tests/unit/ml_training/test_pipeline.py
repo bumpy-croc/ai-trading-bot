@@ -95,7 +95,9 @@ class TestEnableMixedPrecision:
         enable_mixed_precision(enabled=False)
 
         # Assert
-        assert any("explicitly disabled via configuration" in record.message for record in caplog.records)
+        assert any(
+            "explicitly disabled via configuration" in record.message for record in caplog.records
+        )
 
     @patch("src.ml.training_pipeline.pipeline.tf")
     def test_logs_when_no_gpu_detected(self, mock_tf, caplog):
@@ -134,7 +136,9 @@ class TestEnableMixedPrecision:
         enable_mixed_precision(enabled=True)
 
         # Assert
-        assert any("Failed to enable mixed precision" in record.message for record in caplog.records)
+        assert any(
+            "Failed to enable mixed precision" in record.message for record in caplog.records
+        )
 
 
 @pytest.mark.fast
@@ -162,7 +166,9 @@ class TestTrainingResult:
         error_metadata = {"error": "Training failed due to insufficient data"}
 
         # Act
-        result = TrainingResult(success=False, metadata=error_metadata, artifact_paths=None, duration_seconds=5.2)
+        result = TrainingResult(
+            success=False, metadata=error_metadata, artifact_paths=None, duration_seconds=5.2
+        )
 
         # Assert
         assert result.success is False

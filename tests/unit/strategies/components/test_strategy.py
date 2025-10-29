@@ -112,7 +112,9 @@ class FakeCorrelationEngine:
     def calculate_position_correlations(self, price_series: dict[str, pd.Series]) -> pd.DataFrame:
         symbols = sorted(price_series)
         return pd.DataFrame(
-            data=[[1.0 if i == j else 0.0 for j in range(len(symbols))] for i in range(len(symbols))],
+            data=[
+                [1.0 if i == j else 0.0 for j in range(len(symbols))] for i in range(len(symbols))
+            ],
             index=symbols,
             columns=symbols,
         )
@@ -166,9 +168,7 @@ def test_process_candle_merges_additional_risk_context(sample_dataframe: pd.Data
     strategy = _build_strategy(risk_manager)
 
     extra_context = {"correlation_ctx": {"enabled": True}}
-    strategy.set_additional_risk_context_provider(
-        lambda df, index, signal: extra_context
-    )
+    strategy.set_additional_risk_context_provider(lambda df, index, signal: extra_context)
 
     decision = strategy.process_candle(sample_dataframe, len(sample_dataframe) - 1, 1000.0)
 

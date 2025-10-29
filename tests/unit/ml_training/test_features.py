@@ -296,7 +296,10 @@ class TestCreateRobustFeatures:
         result_df, scalers, feature_names = create_robust_features(data, sentiment_assessment, 60)
 
         # Assert
-        assert "sentiment_score_filled" in result_df.columns or "sentiment_score_scaled" in result_df.columns
+        assert (
+            "sentiment_score_filled" in result_df.columns
+            or "sentiment_score_scaled" in result_df.columns
+        )
 
     def test_drops_nans_from_rolling_windows(self):
         # Arrange

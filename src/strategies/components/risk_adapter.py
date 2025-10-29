@@ -160,11 +160,11 @@ class CoreRiskAdapter(RiskManager):
         if price <= 0 or entry_price <= 0:
             return False
 
-        if position.side == 'long':
+        if position.side == "long":
             pnl_pct = (price - entry_price) / entry_price
             threshold = -float(params.max_risk_per_trade)
             return pnl_pct <= threshold
-        if position.side == 'short':
+        if position.side == "short":
             pnl_pct = (entry_price - price) / entry_price
             threshold = -float(params.max_risk_per_trade)
             return pnl_pct <= threshold
@@ -214,9 +214,7 @@ class CoreRiskAdapter(RiskManager):
             take_profit_pct = overrides.get("take_profit_pct")
             if take_profit_pct is None:
                 params = getattr(manager, "params", None)
-                take_profit_pct = (
-                    params.default_take_profit_pct if params else None
-                )
+                take_profit_pct = params.default_take_profit_pct if params else None
             if take_profit_pct is None:
                 return entry_price
             if self._signal_side(signal) == "long":
@@ -298,11 +296,11 @@ class CoreRiskAdapter(RiskManager):
     @staticmethod
     def _signal_side(signal: Signal) -> str:
         direction = getattr(signal.direction, "value", getattr(signal, "direction", "hold"))
-        if direction == 'buy':
-            return 'long'
-        if direction == 'sell':
-            return 'short'
-        return 'long'
+        if direction == "buy":
+            return "long"
+        if direction == "sell":
+            return "short"
+        return "long"
 
     def _build_partial_descriptor(self) -> PartialExitPolicyDescriptor | None:
         params = getattr(self._require_core_manager(), "params", None)
@@ -322,12 +320,8 @@ class CoreRiskAdapter(RiskManager):
         params = getattr(self._require_core_manager(), "params", None)
         if params is None:
             return None
-        if (
-            params.trailing_activation_threshold is None
-            or (
-                params.trailing_distance_pct is None
-                and params.trailing_atr_multiplier is None
-            )
+        if params.trailing_activation_threshold is None or (
+            params.trailing_distance_pct is None and params.trailing_atr_multiplier is None
         ):
             return None
         return TrailingStopPolicyDescriptor(

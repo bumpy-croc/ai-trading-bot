@@ -164,8 +164,7 @@ def create_robust_features(
 
         if rows_dropped > 0:
             logger.info(
-                "Dropped %d rows with NaNs from %d total rows (%.1f%%). "
-                "Features with NaNs: %s",
+                "Dropped %d rows with NaNs from %d total rows (%.1f%%). " "Features with NaNs: %s",
                 rows_dropped,
                 rows_before,
                 (rows_dropped / rows_before) * 100,

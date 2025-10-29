@@ -177,7 +177,9 @@ class TestValidateModelRobustness:
         feature_names = ["feature1", "feature2"]
 
         # Act
-        result = validate_model_robustness(model, X_test, y_test, feature_names, has_sentiment=False)
+        result = validate_model_robustness(
+            model, X_test, y_test, feature_names, has_sentiment=False
+        )
 
         # Assert
         assert "base_performance" in result
@@ -217,7 +219,9 @@ class TestValidateModelRobustness:
         feature_names = ["feature1", "feature2"]
 
         # Act
-        result = validate_model_robustness(model, X_test, y_test, feature_names, has_sentiment=False)
+        result = validate_model_robustness(
+            model, X_test, y_test, feature_names, has_sentiment=False
+        )
 
         # Assert
         assert "no_sentiment_performance" not in result

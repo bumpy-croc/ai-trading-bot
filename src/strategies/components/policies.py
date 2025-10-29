@@ -43,15 +43,15 @@ class TrailingStopPolicyDescriptor:
 
         return TrailingStopPolicy(
             activation_threshold=float(self.activation_threshold),
-            trailing_distance_pct=float(self.trailing_distance_pct)
-            if self.trailing_distance_pct is not None
-            else None,
-            atr_multiplier=float(self.atr_multiplier)
-            if self.atr_multiplier is not None
-            else None,
-            breakeven_threshold=float(self.breakeven_threshold)
-            if self.breakeven_threshold is not None
-            else None,
+            trailing_distance_pct=(
+                float(self.trailing_distance_pct)
+                if self.trailing_distance_pct is not None
+                else None
+            ),
+            atr_multiplier=float(self.atr_multiplier) if self.atr_multiplier is not None else None,
+            breakeven_threshold=(
+                float(self.breakeven_threshold) if self.breakeven_threshold is not None else None
+            ),
             breakeven_buffer=float(self.breakeven_buffer),
         )
 
@@ -77,15 +77,17 @@ class DynamicRiskDescriptor:
         return DynamicRiskConfig(
             enabled=bool(self.enabled),
             performance_window_days=int(self.performance_window_days),
-            drawdown_thresholds=list(self.drawdown_thresholds)
-            if self.drawdown_thresholds is not None
-            else None,
-            risk_reduction_factors=list(self.risk_reduction_factors)
-            if self.risk_reduction_factors is not None
-            else None,
-            recovery_thresholds=list(self.recovery_thresholds)
-            if self.recovery_thresholds is not None
-            else None,
+            drawdown_thresholds=(
+                list(self.drawdown_thresholds) if self.drawdown_thresholds is not None else None
+            ),
+            risk_reduction_factors=(
+                list(self.risk_reduction_factors)
+                if self.risk_reduction_factors is not None
+                else None
+            ),
+            recovery_thresholds=(
+                list(self.recovery_thresholds) if self.recovery_thresholds is not None else None
+            ),
             volatility_adjustment_enabled=bool(self.volatility_adjustment_enabled),
             volatility_window_days=int(self.volatility_window_days),
             high_volatility_threshold=float(self.high_volatility_threshold),

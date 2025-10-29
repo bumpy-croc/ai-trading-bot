@@ -262,9 +262,7 @@ class TestLoadSentimentData:
         assert result is not None
         assert len(result) == 3
         assert "sentiment_score" in result.columns
-        mock_provider.get_historical_sentiment.assert_called_once_with(
-            "BTCUSDT", start, end
-        )
+        mock_provider.get_historical_sentiment.assert_called_once_with("BTCUSDT", start, end)
 
     def test_load_sentiment_data_force_price_only(self):
         # Arrange

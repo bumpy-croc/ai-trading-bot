@@ -1,5 +1,12 @@
 from .config import configure_logging
-from .context import clear_context, get_context, new_request_id, set_context, update_context, use_context
+from .context import (
+    clear_context,
+    get_context,
+    new_request_id,
+    set_context,
+    update_context,
+    use_context,
+)
 from .decision_logger import log_strategy_execution
 from .events import (
     log_data_event,
