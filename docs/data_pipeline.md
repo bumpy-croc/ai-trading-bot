@@ -1,6 +1,6 @@
 # Data pipeline
 
-> **Last Updated**: 2025-10-27  
+> **Last Updated**: 2025-10-29  
 > **Related Documentation**: [Backtesting](backtesting.md), [Configuration](configuration.md)
 
 Market, sentiment, and cached data access lives under `src/data_providers`. The system exposes a consistent `DataProvider`
