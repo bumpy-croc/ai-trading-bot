@@ -78,7 +78,9 @@ class TestQualityCommand:
 
                 assert result == 1
                 # Check that stderr was printed
-                printed_output = " ".join(str(call[0][0]) for call in mock_print.call_args_list)
+                printed_output = " ".join(
+                    str(call[0][0]) for call in mock_print.call_args_list if call[0]
+                )
                 assert "formatting errors found" in printed_output
 
     def test_handles_exception_in_tool_execution(self):
