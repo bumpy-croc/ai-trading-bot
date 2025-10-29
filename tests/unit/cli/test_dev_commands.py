@@ -366,8 +366,8 @@ class TestDashboardCommand:
 
         # Act
         with (
-            patch("cli.commands.dev.MonitoringDashboard") as mock_dashboard_class,
-            patch("cli.commands.dev.configure_logging"),
+            patch("src.dashboards.monitoring.dashboard.MonitoringDashboard") as mock_dashboard_class,
+            patch("src.infrastructure.logging.config.configure_logging"),
             patch.dict("os.environ", {"PORT": "8090", "HOST": "0.0.0.0"}),
         ):
 
@@ -388,8 +388,8 @@ class TestDashboardCommand:
 
         # Act
         with (
-            patch("cli.commands.dev.MonitoringDashboard") as mock_dashboard_class,
-            patch("cli.commands.dev.configure_logging"),
+            patch("src.dashboards.monitoring.dashboard.MonitoringDashboard") as mock_dashboard_class,
+            patch("src.infrastructure.logging.config.configure_logging"),
             patch.dict("os.environ", {"PORT": "8090", "HOST": "0.0.0.0"}),
         ):
 
