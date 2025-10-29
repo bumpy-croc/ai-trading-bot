@@ -566,7 +566,10 @@ def _quality(ns: argparse.Namespace) -> int:
                 results[tool['name']] = True
             else:
                 print(f"❌ {tool['name']} failed")
-                # Only show stderr for failed tools (stdout is often just normal output)
+                # Show stdout and stderr (black/ruff emit diagnostics on stdout)
+                if result.stdout:
+                    print(f"\n{tool['name']} output:")
+                    print(result.stdout)
                 if result.stderr:
                     print(f"\n{tool['name']} errors:")
                     print(result.stderr)
