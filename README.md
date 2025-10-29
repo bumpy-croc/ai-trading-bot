@@ -28,10 +28,10 @@ python -m venv .venv && source .venv/bin/activate
 
 # Install CLI and dependencies
 make install                 # Install CLI (atb) + upgrade pip
-make deps                    # Install dev dependencies (can timeout - see workarounds)
+make deps-dev                # Install dev dependencies (can timeout - see workarounds)
 
 # Alternative: use server dependencies for faster install
-make deps-server             # Lighter production dependencies
+make deps-server             # Lighter server/production dependencies
 ```
 
 **Note**: If pip install times out due to large packages (TensorFlow ~500MB), try:
@@ -104,6 +104,12 @@ atb data populate-dummy --trades 100 --confirm
 7) Tests
 
 ```bash
+# Run test suite
+atb test unit                # Unit tests only
+atb test integration         # Integration tests
+atb test all                 # All tests
+
+# Or use pytest directly
 pytest -q
 
 # Diagnostics
@@ -116,12 +122,15 @@ atb tests heartbeat
 ```bash
 # Setup development environment
 python -m venv .venv && source .venv/bin/activate
-make install && make deps
+make install && make deps-dev
 
 # Run code quality checks
-make code-quality  # ruff + black + mypy + bandit
+atb dev quality            # Run all: black + ruff + mypy + bandit
 
-# Or run individually:
+# Clean caches and build artifacts
+atb dev clean              # Remove .pytest_cache, .ruff_cache, etc.
+
+# Or run individual tools:
 black .
 ruff check . --fix
 python bin/run_mypy.py

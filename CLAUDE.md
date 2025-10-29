@@ -15,7 +15,7 @@ This is a modular cryptocurrency trading system focused on long-term, risk-balan
 # Create virtual environment and install
 python -m venv .venv && source .venv/bin/activate
 make install                 # Install CLI (atb) + upgrade pip
-make deps                    # Install dev dependencies
+make deps-dev                # Install dev dependencies
 
 # If pip install times out (common with TensorFlow ~500MB):
 .venv/bin/pip install --timeout 1000 <package>
@@ -35,29 +35,34 @@ atb db verify
 
 ### Testing
 ```bash
-# Run all tests
-pytest -q
-make test                    # Parallel (4 workers)
+# Run test suite (recommended)
+atb test unit                # Unit tests only
+atb test integration         # Integration tests
+atb test smoke               # Quick smoke tests
+atb test all                 # All tests
 
-# Specific test categories
-python tests/run_tests.py unit          # Unit tests only
+# Or use test runner directly
+python tests/run_tests.py unit          # Unit tests with parallelism
 python tests/run_tests.py integration   # Integration tests
-python tests/run_tests.py smoke         # Quick smoke tests
-pytest -m "not integration and not slow"  # Fast tests only
 
-# Single test file
-pytest tests/unit/test_backtesting.py
+# Or use pytest directly
+pytest -q                               # All tests
+pytest -m "not integration and not slow"  # Fast tests only
+pytest tests/unit/test_backtesting.py    # Single file
 ```
 
 ### Code Quality
 ```bash
-make code-quality            # Run all: ruff + black + mypy + bandit
+atb dev quality              # Run all: black + ruff + mypy + bandit
 
 # Individual tools
 black .                      # Format code
 ruff check . --fix          # Lint with auto-fix
 python bin/run_mypy.py      # Type checking
 bandit -c pyproject.toml -r src  # Security scan
+
+# Clean caches
+atb dev clean                # Remove .pytest_cache, .ruff_cache, etc.
 ```
 
 ### Backtesting & Live Trading
@@ -264,8 +269,8 @@ LOG_JSON=true  # Enable structured logging
 
 4. **Run quality checks**:
    ```bash
-   make code-quality
-   make test
+   atb dev quality
+   atb test unit
    ```
 
 5. **Commit frequently** with clear messages:
@@ -349,7 +354,7 @@ def test_position_sizing():
 Follow `.github/pull_request_template.md`:
 - Describe user-facing impact
 - Reference issues with `(#123)` when relevant
-- Include testing performed (`make test`, `make code-quality`)
+- Include testing performed (`atb test unit`, `atb dev quality`)
 - Attach strategy metrics or dashboard screenshots when behavior changes
 - Document migrations or scripts in `docs/` if they change operational steps
 - Request review only after CI is green
@@ -464,7 +469,7 @@ railway logs --environment production
 - Load via environment variables consumed by `src/config` loaders
 - Keep `.env` files out of version control
 - Document required settings in PRs
-- For local databases: run `make migrate` after schema updates
+- For local databases: run `atb db migrate` after schema updates
 - Ensure backups in `backups/` are encrypted or excluded from commits
 
 ## Documentation References

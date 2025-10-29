@@ -11,10 +11,10 @@ This project ships a command-line interface and Makefile targets that standardis
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 make install            # install the CLI in editable mode
-make deps               # install development dependencies (pytest, ruff, mypy, etc.)
+make deps-dev           # install development dependencies (pytest, ruff, mypy, etc.)
 ```
 
-Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) used by maintainers; the helper now looks up `python3.11` (or `PYTHON311`) and recreates `.venv` with that interpreter if needed, so you never end up running tests on the macOS 3.9 default.
+Run `atb dev setup` to execute helper scripts (pre-commit hooks, git config) used by maintainers; the helper now looks up `python3.11` (or `PYTHON311`) and recreates `.venv` with that interpreter if needed, so you never end up running tests on the macOS 3.9 default.
 
 ## Key shared directories
 
@@ -38,15 +38,18 @@ Run `make dev-setup` to execute helper scripts (pre-commit hooks, git config) us
 
 ## Tests and diagnostics
 
-- `pytest -q` – run the entire unit/integration suite.
-- `make test` – parallel test run (`pytest -n 4`).
+- `atb test unit` – run unit tests with parallelism.
+- `atb test integration` – run integration tests.
+- `atb test all` – run the entire unit/integration suite.
+- `pytest -q` – run tests directly with pytest.
 - `atb tests heartbeat` – insert a `SystemEvent` row for monitoring pipelines.
 - `atb tests db` – verify database connectivity end-to-end.
 - `atb tests download` – smoke test data downloads via CCXT.
 
 ## Code quality
 
-- `make code-quality` – run Black formatting, Ruff linting, MyPy type checks, and Bandit security scans.
+- `atb dev quality` – run Black formatting, Ruff linting, MyPy type checks, and Bandit security scans.
+- `atb dev clean` – remove caches and build artifacts.
 - `black .` and `ruff check . --fix` – apply formatting and lint fixes manually.
 - `python bin/run_mypy.py` – strict type checking without formatting.
 - `bandit -c pyproject.toml -r src` – security audit focusing on runtime code.
@@ -61,11 +64,12 @@ succinct changelog, bumps the semantic version, and auto-stages the updated mani
 
 ## Helpful shortcuts
 
-- `make backtest STRATEGY=ml_basic DAYS=30` – quick simulations while iterating on strategies.
-- `make live` / `make live-health` – start the live runner (paper trading by default) from the shell.
-- `make optimizer` – trigger the optimisation CLI with the default configuration.
+- `atb backtest ml_basic --days 30` – quick simulations while iterating on strategies.
+- `atb live ml_basic --paper-trading` – start the live runner in paper trading mode.
+- `atb live-health --port 8000 -- ml_basic --paper-trading` – start live trading with health endpoint.
+- `atb optimizer --strategy ml_basic --days 30` – trigger the optimisation CLI.
 
-Use these wrappers to mirror CI behaviour locally before opening pull requests.
+Use these commands to mirror CI behaviour locally before opening pull requests.
 
 ## Codex auto-review workflow
 
