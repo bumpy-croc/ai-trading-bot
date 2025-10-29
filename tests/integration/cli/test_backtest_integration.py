@@ -90,7 +90,8 @@ class TestBacktestIntegration:
             # Verify log file contains expected data
             with open(log_files[0], "r") as f:
                 log_data = json.load(f)
-                assert log_data["strategy"] == "ml_basic"
+                # Strategy is logged as class name (MlBasic) not identifier (ml_basic)
+                assert log_data["strategy"] == "MlBasic"
                 assert log_data["symbol"] == "BTCUSDT"
                 assert log_data["timeframe"] == "1h"
                 assert "results" in log_data
