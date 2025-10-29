@@ -90,22 +90,33 @@ def build_parser() -> argparse.ArgumentParser:
         docs as docs_cmd,
     )
 
-    dashboards.register(subparsers)
+    # Core trading operations
     live.register(subparsers)
+    live_health.register(subparsers)
     backtest.register(subparsers)
     optimizer.register(subparsers)
+
+    # Strategy and model management
+    strategies.register(subparsers)
     models.register(subparsers)
-    live_health.register(subparsers)
-    data.register(subparsers)
-    db.register(subparsers)
-    dev.register(subparsers)
     train.register(subparsers)
+    regime.register(subparsers)
+
+    # Development and testing
     test.register(subparsers)
     tests.register(subparsers)
+    dev.register(subparsers)
+
+    # Infrastructure and data
+    db.register(subparsers)
+    data.register(subparsers)
     migration.register(subparsers)
+
+    # Monitoring and documentation
+    dashboards.register(subparsers)
     docs_cmd.register(subparsers)
-    strategies.register(subparsers)
-    regime.register(subparsers)
+
+    # Automation
     codex.register(subparsers)
 
     return parser

@@ -30,8 +30,8 @@ python -m venv .venv && source .venv/bin/activate
 make install                 # Install CLI (atb) + upgrade pip
 make deps-dev                # Install dev dependencies (can timeout - see workarounds)
 
-# Alternative: use production dependencies for faster install
-make deps-prod               # Lighter production dependencies
+# Alternative: use server dependencies for faster install
+make deps-server             # Lighter server/production dependencies
 ```
 
 **Note**: If pip install times out due to large packages (TensorFlow ~500MB), try:

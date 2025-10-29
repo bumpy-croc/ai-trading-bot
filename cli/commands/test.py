@@ -48,8 +48,11 @@ def _handle_test(ns: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("\nTest run interrupted by user", file=sys.stderr)
         return 1
-    except Exception as e:
-        print(f"Error running tests: {e}", file=sys.stderr)
+    except FileNotFoundError as e:
+        print(f"Error: Test runner not found: {e}", file=sys.stderr)
+        return 1
+    except PermissionError as e:
+        print(f"Error: Permission denied running tests: {e}", file=sys.stderr)
         return 1
 
 

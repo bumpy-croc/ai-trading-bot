@@ -418,8 +418,6 @@ def _venv_python_path(venv_dir: Path) -> Path:
     if os.name == "nt":
         return venv_dir / "Scripts" / "python.exe"
     return venv_dir / "bin" / "python"
-    print("📈 Start Dashboard:")
-    print("   atb dev dashboard")
 
 
 def _venv(ns: argparse.Namespace) -> int:
@@ -568,11 +566,9 @@ def _quality(ns: argparse.Namespace) -> int:
                 results[tool['name']] = True
             else:
                 print(f"❌ {tool['name']} failed")
-                if result.stdout:
-                    print("Output:")
-                    print(result.stdout)
+                # Only show stderr for failed tools (stdout is often just normal output)
                 if result.stderr:
-                    print("Errors:")
+                    print(f"\n{tool['name']} errors:")
                     print(result.stderr)
                 results[tool['name']] = False
 

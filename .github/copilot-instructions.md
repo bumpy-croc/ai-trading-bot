@@ -50,14 +50,14 @@ atb test unit                # Run test suite (requires DB)
 # PyPI timeouts are frequent due to large packages (TensorFlow ~500MB)
 # If ANY pip install times out, try:
 .venv/bin/pip install --timeout 1000 <package>
-# Or use production requirements only:
-make deps-prod               # Lighter requirements
+# Or use server requirements only:
+make deps-server             # Lighter requirements
 ```
 
 **Dependency Installation Timeout:**
 ```bash
-# If 'make deps-dev' times out (common due to TensorFlow size), install production deps first:
-make deps-prod               # Lighter requirements
+# If 'make deps-dev' times out (common due to TensorFlow size), install server deps first:
+make deps-server             # Lighter requirements
 # Then manually install missing dev dependencies as needed:
 # .venv/bin/pip install pytest pytest-mock ruff black mypy
 ```

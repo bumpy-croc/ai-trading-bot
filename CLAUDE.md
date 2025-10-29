@@ -19,8 +19,8 @@ make deps-dev                # Install dev dependencies
 
 # If pip install times out (common with TensorFlow ~500MB):
 .venv/bin/pip install --timeout 1000 <package>
-# Or use lighter production dependencies:
-make deps-prod
+# Or use lighter server dependencies:
+make deps-server
 ```
 
 ### Database Setup (PostgreSQL Required)
@@ -447,7 +447,7 @@ railway logs --environment production
 
 1. **Import Errors**: Always run `make install` first - CLI requires core packages
 2. **Database Required**: PostgreSQL is mandatory, no fallback
-3. **Timeout on Deps**: Use `--timeout 1000` or `make deps-prod` for large packages
+3. **Timeout on Deps**: Use `--timeout 1000` or `make deps-server` for large packages
 4. **Docker Compose**: Use `docker compose` not `docker-compose` (v2 syntax)
 5. **Model Loading**: Strategies use `latest` symlink - ensure it points to valid version
 6. **Test Isolation**: Use fixtures, avoid global state, mock external APIs

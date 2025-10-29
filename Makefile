@@ -1,20 +1,24 @@
 SHELL := /bin/bash
 
-.PHONY: help install deps-dev deps-prod clean build
+.PHONY: help install deps-dev deps-server clean build
 
 help:
 	@echo "AI Trading Bot - Makefile Commands"
 	@echo ""
 	@echo "Installation:"
-	@echo "  make install       Install CLI in editable mode (pip install -e .)"
-	@echo "  make deps-dev      Install development dependencies (includes install)"
-	@echo "  make deps-prod     Install production dependencies (includes install)"
+	@echo "  make install         Install CLI in editable mode (pip install -e .)"
+	@echo "  make deps-dev        Install development dependencies (includes install)"
+	@echo "  make deps-server     Install server/production dependencies (includes install)"
 	@echo ""
 	@echo "Utilities:"
-	@echo "  make clean         Remove caches and build artifacts"
-	@echo "  make build         Build distributable package"
+	@echo "  make clean           Remove caches and build artifacts"
+	@echo "  make build           Build distributable package"
 	@echo ""
-	@echo "Note: Use 'atb --help' for all project operations (testing, quality checks, backtesting, etc.)"
+	@echo "Note: For project operations, use 'atb' commands:"
+	@echo "  atb test unit        Run unit tests"
+	@echo "  atb dev quality      Run code quality checks"
+	@echo "  atb backtest         Run strategy backtests"
+	@echo "  atb --help           Show all available commands"
 
 install:
 	pip install -e .
@@ -22,7 +26,7 @@ install:
 deps-dev: install
 	pip install -r requirements.txt
 
-deps-prod: install
+deps-server: install
 	pip install -r requirements-server.txt
 
 clean:
