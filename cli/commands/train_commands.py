@@ -23,6 +23,7 @@ except ImportError:
 
 from src.infrastructure.runtime.paths import get_project_root
 from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext
+from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.pipeline import TrainingResult, run_training_pipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
 from src.trading.symbols.factory import SymbolFactory
@@ -204,6 +205,14 @@ def train_price_model_main(args) -> int:
         print("❌ tensorflow is required for model training but is not installed.")
         print("Install it with: pip install tensorflow")
         return 1
+
+    # Configure GPU early
+    device_name = configure_gpu()
+    if device_name:
+        print(f"🚀 Using device: {device_name}")
+    else:
+        print("🚀 Using CPU")
+
     sequence_length = args.sequence_length
     try:
         start_date, end_date = _parse_dates(args.start_date, args.end_date)
