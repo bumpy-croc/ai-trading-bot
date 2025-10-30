@@ -9,9 +9,38 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-from cli.commands.train_commands import train_model_main, train_price_model_main
 from cli.core.forward import forward_to_module_main
 from src.infrastructure.runtime.paths import get_project_root
+
+# Conditionally import training commands only in non-Railway environments
+try:
+    from src.config.providers.railway_provider import RailwayProvider
+
+    railway_provider = RailwayProvider()
+    _IS_RAILWAY = railway_provider.is_available()
+except ImportError:
+    # Fallback to environment variables if Railway provider not available
+    railway_indicators = [
+        "RAILWAY_DEPLOYMENT_ID",
+        "RAILWAY_PROJECT_ID",
+        "RAILWAY_SERVICE_ID",
+        "RAILWAY_ENVIRONMENT_ID",
+    ]
+    _IS_RAILWAY = any(key in os.environ for key in railway_indicators)
+
+if not _IS_RAILWAY:
+    try:
+        from cli.commands.train_commands import train_model_main, train_price_model_main
+
+        _TRAINING_AVAILABLE = True
+    except ImportError as e:
+        _TRAINING_AVAILABLE = False
+        train_model_main = None  # type: ignore
+        train_price_model_main = None  # type: ignore
+else:
+    _TRAINING_AVAILABLE = False
+    train_model_main = None  # type: ignore
+    train_price_model_main = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +169,13 @@ def _repoint_latest(version_dir: Path) -> None:
 
 def _control(ns: argparse.Namespace) -> int:
     if ns.control_cmd == "train":
+        if not _TRAINING_AVAILABLE:
+            print("❌ Model training is not available in Railway environments.")
+            print(
+                "Training requires heavy dependencies (tensorflow) that are excluded from Railway builds."
+            )
+            print("Use a local development environment for model training.")
+            return 1
         start_date, end_date = _date_range(ns.days)
         if ns.sentiment:
             args = SimpleNamespace(
