@@ -1,6 +1,6 @@
 # Test Suite
 
-> **Last Updated**: 2025-10-21  
+> **Last Updated**: 2025-10-30  
 > **Related Documentation**: See [Development workflow](../docs/development.md#tests-and-diagnostics)
 
 Comprehensive tests for reliability and correctness across components, including the new component-based strategy system.
