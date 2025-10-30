@@ -34,6 +34,7 @@ from src.ml.training_pipeline.features import (
     create_robust_features,
     merge_price_sentiment_data,
 )
+from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.ingestion import download_price_data, load_sentiment_data
 from src.ml.training_pipeline.models import create_adaptive_model, default_callbacks
 
@@ -99,8 +100,13 @@ def enable_mixed_precision(enabled: bool) -> None:
         return
     try:
         tf.keras.mixed_precision.set_global_policy("mixed_float16")
-        tf.config.optimizer.set_jit(True)
-        logger.info("Enabled mixed precision and XLA")
+        # XLA JIT compilation may not be fully supported on MPS, so we catch errors
+        try:
+            tf.config.optimizer.set_jit(True)
+            logger.info("Enabled mixed precision and XLA JIT compilation")
+        except Exception:  # noqa: BLE001
+            # XLA may not be available on all platforms (e.g., MPS)
+            logger.info("Enabled mixed precision (XLA not available on this platform)")
     except (RuntimeError, ValueError) as exc:
         # Mixed precision is an optimization - training should continue with regular precision
         # if setup fails (e.g., GPU driver issues, TensorFlow version incompatibility)
@@ -116,6 +122,13 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             "Install it with: pip install tensorflow"
         )
     start_time = perf_counter()
+
+    # Configure GPU early in the pipeline
+    device_name = configure_gpu()
+    if device_name:
+        logger.info(f"🚀 Training will use device: {device_name}")
+    else:
+        logger.info("🚀 Training will use CPU")
     try:
         price_df = download_price_data(ctx)
         sentiment_df = load_sentiment_data(ctx)
