@@ -10,11 +10,23 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
-import tensorflow as tf
+
+try:
+    import tensorflow as tf
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
+
+if TYPE_CHECKING:
+    from tensorflow.keras.models import Model as ModelType
+else:
+    ModelType = Any  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +69,7 @@ class ArtifactPaths:
 
 def create_training_plots(
     history: Any,
-    model: tf.keras.Model,
+    model: Any,
     X_test: np.ndarray,
     y_test: np.ndarray,
     feature_names: List[str],
@@ -66,6 +78,12 @@ def create_training_plots(
     output_dir: Path,
     enable_plots: bool,
 ) -> Optional[Path]:
+    """Create training plots."""
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for creating training plots but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
     if not enable_plots:
         return None
     try:
@@ -114,12 +132,18 @@ def create_training_plots(
 
 
 def validate_model_robustness(
-    model: tf.keras.Model,
+    model: Any,
     X_test: np.ndarray,
     y_test: np.ndarray,
     feature_names: List[str],
     has_sentiment: bool,
 ) -> RobustnessValidationResult:
+    """Validate model robustness."""
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for model robustness validation but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
     # Validate input tensor shape
     assert (
         len(X_test.shape) == 3
@@ -150,13 +174,19 @@ def validate_model_robustness(
 
 
 def evaluate_model_performance(
-    model: tf.keras.Model,
+    model: Any,
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_test: np.ndarray,
     y_test: np.ndarray,
     close_scaler: Optional[Any] = None,
 ) -> Dict[str, float]:
+    """Evaluate model performance."""
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for model performance evaluation but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
     train_loss, train_rmse = model.evaluate(X_train, y_train, verbose=0)
     test_loss, test_rmse = model.evaluate(X_test, y_test, verbose=0)
     test_predictions = model.predict(X_test, verbose=0)
@@ -190,7 +220,7 @@ def evaluate_model_performance(
     }
 
 
-def convert_to_onnx(model: tf.keras.Model, output_path: Path) -> Optional[Path]:
+def convert_to_onnx(model: Any, output_path: Path) -> Optional[Path]:
     """Convert Keras model to ONNX format.
 
     Args:
@@ -200,6 +230,11 @@ def convert_to_onnx(model: tf.keras.Model, output_path: Path) -> Optional[Path]:
     Returns:
         Path to ONNX file if successful, None otherwise
     """
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for ONNX conversion but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
     tmp_dir = None
     try:
         tmp_dir = tempfile.mkdtemp()
@@ -244,7 +279,7 @@ def convert_to_onnx(model: tf.keras.Model, output_path: Path) -> Optional[Path]:
 
 
 def save_artifacts(
-    model: tf.keras.Model,
+    model: Any,
     symbol: str,
     model_type: str,
     registry_root: Path,
@@ -252,6 +287,12 @@ def save_artifacts(
     version_id: str,
     enable_onnx: bool,
 ) -> ArtifactPaths:
+    """Save training artifacts."""
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for saving artifacts but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
     symbol_dir = registry_root / symbol.upper()
     type_dir = symbol_dir / model_type
     version_dir = type_dir / version_id

@@ -2,13 +2,48 @@
 
 from __future__ import annotations
 
-import tensorflow as tf
-from tensorflow.keras import callbacks
-from tensorflow.keras.layers import Conv1D, Dense, Dropout, Input, LSTM, MaxPooling1D
-from tensorflow.keras.models import Model
+from typing import TYPE_CHECKING, Any
+
+try:
+    import tensorflow as tf
+    from tensorflow.keras import callbacks
+    from tensorflow.keras.layers import Conv1D, Dense, Dropout, Input, LSTM, MaxPooling1D
+    from tensorflow.keras.models import Model
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    # Create placeholder types for type checking
+    tf = None  # type: ignore
+    callbacks = None  # type: ignore
+    Conv1D = None  # type: ignore
+    Dense = None  # type: ignore
+    Dropout = None  # type: ignore
+    Input = None  # type: ignore
+    LSTM = None  # type: ignore
+    MaxPooling1D = None  # type: ignore
+    Model = None  # type: ignore
+
+if TYPE_CHECKING:
+    # For type checking, assume tensorflow is available
+    from tensorflow.keras.models import Model as ModelType
+    from tensorflow.keras import callbacks as CallbacksType
+else:
+    ModelType = Any  # type: ignore
+    CallbacksType = Any  # type: ignore
 
 
-def create_adaptive_model(input_shape, has_sentiment: bool = True) -> tf.keras.Model:
+def _ensure_tensorflow_available() -> None:
+    """Ensure tensorflow is available, raising ImportError with helpful message if not."""
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for model training but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
+
+
+def create_adaptive_model(input_shape, has_sentiment: bool = True) -> Any:
+    _ensure_tensorflow_available()
     inputs = Input(shape=input_shape)
     x = Conv1D(filters=64, kernel_size=3, activation="relu")(inputs)
     x = MaxPooling1D(pool_size=2)(x)
@@ -31,7 +66,8 @@ def create_adaptive_model(input_shape, has_sentiment: bool = True) -> tf.keras.M
     return model
 
 
-def build_price_only_model(sequence_length: int, num_features: int) -> tf.keras.Model:
+def build_price_only_model(sequence_length: int, num_features: int) -> Any:
+    _ensure_tensorflow_available()
     inputs = tf.keras.layers.Input(shape=(sequence_length, num_features))
     x = tf.keras.layers.LSTM(128, return_sequences=True)(inputs)
     x = tf.keras.layers.Dropout(0.2)(x)
@@ -48,7 +84,8 @@ def build_price_only_model(sequence_length: int, num_features: int) -> tf.keras.
     return model
 
 
-def default_callbacks(patience: int = 15) -> list[callbacks.Callback]:
+def default_callbacks(patience: int = 15) -> list[Any]:
+    _ensure_tensorflow_available()
     return [
         callbacks.EarlyStopping(monitor="val_loss", patience=patience, restore_best_weights=True),
         callbacks.ReduceLROnPlateau(

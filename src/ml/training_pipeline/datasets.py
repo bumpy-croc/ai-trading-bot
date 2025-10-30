@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import TYPE_CHECKING, Any, Tuple
 
 import numpy as np
-import tensorflow as tf
 from numpy.lib.stride_tricks import sliding_window_view
+
+try:
+    import tensorflow as tf
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
+
+if TYPE_CHECKING:
+    from tensorflow.data import Dataset as DatasetType
+else:
+    DatasetType = Any  # type: ignore
 
 # Training dataset constants
 DEFAULT_SHUFFLE_BUFFER_SIZE = (
@@ -86,7 +98,13 @@ def build_tf_datasets(
     X_val: np.ndarray,
     y_val: np.ndarray,
     batch_size: int,
-) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
+) -> Tuple[Any, Any]:
+    """Build TensorFlow datasets for training and validation."""
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for dataset building but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
     train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train))
     train_ds = (
         train_ds.cache()

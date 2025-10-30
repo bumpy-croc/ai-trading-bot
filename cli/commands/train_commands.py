@@ -10,8 +10,16 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-from tensorflow.keras import callbacks
+
+try:
+    import tensorflow as tf
+    from tensorflow.keras import callbacks
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
+    callbacks = None  # type: ignore
 
 from src.infrastructure.runtime.paths import get_project_root
 from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext
@@ -43,6 +51,11 @@ def _diagnostics_from_args(args) -> DiagnosticsOptions:
 
 
 def train_model_main(args) -> int:
+    """Train a combined model."""
+    if not _TENSORFLOW_AVAILABLE:
+        print("❌ tensorflow is required for model training but is not installed.")
+        print("Install it with: pip install tensorflow")
+        return 1
     try:
         start_date, end_date = _parse_dates(args.start_date, args.end_date)
     except ValueError as exc:
@@ -133,7 +146,13 @@ def _prepare_price_only_sequences(
     return X, y, feature_cols
 
 
-def _build_price_only_model(sequence_length: int, num_features: int) -> tf.keras.Model:
+def _build_price_only_model(sequence_length: int, num_features: int):
+    """Build a price-only model."""
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for model building but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
     inputs = tf.keras.layers.Input(shape=(sequence_length, num_features))
     x = tf.keras.layers.LSTM(128, return_sequences=True)(inputs)
     x = tf.keras.layers.Dropout(0.2)(x)
@@ -180,6 +199,11 @@ def _download_price_frame(symbol: str, timeframe: str, start: str, end: str) -> 
 
 
 def train_price_model_main(args) -> int:
+    """Train a price model."""
+    if not _TENSORFLOW_AVAILABLE:
+        print("❌ tensorflow is required for model training but is not installed.")
+        print("Install it with: pip install tensorflow")
+        return 1
     sequence_length = args.sequence_length
     try:
         start_date, end_date = _parse_dates(args.start_date, args.end_date)

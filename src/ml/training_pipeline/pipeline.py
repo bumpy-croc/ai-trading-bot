@@ -11,7 +11,14 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
+
+try:
+    import tensorflow as tf
+
+    _TENSORFLOW_AVAILABLE = True
+except ImportError:
+    _TENSORFLOW_AVAILABLE = False
+    tf = None  # type: ignore
 
 from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext
 from src.ml.training_pipeline.artifacts import (
@@ -81,6 +88,8 @@ def enable_mixed_precision(enabled: bool) -> None:
     Args:
         enabled: Whether to enable mixed precision training
     """
+    if not _TENSORFLOW_AVAILABLE:
+        return
     if not enabled:
         logger.info("Mixed precision explicitly disabled via configuration")
         return
@@ -100,6 +109,12 @@ def enable_mixed_precision(enabled: bool) -> None:
 
 
 def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
+    """Run the training pipeline."""
+    if not _TENSORFLOW_AVAILABLE:
+        raise ImportError(
+            "tensorflow is required for model training but is not installed. "
+            "Install it with: pip install tensorflow"
+        )
     start_time = perf_counter()
     try:
         price_df = download_price_data(ctx)
