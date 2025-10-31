@@ -27,6 +27,7 @@ from .exceptions import (
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
 from .models.registry import PredictionModelRegistry, StrategyModel
+from .models.onnx_runner import ModelPrediction
 from .utils.caching import PredictionCacheManager
 
 
@@ -193,7 +194,20 @@ class PredictionEngine:
                     )
                     if not features_used:
                         features_used = self._count_features_used(ensemble_features)
-                    preds.append(ensemble_bundle.runner.predict(ensemble_features))
+
+                    raw_prediction = ensemble_bundle.runner.predict(ensemble_features)
+                    denormalized_price = self._apply_rolling_denormalization(
+                        raw_prediction.price, ensemble_bundle, data
+                    )
+                    preds.append(
+                        ModelPrediction(
+                            price=denormalized_price,
+                            confidence=raw_prediction.confidence,
+                            direction=raw_prediction.direction,
+                            model_name=raw_prediction.model_name,
+                            inference_time=raw_prediction.inference_time,
+                        )
+                    )
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence
@@ -202,11 +216,6 @@ class PredictionEngine:
                 member_preds = ens.member_predictions
                 if not features_used:
                     features_used = self._count_features_used(features)
-
-                # Apply rolling MinMax denormalization if needed (use first bundle's metadata)
-                final_price = self._apply_rolling_denormalization(
-                    final_price, ensemble_bundles[0] if ensemble_bundles else bundle, data
-                )
 
             # Calculate total inference time
             inference_time = time.time() - start_time
