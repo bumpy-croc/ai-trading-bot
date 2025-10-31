@@ -224,7 +224,12 @@ class EnhancedRegimeDetector:
     ) -> tuple[RegimeEvaluationMetrics, pd.DataFrame]:
         """Evaluate detection accuracy against labelled columns."""
 
-        annotated = self.base_detector.annotate(df.copy())
+        # ``RegimeDetector.annotate`` mutates the detector's hysteresis state, so
+        # evaluating accuracy must avoid touching the live detector instance used
+        # for ongoing regime detection. Clone the configuration and evaluate with
+        # a fresh detector to keep live state intact.
+        evaluation_detector = RegimeDetector(replace(self.base_detector.config))
+        annotated = evaluation_detector.annotate(df.copy())
         return evaluate_regime_accuracy(
             annotated,
             target_trend_col=target_trend_col,
