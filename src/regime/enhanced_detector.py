@@ -1,553 +1,606 @@
+"""Consolidated market regime detection utilities.
+
+This module extends the baseline :class:`~src.regime.detector.RegimeDetector`
+with higher level abstractions used across the trading system.  It also
+provides calibration and evaluation helpers for quantifying regime detection
+accuracy and visualising the results.
 """
-Enhanced Regime Detector
 
-An improved regime detection system that combines multiple indicators
-and timeframes for better accuracy and faster response times.
-"""
+from __future__ import annotations
 
-import logging
-from dataclasses import dataclass
-from enum import Enum
-from typing import Optional
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from datetime import datetime
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from src.regime.detector import RegimeConfig, RegimeDetector
+from .detector import RegimeConfig, RegimeDetector, TrendLabel, VolLabel
 
-logger = logging.getLogger(__name__)
+__all__ = [
+    "RegimeContext",
+    "RegimeTransition",
+    "EnhancedRegimeDetector",
+    "RegimeEvaluationMetrics",
+    "RegimeCalibrationResult",
+    "calibrate_regime_detector",
+    "evaluate_regime_accuracy",
+    "plot_regime_accuracy",
+]
 
 
 @dataclass
-class EnhancedRegimeConfig:
-    """Enhanced configuration for regime detection"""
+class RegimeContext:
+    """Enhanced regime context used by strategy components."""
 
-    # Base regime detection
-    slope_window: int = 40
-    band_window: int = 20
-    atr_window: int = 14
-    atr_percentile_lookback: int = 50  # Reduced for performance
-    trend_threshold: float = 0.001
-    r2_min: float = 0.3
-    atr_high_percentile: float = 0.7
-    hysteresis_k: int = 3
-    min_dwell: int = 12
+    trend: TrendLabel
+    volatility: VolLabel
+    confidence: float
+    duration: int
+    strength: float
+    timestamp: datetime | None = None
+    metadata: dict[str, float] | None = None
 
-    # Enhanced momentum indicators
-    rsi_window: int = 14
-    rsi_overbought: float = 70
-    rsi_oversold: float = 30
-    momentum_windows: list[int] = None  # [5, 10, 20]
+    def __post_init__(self) -> None:
+        self._validate_regime_context()
 
-    # Volume analysis
-    volume_sma_window: int = 20
-    volume_spike_threshold: float = 2.0
+    def _validate_regime_context(self) -> None:
+        if not isinstance(self.trend, TrendLabel):
+            raise ValueError(f"trend must be a TrendLabel enum, got {type(self.trend)}")
 
-    # Volatility regime detection
-    garch_window: int = 50
-    volatility_regime_threshold: float = 1.5
+        if not isinstance(self.volatility, VolLabel):
+            raise ValueError(f"volatility must be a VolLabel enum, got {type(self.volatility)}")
 
-    # Multi-indicator weights
-    trend_weight: float = 0.4
-    momentum_weight: float = 0.3
-    volume_weight: float = 0.2
-    volatility_weight: float = 0.1
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"confidence must be between 0.0 and 1.0, got {self.confidence}")
 
-    # Confidence calculation
-    min_confidence_threshold: float = 0.3
-    confidence_smoothing: int = 10
+        if self.duration < 0:
+            raise ValueError(f"duration must be non-negative, got {self.duration}")
+
+        if not 0.0 <= self.strength <= 1.0:
+            raise ValueError(f"strength must be between 0.0 and 1.0, got {self.strength}")
+
+        if self.metadata is not None and not isinstance(self.metadata, dict):
+            raise ValueError(
+                f"metadata must be a dictionary when provided, got {type(self.metadata)}"
+            )
+
+    def get_regime_label(self) -> str:
+        """Return the combined regime label string."""
+
+        return f"{self.trend.value}:{self.volatility.value}"
+
+    def is_stable(self, min_duration: int = 10) -> bool:
+        """Return ``True`` when the regime has lasted at least ``min_duration`` bars."""
+
+        return self.duration >= min_duration
+
+    def is_high_confidence(self, threshold: float = 0.7) -> bool:
+        """Return ``True`` when the regime confidence exceeds ``threshold``."""
+
+        return self.confidence >= threshold
+
+    def is_strong_regime(self, threshold: float = 0.6) -> bool:
+        """Return ``True`` when the regime strength exceeds ``threshold``."""
+
+        return self.strength >= threshold
+
+    def get_risk_multiplier(self) -> float:
+        """Return a risk multiplier derived from the regime properties."""
+
+        multiplier = 1.0
+        if self.volatility == VolLabel.HIGH:
+            multiplier *= 0.8
+        if self.trend == TrendLabel.TREND_DOWN:
+            multiplier *= 0.7
+        if self.trend == TrendLabel.RANGE:
+            multiplier *= 0.9
+        if self.confidence < 0.5:
+            multiplier *= 0.8
+        if not self.is_stable():
+            multiplier *= 0.9
+        return max(0.2, multiplier)
 
 
-class MarketRegime(str, Enum):
-    """Enhanced market regime labels"""
+@dataclass
+class RegimeTransition:
+    """Description of a detected regime transition."""
 
-    STRONG_BULL = "strong_bull"
-    MILD_BULL = "mild_bull"
-    STRONG_BEAR = "strong_bear"
-    MILD_BEAR = "mild_bear"
-    CHOPPY_RANGE = "choppy_range"
-    STABLE_RANGE = "stable_range"
-    HIGH_VOLATILITY = "high_volatility"
-    TRANSITION = "transition"
+    from_regime: RegimeContext
+    to_regime: RegimeContext
+    transition_time: datetime
+    confidence: float
+
+    def get_transition_type(self) -> str:
+        return f"{self.from_regime.get_regime_label()} -> {self.to_regime.get_regime_label()}"
+
+    def is_major_transition(self) -> bool:
+        return self.from_regime.trend != self.to_regime.trend
+
+
+@dataclass(frozen=True)
+class RegimeEvaluationMetrics:
+    """Summary metrics describing regime detection accuracy."""
+
+    accuracy: float
+    trend_accuracy: float
+    volatility_accuracy: float
+    support: int
+
+
+@dataclass(frozen=True)
+class RegimeCalibrationResult:
+    """Result of a calibration run."""
+
+    config: RegimeConfig
+    metrics: RegimeEvaluationMetrics
+    evaluation_frame: pd.DataFrame
+    tried_configs: int
 
 
 class EnhancedRegimeDetector:
-    """
-    Enhanced regime detector using multiple indicators and ensemble methods
-    """
+    """Strategy-facing wrapper that augments :class:`RegimeDetector`."""
 
-    def __init__(self, config: Optional[EnhancedRegimeConfig] = None):
-        self.config = config or EnhancedRegimeConfig()
-
-        # Initialize default momentum windows
-        if self.config.momentum_windows is None:
-            self.config.momentum_windows = [5, 10, 20]
-
-        # Base regime detector for comparison
-        base_config = RegimeConfig(
-            slope_window=self.config.slope_window,
-            hysteresis_k=self.config.hysteresis_k,
-            min_dwell=self.config.min_dwell,
-            trend_threshold=self.config.trend_threshold,
-        )
-        self.base_detector = RegimeDetector(base_config)
-
-        # State tracking
-        self._last_regime: Optional[str] = None
-        self._regime_strength: float = 0.0
-        self._consecutive: int = 0
-        self._dwell: int = 0
-
-        logger.info("Enhanced regime detector initialized")
-
-    def calculate_enhanced_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate enhanced technical indicators for regime detection"""
-
-        result_df = df.copy()
-
-        # Basic price indicators
-        result_df = self._add_trend_indicators(result_df)
-        result_df = self._add_momentum_indicators(result_df)
-        result_df = self._add_volume_indicators(result_df)
-        result_df = self._add_volatility_indicators(result_df)
-
-        return result_df
-
-    def _add_trend_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add trend-based indicators"""
-
-        # Multiple EMAs for trend analysis
-        df["ema_12"] = df["close"].ewm(span=12).mean()
-        df["ema_26"] = df["close"].ewm(span=26).mean()
-        df["ema_50"] = df["close"].ewm(span=50).mean()
-        df["ema_100"] = df["close"].ewm(span=100).mean()
-
-        # Trend strength indicators
-        df["trend_short"] = (df["ema_12"] - df["ema_26"]) / df["ema_26"]
-        df["trend_medium"] = (df["ema_26"] - df["ema_50"]) / df["ema_50"]
-        df["trend_long"] = (df["ema_50"] - df["ema_100"]) / df["ema_100"]
-
-        # MACD
-        df["macd"] = df["ema_12"] - df["ema_26"]
-        df["macd_signal"] = df["macd"].ewm(span=9).mean()
-        df["macd_histogram"] = df["macd"] - df["macd_signal"]
-
-        # Bollinger Bands
-        bb_window = self.config.band_window
-        df["bb_middle"] = df["close"].rolling(bb_window).mean()
-        bb_std = df["close"].rolling(bb_window).std()
-        df["bb_upper"] = df["bb_middle"] + (bb_std * 2)
-        df["bb_lower"] = df["bb_middle"] - (bb_std * 2)
-        df["bb_position"] = (df["close"] - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"])
-
-        # Trend alignment score
-        df["trend_alignment"] = (
-            np.sign(df["trend_short"]) * 0.5
-            + np.sign(df["trend_medium"]) * 0.3
-            + np.sign(df["trend_long"]) * 0.2
-        )
-
-        return df
-
-    def _add_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add momentum-based indicators"""
-
-        # RSI
-        delta = df["close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(self.config.rsi_window).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(self.config.rsi_window).mean()
-        rs = gain / loss
-        df["rsi"] = 100 - (100 / (1 + rs))
-
-        # Stochastic Oscillator
-        stoch_window = 14
-        df["stoch_k"] = (
-            (df["close"] - df["low"].rolling(stoch_window).min())
-            / (df["high"].rolling(stoch_window).max() - df["low"].rolling(stoch_window).min())
-        ) * 100
-        df["stoch_d"] = df["stoch_k"].rolling(3).mean()
-
-        # Multi-timeframe momentum
-        for window in self.config.momentum_windows:
-            df[f"momentum_{window}"] = df["close"].pct_change(window)
-
-        # Momentum score (composite)
-        momentum_cols = [f"momentum_{w}" for w in self.config.momentum_windows]
-        weights = np.array([1.0 / w for w in self.config.momentum_windows])
-        weights = weights / weights.sum()
-
-        momentum_values = df[momentum_cols].fillna(0).values
-        df["momentum_score"] = np.dot(momentum_values, weights)
-
-        # Rate of change
-        df["roc"] = df["close"].pct_change(self.config.slope_window)
-
-        return df
-
-    def _add_volume_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add volume-based indicators"""
-
-        # Volume moving average
-        df["volume_sma"] = df["volume"].rolling(self.config.volume_sma_window).mean()
-        df["volume_ratio"] = df["volume"] / df["volume_sma"]
-
-        # On-Balance Volume (OBV)
-        df["obv"] = (np.sign(df["close"].diff()) * df["volume"]).fillna(0).cumsum()
-        df["obv_sma"] = df["obv"].rolling(20).mean()
-        df["obv_trend"] = np.sign(df["obv"] - df["obv_sma"])
-
-        # Volume Price Trend (VPT)
-        df["vpt"] = (df["close"].pct_change() * df["volume"]).fillna(0).cumsum()
-        df["vpt_sma"] = df["vpt"].rolling(20).mean()
-
-        # Volume spike detection
-        df["volume_spike"] = df["volume_ratio"] > self.config.volume_spike_threshold
-
-        return df
-
-    def _add_volatility_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add volatility-based indicators"""
-
-        # Returns for volatility calculation
-        df["returns"] = df["close"].pct_change()
-
-        # Simple volatility measures
-        df["volatility_10"] = df["returns"].rolling(10).std()
-        df["volatility_20"] = df["returns"].rolling(20).std()
-        df["volatility_50"] = df["returns"].rolling(50).std()
-
-        # GARCH-like volatility estimate
-        df["vol_garch"] = self._calculate_garch_volatility(df["returns"])
-
-        # Volatility regime
-        df["vol_regime"] = df["volatility_20"] / df["volatility_50"]
-
-        # True Range and ATR
-        df["true_range"] = np.maximum(
-            np.maximum(df["high"] - df["low"], abs(df["high"] - df["close"].shift(1))),
-            abs(df["low"] - df["close"].shift(1)),
-        )
-        df["atr"] = df["true_range"].rolling(self.config.atr_window).mean()
-        df["atr_pct"] = df["atr"] / df["close"]
-
-        return df
-
-    def _calculate_garch_volatility(self, returns: pd.Series) -> pd.Series:
-        """Calculate GARCH-like volatility estimate using vectorized operations"""
-
-        # Simple GARCH(1,1) approximation
-        alpha = 0.1
-        beta = 0.85
-
-        returns_array = returns.to_numpy()
-        n = len(returns_array)
-        volatility = np.full(n, np.nan, dtype=np.float64)
-
-        # Use the std of returns (ignoring NaNs) for initial volatility
-        initial_vol = np.nanstd(returns_array)
-        volatility[0] = initial_vol
-
-        for i in range(1, n):
-            if not np.isnan(returns_array[i]) and not np.isnan(volatility[i - 1]):
-                volatility[i] = np.sqrt(
-                    alpha * returns_array[i] ** 2 + beta * volatility[i - 1] ** 2
-                )
-            else:
-                volatility[i] = volatility[i - 1] if i > 0 else initial_vol
-
-        return pd.Series(volatility, index=returns.index)
-
-    def detect_regime(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Main regime detection using enhanced indicators"""
-
-        # Calculate enhanced indicators
-        df_enhanced = self.calculate_enhanced_indicators(df)
-
-        # Get base regime detection
-        df_base = self.base_detector.annotate(df.copy())
-
-        # Combine with enhanced analysis
-        df_result = self._combine_regime_signals(df_enhanced, df_base)
-
-        return df_result
-
-    def _combine_regime_signals(
-        self, df_enhanced: pd.DataFrame, df_base: pd.DataFrame
-    ) -> pd.DataFrame:
-        """Combine multiple regime signals into final regime classification"""
-
-        result_df = df_enhanced.copy()
-
-        # Add base regime signals
-        result_df["base_trend_label"] = df_base["trend_label"]
-        result_df["base_regime_confidence"] = df_base["regime_confidence"]
-
-        # Calculate enhanced regime scores
-        regime_scores = []
-        enhanced_regimes = []
-        confidence_scores = []
-
-        for i in range(len(result_df)):
-            if i < max(self.config.momentum_windows + [self.config.slope_window]):
-                regime_scores.append(0.0)
-                enhanced_regimes.append(MarketRegime.TRANSITION.value)
-                confidence_scores.append(0.0)
-                continue
-
-            # Get current values
-            row = result_df.iloc[i]
-
-            # Calculate regime scores
-            trend_score = self._calculate_trend_score(row)
-            momentum_score = self._calculate_momentum_score(row)
-            volume_score = self._calculate_volume_score(row)
-            volatility_score = self._calculate_volatility_score(row)
-
-            # Weighted ensemble score
-            total_score = (
-                trend_score * self.config.trend_weight
-                + momentum_score * self.config.momentum_weight
-                + volume_score * self.config.volume_weight
-                + volatility_score * self.config.volatility_weight
-            )
-
-            # Determine enhanced regime
-            enhanced_regime = self._score_to_regime(
-                total_score, trend_score, momentum_score, volatility_score
-            )
-
-            # Calculate confidence
-            confidence = self._calculate_confidence(
-                trend_score, momentum_score, volume_score, volatility_score, row
-            )
-
-            regime_scores.append(total_score)
-            enhanced_regimes.append(enhanced_regime)
-            confidence_scores.append(confidence)
-
-        result_df["enhanced_regime_score"] = regime_scores
-        result_df["enhanced_regime"] = enhanced_regimes
-        result_df["enhanced_confidence"] = confidence_scores
-
-        # Apply hysteresis to enhanced regime
-        result_df["final_regime"] = self._apply_hysteresis(enhanced_regimes)
-
-        # Smooth confidence scores
-        result_df["final_confidence"] = (
-            pd.Series(confidence_scores)
-            .rolling(self.config.confidence_smoothing, min_periods=1)
-            .mean()
-        )
-
-        return result_df
-
-    def _calculate_trend_score(self, row: pd.Series) -> float:
-        """Calculate trend component score"""
-
-        trend_alignment = row.get("trend_alignment", 0)
-        macd_signal = 1 if row.get("macd_histogram", 0) > 0 else -1
-        bb_position = row.get("bb_position", 0.5)
-
-        # Combine trend signals
-        trend_score = trend_alignment * 0.6 + macd_signal * 0.3 + (bb_position - 0.5) * 0.1
-
-        return np.clip(trend_score, -1, 1)
-
-    def _calculate_momentum_score(self, row: pd.Series) -> float:
-        """Calculate momentum component score"""
-
-        rsi = row.get("rsi", 50)
-        momentum_score = row.get("momentum_score", 0)
-        roc = row.get("roc", 0)
-
-        # RSI contribution
-        rsi_normalized = (rsi - 50) / 50  # Convert to -1 to 1 range
-
-        # Combine momentum signals
-        momentum_score_combined = (
-            momentum_score * 0.5 + rsi_normalized * 0.3 + np.sign(roc) * min(abs(roc) * 10, 1) * 0.2
-        )
-
-        return np.clip(momentum_score_combined, -1, 1)
-
-    def _calculate_volume_score(self, row: pd.Series) -> float:
-        """Calculate volume component score"""
-
-        volume_ratio = row.get("volume_ratio", 1)
-        obv_trend = row.get("obv_trend", 0)
-        volume_spike = row.get("volume_spike", False)
-
-        # Volume confirmation score
-        volume_score = (
-            np.sign(volume_ratio - 1) * min(abs(volume_ratio - 1), 1) * 0.5
-            + obv_trend * 0.3
-            + (0.2 if volume_spike else 0) * 0.2
-        )
-
-        return np.clip(volume_score, -1, 1)
-
-    def _calculate_volatility_score(self, row: pd.Series) -> float:
-        """Calculate volatility component score"""
-
-        vol_regime = row.get("vol_regime", 1)
-        atr_pct = row.get("atr_pct", 0.02)
-
-        # High volatility reduces confidence in trend signals
-        # Combine vol_regime and atr_pct for more comprehensive volatility assessment
-        if vol_regime > self.config.volatility_regime_threshold or atr_pct > 0.04:
-            volatility_penalty = -0.5
-        elif vol_regime < 0.5 and atr_pct < 0.02:
-            volatility_penalty = 0.3  # Low volatility is good for trends
-        else:
-            volatility_penalty = 0.0
-
-        return np.clip(volatility_penalty, -1, 1)
-
-    def _score_to_regime(
-        self, total_score: float, trend_score: float, momentum_score: float, volatility_score: float
-    ) -> str:
-        """Convert scores to enhanced regime classification"""
-
-        # Strong signals
-        if total_score > 0.6 and trend_score > 0.5:
-            return MarketRegime.STRONG_BULL.value
-        elif total_score < -0.6 and trend_score < -0.5:
-            return MarketRegime.STRONG_BEAR.value
-
-        # Moderate signals
-        elif total_score > 0.3:
-            return MarketRegime.MILD_BULL.value
-        elif total_score < -0.3:
-            return MarketRegime.MILD_BEAR.value
-
-        # High volatility override
-        elif volatility_score < -0.3:
-            return MarketRegime.HIGH_VOLATILITY.value
-
-        # Range markets
-        elif abs(total_score) < 0.15:
-            if abs(momentum_score) < 0.1:
-                return MarketRegime.STABLE_RANGE.value
-            else:
-                return MarketRegime.CHOPPY_RANGE.value
-
-        # Default to transition
-        else:
-            return MarketRegime.TRANSITION.value
-
-    def _calculate_confidence(
+    def __init__(
         self,
-        trend_score: float,
-        momentum_score: float,
-        volume_score: float,
-        volatility_score: float,
-        row: pd.Series,
-    ) -> float:
-        """Calculate confidence in regime classification"""
+        base_detector: RegimeDetector | None = None,
+        stability_threshold: int = 10,
+        max_history: int = 1000,
+    ) -> None:
+        self.base_detector = base_detector or RegimeDetector()
+        self.stability_threshold = stability_threshold
+        self.max_history = max_history
 
-        # Base confidence from signal strength
-        signal_strength = (
-            abs(trend_score) * 0.4 + abs(momentum_score) * 0.3 + abs(volume_score) * 0.3
+        self.regime_history: list[RegimeContext] = []
+        self.transition_history: list[RegimeTransition] = []
+        self.current_regime: RegimeContext | None = None
+        self.regime_start_index: int = 0
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the minimum history required for regime detection."""
+
+        return 0
+
+    def get_feature_generators(self) -> Sequence[object]:  # pragma: no cover - interface hook
+        """Return optional feature generator specifications.
+
+        The production system injects feature generators through this hook.  It is
+        intentionally lightweight to avoid coupling unit tests to runtime
+        infrastructure.
+        """
+
+        return []
+
+    def detect_regime(self, df: pd.DataFrame, index: int) -> RegimeContext:
+        """Detect the regime at ``index`` within ``df``."""
+
+        if index < 0 or index >= len(df):
+            raise IndexError(f"Index {index} is out of bounds for DataFrame of length {len(df)}")
+
+        working_df = df
+        if "regime_label" not in working_df.columns:
+            working_df = self.base_detector.annotate(working_df.copy())
+
+        current_row = working_df.iloc[index]
+        trend_label = TrendLabel(current_row["trend_label"])
+        vol_label = VolLabel(current_row["vol_label"])
+        base_confidence = float(current_row.get("regime_confidence", 0.5))
+
+        duration = self._calculate_regime_duration(working_df, index, trend_label)
+        strength = self._calculate_regime_strength(working_df, index)
+        enhanced_confidence = self._enhance_confidence(base_confidence, duration, strength)
+
+        regime_context = RegimeContext(
+            trend=trend_label,
+            volatility=vol_label,
+            confidence=enhanced_confidence,
+            duration=duration,
+            strength=strength,
+            timestamp=datetime.now(),
+            metadata={
+                "trend_score": float(current_row.get("trend_score", 0.0)),
+                "atr_percentile": float(current_row.get("atr_percentile", 0.5)),
+                "base_confidence": base_confidence,
+                "index": index,
+            },
         )
 
-        # Reduce confidence for high volatility
-        vol_penalty = max(0, volatility_score * -0.5)
+        self._update_regime_tracking(regime_context, index)
+        return regime_context
 
-        # Increase confidence for signal alignment
-        signal_alignment = 1 - abs(trend_score - momentum_score) / 2
+    def apply_calibration(self, result: RegimeCalibrationResult) -> None:
+        """Replace the underlying detector with a calibrated configuration."""
 
-        # Base regime confidence
-        base_confidence = row.get("base_regime_confidence", 0.5)
+        self.base_detector = RegimeDetector(result.config)
 
-        # Combined confidence
-        confidence = (
-            signal_strength * 0.5 + signal_alignment * 0.3 + base_confidence * 0.2 - vol_penalty
+    def evaluate_accuracy(
+        self,
+        df: pd.DataFrame,
+        *,
+        target_trend_col: str,
+        target_vol_col: str,
+    ) -> tuple[RegimeEvaluationMetrics, pd.DataFrame]:
+        """Evaluate detection accuracy against labelled columns."""
+
+        annotated = self.base_detector.annotate(df.copy())
+        return evaluate_regime_accuracy(
+            annotated,
+            target_trend_col=target_trend_col,
+            target_vol_col=target_vol_col,
         )
 
-        return np.clip(confidence, 0, 1)
+    def get_regime_history(
+        self, df: pd.DataFrame, lookback_periods: int = 100
+    ) -> list[RegimeContext]:
+        """Return historical regime contexts for ``df``."""
 
-    def _apply_hysteresis(self, regimes: list[str]) -> list[str]:
-        """Apply hysteresis to prevent regime flip-flopping"""
+        if df.empty:
+            return []
 
-        result = []
-        last_regime = None
-        consecutive = 0
-        dwell = 0
+        working_df = df
+        if "regime_label" not in working_df.columns:
+            working_df = self.base_detector.annotate(working_df.copy())
 
-        for regime in regimes:
-            if last_regime is None:
-                last_regime = regime
-                consecutive = 1
-                dwell = 1
-                result.append(regime)
+        history: list[RegimeContext] = []
+        start_index = max(0, len(working_df) - lookback_periods)
+
+        for i in range(start_index, len(working_df)):
+            try:
+                regime_context = self.detect_regime(working_df, i)
+            except (IndexError, ValueError):
+                continue
+            history.append(regime_context)
+
+        return history
+
+    def is_regime_stable(
+        self, df: pd.DataFrame, index: int, min_duration: int | None = None
+    ) -> bool:
+        """Return ``True`` when the current regime has persisted sufficiently."""
+
+        min_dur = min_duration or self.stability_threshold
+        try:
+            regime_context = self.detect_regime(df, index)
+        except (IndexError, ValueError):
+            return False
+        return regime_context.is_stable(min_dur)
+
+    def detect_regime_transitions(
+        self, df: pd.DataFrame, lookback_periods: int = 50
+    ) -> list[RegimeTransition]:
+        """Return a list of detected regime transitions."""
+
+        if df.empty or len(df) < 2:
+            return []
+
+        working_df = df
+        if "regime_label" not in working_df.columns:
+            working_df = self.base_detector.annotate(working_df.copy())
+
+        transitions: list[RegimeTransition] = []
+        start_index = max(1, len(working_df) - lookback_periods)
+        prev_regime: RegimeContext | None = None
+
+        for i in range(start_index, len(working_df)):
+            try:
+                current_regime = self.detect_regime(working_df, i)
+            except (IndexError, ValueError):
                 continue
 
-            if regime == last_regime:
-                consecutive += 1
-                dwell += 1
-                result.append(last_regime)
-                continue
+            if prev_regime is not None and (
+                prev_regime.trend != current_regime.trend
+                or prev_regime.volatility != current_regime.volatility
+            ):
+                transition = RegimeTransition(
+                    from_regime=prev_regime,
+                    to_regime=current_regime,
+                    transition_time=current_regime.timestamp or datetime.now(),
+                    confidence=min(prev_regime.confidence, current_regime.confidence),
+                )
+                transitions.append(transition)
 
-            # Different regime proposed
-            consecutive += 1
+            prev_regime = current_regime
 
-            # Check if we should switch
-            if dwell >= self.config.min_dwell and consecutive >= self.config.hysteresis_k:
-                last_regime = regime
-                dwell = 1
-                consecutive = 1
-            else:
-                # Don't switch yet
-                pass
+        return transitions
 
-            result.append(last_regime)
+    def get_regime_statistics(
+        self, df: pd.DataFrame, lookback_periods: int = 252
+    ) -> dict[str, float]:
+        """Return aggregate statistics describing regime behaviour."""
 
-        return result
-
-    def get_current_regime(self, df: pd.DataFrame) -> tuple[str, float]:
-        """Get current market regime and confidence"""
-
-        if df.empty or "final_regime" not in df.columns:
-            return MarketRegime.TRANSITION.value, 0.0
-
-        current_regime = df["final_regime"].iloc[-1]
-        current_confidence = df["final_confidence"].iloc[-1]
-
-        return current_regime, current_confidence
-
-    def get_regime_summary(self, df: pd.DataFrame, lookback: int = 100) -> dict[str, any]:
-        """Get summary of recent regime behavior"""
-
-        if df.empty or len(df) < lookback:
+        history = self.get_regime_history(df, lookback_periods)
+        if not history:
             return {}
 
-        recent_df = df.tail(lookback)
+        regime_counts: dict[str, int] = {}
+        confidence_sum = 0.0
+        strength_sum = 0.0
+        duration_sum = 0
 
-        # Regime distribution
-        regime_counts = recent_df["final_regime"].value_counts()
-        regime_distribution = (regime_counts / len(recent_df)).to_dict()
+        for regime in history:
+            label = regime.get_regime_label()
+            regime_counts[label] = regime_counts.get(label, 0) + 1
+            confidence_sum += regime.confidence
+            strength_sum += regime.strength
+            duration_sum += regime.duration
 
-        # Regime stability (fewer unique regimes = more stable)
-        unique_regimes = recent_df["final_regime"].nunique()
-        stability_score = 1.0 / unique_regimes if unique_regimes > 0 else 0.0
-
-        # Average confidence
-        avg_confidence = recent_df["final_confidence"].mean()
-
-        # Regime transitions
-        transitions = []
-        prev_regime = None
-        for i, regime in enumerate(recent_df["final_regime"]):
-            if prev_regime and regime != prev_regime:
-                transitions.append((i, prev_regime, regime))
-            prev_regime = regime
-
-        return {
-            "regime_distribution": regime_distribution,
-            "stability_score": stability_score,
-            "average_confidence": avg_confidence,
-            "num_transitions": len(transitions),
-            "recent_transitions": transitions[-5:],  # Last 5 transitions
-            "current_regime": recent_df["final_regime"].iloc[-1],
-            "current_confidence": recent_df["final_confidence"].iloc[-1],
+        total_periods = len(history)
+        stats = {
+            "total_periods": total_periods,
+            "avg_confidence": confidence_sum / total_periods,
+            "avg_strength": strength_sum / total_periods,
+            "avg_duration": duration_sum / total_periods,
         }
+
+        for label, count in regime_counts.items():
+            stats[f"{label}_pct"] = (count / total_periods) * 100
+
+        transitions = self.detect_regime_transitions(df, lookback_periods)
+        stats["transition_frequency"] = (
+            len(transitions) / total_periods if total_periods > 0 else 0
+        )
+
+        return stats
+
+    def get_current_regime(self) -> RegimeContext | None:
+        """Return the most recently detected regime."""
+
+        return self.current_regime
+
+    def get_recent_transitions(self, count: int = 5) -> list[RegimeTransition]:
+        """Return the last ``count`` regime transitions."""
+
+        return self.transition_history[-count:] if self.transition_history else []
+
+    def reset_tracking(self) -> None:
+        """Reset all internal tracking state."""
+
+        self.regime_history.clear()
+        self.transition_history.clear()
+        self.current_regime = None
+        self.regime_start_index = 0
+
+    def _calculate_regime_duration(
+        self, df: pd.DataFrame, index: int, current_trend: TrendLabel
+    ) -> int:
+        duration = 1
+        for i in range(index - 1, -1, -1):
+            try:
+                prev_trend = TrendLabel(df.iloc[i]["trend_label"])
+            except (KeyError, ValueError):
+                break
+            if prev_trend == current_trend:
+                duration += 1
+            else:
+                break
+        return duration
+
+    def _calculate_regime_strength(
+        self, df: pd.DataFrame, index: int, window: int = 20
+    ) -> float:
+        if index < window:
+            return 0.5
+
+        try:
+            start_idx = max(0, index - window + 1)
+            trend_scores = df.iloc[start_idx : index + 1]["trend_score"].values
+        except (KeyError, IndexError):
+            return 0.5
+
+        if len(trend_scores) == 0:
+            return 0.5
+
+        valid_scores = trend_scores[~np.isnan(trend_scores)]
+        if len(valid_scores) == 0:
+            return 0.5
+
+        mean_score = float(np.mean(np.abs(valid_scores)))
+        strength = min(1.0, mean_score / 0.05)
+        return max(0.0, strength)
+
+    def _enhance_confidence(self, base_confidence: float, duration: int, strength: float) -> float:
+        enhanced = base_confidence
+
+        if duration >= self.stability_threshold:
+            stability_boost = min(0.2, duration / (self.stability_threshold * 5))
+            enhanced += stability_boost
+
+        if strength > 0.7:
+            strength_boost = (strength - 0.7) * 0.3
+            enhanced += strength_boost
+
+        if duration < 3:
+            enhanced *= 0.8
+
+        return max(0.0, min(1.0, enhanced))
+
+    def _update_regime_tracking(self, regime_context: RegimeContext, index: int) -> None:
+        if (
+            self.current_regime is None
+            or self.current_regime.trend != regime_context.trend
+            or self.current_regime.volatility != regime_context.volatility
+        ):
+            if self.current_regime is not None:
+                transition = RegimeTransition(
+                    from_regime=self.current_regime,
+                    to_regime=regime_context,
+                    transition_time=regime_context.timestamp or datetime.now(),
+                    confidence=min(self.current_regime.confidence, regime_context.confidence),
+                )
+                self.transition_history.append(transition)
+                if len(self.transition_history) > self.max_history // 10:
+                    self.transition_history = self.transition_history[-self.max_history // 10 :]
+            self.regime_start_index = index
+
+        self.current_regime = regime_context
+        self.regime_history.append(regime_context)
+        if len(self.regime_history) > self.max_history:
+            self.regime_history = self.regime_history[-self.max_history :]
+
+
+def evaluate_regime_accuracy(
+    annotated_df: pd.DataFrame,
+    *,
+    target_trend_col: str,
+    target_vol_col: str,
+    predicted_trend_col: str = "trend_label",
+    predicted_vol_col: str = "vol_label",
+) -> tuple[RegimeEvaluationMetrics, pd.DataFrame]:
+    """Compute accuracy metrics for regime detection results."""
+
+    for column in (predicted_trend_col, predicted_vol_col, target_trend_col, target_vol_col):
+        if column not in annotated_df.columns:
+            raise ValueError(f"Column '{column}' is required for regime accuracy evaluation")
+
+    evaluation = annotated_df[[predicted_trend_col, predicted_vol_col]].copy()
+    evaluation.rename(
+        columns={
+            predicted_trend_col: "predicted_trend",
+            predicted_vol_col: "predicted_volatility",
+        },
+        inplace=True,
+    )
+    evaluation["target_trend"] = annotated_df[target_trend_col]
+    evaluation["target_volatility"] = annotated_df[target_vol_col]
+
+    mask = evaluation[["predicted_trend", "predicted_volatility", "target_trend", "target_volatility"]].notna().all(axis=1)
+
+    evaluation["trend_correct"] = (evaluation["predicted_trend"] == evaluation["target_trend"]).where(mask)
+    evaluation["volatility_correct"] = (
+        evaluation["predicted_volatility"] == evaluation["target_volatility"]
+    ).where(mask)
+    evaluation["regime_correct"] = (
+        evaluation["trend_correct"] & evaluation["volatility_correct"]
+    )
+
+    support = int(mask.sum())
+    if support == 0:
+        metrics = RegimeEvaluationMetrics(accuracy=np.nan, trend_accuracy=np.nan, volatility_accuracy=np.nan, support=0)
+        return metrics, evaluation
+
+    trend_accuracy = float(evaluation.loc[mask, "trend_correct"].mean())
+    volatility_accuracy = float(evaluation.loc[mask, "volatility_correct"].mean())
+    accuracy = float(evaluation.loc[mask, "regime_correct"].mean())
+
+    evaluation["rolling_accuracy"] = (
+        evaluation["regime_correct"].astype(float).rolling(window=20, min_periods=1).mean()
+    )
+
+    metrics = RegimeEvaluationMetrics(
+        accuracy=accuracy,
+        trend_accuracy=trend_accuracy,
+        volatility_accuracy=volatility_accuracy,
+        support=support,
+    )
+    return metrics, evaluation
+
+
+def calibrate_regime_detector(
+    df: pd.DataFrame,
+    *,
+    target_trend_col: str,
+    target_vol_col: str,
+    slope_windows: Sequence[int] = (30, 40, 50),
+    atr_windows: Sequence[int] = (14, 20),
+    trend_thresholds: Sequence[float] = (0.0, 0.0005, 0.001),
+    r2_mins: Sequence[float] = (0.1, 0.2),
+    atr_percentiles: Sequence[float] = (0.6, 0.7, 0.8),
+    base_config: RegimeConfig | None = None,
+) -> RegimeCalibrationResult:
+    """Calibrate the regime detector against labelled data."""
+
+    if df.empty:
+        raise ValueError("Calibration requires a non-empty DataFrame")
+
+    base = base_config or RegimeConfig()
+    best_result: RegimeCalibrationResult | None = None
+    tried = 0
+
+    for slope_window in slope_windows:
+        for atr_window in atr_windows:
+            for threshold in trend_thresholds:
+                for r2_min in r2_mins:
+                    for atr_percentile in atr_percentiles:
+                        tried += 1
+                        candidate = replace(
+                            base,
+                            slope_window=slope_window,
+                            atr_window=atr_window,
+                            trend_threshold=threshold,
+                            r2_min=r2_min,
+                            atr_high_percentile=atr_percentile,
+                        )
+                        detector = RegimeDetector(candidate)
+                        annotated = detector.annotate(df.copy())
+                        metrics, evaluation = evaluate_regime_accuracy(
+                            annotated,
+                            target_trend_col=target_trend_col,
+                            target_vol_col=target_vol_col,
+                        )
+                        if best_result is None or (
+                            np.nan_to_num(metrics.accuracy, nan=-1.0)
+                            > np.nan_to_num(best_result.metrics.accuracy, nan=-1.0)
+                        ):
+                            best_result = RegimeCalibrationResult(
+                                config=candidate,
+                                metrics=metrics,
+                                evaluation_frame=evaluation,
+                                tried_configs=tried,
+                            )
+
+    if best_result is None:
+        raise RuntimeError("Calibration failed to evaluate any configuration")
+
+    if best_result.tried_configs != tried:
+        best_result = RegimeCalibrationResult(
+            config=best_result.config,
+            metrics=best_result.metrics,
+            evaluation_frame=best_result.evaluation_frame,
+            tried_configs=tried,
+        )
+
+    return best_result
+
+
+def plot_regime_accuracy(
+    evaluation: pd.DataFrame,
+    *,
+    window: int = 20,
+    ax: plt.Axes | None = None,
+) -> plt.Figure:
+    """Plot rolling accuracy derived from :func:`evaluate_regime_accuracy`."""
+
+    if "regime_correct" not in evaluation.columns:
+        raise ValueError("evaluation DataFrame must contain 'regime_correct' column")
+
+    working = evaluation.copy()
+    working["rolling_accuracy"] = (
+        working["regime_correct"].astype(float).rolling(window, min_periods=1).mean()
+    )
+    working["rolling_trend_accuracy"] = (
+        working["trend_correct"].astype(float).rolling(window, min_periods=1).mean()
+    )
+    working["rolling_vol_accuracy"] = (
+        working["volatility_correct"].astype(float).rolling(window, min_periods=1).mean()
+    )
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 5))
+    else:
+        fig = ax.figure
+
+    x = working.index
+    ax.plot(x, working["rolling_accuracy"], label="Regime accuracy", linewidth=2)
+    ax.plot(x, working["rolling_trend_accuracy"], label="Trend accuracy", linestyle="--")
+    ax.plot(x, working["rolling_vol_accuracy"], label="Volatility accuracy", linestyle=":")
+
+    ax.set_ylabel("Accuracy")
+    ax.set_xlabel("Time")
+    ax.set_ylim(0, 1)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.autofmt_xdate()
+
+    return fig
