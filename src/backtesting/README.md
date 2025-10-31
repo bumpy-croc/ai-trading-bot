@@ -1,6 +1,6 @@
 # Backtesting Engine
 
-> **Last Updated**: 2025-10-30  
+> **Last Updated**: 2025-10-31  
 > **Related Documentation**: See [docs/backtesting.md](../../docs/backtesting.md) for comprehensive guide
 
 Vectorized historical simulation engine for evaluating strategies.
