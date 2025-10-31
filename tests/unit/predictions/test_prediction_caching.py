@@ -219,6 +219,15 @@ class TestOnnxRunnerCaching:
 
         self.mock_cache_manager = MagicMock()
         self.features = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+        self.providers_patcher = patch(
+            "src.prediction.models.onnx_runner.get_preferred_providers",
+            return_value=["CPUExecutionProvider"],
+        )
+        self.providers_patcher.start()
+
+    def teardown_method(self):
+        """Stop patched providers"""
+        self.providers_patcher.stop()
 
     @patch("src.prediction.models.onnx_runner.ort.InferenceSession")
     def test_predict_with_cache_hit(self, mock_inference_session):

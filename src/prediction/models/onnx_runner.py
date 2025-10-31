@@ -9,13 +9,14 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import onnxruntime as ort
 
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
+from .execution_providers import get_preferred_providers
 
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
@@ -39,7 +40,7 @@ class OnnxRunner:
         self,
         model_path: str,
         config: PredictionConfig,
-        cache_manager: Optional[PredictionCacheManager] = None,
+        cache_manager: PredictionCacheManager | None = None,
     ):
         """
         Initialize ONNX runner with model path and configuration.
@@ -59,8 +60,9 @@ class OnnxRunner:
     def _load_model(self) -> None:
         """Load ONNX model and metadata"""
         try:
-            # Load ONNX session
-            self.session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
+            # Load ONNX session with the best available execution providers
+            providers = get_preferred_providers()
+            self.session = ort.InferenceSession(self.model_path, providers=providers)
 
             # Load model metadata
             self.model_metadata = self._load_metadata()
@@ -126,7 +128,7 @@ class OnnxRunner:
         except Exception as e:
             raise RuntimeError(f"Prediction failed: {e}") from e
 
-    def _check_cache(self, features: np.ndarray) -> Optional[dict]:
+    def _check_cache(self, features: np.ndarray) -> dict | None:
         """Check cache for existing prediction result"""
         if not self.cache_manager:
             return None
