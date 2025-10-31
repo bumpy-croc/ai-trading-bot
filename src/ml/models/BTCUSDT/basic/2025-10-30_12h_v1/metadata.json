@@ -1,0 +1,43 @@
+{
+  "model_id": "btcusdt_price_v3",
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "model_type": "basic",
+  "version_id": "2025-10-30_12h_v1",
+  "framework": "onnx",
+  "model_file": "model.onnx",
+  "created_at": "2025-10-30T12:13:22.977562",
+  "sequence_length": 120,
+  "feature_names": [
+    "close_normalized",
+    "volume_normalized",
+    "high_normalized",
+    "low_normalized",
+    "open_normalized"
+  ],
+  "feature_strategy": "price_only_rolling_minmax",
+  "price_normalization": {
+    "method": "rolling_minmax",
+    "window": 120,
+    "target_feature": "close"
+  },
+  "training_params": {
+    "epochs": 49,
+    "batch_size": 256,
+    "timeframe": "1h",
+    "start_date": "2017-08-17",
+    "end_date": "2025-10-30"
+  },
+  "evaluation_results": {
+    "train_loss": 0.004213753622025251,
+    "test_loss": 0.004428462591022253,
+    "train_rmse": 0.06491342931985855,
+    "test_rmse": 0.06654669344425201,
+    "mape": 21801942.1875
+  },
+  "dataset": {
+    "row_count": 71784,
+    "train_samples": 57331,
+    "val_samples": 14333
+  }
+}

@@ -27,6 +27,7 @@ from .exceptions import (
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
 from .models.registry import PredictionModelRegistry, StrategyModel
+from .models.onnx_runner import ModelPrediction
 from .utils.caching import PredictionCacheManager
 
 
@@ -162,6 +163,11 @@ class PredictionEngine:
                 final_model_name = prediction.model_name
                 member_preds = None
                 features_used = self._count_features_used(prepared_features)
+
+                # Apply rolling MinMax denormalization if needed
+                final_price = self._apply_rolling_denormalization(
+                    final_price, bundle, data
+                )
             else:
                 # Run all available structured runners for ensemble
                 preds = []
@@ -188,7 +194,20 @@ class PredictionEngine:
                     )
                     if not features_used:
                         features_used = self._count_features_used(ensemble_features)
-                    preds.append(ensemble_bundle.runner.predict(ensemble_features))
+
+                    raw_prediction = ensemble_bundle.runner.predict(ensemble_features)
+                    denormalized_price = self._apply_rolling_denormalization(
+                        raw_prediction.price, ensemble_bundle, data
+                    )
+                    preds.append(
+                        ModelPrediction(
+                            price=denormalized_price,
+                            confidence=raw_prediction.confidence,
+                            direction=raw_prediction.direction,
+                            model_name=raw_prediction.model_name,
+                            inference_time=raw_prediction.inference_time,
+                        )
+                    )
                 ens = self._ensemble_aggregator.aggregate(preds)
                 final_price = ens.price
                 final_conf = ens.confidence
@@ -501,12 +520,17 @@ class PredictionEngine:
                 # Make prediction with pre-loaded model
                 prediction = model.predict(prepared_features)
 
+                # Apply rolling MinMax denormalization if needed
+                denorm_price = self._apply_rolling_denormalization(
+                    prediction.price, bundle, data
+                )
+
                 # Calculate total inference time
                 inference_time = time.time() - start_time
 
                 # Create result
                 result = PredictionResult(
-                    price=prediction.price,
+                    price=denorm_price,
                     confidence=prediction.confidence,
                     direction=prediction.direction,
                     model_name=prediction.model_name,
@@ -909,3 +933,52 @@ class PredictionEngine:
             if self._prediction_count > 0
             else 0.0
         )
+
+    def _apply_rolling_denormalization(
+        self, normalized_price: float, bundle: "StrategyModel", input_data: pd.DataFrame
+    ) -> float:
+        """
+        Apply rolling MinMax denormalization to price prediction.
+
+        For models trained with rolling window normalization, denormalize using
+        the min/max of the input window.
+
+        Args:
+            normalized_price: Normalized prediction (0-1 range)
+            bundle: Model bundle with metadata
+            input_data: Original OHLCV data
+
+        Returns:
+            Denormalized price prediction
+        """
+        # Check if model uses rolling minmax normalization
+        metadata = bundle.metadata
+        if not metadata:
+            return normalized_price
+
+        price_norm = metadata.get("price_normalization", {})
+        if price_norm.get("method") != "rolling_minmax":
+            # Not a rolling minmax model, return as-is (handled by ONNX runner)
+            return normalized_price
+
+        # Get target feature (typically "close")
+        target_feature = price_norm.get("target_feature", "close")
+        if target_feature not in input_data.columns:
+            # Cannot denormalize without target feature
+            return normalized_price
+
+        # Get window parameters
+        window = price_norm.get("window", len(input_data))
+
+        # Calculate min/max from the input window
+        window_data = input_data[target_feature].tail(window)
+        window_min = float(window_data.min())
+        window_max = float(window_data.max())
+
+        # Denormalize: real_price = normalized * (max - min) + min
+        if window_max == window_min:
+            # Constant price in window, return the constant value
+            return window_min
+
+        denormalized = normalized_price * (window_max - window_min) + window_min
+        return float(denormalized)

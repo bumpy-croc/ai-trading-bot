@@ -255,6 +255,13 @@ def train_price_model_main(args) -> int:
         verbose=1,
     )
 
+    # Evaluate model performance
+    train_loss, train_rmse = model.evaluate(X_train, y_train, verbose=0)
+    test_loss, test_rmse = model.evaluate(X_val, y_val, verbose=0)
+    test_predictions = model.predict(X_val, verbose=0)
+    # MAPE calculation (targets are normalized, so MAPE is relative to normalized range)
+    mape = float(np.mean(np.abs((y_val - test_predictions.flatten()) / (y_val + 1e-8))) * 100)
+
     version_id = datetime.utcnow().strftime("%Y-%m-%d_%Hh_v1")
     metadata = {
         "model_id": f"{args.symbol.lower()}_price_v3",
@@ -267,12 +274,25 @@ def train_price_model_main(args) -> int:
         "created_at": datetime.utcnow().isoformat(),
         "sequence_length": sequence_length,
         "feature_names": feature_cols,
+        "feature_strategy": "price_only_rolling_minmax",
+        "price_normalization": {
+            "method": "rolling_minmax",
+            "window": sequence_length,
+            "target_feature": "close",
+        },
         "training_params": {
             "epochs": len(history.history.get("loss", [])),
             "batch_size": args.batch_size,
             "timeframe": args.timeframe,
             "start_date": args.start_date,
             "end_date": args.end_date,
+        },
+        "evaluation_results": {
+            "train_loss": float(train_loss),
+            "test_loss": float(test_loss),
+            "train_rmse": float(train_rmse),
+            "test_rmse": float(test_rmse),
+            "mape": mape,
         },
         "dataset": {
             "row_count": int(len(price_df)),
