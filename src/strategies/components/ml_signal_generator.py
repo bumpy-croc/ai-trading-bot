@@ -568,6 +568,10 @@ class MLBasicSignalGenerator(SignalGenerator):
             "model_timeframe": self.model_timeframe,
         }
 
+        # Enable short entries for SELL signals
+        if direction == SignalDirection.SELL:
+            metadata["enter_short"] = True
+
         return Signal(
             direction=direction, strength=strength, confidence=confidence, metadata=metadata
         )
