@@ -130,8 +130,8 @@ Data Providers → Indicators → Strategy → Risk Manager → Execution
   - `runtime/` - Path resolution, geo detection, cache TTL, secrets
 - `live/` - Live trading engine with real-time execution
 - `ml/` - Trained models and metadata
-  - **Legacy**: Root-level `*.onnx` files (currently used by strategies)
-  - **Registry**: `models/{SYMBOL}/{TYPE}/{VERSION}/` (new versioned structure)
+  - **Registry**: `models/{SYMBOL}/{TYPE}/{VERSION}/` (versioned structure with latest symlinks)
+  - All strategies now exclusively use registry-based model loading
 - `prediction/` - Model registry, ONNX runtime, caching, feature pipeline
 - `position_management/` - Position sizing policies
 - `regime/` - Market regime detection and analysis
