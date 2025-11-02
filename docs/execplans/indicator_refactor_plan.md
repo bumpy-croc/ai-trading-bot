@@ -33,7 +33,25 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 
 ## Outcomes & Retrospective
 
-No engineering work has started. Populate this section once milestones complete to capture what shipped, remaining gaps, and lessons for future refactors.
+**Status**: ✅ Completed (2025-10-27)
+
+**What Shipped**:
+- Successfully consolidated all technical indicator math under `src/tech/indicators/core.py`
+- Created organized package structure with `indicators`, `features`, and `adapters` subpackages
+- Migrated all consumers (prediction, strategies, risk, dashboards) to use shared `src.tech` modules
+- Implemented compatibility shims in `src/indicators/` to prevent breaking existing imports
+- Updated documentation (`docs/tech_indicators.md`, `src/indicators/README.md`) to reflect new structure
+- All tests passing with Python 3.11+ requirement documented
+
+**Remaining Considerations**:
+- Compatibility shims in `src/indicators/` remain in place for backward compatibility
+- Future work could eventually remove shims once all external references are confirmed migrated
+- Documentation updated to guide contributors to use `src.tech` for new indicator implementations
+
+**Lessons Learned**:
+- Incremental migration with compatibility shims allowed safe transition without breaking changes
+- Centralizing indicator math eliminated duplication between trading, backtesting, and prediction modules
+- Python 3.11+ requirement for union syntax should be clearly documented for new contributors
 
 ## Context and Orientation
 

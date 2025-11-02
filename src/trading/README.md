@@ -1,52 +1,43 @@
 # Trading Core
 
-Base classes and shared utilities for trading strategies and components.
+Shared utilities and helpers for trading strategies and components.
 
 ## Overview
 
-This module provides the foundational interfaces and shared functionality used across the trading system. It defines base strategy classes, component interfaces, and common helpers for backtesting and live trading, including symbol utilities under `symbols/`.
+This module provides shared functionality used across the trading system, including symbol normalization utilities under `symbols/`. Trading strategies are built using the component-based architecture defined in `src/strategies/components/`.
 
 ## Modules
 
-- `symbols/`: Symbol normalization helpers for exchange-specific formats.
+- `symbols/`: Symbol normalization helpers for exchange-specific formats (e.g., converting between `BTCUSDT` and `BTC-USD`).
 
 ## Key Components
 
-### Base Strategy Classes
-Abstract base classes for implementing trading strategies. All custom strategies should inherit from `BaseStrategy`.
+### Symbol Utilities
+Symbol conversion and validation helpers that handle exchange-specific formats:
+- Convert between different exchange symbol formats
+- Validate symbol strings
+- Normalize symbol representations
 
-### Component Interfaces
-Contracts defining the interface for:
-- Signal generators
-- Risk managers
-- Position sizers
-- Entry/exit logic
-
-### Shared Utilities
-Common helpers used by strategies and engines including validation, error handling, and data processing utilities.
+### Shared Helpers
+Common utilities used by strategies and engines including:
+- Symbol normalization and validation
+- Exchange-specific formatting helpers
+- Data processing utilities
 
 ## Usage
 
 ```python
-# Import base strategy class
-from src.strategies.base import BaseStrategy
+# Import symbol utilities
+from src.trading.symbols.factory import SymbolFactory
 
-class MyStrategy(BaseStrategy):
-    def calculate_indicators(self, df):
-        # Add indicators to dataframe
-        return df
-    
-    def check_entry_conditions(self, df):
-        # Return entry signal
-        return signal
-    
-    def check_exit_conditions(self, df, position):
-        # Return exit signal
-        return signal
+# Convert symbol formats between exchanges
+binance_symbol = SymbolFactory.to_exchange_symbol("BTC-USD", "binance")  # Returns "BTCUSDT"
+coinbase_symbol = SymbolFactory.to_exchange_symbol("BTCUSDT", "coinbase")  # Returns "BTC-USD"
 ```
 
 ## See Also
 
-- [strategies/README.md](../strategies/README.md) - Strategy implementation examples
+- [strategies/README.md](../strategies/README.md) - Component-based strategy architecture
+- [strategies/components/README.md](../strategies/components/README.md) - Strategy component interfaces
 - [docs/backtesting.md](../../docs/backtesting.md) - Backtesting strategies
 - [docs/live_trading.md](../../docs/live_trading.md) - Live trading usage
