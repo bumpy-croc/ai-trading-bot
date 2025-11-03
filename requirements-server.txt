@@ -6,7 +6,7 @@ python-dotenv==1.0.0
 numpy==1.26.2
 scikit-learn==1.5.0
 scipy==1.16.1
-requests==2.31.0
+requests==2.32.4
 textblob==0.17.1
 nltk==3.9.1
 ccxt==4.4.85
