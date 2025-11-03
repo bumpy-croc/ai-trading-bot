@@ -33,7 +33,22 @@ Trading, prediction, risk, and dashboard components each compute or consume tech
 
 ## Outcomes & Retrospective
 
-No engineering work has started. Populate this section once milestones complete to capture what shipped, remaining gaps, and lessons for future refactors.
+### What Shipped (October 2025)
+- Successfully created `src/tech` package with three-layer architecture (indicators, features, adapters)
+- Migrated all indicator math to `src/tech/indicators/core.py` with backward-compatible shims
+- Centralized row extraction helpers in `src/tech/adapters/row_extractors.py`
+- Updated all consumers (prediction, risk, strategies, dashboards) to use shared API
+- All tests passing with new structure
+- Documentation updated across the board
+
+### Remaining Gaps
+- Legacy shims in `src/indicators` remain for backward compatibility (can be fully removed in future major version)
+- Some external documentation may still reference old paths
+
+### Lessons Learned
+- Moving TechnicalFeatureExtractor revealed circular import issues that were resolved by creating proper layer separation
+- Python 3.11+ requirement became apparent due to union type syntax usage
+- Incremental migration with shims allowed for safer rollout without breaking existing code
 
 ## Context and Orientation
 
