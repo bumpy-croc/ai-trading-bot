@@ -18,7 +18,7 @@ matplotlib==3.8.2
 
 # ML inference
 onnxruntime==1.17.0
-onnx==1.14.0
+onnx==1.17.0
 
 # Web framework
 Flask==2.3.3
