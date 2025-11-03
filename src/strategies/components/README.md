@@ -917,8 +917,7 @@ strategy = Strategy(
 ## Related Documentation
 
 - [Testing Framework](testing/README.md) - Comprehensive testing documentation
-- [Strategy System Design](../.kiro/specs/strategy-system-redesign/) - Architecture design documents
-- [Component Examples](../examples/) - Usage examples and tutorials
+- [Main Strategy Documentation](../README.md) - Strategy system overview
 
 ---
 
@@ -933,6 +932,6 @@ For questions or issues:
 
 ---
 
-**Last Updated**: December 2024  
+**Last Updated**: November 2025  
 **Version**: 1.0.0  
 **Status**: Production Ready
