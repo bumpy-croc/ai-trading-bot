@@ -1,11 +1,10 @@
 import hashlib
 import logging
 import os
-import pickle  # nosec B403: used for trusted local cache serialization
 from datetime import datetime, timedelta
-from typing import Optional
 
 import pandas as pd
+from pandas.tseries.frequencies import to_offset
 
 from src.config.paths import get_cache_dir
 from src.data_providers.data_provider import DataProvider
@@ -22,7 +21,7 @@ class CachedDataProvider(DataProvider):
     def __init__(
         self,
         data_provider: DataProvider,
-        cache_dir: Optional[str] = None,
+        cache_dir: str | None = None,
         cache_ttl_hours: int = 24,
     ):
         """
@@ -87,13 +86,13 @@ class CachedDataProvider(DataProvider):
         request_str = f"{symbol}_{timeframe}_{year}"
         return hashlib.sha256(request_str.encode()).hexdigest()
 
-    def _get_cache_path(self, cache_key: str) -> Optional[str]:
+    def _get_cache_path(self, cache_key: str) -> str | None:
         """Get the full path for a cache file."""
         if self.cache_dir is None:
             return None
-        return os.path.join(self.cache_dir, f"{cache_key}.pkl")
+        return os.path.join(self.cache_dir, f"{cache_key}.parquet")
 
-    def _is_cache_valid(self, cache_path: str, year: Optional[int] = None) -> bool:
+    def _is_cache_valid(self, cache_path: str, year: int | None = None) -> bool:
         """
         Check if the cache file exists and is not expired.
 
@@ -123,7 +122,7 @@ class CachedDataProvider(DataProvider):
 
         return age_hours < self.cache_ttl_hours
 
-    def _load_from_cache(self, cache_path: str) -> Optional[pd.DataFrame]:
+    def _load_from_cache(self, cache_path: str) -> pd.DataFrame | None:
         """
         Load data from cache file.
 
@@ -134,16 +133,24 @@ class CachedDataProvider(DataProvider):
             DataFrame if successful, None otherwise
         """
         try:
-            with open(cache_path, "rb") as f:
-                data = pickle.load(
-                    f
-                )  # nosec B301: loading only trusted, locally-created cache files
-            return data
+            data = pd.read_parquet(cache_path)
         except Exception as e:
             logger.warning(f"Failed to load cache from {cache_path}: {e}")
             return None
 
-    def _save_to_cache(self, cache_path: Optional[str], data: pd.DataFrame):
+        if isinstance(data.index, pd.DatetimeIndex) and data.index.freq is None:
+            try:
+                inferred_freq = pd.infer_freq(data.index)
+            except (ValueError, TypeError):
+                inferred_freq = None
+
+            if inferred_freq:
+                data = data.copy()
+                data.index.freq = to_offset(inferred_freq)
+
+        return data
+
+    def _save_to_cache(self, cache_path: str | None, data: pd.DataFrame):
         """
         Save data to cache file.
 
@@ -155,8 +162,7 @@ class CachedDataProvider(DataProvider):
             return
 
         try:
-            with open(cache_path, "wb") as f:
-                pickle.dump(data, f)  # nosec B301: writing trusted, locally-used cache files
+            data.to_parquet(cache_path, index=True)
             logger.debug(f"Saved data to cache: {cache_path}")
         except Exception as e:
             logger.warning(f"Failed to save cache to {cache_path}: {e}")
@@ -188,7 +194,7 @@ class CachedDataProvider(DataProvider):
         return ranges
 
     @staticmethod
-    def _get_timeframe_timedelta(timeframe: str) -> Optional[timedelta]:
+    def _get_timeframe_timedelta(timeframe: str) -> timedelta | None:
         """Convert timeframe string (e.g. ``1h``) to a ``timedelta``."""
 
         if not timeframe:
@@ -213,7 +219,7 @@ class CachedDataProvider(DataProvider):
 
     def _load_year_data(
         self, symbol: str, timeframe: str, year: int, year_start: datetime, year_end: datetime
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """
         Load data for a specific year, either from cache or by fetching.
 
@@ -322,8 +328,8 @@ class CachedDataProvider(DataProvider):
         self,
         symbol: str,
         timeframe: str,
-        start: Optional[datetime] = None,
-        end: Optional[datetime] = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
     ) -> pd.DataFrame:
         """
         Fetch historical data with year-based caching.
@@ -443,9 +449,9 @@ class CachedDataProvider(DataProvider):
 
     def clear_cache(
         self,
-        symbol: Optional[str] = None,
-        timeframe: Optional[str] = None,
-        year: Optional[int] = None,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        year: int | None = None,
     ):
         """
         Clear cache files.
