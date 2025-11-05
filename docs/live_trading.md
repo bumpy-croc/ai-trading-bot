@@ -1,6 +1,6 @@
 # Live trading
 
-> **Last Updated**: 2025-11-03  
+> **Last Updated**: 2025-11-05  
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
 `src/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
