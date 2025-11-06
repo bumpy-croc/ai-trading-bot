@@ -1,6 +1,6 @@
 # Prediction & models
 
-> **Last Updated**: 2025-11-05  
+> **Last Updated**: 2025-11-06  
 > **Related Documentation**: [Backtesting](backtesting.md), [Live trading](live_trading.md)
 
 Machine-learning inference and model lifecycle management live under `src/prediction` and `src/ml`. The goal is to keep training
