@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.prediction.models.execution_providers import get_preferred_providers
 from src.strategies.components import Strategy
 from src.strategies.versioning import StrategyVersionRecord
 
@@ -370,8 +371,9 @@ class StrategyManager:
             model = onnx.load(model_path)
             onnx.checker.check_model(model)
 
-            # Test inference session
-            session = ort.InferenceSession(model_path)
+            # Test inference session using the preferred execution providers
+            providers = get_preferred_providers()
+            session = ort.InferenceSession(model_path, providers=providers)
             input_shape = session.get_inputs()[0].shape
 
             logger.info(f"Model validation passed: {model_path} (input shape: {input_shape})")

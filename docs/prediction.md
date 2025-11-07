@@ -92,3 +92,33 @@ Use the following knobs when running `python -m cli train model` locally:
 - `--disable-mixed-precision` falls back to float32 math if you encounter GPU/MPS precision glitches. Mixed precision remains enabled by default when a GPU is present to speed up long jobs.
 
 The defaults remain equivalent to the legacy behavior (300 epochs, batch size 32, sequence length 120, diagnostics on, ONNX on), so unattended jobs continue to produce identical artifacts unless you override the flags explicitly.
+
+## macOS GPU inference verification
+
+macOS users can confirm that ONNX Runtime is activating the CoreML/MPS execution providers introduced in [issue #156](https://github.com/bumpy-croc/ai-trading-bot/issues/156) with the following steps:
+
+1. **Install the GPU-enabled ONNX Runtime build.**
+   ```bash
+   pip install onnxruntime-silicon
+   ```
+   The `onnxruntime` PyPI package only enables CPU execution on Apple Silicon. The `onnxruntime-silicon` wheel ships the CoreML and MPS providers required for GPU acceleration.
+
+2. **Inspect the detected providers.**
+   ```bash
+   python -m src.prediction.models.execution_providers --include-missing
+   ```
+   The command prints every provider exposed by the host runtime followed by the prioritized list used by the trading bot. On an Apple Silicon Mac with `onnxruntime-silicon` installed you should see `CoreMLExecutionProvider` and `MPSExecutionProvider` in both lists.
+
+3. **(Optional) Validate against a model.**
+   ```bash
+   python -m src.prediction.models.execution_providers --model path/to/model.onnx
+   ```
+   When a model path is supplied, the helper loads the session with the preferred providers and echoes the providers ONNX Runtime actually activated. This confirms that the GPU-capable backend is used instead of falling back to CPU.
+
+4. **Run the prediction unit tests.**
+   ```bash
+   pytest tests/unit/predictions/test_models.py tests/unit/predictions/test_prediction_caching.py -k provider
+   ```
+   The focused tests validate that the provider utility feeds the ONNX runner and caching layers correctly.
+
+If any of the above steps omit the GPU providers, reinstall `onnxruntime-silicon`, ensure the Python environment is using that interpreter, and repeat the checks.
