@@ -12,6 +12,9 @@ from src.data_providers.data_provider import DataProvider
 logger = logging.getLogger(__name__)
 
 
+CACHE_FILE_EXTENSION = ".parquet"
+
+
 class CachedDataProvider(DataProvider):
     """
     A wrapper around any DataProvider that caches fetched data to disk using year-based caching.
@@ -90,7 +93,7 @@ class CachedDataProvider(DataProvider):
         """Get the full path for a cache file."""
         if self.cache_dir is None:
             return None
-        return os.path.join(self.cache_dir, f"{cache_key}.parquet")
+        return os.path.join(self.cache_dir, f"{cache_key}{CACHE_FILE_EXTENSION}")
 
     def _is_cache_valid(self, cache_path: str, year: int | None = None) -> bool:
         """
@@ -469,7 +472,7 @@ class CachedDataProvider(DataProvider):
 
         cleared_count = 0
         for filename in os.listdir(self.cache_dir):
-            if filename.endswith(".pkl"):
+            if filename.endswith(CACHE_FILE_EXTENSION):
                 file_path = os.path.join(self.cache_dir, filename)
                 should_delete = True
 
@@ -480,7 +483,7 @@ class CachedDataProvider(DataProvider):
                     # and just delete files that match the hash pattern
                     if symbol and timeframe and year:
                         expected_key = self._generate_year_cache_key(symbol, timeframe, year)
-                        expected_filename = f"{expected_key}.pkl"
+                        expected_filename = f"{expected_key}{CACHE_FILE_EXTENSION}"
                         should_delete = filename == expected_filename
                     else:
                         # For partial matches, we'll need to be more conservative
@@ -521,7 +524,7 @@ class CachedDataProvider(DataProvider):
                 "years_cached": [],
             }
 
-        files = [f for f in os.listdir(self.cache_dir) if f.endswith(".pkl")]
+        files = [f for f in os.listdir(self.cache_dir) if f.endswith(CACHE_FILE_EXTENSION)]
         total_size = sum(os.path.getsize(os.path.join(self.cache_dir, f)) for f in files)
 
         if not files:
