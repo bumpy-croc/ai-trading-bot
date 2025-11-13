@@ -55,29 +55,29 @@ The `latest/` symlink in each type directory (e.g., `BTCUSDT/basic/latest/`) poi
 
 ### Model Management Commands
 
-Helper commands under `python -m cli models` provide operational visibility:
+Helper commands under `atb models` provide operational visibility:
 
-- `python -m cli models list` – list all discovered bundles grouped by symbol/timeframe/model type.
-- `python -m cli models compare BTCUSDT 1h price` – print the metrics metadata for the selected bundle.
-- `python -m cli models validate` – reload all bundles to surface missing files or corrupt artifacts.
-- `python -m cli models promote BTCUSDT price 2024-03-01` – repoint the `latest` symlink to a specific version.
+- `atb models list` – list all discovered bundles grouped by symbol/timeframe/model type.
+- `atb models compare BTCUSDT 1h price` – print the metrics metadata for the selected bundle.
+- `atb models validate` – reload all bundles to surface missing files or corrupt artifacts.
+- `atb models promote BTCUSDT price 2024-03-01` – repoint the `latest` symlink to a specific version.
 
 ## Training and deployment
 
-`python -m cli train` now writes models directly into the registry at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}` and refreshes the `latest`
+`atb train` now writes models directly into the registry at `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}` and refreshes the `latest`
 symlink used by the prediction engine. Operations teams can still trigger training from the live-control CLI, which simply wraps the
 same pipeline:
 
 ```bash
 # Train a price-only model on the last 365 days and update the latest bundle
-python -m cli live-control train --symbol BTCUSDT --days 365 --epochs 50
+atb live-control train --symbol BTCUSDT --days 365 --epochs 50
 ```
 
-To roll back, repoint the `latest` symlink with either `python -m cli models promote …` or `python -m cli live-control deploy-model --model-path BTCUSDT/basic/2025-09-17_1h_v1`.
+To roll back, repoint the `latest` symlink with either `atb models promote …` or `atb live-control deploy-model --model-path BTCUSDT/basic/2025-09-17_1h_v1`.
 Listing available bundles uses the same registry information:
 
 ```bash
-python -m cli live-control list-models
+atb live-control list-models
 ```
 
 Models are stored in `src/ml/models` by default. Metadata JSON files capture training parameters so dashboards and audits can tie
@@ -85,7 +85,7 @@ strategy performance back to the model version in use.
 
 ### Training CLI options
 
-Use the following knobs when running `python -m cli train model` locally:
+Use the following knobs when running `atb train model` locally:
 
 - `--epochs`, `--batch-size`, and `--sequence-length` adjust hyperparameters without editing code.
 - `--skip-plots`, `--skip-robustness`, and `--skip-onnx` let you bypass the slowest diagnostics when you only need a quick experiment. Leave them off for production artifacts so the metadata and ONNX bundle stay in sync.
