@@ -1,6 +1,6 @@
 # Configuration
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-11-15  
 > **Related Documentation**: [Development workflow](development.md), [Database](database.md)
 
 The configuration system centralises access to environment settings so that every service (CLI commands, backtesting, live
@@ -51,15 +51,23 @@ Feature toggles live outside static constants so experiments can be promoted wit
 2. `FEATURE_FLAGS_OVERRIDES` JSON overrides defined per environment.
 3. Repository defaults stored in `feature_flags.json`.
 
+Current defaults (see `feature_flags.json`):
+
+- `use_prediction_engine` (bool) – drives whether strategies call the prediction engine.
+- `enable_regime_detection` (bool) – gates regime-aware overlays.
+- `optimizer_canary_fraction` (string) – fraction of optimizer runs allowed to auto-apply.
+- `optimizer_auto_apply` (bool) – controls whether successful optimizer suggestions are enacted automatically.
+
 Usage:
 
 ```python
-from src.config.feature_flags import is_enabled, get_flag
+from src/config.feature_flags import is_enabled, get_flag
 
 if is_enabled("use_prediction_engine", default=False):
     enable_prediction_mode()
 
-bucket = get_flag("optimizer_bucket", default="control")
+canary_bucket = get_flag("optimizer_canary_fraction", default="0.0")
+auto_apply = is_enabled("optimizer_auto_apply", default=False)
 ```
 
 `resolve_all()` returns a merged dictionary that is useful when exposing diagnostics endpoints.

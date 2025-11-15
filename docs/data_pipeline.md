@@ -1,6 +1,6 @@
 # Data pipeline
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-11-15  
 > **Related Documentation**: [Backtesting](backtesting.md), [Configuration](configuration.md)
 
 Market, sentiment, and cached data access lives under `src/data_providers`. The system exposes a consistent `DataProvider`
@@ -52,7 +52,7 @@ The `atb data` command family in `cli/commands/data.py` covers the most common w
   run offline.
 - `atb data preload-offline --symbols BTCUSDT --timeframes 1h --years-back 10 --test-offline` – ensures the cache contains enough
   history for air-gapped environments and verifies offline reads.
-- `atb data cache-manager info|list|clear-old` – inspect or prune cached files. The commands reuse `CachedDataProvider`
-  instrumentation and normalise output sizes/timestamps for easier monitoring.
+- `atb data cache-manager info|list|clear|clear-old` – inspect or prune cached files. `clear` wipes every cached partition (respecting
+  `--force` confirmations) while `clear-old` deletes files older than `--hours` hours.
 
 All subcommands honour the `--cache-dir` flag so CI and containerised deployments can isolate cache storage.
