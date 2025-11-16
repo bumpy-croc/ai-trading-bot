@@ -78,9 +78,11 @@ atb live ml_basic --symbol BTCUSDT --paper-trading
 # Live trading (requires explicit confirmation)
 atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
-# Live trading + health endpoint
-atb live-health --port 8000 -- ml_basic --paper-trading
+# Live trading + health endpoint (PORT/HEALTH_CHECK_PORT controls server port)
+PORT=8000 atb live-health ml_basic --paper-trading
 ```
+
+The `live-health` helper always reads the HTTP port from the `PORT` environment variable (falling back to `HEALTH_CHECK_PORT` or `8000`), so pass the desired port before the command rather than as a CLI flag.
 
 6) Utilities
 

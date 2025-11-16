@@ -1,6 +1,6 @@
 # Development workflow
 
-> **Last Updated**: 2025-11-10
+> **Last Updated**: 2025-11-16
 
 This project ships a command-line interface and Makefile targets that standardise local setup, quality checks, and diagnostics.
 
@@ -45,6 +45,8 @@ Run `atb dev setup` to execute helper scripts (pre-commit hooks, git config) use
 - `atb tests heartbeat` – insert a `SystemEvent` row for monitoring pipelines.
 - `atb tests db` – verify database connectivity end-to-end.
 - `atb tests download` – smoke test data downloads via CCXT.
+- `atb tests secrets` – confirm Railway/local secrets are reachable from the current shell.
+- `atb tests parse-junit reports/unit.xml --label unit` – summarise failing tests from a stored JUnit XML report.
 
 ## Code quality
 
@@ -66,10 +68,12 @@ succinct changelog, bumps the semantic version, and auto-stages the updated mani
 
 - `atb backtest ml_basic --days 30` – quick simulations while iterating on strategies.
 - `atb live ml_basic --paper-trading` – start the live runner in paper trading mode.
-- `atb live-health --port 8000 -- ml_basic --paper-trading` – start live trading with health endpoint.
+- `PORT=8000 atb live-health ml_basic --paper-trading` – start live trading with the embedded health endpoint.
 - `atb optimizer --strategy ml_basic --days 30` – trigger the optimisation CLI.
 
 Use these commands to mirror CI behaviour locally before opening pull requests.
+
+`atb live-health` always reads its HTTP port from the `PORT` environment variable (falling back to `HEALTH_CHECK_PORT`), so set the variable inline as shown above instead of passing a `--port` flag.
 
 ## Codex auto-review workflow
 

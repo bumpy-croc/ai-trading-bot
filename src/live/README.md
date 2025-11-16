@@ -1,6 +1,6 @@
 # Live Trading Engine
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-11-16  
 > **Related Documentation**: See [docs/live_trading.md](../../docs/live_trading.md) for comprehensive guide and safety controls
 
 Executes strategies in real time with risk controls, data providers, and database logging.
@@ -13,8 +13,8 @@ atb live ml_basic --symbol BTCUSDT --paper-trading
 # Live trading (explicit confirmation required)
 atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
-# Live trading with health endpoint
-atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading
+# Live trading with health endpoint (PORT/HEALTH_CHECK_PORT controls server port)
+PORT=8000 atb live-health ml_basic --symbol BTCUSDT --paper-trading
 ```
 
 ## Programmatic
@@ -30,3 +30,5 @@ engine = LiveTradingEngine(
 )
 engine.start("BTCUSDT", "1h")
 ```
+
+`atb live-health` reads the HTTP port from the `PORT` environment variable (falling back to `HEALTH_CHECK_PORT`), so export or prefix the variable when you need a non-default port.

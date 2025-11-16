@@ -1,6 +1,6 @@
 # Live trading
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-11-16  
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
 `src/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
@@ -79,6 +79,16 @@ The control surface lives under `atb live-control`:
   directory.
 - `atb live-control list-models` / `status` / `emergency-stop` – quick operational actions when supervising a running engine.
 
+## Health endpoints
+
+Use `atb live-health` to embed the HTTP `/health` and `/status` endpoints alongside the runner:
+
+```bash
+PORT=9000 atb live-health ml_basic --paper-trading
+```
+
+The command reads the listening port from the `PORT` environment variable (falling back to `HEALTH_CHECK_PORT` or `8000`) and forwards all remaining arguments directly to `src/live/runner.py`. Set the variable inline, as shown, when you need to override the default port.
+
 ## Programmatic usage
 
 ```python
@@ -96,6 +106,8 @@ engine = LiveTradingEngine(
 )
 engine.start("BTCUSDT", "1h")
 ```
+
+`LiveTradingEngine` performs an immediate health check against the configured `DATABASE_URL`, so ensure PostgreSQL is running (or set `DATABASE_URL=postgresql://...`) before instantiating it in scripts or notebooks.
 
 In production deployments wrap the engine in a supervisor (systemd, Docker, Kubernetes) so that `SIGTERM` triggers the graceful
 shutdown path implemented in the runner.

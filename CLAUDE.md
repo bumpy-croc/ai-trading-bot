@@ -74,7 +74,7 @@ atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30
 atb live ml_basic --symbol BTCUSDT --paper-trading
 
 # Live trading with health endpoint
-atb live-health --port 8000 -- ml_basic --paper-trading
+PORT=8000 atb live-health ml_basic --paper-trading
 ```
 
 ### ML Model Training & Deployment

@@ -1,6 +1,6 @@
 # Monitoring & observability
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-11-16  
 > **Related Documentation**: [Live trading](live_trading.md), [Database](database.md)
 
 Instrumentation is delivered through structured logging, database events, and interactive dashboards. The goal is to provide the
@@ -40,9 +40,10 @@ underlying dashboard supports them.
 
 ## Health endpoints
 
-`atb live-health --port 9000 -- ml_basic --paper-trading` runs the trading engine with an HTTP server exposing `/health` and
-`/status`. The status payload checks configuration providers, database connectivity, and Binance API reachability so you can wire
-it into uptime monitors or Kubernetes liveness probes.
+`PORT=9000 atb live-health ml_basic --paper-trading` runs the trading engine with an HTTP server exposing `/health` and
+`/status`. The command derives its port from the `PORT` environment variable (falling back to `HEALTH_CHECK_PORT` or `8000`) and
+forwards every remaining argument to the live runner. The status payload checks configuration providers, database connectivity, and
+Binance API reachability so you can wire it into uptime monitors or Kubernetes liveness probes.
 
 ## Operational tips
 
