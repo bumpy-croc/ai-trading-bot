@@ -1,6 +1,6 @@
 # Prediction & models
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-11-18  
 > **Related Documentation**: [Backtesting](backtesting.md), [Live trading](live_trading.md)
 
 Machine-learning inference and model lifecycle management live under `src/prediction` and `src/ml`. The goal is to keep training
@@ -39,28 +39,37 @@ print(result.price, result.confidence, result.model_name)
 ## Model registry
 
 The registry (`src/prediction/models/registry.py`) loads model bundles from the path declared in `PredictionConfig.model_registry_path`.
-Each bundle stores weights, metadata, and optional metrics.
+Each bundle contains:
+
+- `model.onnx` – the ONNX runtime artifact used by inference-heavy workflows.
+- `model.keras` plus the `saved_model/` export – retained for retracing or fine-tuning.
+- `metadata.json` – training parameters, evaluation summaries, and lineage (symbol, timeframe, model type).
+- `feature_schema.json` – canonical schema describing the features the model expects at inference time.
+- `metrics.json` (optional) – lightweight rollups surfaced by the CLI compare command.
+
+Bundles are keyed by `(symbol, timeframe, model_type)` and can optionally expose a `latest/` symlink per model type so production
+strategies always resolve to the current version without editing code.
 
 ### Model Storage Locations
 
-All models are now stored exclusively in the **structured registry**:
-- `src/ml/models/SYMBOL/TYPE/VERSION/model.onnx` - Versioned model structure
+All models are stored exclusively in the structured registry:
+- `src/ml/models/SYMBOL/TYPE/VERSION/` – versioned directories that include the ONNX model, Keras SavedModel, metadata, and feature schema.
 
 Example models:
-- `BTCUSDT/basic/2025-09-17_1h_v1/` - BTC price prediction (basic)
-- `BTCUSDT/sentiment/2025-09-17_1h_v1/` - BTC with sentiment analysis
-- `ETHUSDT/sentiment/2025-09-17_1h_v1/` - ETH with sentiment analysis
+- `BTCUSDT/basic/2025-10-30_12h_v1/` – BTC price prediction (basic, 1h timeframe)
+- `BTCUSDT/sentiment/2025-09-17_1h_v1/` – BTC with sentiment analysis
+- `ETHUSDT/sentiment/2025-09-17_1h_v1/` – ETH with sentiment analysis
 
-The `latest/` symlink in each type directory (e.g., `BTCUSDT/basic/latest/`) points to the current production version. All strategies now load models exclusively through the `PredictionModelRegistry`.
+The `latest/` symlink in each type directory (e.g., `BTCUSDT/basic/latest/`) points to the current production version. All strategies load models exclusively through the `PredictionModelRegistry`.
 
 ### Model Management Commands
 
 Helper commands under `atb models` provide operational visibility:
 
 - `atb models list` – list all discovered bundles grouped by symbol/timeframe/model type.
-- `atb models compare BTCUSDT 1h price` – print the metrics metadata for the selected bundle.
+- `atb models compare BTCUSDT 1h basic` – print the `metrics.json` payload for the selected bundle (`model_type` is `basic`, `sentiment`, etc.); if the file is absent the command returns `{}`.
 - `atb models validate` – reload all bundles to surface missing files or corrupt artifacts.
-- `atb models promote BTCUSDT price 2024-03-01` – repoint the `latest` symlink to a specific version.
+- `atb models promote BTCUSDT basic 2025-10-30_12h_v1` – repoint the `latest` symlink for `BTCUSDT/basic` to a specific version directory.
 
 ## Training and deployment
 
