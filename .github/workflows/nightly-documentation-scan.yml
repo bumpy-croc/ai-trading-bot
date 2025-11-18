@@ -1,12 +1,12 @@
-name: Nightly Cursor Docs Agent
+name: Weekly Documentation Scan
 
 on:
   schedule:
-    - cron: "0 3 * * *"  # 03:00 UTC nightly
+    - cron: "0 3 * * 1"  # 03:00 UTC every Monday
   workflow_dispatch:
 
 concurrency:
-  group: nightly-cursor-docs-agent
+  group: weekly-documentation-scan
   cancel-in-progress: false
 
 jobs:
