@@ -35,11 +35,12 @@ import logging
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, TypedDict
 
 # Third-party imports
+import numpy as np
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
@@ -487,6 +488,153 @@ class MonitoringDashboard:
                 return jsonify(pending_orders)
             except Exception as e:
                 logger.error(f"Error getting pending orders: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        # ========== ADVANCED ANALYTICS ENDPOINTS ==========
+
+        @self.app.route("/api/performance/advanced")
+        def get_advanced_performance():
+            """Get advanced performance metrics including rolling calculations."""
+            days = request.args.get("days", 30, type=int)
+            window = request.args.get("window", 7, type=int)  # Rolling window size
+            try:
+                data = self._get_advanced_performance_metrics(days, window)
+                return jsonify(data)
+            except Exception as e:
+                logger.error(f"Error getting advanced performance: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/trades/analysis")
+        def get_trade_analysis():
+            """Get detailed trade analysis including distributions and patterns."""
+            days = request.args.get("days", 30, type=int)
+            try:
+                data = self._get_trade_analysis(days)
+                return jsonify(data)
+            except Exception as e:
+                logger.error(f"Error getting trade analysis: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/trades/distribution")
+        def get_trade_distribution():
+            """Get trade P&L distribution data for histogram."""
+            days = request.args.get("days", 30, type=int)
+            bins = request.args.get("bins", 20, type=int)
+            try:
+                data = self._get_trade_distribution(days, bins)
+                return jsonify(data)
+            except Exception as e:
+                logger.error(f"Error getting trade distribution: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/models/performance")
+        def get_model_performance():
+            """Get ML model performance metrics and accuracy tracking."""
+            model_name = request.args.get("model", "")
+            days = request.args.get("days", 30, type=int)
+            try:
+                data = self._get_model_performance_data(model_name, days)
+                return jsonify(data)
+            except Exception as e:
+                logger.error(f"Error getting model performance: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/models/list")
+        def list_models():
+            """List all tracked models with basic stats."""
+            try:
+                models = self._list_tracked_models()
+                return jsonify(models)
+            except Exception as e:
+                logger.error(f"Error listing models: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/system/health-detailed")
+        def get_detailed_health():
+            """Get detailed system health metrics."""
+            try:
+                health = self._get_detailed_system_health()
+                return jsonify(health)
+            except Exception as e:
+                logger.error(f"Error getting system health: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/risk/detailed")
+        def get_detailed_risk():
+            """Get detailed risk metrics and exposure analysis."""
+            try:
+                risk_data = self._get_detailed_risk_metrics()
+                return jsonify(risk_data)
+            except Exception as e:
+                logger.error(f"Error getting risk metrics: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/correlation/matrix-formatted")
+        def get_correlation_matrix_formatted():
+            """Get correlation matrix in formatted structure for heatmap."""
+            try:
+                matrix = self._get_formatted_correlation_matrix()
+                return jsonify(matrix)
+            except Exception as e:
+                logger.error(f"Error getting correlation matrix: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        # ========== EXPORT ENDPOINTS ==========
+
+        @self.app.route("/api/export/trades")
+        def export_trades():
+            """Export trades as CSV."""
+            days = request.args.get("days", 30, type=int)
+            try:
+                csv_data = self._export_trades_csv(days)
+                from flask import Response
+
+                return Response(
+                    csv_data,
+                    mimetype="text/csv",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=trades_{datetime.now().strftime('%Y%m%d')}.csv"
+                    },
+                )
+            except Exception as e:
+                logger.error(f"Error exporting trades: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/export/performance")
+        def export_performance():
+            """Export performance metrics as CSV."""
+            days = request.args.get("days", 30, type=int)
+            try:
+                csv_data = self._export_performance_csv(days)
+                from flask import Response
+
+                return Response(
+                    csv_data,
+                    mimetype="text/csv",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=performance_{datetime.now().strftime('%Y%m%d')}.csv"
+                    },
+                )
+            except Exception as e:
+                logger.error(f"Error exporting performance: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        @self.app.route("/api/export/positions")
+        def export_positions():
+            """Export current positions as CSV."""
+            try:
+                csv_data = self._export_positions_csv()
+                from flask import Response
+
+                return Response(
+                    csv_data,
+                    mimetype="text/csv",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=positions_{datetime.now().strftime('%Y%m%d')}.csv"
+                    },
+                )
+            except Exception as e:
+                logger.error(f"Error exporting positions: {e}")
                 return jsonify({"error": str(e)}), 500
 
     def _setup_websocket_handlers(self):
@@ -1798,8 +1946,8 @@ class MonitoringDashboard:
                             for h in balance_history
                             if (
                                 (
-                                    datetime.now(timezone.utc)
-                                    - h["timestamp"].astimezone(timezone.utc)
+                                    datetime.now(UTC)
+                                    - h["timestamp"].astimezone(UTC)
                                 ).days
                                 >= 1
                             )
@@ -1850,6 +1998,563 @@ class MonitoringDashboard:
         except Exception as e:
             logger.error(f"Error getting balance history: {e}")
             return []
+
+    # ========== ADVANCED ANALYTICS METHODS ==========
+
+    def _get_advanced_performance_metrics(self, days: int = 30, window: int = 7) -> dict[str, Any]:
+        """Calculate advanced performance metrics with rolling windows."""
+        try:
+            # Get account history
+            query = f"""
+            SELECT balance, timestamp
+            FROM account_history
+            WHERE timestamp > NOW() - INTERVAL '{days} DAYS'
+            ORDER BY timestamp
+            """  # nosec B608: days validated below
+            if days <= 0 or days > 365:
+                days = 30
+            result = self.db_manager.execute_query(query)
+
+            if len(result) < 2:
+                return {"error": "Insufficient data"}
+
+            df = pd.DataFrame(result)
+            df["balance"] = df["balance"].apply(self._safe_float)
+            df = df.set_index("timestamp")
+
+            # Calculate daily returns
+            df["returns"] = df["balance"].pct_change()
+
+            # Rolling Sharpe ratio (annualized)
+            rolling_sharpe = []
+            for i in range(window, len(df)):
+                window_returns = df["returns"].iloc[i - window : i]
+                if window_returns.std() > 0:
+                    sharpe = (window_returns.mean() / window_returns.std()) * (252**0.5)
+                else:
+                    sharpe = 0.0
+                rolling_sharpe.append(
+                    {"timestamp": df.index[i].isoformat(), "sharpe": float(sharpe)}
+                )
+
+            # Drawdown calculation
+            df["peak"] = df["balance"].cummax()
+            df["drawdown"] = (df["balance"] - df["peak"]) / df["peak"] * 100
+
+            drawdown_data = [
+                {"timestamp": ts.isoformat(), "drawdown": float(dd)}
+                for ts, dd in zip(df.index, df["drawdown"], strict=False)
+            ]
+
+            # Win rate over time (rolling)
+            trades_query = f"""
+            SELECT DATE(exit_time) as date,
+                   COUNT(*) as total,
+                   COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins
+            FROM trades
+            WHERE exit_time > NOW() - INTERVAL '{days} DAYS'
+            AND exit_time IS NOT NULL
+            GROUP BY DATE(exit_time)
+            ORDER BY date
+            """  # nosec B608: days validated above
+            trades_result = self.db_manager.execute_query(trades_query)
+
+            win_rate_data = []
+            for row in trades_result:
+                wr = (row["wins"] / row["total"] * 100) if row["total"] > 0 else 0
+                win_rate_data.append(
+                    {
+                        "date": (
+                            row["date"].isoformat()
+                            if hasattr(row["date"], "isoformat")
+                            else str(row["date"])
+                        ),
+                        "win_rate": float(wr),
+                    }
+                )
+
+            return {
+                "rolling_sharpe": rolling_sharpe,
+                "drawdown_series": drawdown_data,
+                "win_rate_series": win_rate_data,
+                "current_drawdown": float(df["drawdown"].iloc[-1]),
+                "max_drawdown": float(df["drawdown"].min()),
+            }
+        except Exception as e:
+            logger.error(f"Error calculating advanced performance: {e}")
+            return {"error": str(e)}
+
+    def _get_trade_analysis(self, days: int = 30) -> dict[str, Any]:
+        """Analyze trade patterns and performance."""
+        try:
+            query = f"""
+            SELECT
+                symbol, side, entry_price, exit_price, quantity,
+                entry_time, exit_time, pnl, pnl_percent,
+                strategy_name, exit_reason
+            FROM trades
+            WHERE exit_time > NOW() - INTERVAL '{days} DAYS'
+            AND exit_time IS NOT NULL
+            ORDER BY exit_time
+            """  # nosec B608: days validated in calling function
+            if days <= 0 or days > 365:
+                days = 30
+            result = self.db_manager.execute_query(query)
+
+            if not result:
+                return {"error": "No trades found"}
+
+            df = pd.DataFrame(result)
+
+            # Trade duration analysis
+            df["duration"] = (
+                pd.to_datetime(df["exit_time"]) - pd.to_datetime(df["entry_time"])
+            ).dt.total_seconds() / 3600
+            avg_duration = float(df["duration"].mean())
+            median_duration = float(df["duration"].median())
+
+            # Profit by hour of day
+            df["hour"] = pd.to_datetime(df["exit_time"]).dt.hour
+            profit_by_hour = df.groupby("hour")["pnl"].sum().to_dict()
+            profit_by_hour = {int(k): float(v) for k, v in profit_by_hour.items()}
+
+            # Profit by day of week
+            df["day_of_week"] = pd.to_datetime(df["exit_time"]).dt.dayofweek
+            profit_by_dow = df.groupby("day_of_week")["pnl"].sum().to_dict()
+            profit_by_dow = {int(k): float(v) for k, v in profit_by_dow.items()}
+
+            # Best and worst trades
+            best_trades = df.nlargest(5, "pnl")[
+                ["symbol", "entry_time", "exit_time", "pnl"]
+            ].to_dict("records")
+            worst_trades = df.nsmallest(5, "pnl")[
+                ["symbol", "entry_time", "exit_time", "pnl"]
+            ].to_dict("records")
+
+            # Serialize timestamps
+            for trade in best_trades + worst_trades:
+                trade["entry_time"] = (
+                    trade["entry_time"].isoformat()
+                    if hasattr(trade["entry_time"], "isoformat")
+                    else str(trade["entry_time"])
+                )
+                trade["exit_time"] = (
+                    trade["exit_time"].isoformat()
+                    if hasattr(trade["exit_time"], "isoformat")
+                    else str(trade["exit_time"])
+                )
+                trade["pnl"] = float(trade["pnl"])
+
+            return {
+                "total_trades": len(df),
+                "avg_duration_hours": avg_duration,
+                "median_duration_hours": median_duration,
+                "profit_by_hour": profit_by_hour,
+                "profit_by_day_of_week": profit_by_dow,
+                "best_trades": best_trades,
+                "worst_trades": worst_trades,
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing trades: {e}")
+            return {"error": str(e)}
+
+    def _get_trade_distribution(self, days: int = 30, bins: int = 20) -> dict[str, Any]:
+        """Get trade P&L distribution for histogram."""
+        try:
+            query = f"""
+            SELECT pnl
+            FROM trades
+            WHERE exit_time > NOW() - INTERVAL '{days} DAYS'
+            AND exit_time IS NOT NULL
+            """  # nosec B608: days validated below
+            if days <= 0 or days > 365:
+                days = 30
+            result = self.db_manager.execute_query(query)
+
+            if not result:
+                return {"bins": [], "counts": []}
+
+            pnls = [float(row["pnl"]) for row in result]
+            counts, bin_edges = np.histogram(pnls, bins=bins)
+
+            return {
+                "bins": [float(x) for x in bin_edges.tolist()],
+                "counts": [int(x) for x in counts.tolist()],
+                "mean": float(np.mean(pnls)),
+                "median": float(np.median(pnls)),
+                "std": float(np.std(pnls)),
+            }
+        except Exception as e:
+            logger.error(f"Error getting trade distribution: {e}")
+            return {"error": str(e)}
+
+    def _get_model_performance_data(self, model_name: str = "", days: int = 30) -> dict[str, Any]:
+        """Get ML model performance metrics."""
+        try:
+            # Query prediction_performance table
+            query = """
+            SELECT
+                timestamp, model_name, horizon, mae, rmse, mape, ic,
+                mean_pred, std_pred, mean_real, std_real,
+                strategy_name, symbol, timeframe
+            FROM prediction_performance
+            WHERE timestamp > NOW() - INTERVAL '%s DAYS'
+            """
+            params = [days]
+
+            if model_name:
+                query += " AND model_name = %s"
+                params.append(model_name)
+
+            query += " ORDER BY timestamp"
+            result = self.db_manager.execute_query(query, params)
+
+            if not result:
+                return {"message": "No model performance data found", "series": []}
+
+            # Convert to time series format
+            series = []
+            for row in result:
+                series.append(
+                    {
+                        "timestamp": (
+                            row["timestamp"].isoformat()
+                            if hasattr(row["timestamp"], "isoformat")
+                            else str(row["timestamp"])
+                        ),
+                        "model_name": row["model_name"],
+                        "mae": float(row["mae"]) if row["mae"] else None,
+                        "rmse": float(row["rmse"]) if row["rmse"] else None,
+                        "mape": float(row["mape"]) if row["mape"] else None,
+                        "ic": float(row["ic"]) if row["ic"] else None,
+                    }
+                )
+
+            # Calculate summary stats
+            df = pd.DataFrame(result)
+            summary = {
+                "avg_mae": float(df["mae"].mean()) if "mae" in df.columns else None,
+                "avg_rmse": float(df["rmse"].mean()) if "rmse" in df.columns else None,
+                "avg_mape": float(df["mape"].mean()) if "mape" in df.columns else None,
+                "avg_ic": float(df["ic"].mean()) if "ic" in df.columns else None,
+            }
+
+            return {"series": series, "summary": summary}
+        except Exception as e:
+            logger.error(f"Error getting model performance: {e}")
+            return {"error": str(e)}
+
+    def _list_tracked_models(self) -> dict[str, Any]:
+        """List all models with performance tracking."""
+        try:
+            query = """
+            SELECT DISTINCT model_name, COUNT(*) as data_points, MAX(timestamp) as last_updated
+            FROM prediction_performance
+            GROUP BY model_name
+            ORDER BY last_updated DESC
+            """
+            result = self.db_manager.execute_query(query)
+
+            models = []
+            for row in result:
+                models.append(
+                    {
+                        "model_name": row["model_name"],
+                        "data_points": row["data_points"],
+                        "last_updated": (
+                            row["last_updated"].isoformat()
+                            if hasattr(row["last_updated"], "isoformat")
+                            else str(row["last_updated"])
+                        ),
+                    }
+                )
+
+            return {"models": models}
+        except Exception as e:
+            logger.error(f"Error listing models: {e}")
+            return {"error": str(e)}
+
+    def _get_detailed_system_health(self) -> dict[str, Any]:
+        """Get detailed system health metrics."""
+        try:
+            # Database metrics
+            db_query_time_start = time.time()
+            self.db_manager.execute_query("SELECT 1")
+            db_latency = (time.time() - db_query_time_start) * 1000
+
+            # Error rate (last hour)
+            error_query = """
+            SELECT
+                COUNT(*) as total_events,
+                COUNT(CASE WHEN event_type = 'ERROR' THEN 1 END) as errors,
+                COUNT(CASE WHEN event_type = 'WARNING' THEN 1 END) as warnings
+            FROM system_events
+            WHERE timestamp > NOW() - INTERVAL '1 hour'
+            """
+            error_result = self.db_manager.execute_query(error_query)
+            error_data = (
+                error_result[0] if error_result else {"total_events": 0, "errors": 0, "warnings": 0}
+            )
+
+            # Recent errors
+            recent_errors_query = """
+            SELECT message, timestamp, severity
+            FROM system_events
+            WHERE event_type IN ('ERROR', 'WARNING')
+            ORDER BY timestamp DESC
+            LIMIT 10
+            """
+            recent_errors = self.db_manager.execute_query(recent_errors_query)
+            for err in recent_errors:
+                err["timestamp"] = (
+                    err["timestamp"].isoformat()
+                    if hasattr(err["timestamp"], "isoformat")
+                    else str(err["timestamp"])
+                )
+
+            # Memory usage (if psutil available)
+            memory_usage = 0.0
+            try:
+                import psutil
+
+                memory_usage = psutil.virtual_memory().percent
+            except ImportError:
+                pass
+
+            return {
+                "database_latency_ms": float(db_latency),
+                "database_status": "connected",
+                "api_status": self._get_api_status(),
+                "error_rate_hourly": (
+                    float(error_data["errors"] / error_data["total_events"] * 100)
+                    if error_data["total_events"] > 0
+                    else 0.0
+                ),
+                "warning_rate_hourly": (
+                    float(error_data["warnings"] / error_data["total_events"] * 100)
+                    if error_data["total_events"] > 0
+                    else 0.0
+                ),
+                "recent_errors": recent_errors,
+                "memory_usage_percent": float(memory_usage),
+                "uptime_minutes": float(self._get_system_uptime()),
+            }
+        except Exception as e:
+            logger.error(f"Error getting detailed system health: {e}")
+            return {"error": str(e)}
+
+    def _get_detailed_risk_metrics(self) -> dict[str, Any]:
+        """Get detailed risk metrics and exposure analysis."""
+        try:
+            # Current risk adjustments
+            risk_adj_query = """
+            SELECT parameter_name, adjustment_factor, trigger_reason, timestamp
+            FROM risk_adjustments
+            ORDER BY timestamp DESC
+            LIMIT 10
+            """
+            risk_adjustments = self.db_manager.execute_query(risk_adj_query)
+            for adj in risk_adjustments:
+                adj["timestamp"] = (
+                    adj["timestamp"].isoformat()
+                    if hasattr(adj["timestamp"], "isoformat")
+                    else str(adj["timestamp"])
+                )
+                adj["adjustment_factor"] = float(adj["adjustment_factor"])
+
+            # VaR calculation (95% confidence)
+            var_query = """
+            SELECT pnl
+            FROM trades
+            WHERE exit_time > NOW() - INTERVAL '30 days'
+            AND exit_time IS NOT NULL
+            """
+            var_result = self.db_manager.execute_query(var_query)
+            pnls = [float(row["pnl"]) for row in var_result] if var_result else []
+            var_95 = float(np.percentile(pnls, 5)) if pnls else 0.0
+
+            # Position concentration
+            positions = self.db_manager.get_active_positions()
+            total_value = sum(
+                self._safe_float(p.get("quantity", 0)) * self._safe_float(p.get("entry_price", 0))
+                for p in positions
+            )
+            concentration = {}
+            for p in positions:
+                symbol = p.get("symbol", "")
+                value = self._safe_float(p.get("quantity", 0)) * self._safe_float(
+                    p.get("entry_price", 0)
+                )
+                pct = (value / total_value * 100) if total_value > 0 else 0
+                concentration[symbol] = float(pct)
+
+            return {
+                "recent_risk_adjustments": risk_adjustments,
+                "var_95": var_95,
+                "position_concentration": concentration,
+                "total_exposure": float(total_value),
+                "current_drawdown": float(self._get_current_drawdown()),
+                "max_drawdown": float(self._get_max_drawdown()),
+            }
+        except Exception as e:
+            logger.error(f"Error getting detailed risk metrics: {e}")
+            return {"error": str(e)}
+
+    def _get_formatted_correlation_matrix(self) -> dict[str, Any]:
+        """Get correlation matrix formatted for heatmap visualization."""
+        try:
+            query = """
+            SELECT symbol_pair, correlation_value, last_updated
+            FROM correlation_matrix
+            ORDER BY last_updated DESC
+            LIMIT 100
+            """
+            result = self.db_manager.execute_query(query)
+
+            # Parse symbol pairs and build matrix
+            symbols = set()
+            correlations = {}
+            for row in result:
+                pair = row["symbol_pair"]
+                s1, s2 = pair.split("-")
+                symbols.add(s1)
+                symbols.add(s2)
+                correlations[pair] = float(row["correlation_value"])
+
+            symbols_list = sorted(list(symbols))
+            matrix = []
+            for s1 in symbols_list:
+                row_data = []
+                for s2 in symbols_list:
+                    if s1 == s2:
+                        row_data.append(1.0)
+                    else:
+                        pair = "-".join(sorted([s1, s2]))
+                        row_data.append(correlations.get(pair, 0.0))
+                matrix.append(row_data)
+
+            return {
+                "symbols": symbols_list,
+                "matrix": matrix,
+            }
+        except Exception as e:
+            logger.error(f"Error formatting correlation matrix: {e}")
+            return {"error": str(e)}
+
+    # ========== EXPORT METHODS ==========
+
+    def _export_trades_csv(self, days: int = 30) -> str:
+        """Export trades to CSV format."""
+        try:
+            import csv
+            import io
+
+            query = f"""
+            SELECT
+                symbol, side, entry_price, exit_price, quantity,
+                entry_time, exit_time, pnl, pnl_percent,
+                strategy_name, exit_reason
+            FROM trades
+            WHERE exit_time > NOW() - INTERVAL '{days} DAYS'
+            AND exit_time IS NOT NULL
+            ORDER BY exit_time DESC
+            """  # nosec B608: days validated below
+            if days <= 0 or days > 365:
+                days = 30
+            result = self.db_manager.execute_query(query)
+
+            output = io.StringIO()
+            if not result:
+                return "symbol,side,entry_price,exit_price,quantity,entry_time,exit_time,pnl,pnl_percent,strategy_name,exit_reason\n"
+
+            writer = csv.DictWriter(output, fieldnames=result[0].keys())
+            writer.writeheader()
+            for row in result:
+                # Convert datetime to string
+                row_dict = dict(row)
+                for k, v in row_dict.items():
+                    if hasattr(v, "isoformat"):
+                        row_dict[k] = v.isoformat()
+                    elif isinstance(v, Decimal):
+                        row_dict[k] = float(v)
+                writer.writerow(row_dict)
+
+            return output.getvalue()
+        except Exception as e:
+            logger.error(f"Error exporting trades: {e}")
+            return f"Error: {e}"
+
+    def _export_performance_csv(self, days: int = 30) -> str:
+        """Export performance metrics to CSV format."""
+        try:
+            import csv
+            import io
+
+            query = f"""
+            SELECT timestamp, balance, equity, total_pnl, daily_pnl, drawdown, open_positions
+            FROM account_history
+            WHERE timestamp > NOW() - INTERVAL '{days} DAYS'
+            ORDER BY timestamp
+            """  # nosec B608: days validated below
+            if days <= 0 or days > 365:
+                days = 30
+            result = self.db_manager.execute_query(query)
+
+            output = io.StringIO()
+            if not result:
+                return "timestamp,balance,equity,total_pnl,daily_pnl,drawdown,open_positions\n"
+
+            writer = csv.DictWriter(output, fieldnames=result[0].keys())
+            writer.writeheader()
+            for row in result:
+                row_dict = dict(row)
+                for k, v in row_dict.items():
+                    if hasattr(v, "isoformat"):
+                        row_dict[k] = v.isoformat()
+                    elif isinstance(v, Decimal):
+                        row_dict[k] = float(v)
+                writer.writerow(row_dict)
+
+            return output.getvalue()
+        except Exception as e:
+            logger.error(f"Error exporting performance: {e}")
+            return f"Error: {e}"
+
+    def _export_positions_csv(self) -> str:
+        """Export current positions to CSV format."""
+        try:
+            import csv
+            import io
+
+            positions = self._get_current_positions()
+
+            output = io.StringIO()
+            if not positions:
+                return "symbol,side,entry_price,current_price,quantity,unrealized_pnl,entry_time\n"
+
+            fieldnames = [
+                "symbol",
+                "side",
+                "entry_price",
+                "current_price",
+                "quantity",
+                "unrealized_pnl",
+                "entry_time",
+            ]
+            writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+
+            for pos in positions:
+                pos_dict = {k: v for k, v in pos.items() if k in fieldnames}
+                for k, v in pos_dict.items():
+                    if hasattr(v, "isoformat"):
+                        pos_dict[k] = v.isoformat()
+                writer.writerow(pos_dict)
+
+            return output.getvalue()
+        except Exception as e:
+            logger.error(f"Error exporting positions: {e}")
+            return f"Error: {e}"
 
     def start_monitoring(self):
         """Start the monitoring update thread"""
