@@ -179,7 +179,7 @@ class LiveTradingEngine:
         time_exit_policy: TimeExitPolicy | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
-        enable_partial_operations: bool = False,
+        enable_partial_operations: bool = True,
     ):
         """
         Initialize the live trading engine.
@@ -273,7 +273,7 @@ class LiveTradingEngine:
         self.enable_hot_swapping = enable_hot_swapping
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
-        # Partial operations policy (disabled by default for parity)
+        # Partial operations policy (enabled by default for better profit capture)
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager = partial_manager
