@@ -231,7 +231,11 @@ class MonitoringDashboard:
         @self.app.route("/")
         def dashboard():
             """Main dashboard page"""
-            return render_template("dashboard.html")
+            # Use enhanced dashboard template if it exists, fallback to standard
+            try:
+                return render_template("dashboard_enhanced.html")
+            except Exception:
+                return render_template("dashboard.html")
 
         @self.app.route("/health")
         def health():
@@ -1944,13 +1948,7 @@ class MonitoringDashboard:
                         (
                             h["balance"]
                             for h in balance_history
-                            if (
-                                (
-                                    datetime.now(UTC)
-                                    - h["timestamp"].astimezone(UTC)
-                                ).days
-                                >= 1
-                            )
+                            if ((datetime.now(UTC) - h["timestamp"].astimezone(UTC)).days >= 1)
                         ),
                         recent_balance,
                     )
