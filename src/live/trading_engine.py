@@ -417,6 +417,9 @@ class LiveTradingEngine:
         self.total_pnl = 0.0
         self.peak_balance = initial_balance
         self.max_drawdown = 0.0
+        # Daily P&L tracking
+        self.current_trading_date = None
+        self.day_start_balance = None
 
         # MFE/MAE tracker
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
@@ -2839,8 +2842,13 @@ class LiveTradingEngine:
                     (self.peak_balance - self.current_balance) / self.peak_balance * 100
                 )
 
-            # TODO: Calculate daily P&L (requires tracking of day start balance)
-            daily_pnl = 0  # Placeholder
+            # Calculate daily P&L based on day start balance
+            daily_pnl = 0.0
+            if hasattr(self, "day_start_balance") and self.day_start_balance is not None:
+                daily_pnl = self.current_balance - self.day_start_balance
+                logger.debug(
+                    f"Daily P&L: ${daily_pnl:,.2f} (start: ${self.day_start_balance:,.2f}, current: ${self.current_balance:,.2f})"
+                )
 
             # Log snapshot to database
             if self.trading_session_id is not None:
