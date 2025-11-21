@@ -20,21 +20,20 @@ Ideal for:
 - Simple deployment scenarios
 """
 
-from typing import Any, Optional
 
 from src.strategies.components import (
-    Strategy,
-    MLSignalGenerator,
-    RegimeAdaptiveRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
+    MLSignalGenerator,
+    RegimeAdaptiveRiskManager,
+    Strategy,
 )
 
 
 def create_ml_adaptive_strategy(
     name: str = "MlAdaptive",
     sequence_length: int = 120,
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
 ) -> Strategy:
     """
     Create ML Adaptive strategy using component composition.

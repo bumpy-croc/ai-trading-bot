@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-from typing import Optional
 
 
 def find_project_root() -> Path:
@@ -27,7 +26,7 @@ def find_project_root() -> Path:
         return app_dir.resolve()
 
     # * Helper: look for common project markers while walking up
-    def _search_up(start: Path) -> Optional[Path]:
+    def _search_up(start: Path) -> Path | None:
         markers = ("alembic.ini", "pyproject.toml", "migrations")
         for parent in [start, *start.parents]:
             try:
@@ -55,7 +54,7 @@ def find_project_root() -> Path:
 
 
 # Cache the project root to avoid repeated filesystem operations
-_PROJECT_ROOT: Optional[Path] = None
+_PROJECT_ROOT: Path | None = None
 
 
 def get_project_root() -> Path:

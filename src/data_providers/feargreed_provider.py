@@ -1,6 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -70,7 +69,7 @@ class FearGreedProvider(SentimentDataProvider):
                 [
                     {
                         "timestamp": datetime.fromtimestamp(
-                            int(r.get("timestamp", 0)), tz=timezone.utc
+                            int(r.get("timestamp", 0)), tz=UTC
                         ),
                         "value": float(r.get("value", 0.0)),
                         "classification": r.get("value_classification", "Unknown"),
@@ -128,22 +127,22 @@ class FearGreedProvider(SentimentDataProvider):
             return False
         last = self.data.index.max()
         if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
+            last = last.replace(tzinfo=UTC)
         # Normalize now_ts to timezone-aware UTC for safe subtraction
         if now_ts.tzinfo is None:
-            now_ts = now_ts.replace(tzinfo=timezone.utc)
+            now_ts = now_ts.replace(tzinfo=UTC)
         return (now_ts - last) <= timedelta(days=self.freshness_days)
 
     def get_historical_sentiment(
-        self, symbol: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, start: datetime, end: datetime | None = None
     ) -> pd.DataFrame:
         # Fear & Greed is market-level; symbol ignored except for logging
         if end is None:
-            end = datetime.now(timezone.utc)
+            end = datetime.now(UTC)
         if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
+            start = start.replace(tzinfo=UTC)
         if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
+            end = end.replace(tzinfo=UTC)
 
         if self.data.empty:
             logger.warning("FearGreedProvider: no data loaded")
@@ -184,7 +183,7 @@ class FearGreedProvider(SentimentDataProvider):
         if self.data.empty:
             return self._neutral()
         if date.tzinfo is None:
-            date = date.replace(tzinfo=timezone.utc)
+            date = date.replace(tzinfo=UTC)
         idx = self.data.index.get_indexer([date], method="ffill")
         if idx.size == 0 or idx[0] < 0:
             return self._neutral()

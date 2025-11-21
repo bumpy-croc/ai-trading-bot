@@ -4,7 +4,6 @@ Technical indicator feature extractor.
 This module provides technical analysis features for prediction.
 """
 
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -48,7 +47,7 @@ class TechnicalFeatureExtractor(FeatureExtractor):
         atr_period: int = DEFAULT_ATR_PERIOD,
         bollinger_period: int = DEFAULT_BOLLINGER_PERIOD,
         bollinger_std_dev: float = DEFAULT_BOLLINGER_STD_DEV,
-        ma_periods: Optional[list[int]] = None,
+        ma_periods: list[int] | None = None,
         macd_fast: int = DEFAULT_MACD_FAST_PERIOD,
         macd_slow: int = DEFAULT_MACD_SLOW_PERIOD,
         macd_signal: int = DEFAULT_MACD_SIGNAL_PERIOD,

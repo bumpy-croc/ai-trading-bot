@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -36,10 +36,10 @@ class RiskParameters:
     max_correlated_risk: float = 0.10  # 10% maximum risk for correlated positions
     max_drawdown: float = 0.20  # 20% maximum drawdown (fraction)
     position_size_atr_multiplier: float = 1.0
-    default_take_profit_pct: Optional[float] = None  # if None, engine/strategy may supply
+    default_take_profit_pct: float | None = None  # if None, engine/strategy may supply
     atr_period: int = 14
     # Time exit config (optional; strategies may override)
-    time_exits: Optional[dict] = None
+    time_exits: dict | None = None
     # Partial operations (defaults can be overridden by strategies)
     partial_exit_targets: list[float] | None = None
     partial_exit_sizes: list[float] | None = None
@@ -48,8 +48,8 @@ class RiskParameters:
     max_scale_ins: int = DEFAULT_MAX_SCALE_INS
     # Trailing stop config (engine/backtester may override via strategy.get_risk_overrides())
     trailing_activation_threshold: float = DEFAULT_TRAILING_ACTIVATION_THRESHOLD
-    trailing_distance_pct: Optional[float] = DEFAULT_TRAILING_DISTANCE_PCT
-    trailing_atr_multiplier: Optional[float] = DEFAULT_TRAILING_DISTANCE_ATR_MULT
+    trailing_distance_pct: float | None = DEFAULT_TRAILING_DISTANCE_PCT
+    trailing_atr_multiplier: float | None = DEFAULT_TRAILING_DISTANCE_ATR_MULT
     breakeven_threshold: float = DEFAULT_BREAKEVEN_THRESHOLD
     breakeven_buffer: float = DEFAULT_BREAKEVEN_BUFFER
     # Correlation control configuration (used by correlation engine/integration)
@@ -112,7 +112,7 @@ class RiskManager:
     """Handles position sizing and risk management"""
 
     def __init__(
-        self, parameters: Optional[RiskParameters] = None, max_concurrent_positions: int = 3
+        self, parameters: RiskParameters | None = None, max_concurrent_positions: int = 3
     ):
         self.params = parameters or RiskParameters()
         self.daily_risk_used = 0.0
@@ -190,11 +190,11 @@ class RiskManager:
         df: pd.DataFrame,
         index: int,
         balance: float,
-        price: Optional[float] = None,
-        indicators: Optional[dict[str, Any]] = None,
-        strategy_overrides: Optional[dict[str, Any]] = None,
+        price: float | None = None,
+        indicators: dict[str, Any] | None = None,
+        strategy_overrides: dict[str, Any] | None = None,
         regime: str = "normal",
-        correlation_ctx: Optional[dict[str, Any]] = None,
+        correlation_ctx: dict[str, Any] | None = None,
     ) -> float:
         """
         Return the fraction of balance to allocate (0..1), enforcing risk limits.
@@ -312,8 +312,8 @@ class RiskManager:
         index: int,
         entry_price: float,
         side: str = "long",
-        strategy_overrides: Optional[dict[str, Any]] = None,
-    ) -> tuple[Optional[float], Optional[float]]:
+        strategy_overrides: dict[str, Any] | None = None,
+    ) -> tuple[float | None, float | None]:
         """
         Compute stop-loss and take-profit prices.
         Priority:
@@ -327,8 +327,8 @@ class RiskManager:
             "take_profit_pct", self.params.default_take_profit_pct
         )
 
-        sl_price: Optional[float] = None
-        tp_price: Optional[float] = None
+        sl_price: float | None = None
+        tp_price: float | None = None
 
         if stop_loss_pct is not None:
             if side == "long":
@@ -405,7 +405,7 @@ class RiskManager:
         self,
         symbols: list,
         corr_matrix: pd.DataFrame | None = None,
-        threshold: Optional[float] = None,
+        threshold: float | None = None,
     ) -> float:
         """Calculate correlated exposure across provided symbols.
 

@@ -5,10 +5,12 @@ This module contains technical indicator-based signal generators that use
 traditional technical analysis methods to generate trading signals.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 
+from src.strategies.components.regime_context import RegimeContext
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
 from src.tech.indicators.core import (
     calculate_atr,
     calculate_bollinger_bands,
@@ -16,8 +18,6 @@ from src.tech.indicators.core import (
     calculate_moving_averages,
     calculate_rsi,
 )
-from src.strategies.components.regime_context import RegimeContext
-from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
 
 
 class TechnicalSignalGenerator(SignalGenerator):
@@ -100,7 +100,7 @@ class TechnicalSignalGenerator(SignalGenerator):
         )
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """
         Generate trading signal based on technical indicators
@@ -349,7 +349,7 @@ class TechnicalSignalGenerator(SignalGenerator):
         macd_signal: int,
         ma_signal: int,
         bb_signal: int,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
     ) -> SignalDirection:
         """
         Combine individual signals into final signal direction
@@ -553,7 +553,7 @@ class RSISignalGenerator(SignalGenerator):
         self.oversold = oversold
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """Generate signal based on RSI levels"""
         self.validate_inputs(df, index)
@@ -683,7 +683,7 @@ class MACDSignalGenerator(SignalGenerator):
         self.min_periods = slow_period + signal_period
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """Generate signal based on MACD crossovers"""
         self.validate_inputs(df, index)

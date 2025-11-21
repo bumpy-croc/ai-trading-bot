@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 try:
     import tensorflow as tf
     from tensorflow.keras import callbacks
-    from tensorflow.keras.layers import Conv1D, Dense, Dropout, Input, LSTM, MaxPooling1D
+    from tensorflow.keras.layers import LSTM, Conv1D, Dense, Dropout, Input, MaxPooling1D
     from tensorflow.keras.models import Model
 
     _TENSORFLOW_AVAILABLE = True
@@ -26,8 +26,8 @@ except ImportError:
 
 if TYPE_CHECKING:
     # For type checking, assume tensorflow is available
-    from tensorflow.keras.models import Model as ModelType
     from tensorflow.keras import callbacks as CallbacksType
+    from tensorflow.keras.models import Model as ModelType
 else:
     ModelType = Any  # type: ignore
     CallbacksType = Any  # type: ignore

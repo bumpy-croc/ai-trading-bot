@@ -14,7 +14,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -68,7 +68,7 @@ class SignalTestResults:
     confidence_accuracy_correlation: float
 
     # Regime breakdown (if regime data available)
-    regime_breakdown: Dict[str, Dict[str, float]]
+    regime_breakdown: dict[str, dict[str, float]]
 
     # Error analysis
     error_count: int
@@ -173,9 +173,9 @@ class SizingTestResults:
 class ComponentTestResults:
     """Combined results from all component tests"""
 
-    signal_results: Optional[SignalTestResults] = None
-    risk_results: Optional[RiskTestResults] = None
-    sizing_results: Optional[SizingTestResults] = None
+    signal_results: SignalTestResults | None = None
+    risk_results: RiskTestResults | None = None
+    sizing_results: SizingTestResults | None = None
 
     # Overall metrics
     total_test_duration: float = 0.0
@@ -194,7 +194,7 @@ class ComponentPerformanceTester:
     and PositionSizer components with detailed performance metrics.
     """
 
-    def __init__(self, test_data: pd.DataFrame, regime_data: Optional[pd.DataFrame] = None):
+    def __init__(self, test_data: pd.DataFrame, regime_data: pd.DataFrame | None = None):
         """
         Initialize component performance tester
 
@@ -279,7 +279,7 @@ class ComponentPerformanceTester:
         true_range = np.maximum(high_low, np.maximum(high_close, low_close))
         return true_range.rolling(window=period).mean()
 
-    def _generate_test_scenarios(self) -> List[Dict[str, Any]]:
+    def _generate_test_scenarios(self) -> list[dict[str, Any]]:
         """Generate various test scenarios for comprehensive testing"""
         scenarios = []
 
@@ -346,7 +346,7 @@ class ComponentPerformanceTester:
 
         return scenarios
 
-    def _identify_trend_periods(self, trend_type: str) -> List[Tuple[int, int]]:
+    def _identify_trend_periods(self, trend_type: str) -> list[tuple[int, int]]:
         """Identify periods of specific trend direction"""
         # Simple trend identification using moving averages
         short_ma = self.test_data["close"].rolling(20).mean()
@@ -378,7 +378,7 @@ class ComponentPerformanceTester:
 
         return periods
 
-    def _identify_volatility_periods(self, vol_type: str) -> List[Tuple[int, int]]:
+    def _identify_volatility_periods(self, vol_type: str) -> list[tuple[int, int]]:
         """Identify periods of specific volatility level"""
         # Calculate rolling volatility
         volatility = self.test_data["returns"].rolling(20).std()
@@ -411,7 +411,7 @@ class ComponentPerformanceTester:
         return periods
 
     def test_signal_generator(
-        self, generator: SignalGenerator, scenarios: Optional[List[str]] = None
+        self, generator: SignalGenerator, scenarios: list[str] | None = None
     ) -> SignalTestResults:
         """
         Test signal generator performance across various scenarios
@@ -618,7 +618,7 @@ class ComponentPerformanceTester:
             signals_per_second=signals_per_second,
         )
 
-    def _simulate_signal_trading(self, signals: List[Dict[str, Any]]) -> pd.Series:
+    def _simulate_signal_trading(self, signals: list[dict[str, Any]]) -> pd.Series:
         """Simulate trading based on signals to calculate performance"""
         returns = []
 
@@ -662,7 +662,7 @@ class ComponentPerformanceTester:
         self,
         risk_manager: RiskManager,
         test_balance: float = 10000.0,
-        scenarios: Optional[List[str]] = None,
+        scenarios: list[str] | None = None,
     ) -> RiskTestResults:
         """
         Test risk manager performance across various scenarios
@@ -847,7 +847,7 @@ class ComponentPerformanceTester:
         self,
         position_sizer: PositionSizer,
         test_balance: float = 10000.0,
-        scenarios: Optional[List[str]] = None,
+        scenarios: list[str] | None = None,
     ) -> SizingTestResults:
         """
         Test position sizer performance across various scenarios
@@ -1002,9 +1002,9 @@ class ComponentPerformanceTester:
 
     def test_all_components(
         self,
-        signal_generator: Optional[SignalGenerator] = None,
-        risk_manager: Optional[RiskManager] = None,
-        position_sizer: Optional[PositionSizer] = None,
+        signal_generator: SignalGenerator | None = None,
+        risk_manager: RiskManager | None = None,
+        position_sizer: PositionSizer | None = None,
         test_balance: float = 10000.0,
     ) -> ComponentTestResults:
         """

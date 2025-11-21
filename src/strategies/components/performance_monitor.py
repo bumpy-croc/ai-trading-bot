@@ -12,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -102,9 +102,9 @@ class SwitchDecision:
     should_switch: bool
     reason: str
     confidence: float
-    recommended_strategy: Optional[str] = None
+    recommended_strategy: str | None = None
     degradation_severity: DegradationSeverity = DegradationSeverity.NONE
-    timeframe_results: Optional[list[TimeFrameAnalysis]] = None
+    timeframe_results: list[TimeFrameAnalysis] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -129,7 +129,7 @@ class PerformanceMonitor:
     intelligent strategy switching decisions.
     """
 
-    def __init__(self, config: Optional[PerformanceDegradationConfig] = None):
+    def __init__(self, config: PerformanceDegradationConfig | None = None):
         """
         Initialize performance monitor
 
@@ -159,7 +159,7 @@ class PerformanceMonitor:
         current_strategy_id: str,
         performance_tracker: PerformanceTracker,
         market_data: pd.DataFrame,
-        current_regime: Optional[RegimeContext] = None,
+        current_regime: RegimeContext | None = None,
     ) -> SwitchDecision:
         """
         Determine if strategy should be switched based on performance degradation
@@ -236,7 +236,7 @@ class PerformanceMonitor:
         self,
         strategy_id: str,
         performance_tracker: PerformanceTracker,
-        regime: Optional[str] = None,
+        regime: str | None = None,
     ) -> None:
         """
         Update performance baseline for a strategy
@@ -342,7 +342,7 @@ class PerformanceMonitor:
         self,
         strategy_id: str,
         performance_tracker: PerformanceTracker,
-        current_regime: Optional[RegimeContext],
+        current_regime: RegimeContext | None,
     ) -> list[TimeFrameAnalysis]:
         """Analyze performance across multiple timeframes"""
         results = []
@@ -543,7 +543,7 @@ class PerformanceMonitor:
         return len(significant_timeframes) >= 2
 
     def _is_regime_transition_period(
-        self, market_data: pd.DataFrame, current_regime: Optional[RegimeContext]
+        self, market_data: pd.DataFrame, current_regime: RegimeContext | None
     ) -> bool:
         """Check if we're in a regime transition period"""
         if not current_regime or market_data.empty:
@@ -619,7 +619,7 @@ class PerformanceMonitor:
             return 30  # Default
 
     def get_degradation_history(
-        self, strategy_id: Optional[str] = None, days: int = 30
+        self, strategy_id: str | None = None, days: int = 30
     ) -> list[dict[str, Any]]:
         """Get degradation history for analysis"""
         cutoff_date = datetime.now() - timedelta(days=days)
@@ -632,7 +632,7 @@ class PerformanceMonitor:
 
         return filtered_history
 
-    def reset_baselines(self, strategy_id: Optional[str] = None) -> None:
+    def reset_baselines(self, strategy_id: str | None = None) -> None:
         """Reset performance baselines"""
         if strategy_id:
             if strategy_id in self.performance_baselines:

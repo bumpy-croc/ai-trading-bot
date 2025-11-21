@@ -8,10 +8,11 @@ and alerting for strategy performance.
 
 import logging
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
@@ -122,10 +123,10 @@ class EmergencyAlert:
     message: str
     triggered_at: datetime
     acknowledged: bool = False
-    acknowledged_by: Optional[str] = None
-    acknowledged_at: Optional[datetime] = None
+    acknowledged_by: str | None = None
+    acknowledged_at: datetime | None = None
     resolved: bool = False
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -159,12 +160,12 @@ class ApprovalRequest:
     status: ApprovalStatus = ApprovalStatus.PENDING
 
     # Approval details
-    approved_by: Optional[str] = None
-    approved_at: Optional[datetime] = None
-    rejection_reason: Optional[str] = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    rejection_reason: str | None = None
 
     # Associated data
-    switch_request: Optional[SwitchRequest] = None
+    switch_request: SwitchRequest | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -194,7 +195,7 @@ class EmergencyControls:
     """
 
     def __init__(
-        self, strategy_switcher: StrategySwitcher, config: Optional[EmergencyConfig] = None
+        self, strategy_switcher: StrategySwitcher, config: EmergencyConfig | None = None
     ):
         """
         Initialize emergency controls
@@ -222,8 +223,8 @@ class EmergencyControls:
         self.approval_history: deque[ApprovalRequest] = deque(maxlen=500)
 
         # Monitoring state
-        self.last_performance_check: Optional[datetime] = None
-        self.last_emergency_check: Optional[datetime] = None
+        self.last_performance_check: datetime | None = None
+        self.last_emergency_check: datetime | None = None
 
         # Callbacks for external integration
         self.alert_callbacks: list[Callable[[EmergencyAlert], None]] = []
@@ -240,7 +241,7 @@ class EmergencyControls:
         self,
         strategy_id: str,
         performance_tracker: PerformanceTracker,
-        current_regime: Optional[RegimeContext] = None,
+        current_regime: RegimeContext | None = None,
     ) -> EmergencyLevel:
         """
         Check for emergency conditions in strategy performance
@@ -390,7 +391,7 @@ class EmergencyControls:
             return request_id
 
     def approve_request(
-        self, request_id: str, approved_by: str, rejection_reason: Optional[str] = None
+        self, request_id: str, approved_by: str, rejection_reason: str | None = None
     ) -> bool:
         """
         Approve or reject a pending approval request
@@ -644,7 +645,7 @@ class EmergencyControls:
 
     def _trigger_alert(
         self, alert_type: AlertType, level: EmergencyLevel, strategy_id: str, message: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Trigger an emergency alert"""
         # Check cooldown
         cooldown_key = f"{alert_type.value}_{strategy_id}"
@@ -825,7 +826,7 @@ class EmergencyControls:
     def update_monitoring(
         self,
         strategy_performance: dict[str, PerformanceTracker],
-        current_regime: Optional[RegimeContext] = None,
+        current_regime: RegimeContext | None = None,
     ) -> None:
         """
         Update monitoring checks for all strategies

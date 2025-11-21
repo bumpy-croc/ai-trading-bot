@@ -41,7 +41,7 @@ def get_cache_dir() -> Path:
     return get_project_root() / "cache" / "market_data"
 
 
-def get_database_path(*_args, **_kwargs):  # type: ignore[override]
+def get_database_path(*_args, **_kwargs):
     """DEPRECATED: SQLite is no longer supported.
 
     This helper previously returned an SQLite connection string.  The project

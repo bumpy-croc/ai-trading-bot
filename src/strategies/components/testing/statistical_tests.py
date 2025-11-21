@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -26,7 +25,7 @@ class StatisticalTestResult:
     test_name: str
     statistic: float
     p_value: float
-    critical_value: Optional[float] = None
+    critical_value: float | None = None
     confidence_level: float = 0.95
     reject_null: bool = False
     interpretation: str = ""
@@ -51,7 +50,7 @@ class FinancialStatisticalTests:
 
     def test_return_distribution_equality(
         self, returns1: pd.Series, returns2: pd.Series
-    ) -> List[StatisticalTestResult]:
+    ) -> list[StatisticalTestResult]:
         """
         Test if two return series have the same distribution.
 
@@ -117,7 +116,7 @@ class FinancialStatisticalTests:
 
     def test_mean_equality(
         self, returns1: pd.Series, returns2: pd.Series
-    ) -> List[StatisticalTestResult]:
+    ) -> list[StatisticalTestResult]:
         """
         Test if two return series have equal means.
 
@@ -183,7 +182,7 @@ class FinancialStatisticalTests:
 
     def test_variance_equality(
         self, returns1: pd.Series, returns2: pd.Series
-    ) -> List[StatisticalTestResult]:
+    ) -> list[StatisticalTestResult]:
         """
         Test if two return series have equal variances.
 
@@ -245,7 +244,7 @@ class FinancialStatisticalTests:
 
         return results
 
-    def test_normality(self, returns: pd.Series) -> List[StatisticalTestResult]:
+    def test_normality(self, returns: pd.Series) -> list[StatisticalTestResult]:
         """
         Test if return series follows normal distribution.
 
@@ -387,7 +386,7 @@ class FinancialStatisticalTests:
                 interpretation=f"Test failed: {str(e)}",
             )
 
-    def test_stationarity(self, series: pd.Series) -> List[StatisticalTestResult]:
+    def test_stationarity(self, series: pd.Series) -> list[StatisticalTestResult]:
         """
         Test for stationarity in time series.
 
@@ -457,7 +456,7 @@ class FinancialStatisticalTests:
         returns2: pd.Series,
         series1_name: str = "Series 1",
         series2_name: str = "Series 2",
-    ) -> Dict[str, List[StatisticalTestResult]]:
+    ) -> dict[str, list[StatisticalTestResult]]:
         """
         Perform comprehensive statistical comparison of two return series.
 
@@ -508,7 +507,7 @@ class EquivalenceTests:
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
     def two_one_sided_test(
-        self, returns1: pd.Series, returns2: pd.Series, equivalence_margin: Optional[float] = None
+        self, returns1: pd.Series, returns2: pd.Series, equivalence_margin: float | None = None
     ) -> StatisticalTestResult:
         """
         Perform Two One-Sided Test (TOST) for equivalence of means.
@@ -584,7 +583,7 @@ class EquivalenceTests:
             )
 
 
-def format_test_results(results: Dict[str, List[StatisticalTestResult]]) -> str:
+def format_test_results(results: dict[str, list[StatisticalTestResult]]) -> str:
     """
     Format statistical test results into a readable report.
 

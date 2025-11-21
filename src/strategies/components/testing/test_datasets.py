@@ -10,7 +10,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -34,12 +34,12 @@ class MarketScenario:
 
     # Price movement parameters
     initial_price: float
-    final_price: Optional[float] = None
-    max_drawdown: Optional[float] = None
-    max_runup: Optional[float] = None
+    final_price: float | None = None
+    max_drawdown: float | None = None
+    max_runup: float | None = None
 
     # Market regime labels
-    regime_labels: Optional[Dict[str, Any]] = None
+    regime_labels: dict[str, Any] | None = None
 
     # Special characteristics
     has_gaps: bool = False
@@ -58,8 +58,8 @@ class TestDatasetGenerator:
 
     def __init__(
         self,
-        data_dir: Optional[str] = None,
-        cache_dir: Optional[str] = None,
+        data_dir: str | None = None,
+        cache_dir: str | None = None,
         max_cache_size_mb: int = 500,
     ):
         """
@@ -113,7 +113,7 @@ class TestDatasetGenerator:
         except Exception as e:
             logger.warning(f"Cache eviction failed: {e}")
 
-    def _define_market_scenarios(self) -> List[MarketScenario]:
+    def _define_market_scenarios(self) -> list[MarketScenario]:
         """Define standard market scenarios for testing"""
         scenarios = [
             # Bull market scenarios
@@ -267,8 +267,8 @@ class TestDatasetGenerator:
     def get_historical_dataset(
         self,
         symbol: str = "BTCUSDT",
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         timeframe: str = "1d",
     ) -> pd.DataFrame:
         """
@@ -411,7 +411,7 @@ class TestDatasetGenerator:
         return true_range.rolling(window=period).mean()
 
     def generate_synthetic_dataset(
-        self, scenario_name: str, seed: Optional[int] = None
+        self, scenario_name: str, seed: int | None = None
     ) -> pd.DataFrame:
         """
         Generate synthetic dataset for a specific market scenario
@@ -452,14 +452,14 @@ class TestDatasetGenerator:
 
         return data
 
-    def _get_scenario_by_name(self, name: str) -> Optional[MarketScenario]:
+    def _get_scenario_by_name(self, name: str) -> MarketScenario | None:
         """Get scenario definition by name"""
         for scenario in self.market_scenarios:
             if scenario.name == name:
                 return scenario
         return None
 
-    def get_all_scenarios(self) -> List[str]:
+    def get_all_scenarios(self) -> list[str]:
         """Get list of all available scenario names"""
         return [scenario.name for scenario in self.market_scenarios]
 
@@ -469,7 +469,7 @@ class TestDatasetGenerator:
         return scenario.description if scenario else "Unknown scenario"
 
     def generate_edge_case_dataset(
-        self, case_type: str, duration_days: int = 100, seed: Optional[int] = None
+        self, case_type: str, duration_days: int = 100, seed: int | None = None
     ) -> pd.DataFrame:
         """
         Generate edge case datasets for stress testing
@@ -633,8 +633,8 @@ class TestDatasetGenerator:
         self,
         scenario_name: str,
         regime_detection_method: str = "simple",
-        seed: Optional[int] = None,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        seed: int | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Create dataset with regime labels for regime-specific testing
 
@@ -711,7 +711,7 @@ class TestDatasetGenerator:
 
         return pd.Series(duration.values, index=regime_data.index, dtype=int)
 
-    def get_comprehensive_test_suite(self, seed: Optional[int] = None) -> Dict[str, pd.DataFrame]:
+    def get_comprehensive_test_suite(self, seed: int | None = None) -> dict[str, pd.DataFrame]:
         """
         Get comprehensive test suite with all scenarios and edge cases
 
@@ -767,7 +767,7 @@ class SyntheticDataGenerator:
         pass
 
     def generate_scenario_data(
-        self, scenario: MarketScenario, seed: Optional[int] = None
+        self, scenario: MarketScenario, seed: int | None = None
     ) -> pd.DataFrame:
         """
         Generate synthetic data for a market scenario
@@ -863,7 +863,7 @@ class SyntheticDataGenerator:
 
     def _generate_ohlcv_from_prices(
         self, prices: np.ndarray, scenario: MarketScenario
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Generate OHLCV data from price series"""
         n_periods = len(prices)
 

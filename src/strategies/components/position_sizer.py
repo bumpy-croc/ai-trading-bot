@@ -7,7 +7,8 @@ strategy architecture.
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
@@ -535,7 +536,7 @@ class RegimeAdaptiveSizer(PositionSizer):
     def __init__(
         self,
         base_fraction: float = 0.03,
-        regime_multipliers: Optional[dict[str, float]] = None,
+        regime_multipliers: dict[str, float] | None = None,
         volatility_adjustment: bool = True,
     ):
         """

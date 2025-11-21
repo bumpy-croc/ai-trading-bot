@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -40,6 +40,13 @@ from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
+from src.infrastructure.logging.context import set_context, update_context
+from src.infrastructure.logging.events import (
+    log_data_event,
+    log_engine_event,
+    log_order_event,
+    log_risk_event,
+)
 from src.live.strategy_manager import StrategyManager
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
@@ -54,13 +61,6 @@ from src.strategies.components import MarketData as ComponentMarketData
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, Signal, SignalDirection, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
-from src.infrastructure.logging.context import set_context, update_context
-from src.infrastructure.logging.events import (
-    log_data_event,
-    log_engine_event,
-    log_order_event,
-    log_risk_event,
-)
 
 from .account_sync import AccountSynchronizer
 
@@ -1090,7 +1090,7 @@ class LiveTradingEngine:
                     )
                 else:
                     logger.info(
-                        f"📅 No day start balance found, initializing to current balance (daily P&L tracking reset)"
+                        "📅 No day start balance found, initializing to current balance (daily P&L tracking reset)"
                     )
                 # Also recover active positions
                 self._recover_active_positions()
@@ -2796,7 +2796,7 @@ class LiveTradingEngine:
 
     def _check_and_update_trading_date(self):
         """Check if a new trading day has started and reset day_start_balance if so"""
-        current_date = datetime.now(timezone.utc).date()
+        current_date = datetime.now(UTC).date()
 
         if self.current_trading_date is None:
             # First time running - initialize with current date
@@ -3033,9 +3033,9 @@ class LiveTradingEngine:
 
         try:
             # Get start of current day in UTC
-            current_date = datetime.now(timezone.utc).date()
+            current_date = datetime.now(UTC).date()
             day_start = datetime.combine(current_date, datetime.min.time()).replace(
-                tzinfo=timezone.utc
+                tzinfo=UTC
             )
 
             # Query for the first account snapshot of the current day

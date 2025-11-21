@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 
@@ -51,7 +50,7 @@ class DataProvider(ABC):
 
     @abstractmethod
     def get_historical_data(
-        self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> pd.DataFrame:
         """
         Fetch historical market data.

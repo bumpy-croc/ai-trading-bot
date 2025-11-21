@@ -20,18 +20,16 @@ Risk Management:
 - Dynamic position sizing based on confidence
 """
 
-from typing import Any, Optional
 
 from src.strategies.components import (
-    Strategy,
-    WeightedVotingSignalGenerator,
-    VolatilityRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
     MLBasicSignalGenerator,
     MLSignalGenerator,
+    Strategy,
+    VolatilityRiskManager,
+    WeightedVotingSignalGenerator,
 )
-
 
 # Configuration constants
 MIN_STRATEGIES_FOR_SIGNAL = 1

@@ -12,12 +12,12 @@ import sys
 
 from src.config.constants import DEFAULT_INITIAL_BALANCE
 from src.data_providers.mock_data_provider import MockDataProvider
+from src.infrastructure.logging.config import configure_logging
 from src.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
 
 # Import strategies
 from src.strategies.ml_basic import create_ml_basic_strategy
-from src.infrastructure.logging.config import configure_logging
 
 # Configure logging
 configure_logging()

@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from pathlib import Path
-from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -32,7 +30,7 @@ PROJECT_ROOT = get_project_root()
 MODEL_REGISTRY = PROJECT_ROOT / "src" / "ml" / "models"
 
 
-def _parse_dates(start: str, end: str) -> Tuple[datetime, datetime]:
+def _parse_dates(start: str, end: str) -> tuple[datetime, datetime]:
     try:
         start_dt = datetime.strptime(start, "%Y-%m-%d")
         end_dt = datetime.strptime(end, "%Y-%m-%d")
@@ -116,7 +114,7 @@ def train_model_main(args) -> int:
 def _prepare_price_only_sequences(
     df: pd.DataFrame,
     sequence_length: int,
-) -> Tuple[np.ndarray, np.ndarray, list[str]]:
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     extractor = PriceOnlyFeatureExtractor(normalization_window=sequence_length)
     enriched = extractor.extract(df.copy())
     feature_cols = [

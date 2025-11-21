@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-
 import json
 import logging
 import os
@@ -33,7 +32,7 @@ if not _IS_RAILWAY:
         from cli.commands.train_commands import train_model_main, train_price_model_main
 
         _TRAINING_AVAILABLE = True
-    except ImportError as e:
+    except ImportError:
         _TRAINING_AVAILABLE = False
         train_model_main = None  # type: ignore
         train_price_model_main = None  # type: ignore
@@ -148,7 +147,7 @@ def _repoint_latest(version_dir: Path) -> None:
             except OSError:
                 pass
         logger.error(f"Permission denied when updating symlink at {latest_link}: {e}")
-        raise OSError(f"Failed to update 'latest' symlink: insufficient permissions") from e
+        raise OSError("Failed to update 'latest' symlink: insufficient permissions") from e
     except OSError as e:
         # Clean up temp symlink on failure
         if temp_link.exists() or temp_link.is_symlink():
@@ -214,7 +213,7 @@ def _control(ns: argparse.Namespace) -> int:
 
         meta_path = _latest_metadata(ns.symbol, model_type)
         if meta_path.exists():
-            with open(meta_path, "r", encoding="utf-8") as fh:
+            with open(meta_path, encoding="utf-8") as fh:
                 metadata = json.load(fh)
             print("✅ Model training complete")
             print(
