@@ -710,3 +710,192 @@ class TestDynamicRiskManagerExtendedEdgeCases:
 
         # Risk should generally increase as balance decreases
         assert results[0].position_size_factor >= results[-1].position_size_factor
+
+
+class TestCorrelationAdjustment:
+    """Test correlation and concentration risk adjustments"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.config = DynamicRiskConfig()
+        self.db_manager = Mock()
+        self.manager = DynamicRiskManager(self.config, self.db_manager, max_correlated_risk=0.10)
+
+    def test_no_positions(self):
+        """Test correlation adjustment with no open positions"""
+        self.db_manager.get_active_positions.return_value = []
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        assert adjustments.primary_reason == "correlation_no_positions"
+        assert adjustments.position_size_factor == 1.0
+        assert adjustments.stop_loss_tightening == 1.0
+
+    def test_no_database_connection(self):
+        """Test correlation adjustment without database connection"""
+        manager = DynamicRiskManager(self.config, db_manager=None)
+
+        adjustments = manager._calculate_correlation_adjustment(session_id=1)
+
+        assert adjustments.primary_reason == "correlation_no_data"
+        assert adjustments.position_size_factor == 1.0
+
+    def test_normal_exposure(self):
+        """Test correlation adjustment with normal exposure levels"""
+        # 2 positions with 5% each = 10% total (at max correlated risk)
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": 0.05},
+            {"symbol": "ETHUSDT", "size_fraction": 0.05},
+        ]
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        # Should be neutral at exact threshold
+        assert adjustments.position_size_factor == 1.0
+        assert adjustments.adjustment_details["total_exposure"] == 0.10
+        assert adjustments.adjustment_details["num_positions"] == 2
+
+    def test_high_total_exposure(self):
+        """Test correlation adjustment with excessive total exposure"""
+        # 3 positions with 8% each = 24% total (exceeds 10% max)
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": 0.08},
+            {"symbol": "ETHUSDT", "size_fraction": 0.08},
+            {"symbol": "BNBUSDT", "size_fraction": 0.08},
+        ]
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        assert adjustments.primary_reason == "high_total_exposure"
+        # Excess ratio = 0.24 / 0.10 = 2.4, reduction factor = 1/2.4 = 0.417
+        # Capped at max 50% reduction -> 0.5
+        assert adjustments.position_size_factor == 0.5
+        assert adjustments.adjustment_details["total_exposure"] == 0.24
+        assert adjustments.adjustment_details["excess_ratio"] == 2.4
+
+    def test_low_diversification(self):
+        """Test correlation adjustment with low diversification"""
+        # 2 positions with 8% and 9% = 17% total (>15% threshold with <=2 positions)
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": 0.08},
+            {"symbol": "ETHUSDT", "size_fraction": 0.09},
+        ]
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        assert adjustments.primary_reason == "low_diversification"
+        assert adjustments.position_size_factor == 0.8  # 20% reduction
+        assert adjustments.adjustment_details["num_positions"] == 2
+        assert adjustments.adjustment_details["total_exposure"] == 0.17
+
+    def test_large_single_position(self):
+        """Test correlation adjustment with a single large position"""
+        # 1 position with 25% (exceeds 20% max single exposure)
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": 0.25},
+        ]
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        # Low diversification has priority over large single position
+        # (1 position, 25% > 15% threshold)
+        assert adjustments.primary_reason == "low_diversification"
+        assert adjustments.position_size_factor == 0.8
+
+    def test_balanced_portfolio(self):
+        """Test correlation adjustment with well-diversified portfolio"""
+        # 5 positions with 2% each = 10% total (balanced)
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": 0.02},
+            {"symbol": "ETHUSDT", "size_fraction": 0.02},
+            {"symbol": "BNBUSDT", "size_fraction": 0.02},
+            {"symbol": "ADAUSDT", "size_fraction": 0.02},
+            {"symbol": "SOLUSDT", "size_fraction": 0.02},
+        ]
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        # Should pass all checks with balanced diversification
+        assert adjustments.position_size_factor == 1.0
+        assert adjustments.adjustment_details["num_positions"] == 5
+        assert adjustments.adjustment_details["total_exposure"] == 0.10
+        assert adjustments.adjustment_details["max_single_exposure"] == 0.02
+
+    def test_short_positions(self):
+        """Test correlation adjustment with short positions"""
+        # Mixed long/short positions
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": 0.08},  # Long
+            {"symbol": "ETHUSDT", "size_fraction": -0.08},  # Short
+        ]
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        # Total exposure counts absolute values: 8% + 8% = 16%
+        assert adjustments.adjustment_details["total_exposure"] == 0.16
+        # > 15% with 2 positions -> low diversification
+        assert adjustments.primary_reason == "low_diversification"
+
+    def test_none_size_fraction(self):
+        """Test handling of None size_fraction values"""
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": None},
+            {"symbol": "ETHUSDT", "size_fraction": 0.05},
+        ]
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        # Should handle None gracefully, treating as 0
+        assert adjustments.adjustment_details["total_exposure"] == 0.05
+        assert adjustments.position_size_factor == 1.0
+
+    def test_database_error_handling(self):
+        """Test graceful error handling when database fails"""
+        self.db_manager.get_active_positions.side_effect = Exception("Database connection error")
+
+        adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
+
+        assert adjustments.primary_reason == "correlation_error"
+        assert adjustments.position_size_factor == 1.0
+
+    def test_custom_max_correlated_risk(self):
+        """Test correlation adjustment with custom max_correlated_risk"""
+        manager = DynamicRiskManager(self.config, self.db_manager, max_correlated_risk=0.20)
+
+        # 3 positions with 8% each = 24% total (exceeds 20% max)
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": 0.08},
+            {"symbol": "ETHUSDT", "size_fraction": 0.08},
+            {"symbol": "BNBUSDT", "size_fraction": 0.08},
+        ]
+
+        adjustments = manager._calculate_correlation_adjustment(session_id=1)
+
+        # Excess ratio = 0.24 / 0.20 = 1.2, reduction factor = 1/1.2 = 0.833
+        assert adjustments.primary_reason == "high_total_exposure"
+        assert 0.83 <= adjustments.position_size_factor <= 0.84
+        assert adjustments.adjustment_details["total_exposure"] == 0.24
+
+    def test_integration_with_dynamic_risk_adjustments(self):
+        """Test correlation adjustment is properly integrated into full calculation"""
+        # Mock performance metrics
+        self.db_manager.get_dynamic_risk_performance_metrics.return_value = {
+            "total_trades": 20,
+            "win_rate": 0.6,
+            "profit_factor": 1.5,
+        }
+
+        # High exposure positions
+        self.db_manager.get_active_positions.return_value = [
+            {"symbol": "BTCUSDT", "size_fraction": 0.15},
+            {"symbol": "ETHUSDT", "size_fraction": 0.15},
+        ]
+
+        adjustments = self.manager.calculate_dynamic_risk_adjustments(
+            current_balance=10000, peak_balance=10000, session_id=1
+        )
+
+        # Correlation adjustment should be applied (30% total > 10% max)
+        # Combined with other factors (taking minimum)
+        assert adjustments.position_size_factor < 1.0
+        assert isinstance(adjustments, RiskAdjustments)

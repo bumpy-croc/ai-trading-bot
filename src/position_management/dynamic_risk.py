@@ -85,9 +85,11 @@ class DynamicRiskManager:
         self,
         config: Optional[DynamicRiskConfig] = None,
         db_manager: Optional["DatabaseManager"] = None,
+        max_correlated_risk: Optional[float] = None,
     ):
         self.config = config or DynamicRiskConfig()
         self.db_manager = db_manager
+        self.max_correlated_risk = max_correlated_risk or 0.10  # 10% default
 
         # Cache for performance calculations
         self._performance_cache: dict[str, Any] = {}
@@ -383,18 +385,83 @@ class DynamicRiskManager:
 
     def _calculate_correlation_adjustment(self, session_id: Optional[int]) -> RiskAdjustments:
         """
-        Calculate adjustments based on position correlation (placeholder implementation).
+        Calculate adjustments based on position correlation and concentration risk.
 
-        TODO: Implement full correlation risk management in future release.
-        This should analyze:
-        - Correlation between current positions
-        - Exposure concentration by sector/asset class
-        - Maximum correlated risk limits
+        Analyzes current open positions to detect excessive concentration risk:
+        - Total exposure across all positions
+        - Number of concurrent positions (diversification)
+        - Concentration in single positions
 
-        For now, returns neutral adjustment.
+        Note: Symbol-level correlation is handled by CorrelationEngine at the engine level.
+        This provides portfolio-level concentration risk management.
         """
-        # Placeholder implementation - always returns neutral
-        return RiskAdjustments(primary_reason="correlation_not_implemented")
+        if not self.db_manager or not session_id:
+            return RiskAdjustments(primary_reason="correlation_no_data")
+
+        try:
+            # Get active positions from database
+            positions = self.db_manager.get_active_positions(session_id=session_id)
+            if not positions:
+                return RiskAdjustments(primary_reason="correlation_no_positions")
+
+            # Calculate total exposure and concentration metrics
+            total_exposure = 0.0
+            max_single_exposure = 0.0
+            num_positions = len(positions)
+
+            for pos in positions:
+                # Extract size_fraction (fraction of balance)
+                size = pos.get("size_fraction", 0.0)
+                if size is None:
+                    size = 0.0
+                size = float(size)
+
+                total_exposure += abs(size)  # Count both long and short
+                max_single_exposure = max(max_single_exposure, abs(size))
+
+            # Apply concentration-based risk reduction
+            position_size_factor = 1.0
+            stop_loss_factor = 1.0
+            primary_reason = "normal"
+            details = {
+                "total_exposure": round(total_exposure, 4),
+                "num_positions": num_positions,
+                "max_single_exposure": round(max_single_exposure, 4),
+            }
+
+            # Check 1: Total exposure exceeds max correlated risk
+            if total_exposure > self.max_correlated_risk:
+                # Reduce position sizing proportionally
+                excess_ratio = total_exposure / self.max_correlated_risk
+                position_size_factor = 1.0 / excess_ratio  # Scale down to bring within limits
+                position_size_factor = max(0.5, min(1.0, position_size_factor))  # Cap at 50% reduction
+                primary_reason = "high_total_exposure"
+                details["excess_ratio"] = round(excess_ratio, 2)
+
+            # Check 2: Low diversification (too few positions with high exposure)
+            elif num_positions <= 2 and total_exposure > 0.15:  # > 15% in 1-2 positions
+                # Reduce new position sizing to encourage diversification
+                position_size_factor = 0.8
+                primary_reason = "low_diversification"
+
+            # Check 3: Single position too large
+            elif max_single_exposure > 0.20:  # Any position > 20%
+                # Tighten stops on new positions
+                stop_loss_factor = 1.2  # 20% tighter stops
+                position_size_factor = 0.9  # Slight size reduction
+                primary_reason = "large_single_position"
+
+            return RiskAdjustments(
+                position_size_factor=position_size_factor,
+                stop_loss_tightening=stop_loss_factor,
+                daily_risk_factor=position_size_factor,  # Also reduce daily risk allowance
+                primary_reason=primary_reason,
+                adjustment_details=details,
+            )
+
+        except Exception as exc:
+            logger.warning("Failed to calculate correlation adjustment: %s", exc)
+            return RiskAdjustments(primary_reason="correlation_error")
 
     def _determine_primary_reason(
         self,
