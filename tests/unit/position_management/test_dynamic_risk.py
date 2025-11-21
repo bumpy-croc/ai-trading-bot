@@ -775,7 +775,8 @@ class TestCorrelationAdjustment:
 
     def test_low_diversification(self):
         """Test correlation adjustment with low diversification"""
-        # 2 positions with 8% and 9% = 17% total (>15% threshold with <=2 positions)
+        # 2 positions with 8% and 9% = 17% total
+        # Note: 17% exceeds max_correlated_risk (10%), so triggers high_total_exposure first
         self.db_manager.get_active_positions.return_value = [
             {"symbol": "BTCUSDT", "size_fraction": 0.08},
             {"symbol": "ETHUSDT", "size_fraction": 0.09},
@@ -783,24 +784,26 @@ class TestCorrelationAdjustment:
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
 
-        assert adjustments.primary_reason == "low_diversification"
-        assert adjustments.position_size_factor == 0.8  # 20% reduction
+        # High total exposure takes priority over low diversification
+        assert adjustments.primary_reason == "high_total_exposure"
+        # Excess ratio = 0.17 / 0.10 = 1.7, reduction = 1/1.7 = 0.588
+        assert 0.58 <= adjustments.position_size_factor <= 0.59
         assert adjustments.adjustment_details["num_positions"] == 2
         assert adjustments.adjustment_details["total_exposure"] == 0.17
 
     def test_large_single_position(self):
         """Test correlation adjustment with a single large position"""
         # 1 position with 25% (exceeds 20% max single exposure)
+        # Note: 25% also exceeds max_correlated_risk (10%), so triggers high_total_exposure first
         self.db_manager.get_active_positions.return_value = [
             {"symbol": "BTCUSDT", "size_fraction": 0.25},
         ]
 
         adjustments = self.manager._calculate_correlation_adjustment(session_id=1)
 
-        # Low diversification has priority over large single position
-        # (1 position, 25% > 15% threshold)
-        assert adjustments.primary_reason == "low_diversification"
-        assert adjustments.position_size_factor == 0.8
+        # High total exposure takes priority (25% > 10% max)
+        assert adjustments.primary_reason == "high_total_exposure"
+        assert adjustments.position_size_factor == 0.5  # Capped at 50% reduction
 
     def test_balanced_portfolio(self):
         """Test correlation adjustment with well-diversified portfolio"""
@@ -833,8 +836,8 @@ class TestCorrelationAdjustment:
 
         # Total exposure counts absolute values: 8% + 8% = 16%
         assert adjustments.adjustment_details["total_exposure"] == 0.16
-        # > 15% with 2 positions -> low diversification
-        assert adjustments.primary_reason == "low_diversification"
+        # 16% > 10% max_correlated_risk -> high_total_exposure
+        assert adjustments.primary_reason == "high_total_exposure"
 
     def test_none_size_fraction(self):
         """Test handling of None size_fraction values"""
