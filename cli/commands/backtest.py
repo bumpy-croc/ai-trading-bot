@@ -17,6 +17,7 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
 from src.strategies import (
+    create_buy_and_hold_strategy,
     create_ensemble_weighted_strategy,
     create_ml_adaptive_strategy,
     create_ml_basic_strategy,
@@ -32,6 +33,7 @@ logger = logging.getLogger("atb.backtest")
 def _load_strategy(strategy_name: str):
     # Define available strategies with their import paths and classes
     available_strategies = {
+        "buy_and_hold": create_buy_and_hold_strategy,
         "ml_basic": create_ml_basic_strategy,
         "ml_sentiment": create_ml_sentiment_strategy,
         "ml_adaptive": create_ml_adaptive_strategy,
