@@ -95,5 +95,5 @@ def custom_report():
 
 ## See Also
 
-- [Database documentation](../../docs/database.md) - Database schema and operations
-- [Monitoring dashboard](../dashboards/monitoring/README.md) - Real-time trading metrics
+- [Database documentation](../../../docs/database.md) - Database schema and operations
+- [Monitoring dashboard](../../dashboards/monitoring/README.md) - Real-time trading metrics

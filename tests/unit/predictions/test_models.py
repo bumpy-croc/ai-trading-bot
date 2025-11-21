@@ -9,9 +9,26 @@ import numpy as np
 import pytest
 
 from src.prediction.config import PredictionConfig
+from src.prediction.models.execution_providers import get_preferred_providers
 from src.prediction.models.onnx_runner import ModelPrediction, OnnxRunner
 from src.prediction.models.registry import PredictionModelRegistry
 from src.prediction.utils.caching import ModelCache, cache_prediction
+
+
+def test_get_preferred_providers_mac_prioritizes_coreml():
+    """Ensure CoreML is preferred on macOS when available."""
+
+    with patch(
+        "src.prediction.models.execution_providers.platform.system",
+        return_value="Darwin",
+    ), patch(
+        "src.prediction.models.execution_providers.ort.get_available_providers",
+        return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        create=True,
+    ):
+        providers = get_preferred_providers()
+
+    assert providers == ["CoreMLExecutionProvider", "CPUExecutionProvider"]
 
 
 class TestPredictionConfig:
@@ -118,6 +135,15 @@ class TestOnnxRunner:
             max_prediction_latency=0.1,
             model_registry_path="src/ml/models",
         )
+        self.providers_patcher = patch(
+            "src.prediction.models.onnx_runner.get_preferred_providers",
+            return_value=["CPUExecutionProvider"],
+        )
+        self.mock_providers = self.providers_patcher.start()
+
+    def teardown_method(self):
+        """Tear down patched providers"""
+        self.providers_patcher.stop()
 
     @patch("onnxruntime.InferenceSession")
     @patch(
@@ -138,6 +164,30 @@ class TestOnnxRunner:
         assert runner.model_metadata is not None
         assert runner.model_metadata["sequence_length"] == 120
         mock_session.assert_called_once_with(model_path, providers=["CPUExecutionProvider"])
+
+    @patch("onnxruntime.InferenceSession")
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data='{"sequence_length": 120, "feature_count": 5}',
+    )
+    def test_model_loading_mac_gpu(self, mock_file, mock_session):
+        """Test ONNX model loading prioritizes CoreML on macOS"""
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+
+        model_path = "/tmp/test_model.onnx"
+        with patch(
+            "src.prediction.models.onnx_runner.get_preferred_providers",
+            return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        ):
+            runner = OnnxRunner(model_path, self.config)
+
+        assert runner.session is not None
+        mock_session.assert_called_once_with(
+            model_path,
+            providers=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        )
 
     @patch("onnxruntime.InferenceSession")
     @patch("builtins.open", side_effect=FileNotFoundError)

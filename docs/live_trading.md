@@ -1,6 +1,6 @@
 # Live trading
 
-> **Last Updated**: 2025-10-31  
+> **Last Updated**: 2025-11-10  
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
 `src/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
@@ -73,8 +73,8 @@ Useful flags:
 
 The control surface lives under `atb live-control`:
 
-- `atb live-control train --symbol BTCUSDT --days 365` – runs the standard `atb train` pipeline from the live console and updates the registry’s `latest` symlink
-  it.
+- `atb live-control train --symbol BTCUSDT --days 365` – runs the standard `atb train` pipeline from the live console and updates the
+  registry’s `latest` symlink automatically so the live engine picks up the new model.
 - `atb live-control deploy-model --model-path <staging-dir> --close-positions` – promote a staged bundle into the live strategy
   directory.
 - `atb live-control list-models` / `status` / `emergency-stop` – quick operational actions when supervising a running engine.

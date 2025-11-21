@@ -10,7 +10,7 @@ statsmodels==0.14.1
 requests==2.31.0
 nltk==3.9.1
 ccxt==4.4.85
-tqdm==4.66.1
+tqdm==4.66.3
 tensorflow==2.19.0
 tf2onnx==1.16.1
 sqlalchemy==2.0.23

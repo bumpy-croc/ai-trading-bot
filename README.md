@@ -115,6 +115,7 @@ pytest -q
 # Diagnostics
 atb db verify
 atb tests heartbeat
+atb tests parse-junit tests/reports/unit.xml --label "Unit Tests"
 ```
 
 8) Development setup

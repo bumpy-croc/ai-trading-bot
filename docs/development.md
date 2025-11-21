@@ -1,6 +1,6 @@
 # Development workflow
 
-> **Last Updated**: 2025-10-31
+> **Last Updated**: 2025-11-17
 
 This project ships a command-line interface and Makefile targets that standardise local setup, quality checks, and diagnostics.
 
@@ -45,6 +45,7 @@ Run `atb dev setup` to execute helper scripts (pre-commit hooks, git config) use
 - `atb tests heartbeat` – insert a `SystemEvent` row for monitoring pipelines.
 - `atb tests db` – verify database connectivity end-to-end.
 - `atb tests download` – smoke test data downloads via CCXT.
+- `atb tests parse-junit tests/reports/unit.xml --label "Unit Tests"` – parse a JUnit XML report and print condensed failure summaries in CI logs.
 
 ## Code quality
 

@@ -10,7 +10,7 @@ requests==2.31.0
 textblob==0.17.1
 nltk==3.9.1
 ccxt==4.4.85
-tqdm==4.66.1
+tqdm==4.66.3
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
 psutil>=5.9.6
@@ -18,7 +18,7 @@ matplotlib==3.8.2
 
 # ML inference
 onnxruntime==1.17.0
-onnx==1.14.0
+onnx==1.17.0
 
 # Web framework
 Flask==2.3.3

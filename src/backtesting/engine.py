@@ -190,8 +190,10 @@ class Backtester:
         self._custom_trailing_stop_policy = trailing_stop_policy is not None
         self.trailing_stop_policy = trailing_stop_policy
         self.partial_manager = partial_manager
+        self._partial_operations_opt_in = self.partial_manager is not None
         self.time_exit_policy: TimeExitPolicy | None = time_exit_policy
         self._custom_time_exit_policy = time_exit_policy is not None
+        self._component_dynamic_risk_config: DynamicRiskConfig | None = None
 
         # Regime-aware strategy switching
         self.enable_regime_switching = enable_regime_switching
@@ -255,6 +257,7 @@ class Backtester:
         self.risk_manager = RiskManager(risk_parameters)
         if not self._custom_trailing_stop_policy:
             self.trailing_stop_policy = self._build_trailing_policy()
+        self._trailing_stop_opt_in = self.trailing_stop_policy is not None
         if not self._custom_time_exit_policy:
             self.time_exit_policy = self._build_time_exit_policy()
         # Correlation engine (for correlation-aware backtests)
@@ -555,6 +558,63 @@ class Backtester:
 
         return RuntimeContext(balance=float(balance), current_positions=positions or None)
 
+    def _apply_policies_from_decision(self, decision) -> None:
+        """Hydrate engine-level policies from runtime decisions."""
+
+        if decision is None:
+            return
+
+        bundle = getattr(decision, "policies", None)
+        if not bundle:
+            return
+
+        try:
+            partial_descriptor = getattr(bundle, "partial_exit", None)
+            if partial_descriptor is not None:
+                if getattr(self, "_partial_operations_opt_in", False) or self.partial_manager is not None:
+                    self.partial_manager = partial_descriptor.to_policy()
+                    self._partial_operations_opt_in = True
+                else:
+                    logger.debug(
+                        "Skipping partial-exit policy from component decision: partial operations disabled"
+                    )
+        except Exception as exc:
+            logger.debug("Failed to hydrate partial-exit policy from component decision: %s", exc)
+
+        try:
+            trailing_descriptor = getattr(bundle, "trailing_stop", None)
+            if trailing_descriptor is not None:
+                if getattr(self, "_trailing_stop_opt_in", False) or self.trailing_stop_policy is not None:
+                    self.trailing_stop_policy = trailing_descriptor.to_policy()
+                    self._trailing_stop_opt_in = True
+                else:
+                    logger.debug(
+                        "Skipping trailing-stop policy from component decision: trailing stops disabled"
+                    )
+        except Exception as exc:
+            logger.debug("Failed to hydrate trailing-stop policy from component decision: %s", exc)
+
+        try:
+            dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
+            if dynamic_descriptor is not None:
+                config = dynamic_descriptor.to_config()
+                self._component_dynamic_risk_config = config
+                if not getattr(self, "enable_dynamic_risk", False):
+                    self.enable_dynamic_risk = True
+
+                manager = getattr(self, "dynamic_risk_manager", None)
+                needs_new_manager = manager is None or getattr(manager, "config", None) != config
+                if needs_new_manager:
+                    self.dynamic_risk_manager = DynamicRiskManager(config=config, db_manager=self.db_manager)
+                else:
+                    try:
+                        self.dynamic_risk_manager.config = config
+                    except AttributeError:
+                        pass
+                    self.dynamic_risk_manager.db_manager = self.db_manager
+        except Exception as exc:
+            logger.debug("Failed to hydrate dynamic risk manager from component decision: %s", exc)
+
     def _runtime_process_decision(
         self,
         index: int,
@@ -574,6 +634,7 @@ class Backtester:
         context = self._build_runtime_context(balance, current_price, current_time)
         try:
             decision = self._runtime.process(index, context)
+            self._apply_policies_from_decision(decision)
             return decision
         except Exception as exc:
             logger.warning("Runtime decision failed at index %s: %s", index, exc)
