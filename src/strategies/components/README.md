@@ -178,7 +178,7 @@ Abstract base class for managing position sizing and risk controls.
 - `FixedRiskManager` - Fixed percentage risk per trade
 - `VolatilityRiskManager` - Risk adjusted for market volatility
 - `RegimeAdaptiveRiskManager` - Risk adjusted for market regime
-- `KellyRiskManager` - Kelly criterion-based sizing
+- `CoreRiskAdapter` - Bridges the engine-level `RiskManager` into component strategies
 
 **Usage**:
 ```python

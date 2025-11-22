@@ -116,7 +116,7 @@ When choosing between different component implementations:
 generators = [
     MLSignalGenerator(),
     TechnicalSignalGenerator(),
-    SentimentSignalGenerator()
+    MomentumSignalGenerator()
 ]
 
 for gen in generators:

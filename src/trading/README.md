@@ -1,52 +1,34 @@
 # Trading Core
 
-Base classes and shared utilities for trading strategies and components.
+Minimal trading-domain helpers that sit outside the strategy/component system.
 
 ## Overview
 
-This module provides the foundational interfaces and shared functionality used across the trading system. It defines base strategy classes, component interfaces, and common helpers for backtesting and live trading, including symbol utilities under `symbols/`.
+The `src/trading` package currently focuses on symbol normalization so every subsystem (data providers, backtester, live engine, CLI)
+can speak a consistent ticker format. Strategy composition, risk, and component interfaces now live under `src/strategies/components`,
+so this directory intentionally stays lightweight.
 
 ## Modules
 
-- `symbols/`: Symbol normalization helpers for exchange-specific formats.
-
-## Key Components
-
-### Base Strategy Classes
-Abstract base classes for implementing trading strategies. All custom strategies should inherit from `BaseStrategy`.
-
-### Component Interfaces
-Contracts defining the interface for:
-- Signal generators
-- Risk managers
-- Position sizers
-- Entry/exit logic
-
-### Shared Utilities
-Common helpers used by strategies and engines including validation, error handling, and data processing utilities.
+- `symbols/factory.py` – `SymbolFactory` converts between generic tickers (e.g., `BTC-USD`) and exchange-specific formats such as
+  `BTCUSDT` (Binance) or `BTC-USD` (Coinbase). The CLI, providers, and engines all reuse this helper to avoid bespoke conversions.
 
 ## Usage
 
 ```python
-# Import base strategy class
-from src.strategies.base import BaseStrategy
+from src.trading.symbols.factory import SymbolFactory
 
-class MyStrategy(BaseStrategy):
-    def calculate_indicators(self, df):
-        # Add indicators to dataframe
-        return df
-    
-    def check_entry_conditions(self, df):
-        # Return entry signal
-        return signal
-    
-    def check_exit_conditions(self, df, position):
-        # Return exit signal
-        return signal
+# Normalize user input for Binance backtests
+symbol = SymbolFactory.to_exchange_symbol("btc-usd", "binance")
+# -> 'BTCUSDT'
+
+# Convert cached Binance symbols back to Coinbase style
+coinbase_symbol = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
+# -> 'BTC-USD'
 ```
 
 ## See Also
 
-- [strategies/README.md](../strategies/README.md) - Strategy implementation examples
-- [docs/backtesting.md](../../docs/backtesting.md) - Backtesting strategies
-- [docs/live_trading.md](../../docs/live_trading.md) - Live trading usage
+- `src/strategies/README.md` – Component-based strategy architecture
+- `docs/backtesting.md` – How symbols flow through the simulation engine
+- `docs/live_trading.md` – Live engine configuration, including provider selection

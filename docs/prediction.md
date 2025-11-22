@@ -11,7 +11,7 @@ isolated from live execution while still exposing predictions to strategies in a
 `PredictionEngine` (`src/prediction/engine.py`) orchestrates feature extraction, model selection, and inference:
 
 - Builds features through `FeaturePipeline` (technical, sentiment, and market microstructure inputs).
-- Technical indicators and normalization live in `src.tech.features.technical`; `src/prediction/features/technical.py` now re-exports the extractor for compatibility.
+- Technical indicators and normalization live in `src/tech/features/technical.py`; `src/prediction/features/technical.py` now re-exports the extractor for compatibility.
 - Selects models from `PredictionModelRegistry`, supporting per-strategy bundles and latest-version symlinks.
 - Optionally caches results in the database (`PredictionCacheManager`) to avoid duplicate inferences during tight polling loops.
 - Supports ensemble aggregation and regime-aware confidence adjustments when enabled in `PredictionConfig`.

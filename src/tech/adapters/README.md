@@ -14,5 +14,7 @@ Guidelines:
   how to persist it.
 
 The `row_extractors.py` module exposes `extract_indicators`,
-`extract_sentiment_data`, and `extract_ml_predictions`, which replace duplicated
-helpers in `src/trading/shared/indicators.py` and `src/backtesting/utils.py`.
+`extract_sentiment_data`, and `extract_ml_predictions`, which replace the legacy
+helpers that used to live in `src/trading/shared` and the bespoke versions inside
+`src/backtesting/utils.py`. Engines and dashboards now import from this package
+so indicator snapshots stay consistent everywhere.
