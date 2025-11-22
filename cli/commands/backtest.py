@@ -18,7 +18,9 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 
 from src.strategies import (
     create_aggressive_trend_strategy,
+    create_balanced_crash_avoider_strategy,
     create_buy_and_hold_strategy,
+    create_crash_avoider_strategy,
     create_ensemble_weighted_strategy,
     create_ml_adaptive_strategy,
     create_ml_basic_strategy,
@@ -26,6 +28,7 @@ from src.strategies import (
     create_moderate_aggressive_trend_strategy,
     create_momentum_leverage_strategy,
     create_ultra_aggressive_trend_strategy,
+    create_ultra_defensive_crash_avoider_strategy,
 )
 from src.infrastructure.logging.config import configure_logging
 from src.trading.symbols.factory import SymbolFactory
@@ -45,6 +48,9 @@ def _load_strategy(strategy_name: str):
         "aggressive_trend": create_aggressive_trend_strategy,
         "moderate_aggressive_trend": create_moderate_aggressive_trend_strategy,
         "ultra_aggressive_trend": create_ultra_aggressive_trend_strategy,
+        "crash_avoider": create_crash_avoider_strategy,
+        "balanced_crash_avoider": create_balanced_crash_avoider_strategy,
+        "ultra_defensive_crash_avoider": create_ultra_defensive_crash_avoider_strategy,
     }
 
     try:

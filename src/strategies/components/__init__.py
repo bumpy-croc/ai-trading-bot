@@ -69,6 +69,7 @@ from .technical_signal_generator import (
 )
 from .momentum_signal_generator import MomentumSignalGenerator
 from .aggressive_trend_signal_generator import AggressiveTrendSignalGenerator
+from .crash_detection_signal_generator import CrashDetectionSignalGenerator
 from .testing.test_datasets import TestDatasetGenerator
 from .testing.component_performance_tester import ComponentPerformanceTester
 from .testing.regime_tester import RegimeTester
@@ -111,6 +112,7 @@ __all__ = [
     "MACDSignalGenerator",
     "MomentumSignalGenerator",
     "AggressiveTrendSignalGenerator",
+    "CrashDetectionSignalGenerator",
     "HoldSignalGenerator",
     "RandomSignalGenerator",
     "WeightedVotingSignalGenerator",
