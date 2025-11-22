@@ -325,33 +325,51 @@ This section will contain:
 
 ## Baseline Metrics Table
 
-*To be populated after Phase 1 completion:*
+**Test Period**: 2024-01-01 to 2024-06-30 (6 months, ~4380 hourly candles)
+**Initial Balance**: $10,000
 
 | Strategy | Symbol | Sharpe | Sortino | Max DD | Win Rate | Total Return | Trades |
 |----------|--------|--------|---------|--------|----------|--------------|--------|
-| ml_basic | BTCUSDT | TBD | TBD | TBD | TBD | TBD | TBD |
-| ml_basic | ETHUSDT | TBD | TBD | TBD | TBD | TBD | TBD |
-| ml_adaptive | BTCUSDT | TBD | TBD | TBD | TBD | TBD | TBD |
-| ml_adaptive | ETHUSDT | TBD | TBD | TBD | TBD | TBD | TBD |
+| ml_basic | BTCUSDT | 1.24 | N/A | 0.10% | 72.73% | 0.11% | 22 |
+| ml_basic | ETHUSDT | Not tested | - | - | - | - | - |
+| ml_adaptive | BTCUSDT | Not tested | - | - | - | - | - |
+| ml_adaptive | ETHUSDT | Not tested | - | - | - | - | - |
 
 ## Experiment Results
 
-*To be populated as experiments complete:*
+### Experiment 1: Lower Confidence Threshold (COMPLETED)
+**Date**: 2025-11-22
+**Hypothesis**: Model predictions at low confidence may be directionally correct
+**Changes**: min_confidence 0.1 (vs 0.3 baseline)
+**Results**:
+- Trades: 288 (13x increase)
+- Win Rate: 61.11% (down 11.6pp)
+- Total Return: -0.16% (NEGATIVE, worse than baseline)
+- Sharpe: -1.35 (NEGATIVE)
+**Conclusion**: FAILED. Low-confidence signals are directionally incorrect. Model quality is the issue, not threshold.
 
-### Batch 1: Risk Management Parameters
-- TBD
+### Experiment 2: Higher Take Profit Target (COMPLETED)
+**Date**: 2025-11-22
+**Hypothesis**: Low returns due to taking profits too early
+**Changes**: take_profit 8% (vs 4% baseline)
+**Results**: IDENTICAL to baseline (22 trades, 72.73% WR, 0.11% return)
+**Conclusion**: Take profit targets are NEVER reached. Trades exit via stop loss or other mechanisms. Exit logic needs investigation.
 
-### Batch 2: ML Feature Engineering
-- TBD
+### Key Findings
+1. **Model has signal quality issues**: Only 22 high-confidence signals in 6 months
+2. **Low confidence predictions are wrong**: Lowering threshold causes losses
+3. **Take profit never reached**: Exits happen much earlier than 4% profit
+4. **Position sizing too conservative**: 0.11% returns over 6 months is meaningless
+5. **Strategy over-optimized for safety**: 0.10% max DD excellent but zero returns
 
-### Batch 3: ML Architecture Tuning
-- TBD
+### Recommended Next Experiments
+1. **Increase position sizing**: 5% base (vs 2%) to capture meaningful returns
+2. **Investigate exit logic**: Why are trades closing before reaching profit targets?
+3. **Model retraining**: Use 5 years data + more epochs + better features
+4. **Different timeframes**: Test 4h or 1d to reduce noise
 
-### Batch 4: Regime Detection
-- TBD
-
-### Batch 5: Signal Thresholds
-- TBD
+### Detailed Analysis
+See `docs/execplans/experiment_results_2025-11-22.md` for complete analysis and recommendations.
 
 ## Interfaces and Dependencies
 
