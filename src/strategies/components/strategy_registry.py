@@ -652,7 +652,7 @@ class StrategyRegistry:
             return strategy_id
 
         except Exception as e:
-            raise StrategyValidationError(f"Failed to deserialize strategy: {e}")
+            raise StrategyValidationError(f"Failed to deserialize strategy: {e}") from e
 
     def validate_strategy_integrity(self, strategy_id: str) -> dict[str, Any]:
         """

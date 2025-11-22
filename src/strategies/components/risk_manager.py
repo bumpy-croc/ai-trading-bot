@@ -660,9 +660,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
     with different risk profiles for different market conditions.
     """
 
-    def __init__(
-        self, base_risk: float = 0.02, regime_multipliers: dict[str, float] | None = None
-    ):
+    def __init__(self, base_risk: float = 0.02, regime_multipliers: dict[str, float] | None = None):
         """
         Initialize regime-adaptive risk manager
 

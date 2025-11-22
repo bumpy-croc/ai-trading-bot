@@ -111,9 +111,7 @@ class RiskParameters:
 class RiskManager:
     """Handles position sizing and risk management"""
 
-    def __init__(
-        self, parameters: RiskParameters | None = None, max_concurrent_positions: int = 3
-    ):
+    def __init__(self, parameters: RiskParameters | None = None, max_concurrent_positions: int = 3):
         self.params = parameters or RiskParameters()
         self.daily_risk_used = 0.0
         self.positions: dict[str, dict] = {}

@@ -1796,13 +1796,7 @@ class MonitoringDashboard:
                         (
                             h["balance"]
                             for h in balance_history
-                            if (
-                                (
-                                    datetime.now(UTC)
-                                    - h["timestamp"].astimezone(UTC)
-                                ).days
-                                >= 1
-                            )
+                            if ((datetime.now(UTC) - h["timestamp"].astimezone(UTC)).days >= 1)
                         ),
                         recent_balance,
                     )

@@ -90,13 +90,12 @@ def train_model_main(args) -> int:
         print(f"❌ Training failed: {result.metadata.get('error')}")
         return 1
 
-    print("✅ Training complete in %.1fs" % result.duration_seconds)
+    print(f"✅ Training complete in {result.duration_seconds:.1f}s")
     eval_results = result.metadata.get("evaluation_results", {})
     if eval_results:
-        print(
-            "📊 Test RMSE: %.6f | MAPE: %.2f%%"
-            % (eval_results.get("test_rmse", 0.0), eval_results.get("mape", 0.0))
-        )
+        test_rmse = eval_results.get("test_rmse", 0.0)
+        mape = eval_results.get("mape", 0.0)
+        print(f"📊 Test RMSE: {test_rmse:.6f} | MAPE: {mape:.2f}%")
     artifacts = result.artifact_paths
     if artifacts:
         print(f"Keras model: {artifacts.keras_path}")

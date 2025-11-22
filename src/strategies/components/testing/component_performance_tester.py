@@ -780,7 +780,7 @@ class ComponentPerformanceTester:
         premature_exits = 0
         late_exits = 0
 
-        for should_exit, actual_return in zip(exit_decisions, actual_returns):
+        for should_exit, actual_return in zip(exit_decisions, actual_returns, strict=True):
             if should_exit and actual_return < -0.02:  # Correctly exited before big loss
                 correct_exits += 1
             elif should_exit and actual_return > 0.01:  # Exited too early (missed profit)

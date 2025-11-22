@@ -20,7 +20,6 @@ Risk Management:
 - Dynamic position sizing based on confidence
 """
 
-
 from src.strategies.components import (
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,

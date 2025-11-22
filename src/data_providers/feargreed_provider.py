@@ -68,9 +68,7 @@ class FearGreedProvider(SentimentDataProvider):
             df = pd.DataFrame(
                 [
                     {
-                        "timestamp": datetime.fromtimestamp(
-                            int(r.get("timestamp", 0)), tz=UTC
-                        ),
+                        "timestamp": datetime.fromtimestamp(int(r.get("timestamp", 0)), tz=UTC),
                         "value": float(r.get("value", 0.0)),
                         "classification": r.get("value_classification", "Unknown"),
                     }

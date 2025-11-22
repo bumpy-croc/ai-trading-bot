@@ -83,7 +83,7 @@ class FeatureCache:
             shape_arr = np.asarray(data.shape, dtype=np.int64)
             hasher.update(shape_arr.tobytes())
             # Columns and dtypes (order matters)
-            for col, dtype in zip(data.columns, data.dtypes):
+            for col, dtype in zip(data.columns, data.dtypes, strict=True):
                 hasher.update(str(col).encode("utf-8", "ignore"))
                 hasher.update(str(dtype).encode("utf-8", "ignore"))
             # Sample first and last few rows

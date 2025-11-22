@@ -194,9 +194,7 @@ class EmergencyControls:
     conservative mode, approval workflows, and real-time monitoring.
     """
 
-    def __init__(
-        self, strategy_switcher: StrategySwitcher, config: EmergencyConfig | None = None
-    ):
+    def __init__(self, strategy_switcher: StrategySwitcher, config: EmergencyConfig | None = None):
         """
         Initialize emergency controls
 

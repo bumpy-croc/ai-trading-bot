@@ -728,9 +728,7 @@ class StrategyLineageTracker:
 
         return metrics
 
-    def visualize_lineage(
-        self, strategy_id: str, format: str = "dict"
-    ) -> dict[str, Any] | str:
+    def visualize_lineage(self, strategy_id: str, format: str = "dict") -> dict[str, Any] | str:
         """
         Create visualization data for strategy lineage
 

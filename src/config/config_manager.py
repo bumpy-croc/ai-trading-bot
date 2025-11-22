@@ -5,7 +5,7 @@ This module provides centralized configuration management.
 """
 
 import threading
-from typing import Any
+from typing import Any, Optional
 
 from .providers.base import ConfigProvider
 from .providers.dotenv_provider import DotEnvProvider
@@ -198,7 +198,7 @@ class ConfigManager:
 
 # Global configuration instance
 _config_instance: ConfigManager | None = None
-_config_lock: threading.Lock | None = None
+_config_lock: Optional[threading.Lock] = None
 
 
 def get_config() -> ConfigManager:

@@ -19,7 +19,6 @@ Research-backed approach:
 Key insight: Beat buy-and-hold by being MORE aggressive, not more conservative.
 """
 
-
 from src.strategies.components import (
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,

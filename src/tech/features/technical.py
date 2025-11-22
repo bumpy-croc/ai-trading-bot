@@ -4,7 +4,6 @@ Technical indicator feature extractor.
 This module provides technical analysis features for prediction.
 """
 
-
 import numpy as np
 import pandas as pd
 

@@ -1042,7 +1042,7 @@ class LiveTradingEngine:
                 self._runtime_dataset = None
                 self._runtime_warmup = 0
 
-    def start(self, symbol: str, timeframe: str = "1h", max_steps: int = None):
+    def start(self, symbol: str, timeframe: str = "1h", max_steps: int | None = None) -> None:
         """Start the live trading engine"""
         if self.is_running:
             logger.warning("Trading engine is already running")
@@ -1207,7 +1207,7 @@ class LiveTradingEngine:
         finally:
             self.stop()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the trading engine gracefully"""
         if not self.is_running:
             return
@@ -1249,13 +1249,13 @@ class LiveTradingEngine:
 
         logger.info("Trading engine stopped")
 
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, signum: int, frame: Any) -> None:
         """Handle shutdown signals"""
         logger.info(f"Received signal {signum}")
         self.stop()
         sys.exit(0)
 
-    def _trading_loop(self, symbol: str, timeframe: str, max_steps: int = None):
+    def _trading_loop(self, symbol: str, timeframe: str, max_steps: int | None = None) -> None:
         """Main trading loop"""
         logger.info("Trading loop started")
         steps = 0
@@ -1757,7 +1757,7 @@ class LiveTradingEngine:
         except Exception:
             return None
 
-    def _update_position_pnl(self, current_price: float):
+    def _update_position_pnl(self, current_price: float) -> None:
         """Update unrealized PnL for all positions"""
         for position in self.positions.values():
             fraction = float(
@@ -1782,7 +1782,7 @@ class LiveTradingEngine:
             position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
             position.unrealized_pnl_percent = pnl_pct * 100.0
 
-    def _update_positions_mfe_mae(self, current_price: float):
+    def _update_positions_mfe_mae(self, current_price: float) -> None:
         """Compute and persist rolling MFE/MAE for active positions."""
         now = datetime.utcnow()
         for order_id, position in self.positions.items():
@@ -3034,9 +3034,7 @@ class LiveTradingEngine:
         try:
             # Get start of current day in UTC
             current_date = datetime.now(UTC).date()
-            day_start = datetime.combine(current_date, datetime.min.time()).replace(
-                tzinfo=UTC
-            )
+            day_start = datetime.combine(current_date, datetime.min.time()).replace(tzinfo=UTC)
 
             # Query for the first account snapshot of the current day
             with self.db_manager.Session() as session:

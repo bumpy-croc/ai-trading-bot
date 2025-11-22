@@ -143,7 +143,9 @@ class Strategy:
         # Runtime configuration
         self._warmup_override: int | None = None
         self._last_signal: Signal | None = None
-        self._additional_risk_context_provider: Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None = None
+        self._additional_risk_context_provider: (
+            Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None
+        ) = None
 
         self.logger.info(
             f"Strategy '{name}' initialized with components: "

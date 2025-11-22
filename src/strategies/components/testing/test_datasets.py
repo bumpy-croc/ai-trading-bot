@@ -292,10 +292,12 @@ class TestDatasetGenerator:
                 data.set_index("timestamp", inplace=True)
                 return self._prepare_historical_data(data)
             except Exception as e:
-                warnings.warn(f"Error loading historical data: {e}")
+                warnings.warn(f"Error loading historical data: {e}", stacklevel=2)
 
         # If historical data not available, generate synthetic data
-        warnings.warn(f"Historical data not found for {symbol}, generating synthetic data")
+        warnings.warn(
+            f"Historical data not found for {symbol}, generating synthetic data", stacklevel=2
+        )
         return self.generate_synthetic_dataset("moderate_bull_low_vol")
 
     def _prepare_historical_data(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -448,7 +450,7 @@ class TestDatasetGenerator:
             data_to_cache = data.reset_index()
             data_to_cache.to_feather(cache_file)
         except Exception as e:
-            warnings.warn(f"Could not cache synthetic data: {e}")
+            warnings.warn(f"Could not cache synthetic data: {e}", stacklevel=2)
 
         return data
 

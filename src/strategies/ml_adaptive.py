@@ -20,7 +20,6 @@ Ideal for:
 - Simple deployment scenarios
 """
 
-
 from src.strategies.components import (
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,

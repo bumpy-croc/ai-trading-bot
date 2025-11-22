@@ -515,7 +515,7 @@ class DatabaseManager:
 
     def end_trading_session(
         self, session_id: int | None = None, final_balance: float | None = None
-    ):
+    ) -> None:
         """End a trading session and calculate final metrics."""
         session_id = session_id or self._current_session_id
         if not session_id:
