@@ -47,6 +47,7 @@ def create_ml_basic_larger_positions_strategy(
     """
     risk_parameters = RiskParameters(
         base_risk_per_trade=0.05,  # <-- Increased from 0.02
+        max_risk_per_trade=0.15,  # <-- Increased from 0.03 to accommodate larger base
         default_take_profit_pct=0.04,
         max_position_size=0.15,  # <-- Increased from 0.1
     )
@@ -70,10 +71,11 @@ def create_ml_basic_larger_positions_strategy(
     risk_manager = CoreRiskAdapter(core_risk_manager)
     risk_manager.set_strategy_overrides(risk_overrides)
 
-    # EXPERIMENT: Still use confidence weighting but with higher base
-    # 5% base * 0.3 min confidence = 1.5% min position size (vs 0.6% baseline)
+    # EXPERIMENT: Increase position sizes 2.5x by raising base_fraction
+    # Baseline: 0.2 * 0.3 min conf = 0.06 (6% of balance minimum)
+    # This: 0.5 * 0.3 min conf = 0.15 (15% of balance minimum, 2.5x increase)
     position_sizer = ConfidenceWeightedSizer(
-        base_fraction=0.2,  # This multiplies the base_fraction from risk_overrides
+        base_fraction=0.5,  # <-- Increased from 0.2 to achieve 2.5x larger positions
         min_confidence=0.3,
     )
     regime_detector = EnhancedRegimeDetector()
