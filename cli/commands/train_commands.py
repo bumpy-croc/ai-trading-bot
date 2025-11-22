@@ -75,12 +75,15 @@ def train_model_main(args) -> int:
         force_price_only=args.force_price_only,
         mixed_precision=not getattr(args, "disable_mixed_precision", False),
         diagnostics=_diagnostics_from_args(args),
+        model_type=getattr(args, "model_type", "cnn_lstm"),
+        model_variant=getattr(args, "model_variant", "default"),
     )
 
     ctx = TrainingContext(config=config)
     print(
         "🚀 Starting training for",
         f"{config.symbol} ({config.timeframe})",
+        f"architecture={config.model_type}({config.model_variant})",
         f"epochs={config.epochs}",
         f"seq_len={config.sequence_length}",
         f"batch_size={config.batch_size}",

@@ -36,7 +36,7 @@ from src.ml.training_pipeline.features import (
 )
 from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.ingestion import download_price_data, load_sentiment_data
-from src.ml.training_pipeline.models import create_adaptive_model, default_callbacks
+from src.ml.training_pipeline.models import create_model, get_model_callbacks
 
 logger = logging.getLogger(__name__)
 
@@ -189,15 +189,23 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             "full_sentiment",
             "hybrid_with_fallback",
         ]
-        model = create_adaptive_model(
-            (ctx.config.sequence_length, len(feature_names)), has_sentiment
+
+        # Create model using factory (supports multiple architectures)
+        model = create_model(
+            model_type=ctx.config.model_type,
+            input_shape=(ctx.config.sequence_length, len(feature_names)),
+            variant=ctx.config.model_variant,
+            has_sentiment=has_sentiment,  # For CNN-LSTM compatibility
         )
+
+        # Get model-specific callbacks
+        callbacks_list = get_model_callbacks(ctx.config.model_type, patience=15)
 
         history = model.fit(
             train_ds,
             validation_data=val_ds,
             epochs=ctx.config.epochs,
-            callbacks=default_callbacks(),
+            callbacks=callbacks_list,
             verbose=1,
         )
 
@@ -230,6 +238,8 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
                 "timeframe": ctx.config.timeframe,
                 "start_date": ctx.config.start_date.isoformat(),
                 "end_date": ctx.config.end_date.isoformat(),
+                "architecture": ctx.config.model_type,  # New: model architecture
+                "architecture_variant": ctx.config.model_variant,  # New: architecture variant
             },
             "evaluation_results": evaluation_results,
             "diagnostics": {

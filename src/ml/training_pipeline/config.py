@@ -52,6 +52,10 @@ class TrainingConfig:
     mixed_precision: bool = True
     diagnostics: DiagnosticsOptions = field(default_factory=DiagnosticsOptions)
 
+    # Model architecture selection (new)
+    model_type: str = "cnn_lstm"  # cnn_lstm, attention_lstm, tcn, tcn_attention, lstm
+    model_variant: str = "default"  # default, lightweight, deep
+
     def days_requested(self) -> int:
         return (self.end_date - self.start_date).days
 

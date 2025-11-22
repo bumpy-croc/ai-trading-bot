@@ -86,6 +86,20 @@ def _handle_model(ns: argparse.Namespace) -> int:
         action="store_true",
         help="Disable mixed precision even when a GPU is available",
     )
+    parser.add_argument(
+        "--model-type",
+        type=str,
+        default="cnn_lstm",
+        choices=["cnn_lstm", "attention_lstm", "tcn", "tcn_attention", "lstm"],
+        help="Model architecture (cnn_lstm, attention_lstm, tcn, tcn_attention, lstm)",
+    )
+    parser.add_argument(
+        "--model-variant",
+        type=str,
+        default="default",
+        choices=["default", "lightweight", "deep"],
+        help="Model variant (default, lightweight, deep)",
+    )
 
     # Parse the arguments from ns.args
     args = parser.parse_args(ns.args or [])
