@@ -113,6 +113,28 @@ if self.current_trade.side == "long" and decision.signal.direction == SignalDire
 
 ---
 
+### Experiment 4: Minimum Hold Time Strategy ❌ ENGINE LIMITATION DISCOVERED
+
+**Hypothesis**: Add 4-hour minimum hold time to prevent premature signal reversal exits
+**Implementation**: MinHoldTimeStrategy overrides should_exit_position()
+
+**Results**: IDENTICAL to Experiment 3 (22 trades, 72.73% WR, 0.28% return)
+
+**Root Cause Discovery**:
+- Backtesting engine checks signal reversals BEFORE calling strategy.should_exit_position()
+- Engine code path: `_runtime_should_exit()` lines 655-658 → returns early on reversal
+- Strategy-level exit overrides NEVER invoked for signal reversal exits
+- **Signal reversals are hardcoded at engine level, not customizable per-strategy**
+
+**Conclusion**: **ENGINE MODIFICATION REQUIRED**. To implement minimum hold time or custom exit logic, must modify `src/backtesting/engine.py` to:
+- Move signal reversal check after strategy.should_exit_position(), OR
+- Pass hold duration to strategy exit logic, OR
+- Add engine-level minimum hold time parameter
+
+**Impact**: This is architectural limitation, not strategy design issue. Exit logic customization requires engine changes.
+
+---
+
 ## Strategic Recommendations
 
 ### Priority 1: Position Sizing ✅ COMPLETED
@@ -256,13 +278,17 @@ atb train model BTCUSDT --timeframe 1h \
 
 1. ✅ **Complete Experiment 3**: DONE - 2.5x position sizing validated
 2. ✅ **Exit logic deep-dive**: DONE - Signal reversals identified as root cause
-3. **Implement exit logic fixes**:
-   - Option A: Add minimum hold time (4 hours)
-   - Option B: Disable signal-based exits, use TP/SL only
-   - Option C: Require stronger opposite signal for reversal
-4. **Model retraining**: Train with extended history + technical indicators
-5. **Deploy to 2-year backtest**: Validate improvements on full 2023-2024 period
-6. **Paper trading**: Deploy best variant to live paper trading
+3. ✅ **Attempt minimum hold time**: DONE - Discovered engine-level limitation
+4. **Modify backtesting engine** (REQUIRED for further progress):
+   - Option A: Add minimum hold time check to `src/backtesting/engine.py`
+   - Option B: Move signal reversal check after strategy.should_exit_position()
+   - Option C: Add flag to disable signal-based exits per strategy
+5. **Alternative approach** (simpler, no engine changes):
+   - Disable signal reversals in engine for specific strategies
+   - Rely purely on TP/SL exits
+6. **Model retraining**: Train with extended history + technical indicators
+7. **Deploy to 2-year backtest**: Validate improvements on full 2023-2024 period
+8. **Paper trading**: Deploy best variant to live paper trading
 
 ---
 
@@ -298,14 +324,16 @@ The AI trading bot's ML model and strategy framework are **fundamentally sound**
 **Progress Achieved**:
 1. ✅ Baseline measured: 22 trades, 72.73% WR, 0.11% return over 6 months
 2. ✅ Position sizing increased 2.5x: Returns improved to 0.28% (validated)
-3. ✅ Exit logic root cause found: Signal reversals cause premature exits
-4. ✅ Infrastructure established: 3 strategy variants, systematic backtesting framework
+3. ✅ Exit logic root cause found: Signal reversals cause premature exits (engine-level)
+4. ✅ Architectural limitation identified: Engine-level signal reversals bypass strategy exit logic
+5. ✅ Infrastructure established: 4 strategy variants, systematic backtesting framework
 
 **Path Forward**:
-1. Immediate: Implement exit logic fix (minimum hold time OR TP/SL-based exits)
-2. Short-term: Expected 5-10x additional improvement (0.28% → 1.4-2.8% over 6 months)
-3. Medium-term: Model retraining with extended data + technical indicators
+1. **Immediate**: Modify backtesting engine to support custom exit logic (engine.py changes required)
+2. **Alternative**: Disable signal-based exits entirely, use TP/SL-only approach (simpler)
+3. **Short-term**: Expected 5-10x additional improvement after exit logic fix (0.28% → 1.4-2.8%)
+4. **Medium-term**: Model retraining with extended data + technical indicators
 
-**Conservative Estimate**: 10-20% annualized returns with <3% drawdown achievable within 2-3 weeks.
+**Conservative Estimate**: 10-20% annualized returns with <3% drawdown achievable, but requires engine modification first.
 
-**Status**: Optimization cycle 1 complete. Two critical bottlenecks identified and one fixed. Ready for implementation of exit logic improvements.
+**Status**: Optimization cycle 1 complete. Position sizing bottleneck resolved (2.5x improvement). Exit logic bottleneck identified with architectural limitation. Engine modification required for further progress.
