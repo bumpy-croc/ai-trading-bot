@@ -17,12 +17,15 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
 from src.strategies import (
+    create_aggressive_trend_strategy,
     create_buy_and_hold_strategy,
     create_ensemble_weighted_strategy,
     create_ml_adaptive_strategy,
     create_ml_basic_strategy,
     create_ml_sentiment_strategy,
+    create_moderate_aggressive_trend_strategy,
     create_momentum_leverage_strategy,
+    create_ultra_aggressive_trend_strategy,
 )
 from src.infrastructure.logging.config import configure_logging
 from src.trading.symbols.factory import SymbolFactory
@@ -39,6 +42,9 @@ def _load_strategy(strategy_name: str):
         "ml_adaptive": create_ml_adaptive_strategy,
         "ensemble_weighted": create_ensemble_weighted_strategy,
         "momentum_leverage": create_momentum_leverage_strategy,
+        "aggressive_trend": create_aggressive_trend_strategy,
+        "moderate_aggressive_trend": create_moderate_aggressive_trend_strategy,
+        "ultra_aggressive_trend": create_ultra_aggressive_trend_strategy,
     }
 
     try:
