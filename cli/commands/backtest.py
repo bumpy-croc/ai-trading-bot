@@ -23,6 +23,7 @@ from src.strategies import (
     create_ml_basic_aggressive_strategy,
     create_ml_basic_larger_positions_strategy,
     create_ml_basic_low_conf_strategy,
+    create_ml_basic_min_hold_strategy,
     create_ml_sentiment_strategy,
     create_momentum_leverage_strategy,
 )
@@ -39,6 +40,7 @@ def _load_strategy(strategy_name: str):
         "ml_basic_aggressive": create_ml_basic_aggressive_strategy,
         "ml_basic_larger_positions": create_ml_basic_larger_positions_strategy,
         "ml_basic_low_conf": create_ml_basic_low_conf_strategy,
+        "ml_basic_min_hold": create_ml_basic_min_hold_strategy,
         "ml_sentiment": create_ml_sentiment_strategy,
         "ml_adaptive": create_ml_adaptive_strategy,
         "ensemble_weighted": create_ensemble_weighted_strategy,
