@@ -323,7 +323,7 @@ class LiveTradingEngine:
         # Initialize database manager
         try:
             self.db_manager = DatabaseManager(database_url)
-        except Exception as e:
+        except (ConnectionError, OSError, ValueError) as e:
             print(
                 f"❌ Could not connect to the PostgreSQL database: {e}\nThe trading engine cannot start without a database connection. Exiting..."
             )
@@ -641,7 +641,18 @@ class LiveTradingEngine:
         engine_params: RiskParameters | None,
         component_params: RiskParameters | None,
     ) -> RiskParameters | None:
-        """Merge engine-provided and component-provided risk parameters."""
+        """Merges engine-provided and component-provided risk parameters.
+
+        Component parameters take precedence over engine parameters when both
+        are provided. Non-None component values override engine values.
+
+        Args:
+            engine_params: Risk parameters from the trading engine
+            component_params: Risk parameters from the strategy component
+
+        Returns:
+            Merged risk parameters, or None if both inputs are None
+        """
 
         if engine_params is None and component_params is None:
             return None
@@ -670,7 +681,14 @@ class LiveTradingEngine:
 
     @staticmethod
     def _clone_risk_parameters(params: RiskParameters | None) -> RiskParameters | None:
-        """Return a deep-cloned copy of risk parameters for safe reuse."""
+        """Creates a deep-cloned copy of risk parameters for safe reuse.
+
+        Args:
+            params: Risk parameters to clone
+
+        Returns:
+            Deep copy of the risk parameters, or None if input is None
+        """
 
         if params is None:
             return None
@@ -678,7 +696,14 @@ class LiveTradingEngine:
         return RiskParameters(**asdict(params))
 
     def _configure_strategy(self, strategy: ComponentStrategy | StrategyRuntime) -> None:
-        """Normalise strategy inputs and configure runtime bookkeeping."""
+        """Normalizes strategy inputs and configures runtime bookkeeping.
+
+        Handles both raw ComponentStrategy instances and wrapped StrategyRuntime
+        instances, extracting the underlying strategy and setting up engine state.
+
+        Args:
+            strategy: Strategy instance to configure (raw or wrapped)
+        """
 
         runtime = strategy if isinstance(strategy, StrategyRuntime) else None
         base_strategy = runtime.strategy if runtime is not None else strategy
@@ -710,7 +735,11 @@ class LiveTradingEngine:
         self._register_component_context_provider()
 
     def _register_component_context_provider(self) -> None:
-        """Attach the engine-provided risk context hook to component strategies."""
+        """Attaches the engine-provided risk context hook to component strategies.
+
+        Registers a callback function that allows component strategies to request
+        additional risk context (correlation data, etc.) during decision-making.
+        """
 
         strategy = getattr(self, "_component_strategy", None)
         if strategy is None:
@@ -725,7 +754,7 @@ class LiveTradingEngine:
 
         try:
             setter(provider)
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except (TypeError, AttributeError) as exc:  # pragma: no cover - defensive logging
             logger.debug("Failed to attach risk context provider to component strategy: %s", exc)
 
     def _component_risk_context(self, df: pd.DataFrame, index: int, signal) -> dict[str, Any]:
@@ -875,17 +904,28 @@ class LiveTradingEngine:
         return self._runtime is not None
 
     def _strategy_name(self) -> str:
-        """Return the configured strategy name for logging/reporting."""
+        """Returns the configured strategy name for logging and reporting.
+
+        Returns:
+            Strategy name, or "UnknownStrategy" if no strategy is configured
+        """
         strategy = getattr(self, "strategy", None)
         if strategy is None:
             return "UnknownStrategy"
         return getattr(strategy, "name", strategy.__class__.__name__)
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Prepare dataframe for strategy processing.
+        """Prepares dataframe for strategy processing.
 
-        For component-based strategies, prepare the runtime dataset.
-        For legacy strategies, return the dataframe as-is (no indicator calculation).
+        Component-based strategies compute indicators on-demand in process_candle(),
+        so the dataframe is returned as-is. Legacy strategies would need upfront
+        indicator calculation (not currently used).
+
+        Args:
+            df: Raw market data dataframe
+
+        Returns:
+            Prepared dataframe ready for strategy processing
         """
         if not self._is_runtime_strategy():
             # Component-based strategies don't need upfront indicator calculation
@@ -960,7 +1000,7 @@ class LiveTradingEngine:
             decision = self._runtime.process(index, context)
             self._apply_policies_from_decision(decision)
             return decision
-        except Exception as exc:
+        except (ValueError, KeyError, IndexError, AttributeError) as exc:
             logger.warning("Runtime decision failed in live engine at index %s: %s", index, exc)
             return None
 
