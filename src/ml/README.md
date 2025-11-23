@@ -47,25 +47,39 @@ The `latest/` symlink points to the current production version for each model ty
 
 ## Available Models
 
-All models are discovered automatically by the PredictionModelRegistry. Use the registry to select models by:
+All models are discovered automatically by the PredictionModelRegistry. Select models by:
 - Symbol (e.g., "BTCUSDT", "ETHUSDT")
 - Type (e.g., "basic", "sentiment")
 - Timeframe (e.g., "1h", "1d")
-- Version (optional - defaults to "latest")
+- Version (optional – defaults to the target of the `latest/` symlink)
 
 ## Usage
 
 ### Via Prediction Engine
 ```python
 from src.prediction.config import PredictionConfig
+from src.prediction.engine import PredictionEngine
+
+# candles_dataframe is a pandas DataFrame with OHLCV (and optional sentiment/prediction) columns.
+config = PredictionConfig.from_config_manager()
+engine = PredictionEngine(config=config)
+prediction = engine.predict(candles_dataframe)
+print(prediction.price, prediction.confidence)
+```
+
+### Manual bundle access
+```python
+import numpy as np
+
+from src.prediction.config import PredictionConfig
 from src.prediction.models.registry import PredictionModelRegistry
 
-config = PredictionConfig()
+config = PredictionConfig.from_config_manager()
 registry = PredictionModelRegistry(config)
-
-# Get the latest BTCUSDT basic model
 bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
-result = registry.predict("BTCUSDT/basic/latest", price_data)
+features = np.random.rand(120, 5).astype(np.float32)
+prediction = bundle.runner.predict(features)
+print(prediction.price, prediction.confidence, prediction.direction)
 ```
 
 ### Via Strategy Components

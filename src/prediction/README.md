@@ -1,6 +1,6 @@
 # Prediction Engine
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-11-23  
 > **Related Documentation**: See [docs/prediction.md](../../docs/prediction.md) for comprehensive guide
 
 Centralized ONNX model loading, inference, and caching for all ML strategies.
@@ -14,17 +14,34 @@ Centralized ONNX model loading, inference, and caching for all ML strategies.
 Note: `sitecustomize.py` adds both project root and `src/` to `sys.path`, so imports like `from prediction...` resolve when running scripts.
 
 ## Usage
+
+### Via `PredictionEngine`
 ```python
+from src.prediction.engine import PredictionEngine
 from src.prediction.config import PredictionConfig
-from src.prediction.models.registry import PredictionModelRegistry
+
+# candles_dataframe is a pandas DataFrame with OHLCV (and optional sentiment) columns.
+config = PredictionConfig.from_config_manager()
+engine = PredictionEngine(config=config)
+
+prediction = engine.predict(candles_dataframe)
+print(prediction.price, prediction.confidence, prediction.model_name)
+```
+
+### Direct registry access (manual runners)
+```python
 import numpy as np
 
-config = PredictionConfig()
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
+
+config = PredictionConfig.from_config_manager()
 registry = PredictionModelRegistry(config)
 
+bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
 features = np.random.rand(120, 5).astype(np.float32)
-pred = registry.predict('btcusdt_price', features)
-print(pred.price, pred.confidence, pred.direction)
+prediction = bundle.runner.predict(features)
+print(prediction.price, prediction.confidence, prediction.direction)
 ```
 
 ## Model Storage

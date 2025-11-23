@@ -5,25 +5,27 @@ Core prediction model components for ONNX runtime and model registry.
 ## Modules
 
 - `onnx_runner.py`: ONNX model loader and inference engine
-- `registry.py`: Model discovery and prediction registry for all strategies
+- `registry.py`: Model discovery, selection, and metadata helpers for all strategies
 
 ## Usage
 
 ```python
-from src.prediction.models.registry import PredictionModelRegistry
-from src.prediction.config import PredictionConfig
+import numpy as np
 
-config = PredictionConfig()
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
+
+config = PredictionConfig.from_config_manager()
 registry = PredictionModelRegistry(config)
 
-# Make prediction with registered model
+bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
 features = np.random.rand(120, 5).astype(np.float32)
-result = registry.predict('btcusdt_price', features)
-print(f"Price: {result.price}, Confidence: {result.confidence}")
+prediction = bundle.runner.predict(features)
+print(f"Price: {prediction.price}, Confidence: {prediction.confidence}")
 ```
 
 ## Model Discovery
 
-Models are automatically discovered from the `src/ml` directory:
-- `*.onnx` files contain the trained models
-- `*_metadata.json` files contain model configuration and metadata
+Models are automatically discovered from the `src/ml/models` registry:
+- `model.onnx` (and optional `model.keras`) files contain the trained models
+- `metadata.json`, `feature_schema.json`, and optional `metrics.json` capture configuration, schema, and evaluation artifacts
