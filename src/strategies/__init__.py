@@ -10,6 +10,12 @@ from .crash_avoider import (
     create_ultra_defensive_crash_avoider_strategy,
 )
 from .ensemble_weighted import create_ensemble_weighted_strategy
+from .extreme_leverage import (
+    create_extreme_leverage_adaptive_strategy,
+    create_extreme_leverage_trend_strategy,
+    create_extreme_leverage_volatility_strategy,
+    create_yolo_strategy,
+)
 from .ml_adaptive import create_ml_adaptive_strategy
 from .ml_basic import create_ml_basic_strategy
 from .ml_sentiment import create_ml_sentiment_strategy
@@ -48,4 +54,8 @@ __all__ = [
     "create_conservative_regime_adaptive_strategy",
     "create_aggressive_regime_adaptive_strategy",
     "create_balanced_regime_adaptive_strategy",
+    "create_extreme_leverage_trend_strategy",
+    "create_extreme_leverage_volatility_strategy",
+    "create_extreme_leverage_adaptive_strategy",
+    "create_yolo_strategy",
 ]

@@ -26,6 +26,9 @@ from src.strategies import (
     create_conservative_volatility_exploiter_strategy,
     create_crash_avoider_strategy,
     create_ensemble_weighted_strategy,
+    create_extreme_leverage_adaptive_strategy,
+    create_extreme_leverage_trend_strategy,
+    create_extreme_leverage_volatility_strategy,
     create_mean_reversion_volatility_strategy,
     create_ml_adaptive_strategy,
     create_ml_basic_strategy,
@@ -37,6 +40,7 @@ from src.strategies import (
     create_ultra_defensive_crash_avoider_strategy,
     create_ultra_volatile_exploiter_strategy,
     create_volatility_exploiter_strategy,
+    create_yolo_strategy,
 )
 from src.infrastructure.logging.config import configure_logging
 from src.trading.symbols.factory import SymbolFactory
@@ -67,6 +71,10 @@ def _load_strategy(strategy_name: str):
         "conservative_regime_adaptive": create_conservative_regime_adaptive_strategy,
         "aggressive_regime_adaptive": create_aggressive_regime_adaptive_strategy,
         "balanced_regime_adaptive": create_balanced_regime_adaptive_strategy,
+        "extreme_leverage_trend": create_extreme_leverage_trend_strategy,
+        "extreme_leverage_volatility": create_extreme_leverage_volatility_strategy,
+        "extreme_leverage_adaptive": create_extreme_leverage_adaptive_strategy,
+        "yolo": create_yolo_strategy,
     }
 
     try:
