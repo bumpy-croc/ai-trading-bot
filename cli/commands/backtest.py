@@ -17,9 +17,12 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
 from src.strategies import (
+    create_aggressive_regime_adaptive_strategy,
     create_aggressive_trend_strategy,
     create_balanced_crash_avoider_strategy,
+    create_balanced_regime_adaptive_strategy,
     create_buy_and_hold_strategy,
+    create_conservative_regime_adaptive_strategy,
     create_conservative_volatility_exploiter_strategy,
     create_crash_avoider_strategy,
     create_ensemble_weighted_strategy,
@@ -29,6 +32,7 @@ from src.strategies import (
     create_ml_sentiment_strategy,
     create_moderate_aggressive_trend_strategy,
     create_momentum_leverage_strategy,
+    create_regime_adaptive_mega_strategy,
     create_ultra_aggressive_trend_strategy,
     create_ultra_defensive_crash_avoider_strategy,
     create_ultra_volatile_exploiter_strategy,
@@ -59,6 +63,10 @@ def _load_strategy(strategy_name: str):
         "ultra_volatile_exploiter": create_ultra_volatile_exploiter_strategy,
         "conservative_volatility_exploiter": create_conservative_volatility_exploiter_strategy,
         "mean_reversion_volatility": create_mean_reversion_volatility_strategy,
+        "regime_adaptive_mega": create_regime_adaptive_mega_strategy,
+        "conservative_regime_adaptive": create_conservative_regime_adaptive_strategy,
+        "aggressive_regime_adaptive": create_aggressive_regime_adaptive_strategy,
+        "balanced_regime_adaptive": create_balanced_regime_adaptive_strategy,
     }
 
     try:

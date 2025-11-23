@@ -14,6 +14,12 @@ from .ml_adaptive import create_ml_adaptive_strategy
 from .ml_basic import create_ml_basic_strategy
 from .ml_sentiment import create_ml_sentiment_strategy
 from .momentum_leverage import create_momentum_leverage_strategy
+from .regime_adaptive_mega import (
+    create_aggressive_regime_adaptive_strategy,
+    create_balanced_regime_adaptive_strategy,
+    create_conservative_regime_adaptive_strategy,
+    create_regime_adaptive_mega_strategy,
+)
 from .volatility_exploiter import (
     create_conservative_volatility_exploiter_strategy,
     create_mean_reversion_volatility_strategy,
@@ -38,4 +44,8 @@ __all__ = [
     "create_ultra_volatile_exploiter_strategy",
     "create_conservative_volatility_exploiter_strategy",
     "create_mean_reversion_volatility_strategy",
+    "create_regime_adaptive_mega_strategy",
+    "create_conservative_regime_adaptive_strategy",
+    "create_aggressive_regime_adaptive_strategy",
+    "create_balanced_regime_adaptive_strategy",
 ]

@@ -71,6 +71,7 @@ from .momentum_signal_generator import MomentumSignalGenerator
 from .aggressive_trend_signal_generator import AggressiveTrendSignalGenerator
 from .crash_detection_signal_generator import CrashDetectionSignalGenerator
 from .volatility_exploitation_signal_generator import VolatilityExploitationSignalGenerator
+from .regime_adaptive_mega_signal_generator import RegimeAdaptiveMegaSignalGenerator
 from .testing.test_datasets import TestDatasetGenerator
 from .testing.component_performance_tester import ComponentPerformanceTester
 from .testing.regime_tester import RegimeTester
@@ -115,6 +116,7 @@ __all__ = [
     "AggressiveTrendSignalGenerator",
     "CrashDetectionSignalGenerator",
     "VolatilityExploitationSignalGenerator",
+    "RegimeAdaptiveMegaSignalGenerator",
     "HoldSignalGenerator",
     "RandomSignalGenerator",
     "WeightedVotingSignalGenerator",
