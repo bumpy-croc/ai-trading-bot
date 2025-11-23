@@ -394,11 +394,18 @@ Generally good, but some opportunities:
 - All code formatted with black (100% compliance)
 - All smoke tests passing
 
-### Phase 2: High Priority (Next Sprint)
-1. Refactor `BacktestingEngine.run()` - break 1248-line function into ~20 functions
-2. Refactor `LiveTradingEngine.__init__` and `_trading_loop`
-3. Fix SQLAlchemy type annotations
-4. Add explicit Optional types
+### Phase 2: High Priority (Partially Complete - 2025-11-22)
+1. Refactor `BacktestingEngine.run()` - break 1248-line function into ~20 functions (DEFERRED)
+2. Refactor `LiveTradingEngine.__init__` and `_trading_loop` (DEFERRED)
+3. ✅ Fix SQLAlchemy type annotations (DONE)
+4. ✅ Add explicit Optional types (DONE)
+
+**Phase 2 (Steps 3-4) Summary:**
+- Fixed SQLAlchemy Base class type annotation (typed as Any)
+- Converted all implicit Optional to explicit X | None syntax
+- Fixed 17 function signatures across 5 files
+- Used TYPE_CHECKING guard for threading.Lock type hint
+- Maintained 100% ruff and black compliance
 
 ### Phase 3: Medium Priority (Following Sprint)
 1. Extract duplicate code to shared utilities
@@ -416,13 +423,14 @@ Generally good, but some opportunities:
 
 ## Metrics & Goals
 
-### Current State (After Phase 1 - 2025-11-22)
-- **Mypy compliance**: ~60% (many errors) - **Next priority**
+### Current State (After Phase 2 Steps 3-4 - 2025-11-22)
+- **Mypy compliance**: ~60% (improved type annotations, still work needed)
 - **Ruff compliance**: 100% ✅ (0 errors)
 - **Black compliance**: 100% ✅
 - **Test coverage**: ~85%
 - **Function length**: ~40% over 50 lines
-- **Type hints coverage**: ~30% (public methods started)
+- **Type hints coverage**: ~35% (public methods + explicit Optional)
+- **PEP 484 compliance**: All implicit Optional fixed ✅
 
 ### Target State (3 months)
 - **Mypy compliance**: 95% (strict mode)
@@ -440,5 +448,5 @@ Generally good, but some opportunities:
 - Tag issues with `technical-debt`, `refactoring`, `code-quality`
 - Reference this doc in PR descriptions for context
 
-**Last Updated**: 2025-11-22 (Phase 1 Complete)
+**Last Updated**: 2025-11-22 (Phase 2 Steps 3-4 Complete)
 **Updated By**: Claude (automated refactoring)
