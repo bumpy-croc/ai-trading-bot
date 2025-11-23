@@ -57,30 +57,57 @@ def train_model_main(args) -> int:
         print("❌ tensorflow is required for model training but is not installed.")
         print("Install it with: pip install tensorflow")
         return 1
-    try:
-        start_date, end_date = _parse_dates(args.start_date, args.end_date)
-    except ValueError as exc:
-        print(f"❌ {exc}")
-        return 1
 
-    config = TrainingConfig(
-        symbol=args.symbol,
-        timeframe=args.timeframe,
-        start_date=start_date,
-        end_date=end_date,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        sequence_length=args.sequence_length,
-        force_sentiment=args.force_sentiment,
-        force_price_only=args.force_price_only,
-        mixed_precision=not getattr(args, "disable_mixed_precision", False),
-        diagnostics=_diagnostics_from_args(args),
-    )
+    # Handle preset if provided
+    if hasattr(args, "preset") and args.preset:
+        from src.ml.training_pipeline.presets import create_config_from_preset
+
+        # Build kwargs for preset overrides
+        overrides = {}
+        if hasattr(args, "model_type") and args.model_type:
+            overrides["model_type"] = args.model_type
+
+        config = create_config_from_preset(
+            args.preset,
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+            start_date=None,  # Will use preset defaults
+            end_date=None,
+            force_sentiment=args.force_sentiment,
+            force_price_only=args.force_price_only,
+            **overrides,
+        )
+        print(f"📋 Using '{args.preset}' preset")
+    else:
+        # Manual configuration (original behavior)
+        try:
+            start_date, end_date = _parse_dates(args.start_date, args.end_date)
+        except ValueError as exc:
+            print(f"❌ {exc}")
+            return 1
+
+        model_type = getattr(args, "model_type", "balanced")
+
+        config = TrainingConfig(
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            sequence_length=args.sequence_length,
+            force_sentiment=args.force_sentiment,
+            force_price_only=args.force_price_only,
+            mixed_precision=not getattr(args, "disable_mixed_precision", False),
+            model_type=model_type,
+            diagnostics=_diagnostics_from_args(args),
+        )
 
     ctx = TrainingContext(config=config)
     print(
         "🚀 Starting training for",
         f"{config.symbol} ({config.timeframe})",
+        f"model={config.model_type}",
         f"epochs={config.epochs}",
         f"seq_len={config.sequence_length}",
         f"batch_size={config.batch_size}",

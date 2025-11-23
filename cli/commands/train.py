@@ -86,6 +86,18 @@ def _handle_model(ns: argparse.Namespace) -> int:
         action="store_true",
         help="Disable mixed precision even when a GPU is available",
     )
+    parser.add_argument(
+        "--preset",
+        type=str,
+        choices=["fast", "balanced", "quality", "legacy"],
+        help="Use a training preset (fast=2-3x faster, balanced=1.5-2x faster, quality=baseline, legacy=original)",
+    )
+    parser.add_argument(
+        "--model-type",
+        type=str,
+        choices=["fast", "balanced", "quality", "adaptive"],
+        help="Model architecture type (overrides preset default)",
+    )
 
     # Parse the arguments from ns.args
     args = parser.parse_args(ns.args or [])

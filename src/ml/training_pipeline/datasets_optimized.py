@@ -97,9 +97,9 @@ def create_sequences(
     targets = target_data[sequence_length:]
 
     # Ensure contiguous arrays for better performance
-    if not sequences.flags["C_CONTIGUOUS"]:
+    if not sequences.flags['C_CONTIGUOUS']:
         sequences = np.ascontiguousarray(sequences, dtype=np.float32)
-    if not targets.flags["C_CONTIGUOUS"]:
+    if not targets.flags['C_CONTIGUOUS']:
         targets = np.ascontiguousarray(targets, dtype=np.float32)
 
     return sequences, targets

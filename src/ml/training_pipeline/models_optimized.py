@@ -83,9 +83,9 @@ def create_fast_model(input_shape, has_sentiment: bool = True) -> Any:
     inputs = Input(shape=input_shape)
 
     # Single convolutional block with batch norm (faster convergence)
-    x = Conv1D(filters=32, kernel_size=3, activation=None, padding="same")(inputs)
+    x = Conv1D(filters=32, kernel_size=3, activation=None, padding='same')(inputs)
     x = BatchNormalization()(x)
-    x = tf.keras.layers.Activation("relu")(x)
+    x = tf.keras.layers.Activation('relu')(x)
     x = MaxPooling1D(pool_size=2)(x)
 
     # GRU layers (faster than LSTM, often similar performance)
@@ -127,14 +127,14 @@ def create_balanced_model(input_shape, has_sentiment: bool = True) -> Any:
     inputs = Input(shape=input_shape)
 
     # Two convolutional blocks with batch norm
-    x = Conv1D(filters=48, kernel_size=3, activation=None, padding="same")(inputs)
+    x = Conv1D(filters=48, kernel_size=3, activation=None, padding='same')(inputs)
     x = BatchNormalization()(x)
-    x = tf.keras.layers.Activation("relu")(x)
+    x = tf.keras.layers.Activation('relu')(x)
     x = MaxPooling1D(pool_size=2)(x)
 
-    x = Conv1D(filters=96, kernel_size=3, activation=None, padding="same")(x)
+    x = Conv1D(filters=96, kernel_size=3, activation=None, padding='same')(x)
     x = BatchNormalization()(x)
-    x = tf.keras.layers.Activation("relu")(x)
+    x = tf.keras.layers.Activation('relu')(x)
     x = MaxPooling1D(pool_size=2)(x)
 
     # GRU layers with layer normalization
@@ -215,19 +215,19 @@ def create_quality_model(input_shape, has_sentiment: bool = True) -> Any:
     inputs = Input(shape=input_shape)
 
     # Three convolutional blocks with batch norm
-    x = Conv1D(filters=64, kernel_size=3, activation=None, padding="same")(inputs)
+    x = Conv1D(filters=64, kernel_size=3, activation=None, padding='same')(inputs)
     x = BatchNormalization()(x)
-    x = tf.keras.layers.Activation("relu")(x)
+    x = tf.keras.layers.Activation('relu')(x)
     x = MaxPooling1D(pool_size=2)(x)
 
-    x = Conv1D(filters=128, kernel_size=3, activation=None, padding="same")(x)
+    x = Conv1D(filters=128, kernel_size=3, activation=None, padding='same')(x)
     x = BatchNormalization()(x)
-    x = tf.keras.layers.Activation("relu")(x)
+    x = tf.keras.layers.Activation('relu')(x)
     x = MaxPooling1D(pool_size=2)(x)
 
-    x = Conv1D(filters=256, kernel_size=3, activation=None, padding="same")(x)
+    x = Conv1D(filters=256, kernel_size=3, activation=None, padding='same')(x)
     x = BatchNormalization()(x)
-    x = tf.keras.layers.Activation("relu")(x)
+    x = tf.keras.layers.Activation('relu')(x)
 
     # Bidirectional LSTM for better context
     x = tf.keras.layers.Bidirectional(LSTM(120, return_sequences=True))(x)
@@ -281,7 +281,8 @@ def create_model(
     """
     if model_type not in MODEL_FACTORIES:
         raise ValueError(
-            f"Unknown model type '{model_type}'. " f"Choose from: {list(MODEL_FACTORIES.keys())}"
+            f"Unknown model type '{model_type}'. "
+            f"Choose from: {list(MODEL_FACTORIES.keys())}"
         )
 
     factory = MODEL_FACTORIES[model_type]

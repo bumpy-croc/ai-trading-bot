@@ -149,8 +149,8 @@ def _calculate_rsi_fast(close_prices: np.ndarray, window: int = 14) -> np.ndarra
     avg_losses = np.full(len(losses), np.nan, dtype=np.float32)
 
     # Calculate initial averages
-    avg_gains[window] = np.mean(gains[1 : window + 1])
-    avg_losses[window] = np.mean(losses[1 : window + 1])
+    avg_gains[window] = np.mean(gains[1:window + 1])
+    avg_losses[window] = np.mean(losses[1:window + 1])
 
     # Calculate subsequent averages using EMA-style smoothing
     for i in range(window + 1, len(gains)):
