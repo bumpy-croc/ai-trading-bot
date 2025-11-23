@@ -192,8 +192,8 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         self,
         method: str,
         path: str,
-        params: dict[str, Any] = None,
-        body: dict[str, Any] = None,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
         auth: bool = False,
     ):
         """Helper to perform HTTP request with optional Coinbase authentication."""
@@ -472,9 +472,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         self,
         product_id: str,
         granularity: int,
-        start: datetime = None,
-        end: datetime = None,
-        limit: int = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int | None = None,
     ) -> list[list[Any]]:
         """Fetch candle data from Coinbase public API."""
         params = {"granularity": granularity}
@@ -587,7 +587,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         }
         return mapping.get(order_type, OrderType.MARKET)
 
-    def _convert_order_status(self, status: str, done_reason: str = None) -> OrderStatus:
+    def _convert_order_status(self, status: str, done_reason: str | None = None) -> OrderStatus:
         """Convert Coinbase order status to internal OrderStatus enum.
 
         Args:

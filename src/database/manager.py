@@ -1822,16 +1822,16 @@ class DatabaseManager:
     def log_dynamic_performance_metrics(
         self,
         session_id: int,
-        rolling_win_rate: float = None,
-        rolling_sharpe_ratio: float = None,
-        current_drawdown: float = None,
-        volatility_30d: float = None,
+        rolling_win_rate: float | None = None,
+        rolling_sharpe_ratio: float | None = None,
+        current_drawdown: float | None = None,
+        volatility_30d: float | None = None,
         consecutive_losses: int = 0,
         consecutive_wins: int = 0,
         risk_adjustment_factor: float = 1.0,
-        profit_factor: float = None,
-        expectancy: float = None,
-        avg_trade_duration_hours: float = None,
+        profit_factor: float | None = None,
+        expectancy: float | None = None,
+        avg_trade_duration_hours: float | None = None,
     ) -> int:
         """
         Log dynamic performance metrics for adaptive risk management.
@@ -1904,12 +1904,12 @@ class DatabaseManager:
         original_value: float,
         adjusted_value: float,
         adjustment_factor: float,
-        current_drawdown: float = None,
-        performance_score: float = None,
-        volatility_level: float = None,
-        duration_minutes: int = None,
+        current_drawdown: float | None = None,
+        performance_score: float | None = None,
+        volatility_level: float | None = None,
+        duration_minutes: int | None = None,
         trades_during_adjustment: int = 0,
-        pnl_during_adjustment: float = None,
+        pnl_during_adjustment: float | None = None,
     ) -> int:
         """
         Log a risk parameter adjustment for tracking and analysis.
@@ -1974,7 +1974,7 @@ class DatabaseManager:
             raise
 
     def get_dynamic_risk_performance_metrics(
-        self, session_id: int, start_date: datetime = None, end_date: datetime = None
+        self, session_id: int, start_date: datetime | None = None, end_date: datetime | None = None
     ) -> dict[str, Any]:
         """
         Get recent performance metrics for dynamic risk calculation.

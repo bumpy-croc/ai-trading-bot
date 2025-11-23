@@ -2927,7 +2927,7 @@ class LiveTradingEngine:
                 break
             time.sleep(min(poll_interval, end_time - time.time()))
 
-    def _calculate_adaptive_interval(self, current_price: float = None) -> int:
+    def _calculate_adaptive_interval(self, current_price: float | None = None) -> int:
         """Calculate adaptive check interval based on recent trading activity and market conditions"""
         # Base interval from configuration
         interval = self.base_check_interval

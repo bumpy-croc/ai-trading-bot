@@ -4,8 +4,13 @@ Configuration management system.
 This module provides centralized configuration management.
 """
 
+from __future__ import annotations
+
 import threading
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from threading import Lock
 
 from .providers.base import ConfigProvider
 from .providers.dotenv_provider import DotEnvProvider
@@ -198,7 +203,7 @@ class ConfigManager:
 
 # Global configuration instance
 _config_instance: ConfigManager | None = None
-_config_lock: Optional[threading.Lock] = None
+_config_lock: Lock | None = None
 
 
 def get_config() -> ConfigManager:
