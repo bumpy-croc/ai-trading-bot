@@ -31,18 +31,25 @@ rewriting strategy logic.
 ## Typical usage
 
 ```python
-from src.risk.risk_manager import RiskManager
+from src.database.manager import DatabaseManager
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
+from src.risk.risk_manager import RiskManager, RiskParameters
 
-risk = RiskManager()
-dyn = DynamicRiskManager(DynamicRiskConfig(enabled=True), database_manager)
+try:
+    db_manager: DatabaseManager | None = DatabaseManager()
+except Exception:
+    # DATABASE_URL or PostgreSQL might be unavailable locally; pass None to skip DB-backed metrics
+    db_manager = None
+
+risk = RiskManager(RiskParameters(base_risk_per_trade=0.02))
+dyn = DynamicRiskManager(DynamicRiskConfig(enabled=True), db_manager=db_manager)
 
 size = risk.calculate_position_size(price=2_000, atr=25, balance=50_000)
 adjustments = dyn.calculate_dynamic_risk_adjustments(
     current_balance=48_000,
     peak_balance=52_000,
 )
-
+scaled_params = dyn.apply_risk_adjustments(risk.params, adjustments)
 effective_size = size * adjustments.position_size_factor
 ```
 

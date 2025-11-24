@@ -15,16 +15,24 @@ Note: `sitecustomize.py` adds both project root and `src/` to `sys.path`, so imp
 
 ## Usage
 ```python
-from src.prediction.config import PredictionConfig
-from src.prediction.models.registry import PredictionModelRegistry
+from __future__ import annotations
+
 import numpy as np
 
-config = PredictionConfig()
-registry = PredictionModelRegistry(config)
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
 
-features = np.random.rand(120, 5).astype(np.float32)
-pred = registry.predict('btcusdt_price', features)
-print(pred.price, pred.confidence, pred.direction)
+config = PredictionConfig.from_config_manager()
+registry = PredictionModelRegistry(config)
+bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+
+schema = bundle.feature_schema or {}
+sequence_length = int(schema.get("sequence_length", 120))
+feature_count = len(schema.get("features", [])) or 5
+features = np.random.rand(sequence_length, feature_count).astype(np.float32)
+
+prediction = bundle.runner.predict(features)
+print(prediction.price, prediction.confidence, prediction.direction)
 ```
 
 ## Model Storage

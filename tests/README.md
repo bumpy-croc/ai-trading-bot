@@ -1,228 +1,125 @@
 # Test Suite
 
-> **Last Updated**: 2025-10-30  
-> **Related Documentation**: See [Development workflow](../docs/development.md#tests-and-diagnostics)
+> **Last Updated**: 2025-11-24  
+> **Related Documentation**: [Development workflow](../docs/development.md#tests-and-diagnostics)
 
-Comprehensive tests for reliability and correctness across components, including the new component-based strategy system.
+The repository ships a single runner (`tests/run_tests.py`) plus focused pytest
+targets that cover every subsystem—from component strategies through live trading
+orchestration and CLI helpers.
 
-## Quick Start
+## Running the suite
 
-### Component System Tests
 ```bash
-# Test individual components
-pytest tests/unit/strategies/components/ -v
-
-# Test complete trading workflows
-pytest tests/integration/test_component_trading_workflows.py -v
-
-# Run performance regression tests
-pytest tests/performance/test_component_performance_regression.py -v -m performance
-
-# Full component test suite
-pytest tests/unit/strategies/components/ tests/integration/test_component_trading_workflows.py -v
-```
-
-### Legacy Compatibility Tests (archived)
-These commands exercise the archived `BaseStrategy` pipeline to ensure historical parity while the
-component-based runtime remains the production path.
-```bash
-python tests/run_tests.py smoke
+# Fast unit surface (skips integration + slow markers)
 python tests/run_tests.py unit
+
+# Integration surface (sequential, exercises PostgreSQL + engines)
 python tests/run_tests.py integration
-python tests/run_tests.py all --coverage
+
+# Full pipeline: unit first, integration second
+python tests/run_tests.py all
+
+# Targeted helpers
+python tests/run_tests.py fast        # (fast | mock_only) markers
+python tests/run_tests.py slow        # long-running computations
+python tests/run_tests.py grouped     # optimized waves for CI
+python tests/run_tests.py benchmark   # wraps performance_benchmark.py
 ```
 
-### Migration and Compatibility Tests
-```bash
-# Test migration compatibility
-pytest tests/unit/strategies/test_component_migration.py -v
+All runner commands accept `--pytest-args` to forward additional flags (markers,
+`-k` expressions, coverage options) directly to pytest.
 
-# Test strategy conversion utilities
-pytest tests/unit/strategies/migration/ -v
+## Directory map
+
+- `tests/unit/` – fast, parallelizable coverage of individual modules. Notable
+  areas:
+  - `strategies/components/` – signal generators, risk adapters, strategy runtime,
+    performance tracking, registry integrations.
+  - `data_providers/`, `risk/`, `position_management/`, `config/`, `cli/` – core
+    services wired exactly as the application does.
+  - `ml_training/`, `training_pipeline/`, `predictions/` – feature pipeline and
+    registry validation.
+- `tests/integration/` – end-to-end workflows:
+  - `test_component_trading_workflows.py` and `test_error_handling_workflows.py`
+    simulate backtest + live decision cycles.
+  - `test_account_sync.py`, `test_order_lifecycle.py`, `test_order_management_methods.py`
+    validate database + exchange abstractions.
+  - Subpackages (`live/`, `predictions/`, `monitoring/`, `cli/`) focus on domain-
+    specific flows.
+- `tests/performance/performance_benchmark.py` – measures elapsed time + test
+  counts for curated pytest commands and persists summaries to
+  `tests/performance/performance_baseline.json`.
+- `tests/data/` and `tests/mocks/` – fixtures used by both unit and integration
+  layers.
+
+## Core pytest markers
+
+Markers declared in `pytest.ini` and enforced via `--strict-markers`:
+
+- `unit`, `integration`, `slow`, `fast`, `medium`, `computation`
+- Domain markers: `live_trading`, `risk_management`, `database`, `strategy`,
+  `data_provider`, `monitoring`, `performance`
+- Utility markers: `mock_only`, `smoke`, `timeout`
+
+Examples:
+
+```bash
+# Run everything except integration + slow suites
+pytest -m "not integration and not slow" -n auto --dist=loadgroup
+
+# Focus on database-heavy coverage
+pytest -m "database" tests/integration -v
 ```
 
-## Test Categories
+## Targeted pytest commands
 
-### Component Tests (`tests/unit/strategies/components/`)
-- **Signal Generators**: `test_signal_generator.py`, `test_ml_signal_generator.py`, `test_technical_signal_generator.py`
-- **Risk Managers**: `test_risk_manager.py`
-- **Position Sizers**: `test_position_sizer.py`
-- **Complete Strategies**: `test_strategy.py`
-- **Strategy Management**: `test_strategy_manager.py`, `test_strategy_registry.py`
-
-### Integration Tests (`tests/integration/`)
-- **Trading Workflows**: `test_component_trading_workflows.py`
-- **Error Handling**: `test_error_handling_workflows.py`
-- **Performance Monitoring**: `test_integration.py`
-
-### Performance Tests (`tests/performance/`)
-- **Regression Testing**: `test_component_performance_regression.py`
-- **Baseline Management**: `performance_baseline_manager.py`
-- **Automated Monitoring**: `automated_performance_monitor.py`
-
-### Migration Tests (`tests/unit/strategies/`)
-- **Compatibility**: `test_component_migration.py`
-- **Conversion Utilities**: `migration/test_strategy_converter.py`
-
-## Test Markers
-
-### Component System Markers
-- `unit` - Fast unit tests for individual components
-- `integration` - Integration tests for component interactions
-- `performance` - Performance regression tests
-- `migration` - Migration and compatibility tests
-- `regression` - Regression detection tests
-
-### Legacy Compatibility Markers (archived)
-- `live_trading` - Live trading system tests
-- `risk_management` - Risk management tests
-- `strategy` - Strategy-specific tests
-- `slow` - Long-running tests
-- `network` - Tests requiring network access
-
-## Performance Monitoring
-
-### Automated Performance Monitoring
 ```bash
-# Run full performance monitoring cycle
-python tests/performance/automated_performance_monitor.py --full-cycle
-
-# Generate performance dashboard
-python tests/performance/automated_performance_monitor.py --dashboard-only
-
-# Check for performance regressions
-python tests/performance/automated_performance_monitor.py --analysis-only
-```
-
-### Performance Dashboard
-Access the performance dashboard at `tests/performance/results/performance_dashboard.html` for:
-- Real-time performance metrics
-- Trend analysis and regression detection
-- Component-level performance breakdown
-- Historical performance data
-
-### Baseline Management
-```bash
-# View current performance baselines
-python tests/performance/performance_baseline_manager.py --report
-
-# Export performance data
-python tests/performance/performance_baseline_manager.py --export performance_data.csv
-
-# Clean old performance data
-python tests/performance/performance_baseline_manager.py --cleanup 30
-```
-
-## Running Tests
-
-### Component-Focused Commands
-```bash
-# All component tests
-pytest tests/unit/strategies/components/ -v
-
-# Specific component type
+# Component system focus
 pytest tests/unit/strategies/components/test_signal_generator.py -v
+pytest tests/unit/strategies/components/test_risk_manager.py -v
 
-# Integration workflows
+# Strategy composition + registry workflows
+pytest tests/unit/strategies/test_ml_basic_unit.py -v
 pytest tests/integration/test_component_trading_workflows.py -v
 
-# Performance tests
-pytest tests/performance/ -v -m performance
+# CLI + runner checks
+pytest tests/unit/cli -v
 
-# Migration tests
-pytest tests/unit/strategies/ -v -m migration
+# Prediction/ML pipeline
+pytest tests/unit/predictions -v
+pytest tests/unit/training_pipeline -v
 ```
 
-### Legacy Commands (compatibility harness)
+Use `-n auto --dist=loadgroup` for unit scopes. Integration suites intentionally
+run sequentially because they share PostgreSQL fixtures.
+
+## Performance benchmarking
+
+`tests/performance/performance_benchmark.py` wraps a curated set of pytest
+commands, measures runtime/test counts, and updates
+`tests/performance/performance_baseline.json`:
+
 ```bash
-python tests/run_tests.py --file tests/test_strategies.py
-python tests/run_tests.py -m "strategy and not slow"
+# Create or refresh benchmark data
+python tests/performance/performance_benchmark.py
+
+# Compare against the last recorded runs
+python tests/performance/performance_benchmark.py --compare
 ```
 
-### Parallel Execution
-```bash
-# Run component tests in parallel
-pytest tests/unit/strategies/components/ -n auto
+The runner’s `benchmark` command simply shells out to the same script, so either
+entry point keeps baseline data in sync.
 
-# Parallel integration tests
-pytest tests/integration/ -n 4
-```
+## Troubleshooting and docs
 
-## Coverage
+- `tests/run_tests.py --help` lists every helper (`smoke`, `critical`, `database`,
+  `coverage`, etc.) plus optional arguments like `--file` or `--markers`.
+- `tests/COMPONENT_TESTING_GUIDE.md`, `tests/TEST_TROUBLESHOOTING_GUIDE.md`, and
+  `tests/unit/strategies/TEST_MIGRATION_GUIDE.md` provide deeper context for the
+  component system, migrations, and debugging broken suites.
+- Coverage-friendly runs: `python tests/run_tests.py --coverage` or
+  `pytest --cov=src --cov-report=html`.
 
-### Component System Coverage
-```bash
-# Component coverage
-pytest tests/unit/strategies/components/ --cov=src/strategies/components --cov-report=html
-
-# Integration coverage
-pytest tests/integration/ --cov=src/strategies/components --cov-report=html
-
-# Combined coverage
-pytest tests/unit/strategies/components/ tests/integration/ --cov=src/strategies/components --cov-report=html
-```
-
-### Legacy Coverage (compatibility)
-```bash
-python tests/run_tests.py --coverage
-# HTML at htmlcov/index.html
-```
-
-## Documentation
-
-### Comprehensive Guides
-- **Component Testing Guide**: `tests/COMPONENT_TESTING_GUIDE.md`
-- **Test Troubleshooting Guide**: `tests/TEST_TROUBLESHOOTING_GUIDE.md`
-- **Migration Guide**: `tests/unit/strategies/TEST_MIGRATION_GUIDE.md`
-
-### Quick References
-- **Performance Dashboard**: `tests/performance/results/performance_dashboard.html`
-- **Test Results**: `tests/performance/results/`
-- **Baseline Data**: `tests/performance/component_baselines.json`
-
-## Troubleshooting
-
-### Common Issues
-1. **Component Interface Errors**: Check `tests/TEST_TROUBLESHOOTING_GUIDE.md#component-interface-errors`
-2. **Performance Regressions**: Run `python tests/performance/automated_performance_monitor.py --analysis-only`
-3. **Migration Failures**: Check `tests/unit/strategies/TEST_MIGRATION_GUIDE.md`
-4. **Integration Problems**: See `tests/TEST_TROUBLESHOOTING_GUIDE.md#integration-problems`
-
-### Debug Commands
-```bash
-# Verbose output with full tracebacks
-pytest tests/unit/strategies/components/test_strategy.py -v -s --tb=long
-
-# Drop into debugger on failure
-pytest tests/unit/strategies/components/test_signal_generator.py --pdb
-
-# Show performance timing
-pytest tests/performance/ --durations=10
-```
-
-## CI/CD Integration
-
-### GitHub Actions Example
-```yaml
-- name: Run Component Tests
-  run: |
-    pytest tests/unit/strategies/components/ -v --cov=src/strategies/components
-    pytest tests/integration/test_component_trading_workflows.py -v
-    python tests/performance/automated_performance_monitor.py --full-cycle
-```
-
-### Performance Monitoring in CI
-The automated performance monitor can be integrated into CI/CD pipelines to:
-- Detect performance regressions automatically
-- Generate performance reports
-- Update performance baselines
-- Alert on critical performance issues
-
-## Notes
-
-- **Component System**: New architecture with pluggable components for signals, risk, and position sizing
-- **Legacy Compatibility**: Migration tests ensure backward compatibility during transition
-- **Performance Focus**: Comprehensive performance monitoring and regression detection
-- **PostgreSQL Testcontainers**: Used for database integration tests
-- **Parallel Execution**: Tests designed for parallel execution where possible
-- **See**: `pytest.ini` and `tests/run_tests.py` for additional configuration options
+When adding new tests, mirror the existing marker taxonomy and keep fixtures
+stateless so both the runner and raw pytest commands behave the same way locally
+and in CI.

@@ -78,17 +78,25 @@ Backtests can also run from Python modules or notebooks:
 from datetime import datetime, timedelta
 
 from src.backtesting.engine import Backtester
-from src.data_providers.binance_provider import BinanceProvider
-from src.data_providers.cached_data_provider import CachedDataProvider
+from src.data_providers.mock_data_provider import MockDataProvider
 from src.strategies.ml_basic import create_ml_basic_strategy
 
 strategy = create_ml_basic_strategy()
-provider = CachedDataProvider(BinanceProvider(), cache_ttl_hours=24)
-backtester = Backtester(strategy=strategy, data_provider=provider, initial_balance=10_000)
-start = datetime.utcnow() - timedelta(days=120)
-results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start)
+provider = MockDataProvider(num_candles=400)
+backtester = Backtester(
+    strategy=strategy,
+    data_provider=provider,
+    initial_balance=10_000,
+    log_to_database=False,
+)
+end = datetime.utcnow()
+start = end - timedelta(days=120)
+results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)
 print(results["total_return"], results["max_drawdown"])
 ```
+
+The mock provider keeps the example self-contained; swap it for
+`CachedDataProvider(BinanceProvider())` when you want to replay real market data.
 
 The returned dictionary includes cumulative metrics, yearly breakdowns, and a trade list. When sentiment or ML prediction columns
 are present they are captured in the trade audit entries to support detailed analysis.
