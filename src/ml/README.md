@@ -57,15 +57,25 @@ All models are discovered automatically by the PredictionModelRegistry. Use the 
 
 ### Via Prediction Engine
 ```python
+import numpy as np
+
 from src.prediction.config import PredictionConfig
 from src.prediction.models.registry import PredictionModelRegistry
 
-config = PredictionConfig()
+config = PredictionConfig.from_config_manager()
 registry = PredictionModelRegistry(config)
 
-# Get the latest BTCUSDT basic model
+# Fetch the active BTCUSDT basic model (latest symlink wins)
 bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
-result = registry.predict("BTCUSDT/basic/latest", price_data)
+
+sequence_length = int(bundle.metadata.get("sequence_length", 120))
+feature_count = len(bundle.metadata.get("feature_names", [])) or len(
+    bundle.feature_schema.get("features", [])
+) or 5
+features = np.zeros((1, sequence_length, feature_count), dtype=np.float32)
+
+prediction = bundle.runner.predict(features)
+print(prediction.price, prediction.confidence)
 ```
 
 ### Via Strategy Components
