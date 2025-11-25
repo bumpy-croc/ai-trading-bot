@@ -115,7 +115,9 @@ class MonitoringDashboard:
     Real-time monitoring dashboard for the trading bot
     """
 
-    def __init__(self, db_url: str | None = None, update_interval: int = 3600):
+    def __init__(
+        self, db_url: DatabaseManager | str | None = None, update_interval: int = 3600
+    ):
         # Calculate absolute paths for templates and static files
         templates_path = src_path / "dashboards" / "monitoring" / "templates"
         static_path = src_path / "dashboards" / "monitoring" / "static"
@@ -128,8 +130,13 @@ class MonitoringDashboard:
         self.app.config["SECRET_KEY"] = get_secret_key()
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode=_ASYNC_MODE)
 
-        # Initialize database manager – avoid passing None to ease mocking in unit tests
-        self.db_manager = DatabaseManager() if db_url is None else DatabaseManager(db_url)
+        # Initialize database manager – allow injection for tests/mocking
+        if isinstance(db_url, DatabaseManager) or (
+            db_url is not None and not isinstance(db_url, str) and hasattr(db_url, "execute_query")
+        ):
+            self.db_manager = db_url  # type: ignore[assignment]
+        else:
+            self.db_manager = DatabaseManager() if db_url is None else DatabaseManager(db_url)
 
         # Initialize data provider for live price data
         # Gracefully degrade if Binance is unreachable (e.g. no outbound DNS in the env)
@@ -1991,26 +1998,39 @@ class MonitoringDashboard:
             A list of balance snapshots ordered by most recent first.
         """
         try:
-            days = max(int(days), 1) if days is not None else 30
-            return self.db_manager.get_balance_history(limit=days)
+            validated_days = self._normalize_days(days)
+            return self.db_manager.get_balance_history(limit=validated_days)
         except Exception as e:
             logger.error(f"Error getting balance history: {e}")
             return []
 
     # ========== ADVANCED ANALYTICS METHODS ==========
 
+    @staticmethod
+    def _normalize_days(days: int | None, default: int = 30, max_days: int = 365) -> int:
+        """Clamp days to a safe range and ensure an integer value."""
+
+        try:
+            validated_days = int(days) if days is not None else default
+        except (TypeError, ValueError):
+            return default
+
+        if validated_days <= 0 or validated_days > max_days:
+            return default
+        return validated_days
+
     def _get_advanced_performance_metrics(self, days: int = 30, window: int = 7) -> dict[str, Any]:
         """Calculate advanced performance metrics with rolling windows."""
         try:
+            validated_days = self._normalize_days(days)
+
             # Get account history
             query = f"""
             SELECT balance, timestamp
             FROM account_history
-            WHERE timestamp > NOW() - INTERVAL '{days} DAYS'
+            WHERE timestamp > NOW() - INTERVAL '{validated_days} DAYS'
             ORDER BY timestamp
-            """  # nosec B608: days validated below
-            if days <= 0 or days > 365:
-                days = 30
+            """
             result = self.db_manager.execute_query(query)
 
             if len(result) < 2:
@@ -2050,22 +2070,27 @@ class MonitoringDashboard:
                    COUNT(*) as total,
                    COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins
             FROM trades
-            WHERE exit_time > NOW() - INTERVAL '{days} DAYS'
+            WHERE exit_time > NOW() - INTERVAL '{validated_days} DAYS'
             AND exit_time IS NOT NULL
             GROUP BY DATE(exit_time)
             ORDER BY date
-            """  # nosec B608: days validated above
+            """
             trades_result = self.db_manager.execute_query(trades_query)
 
-            win_rate_data = []
+            win_rate_data: list[dict[str, float | str]] = []
             for row in trades_result:
-                wr = (row["wins"] / row["total"] * 100) if row["total"] > 0 else 0
+                if not isinstance(row, dict) or "total" not in row or "wins" not in row:
+                    continue
+
+                total = row["total"]
+                wins = row["wins"]
+                wr = (wins / total * 100) if total and total > 0 else 0
                 win_rate_data.append(
                     {
                         "date": (
-                            row["date"].isoformat()
-                            if hasattr(row["date"], "isoformat")
-                            else str(row["date"])
+                            row.get("date").isoformat()
+                            if hasattr(row.get("date"), "isoformat")
+                            else str(row.get("date"))
                         ),
                         "win_rate": float(wr),
                     }
@@ -2085,24 +2110,24 @@ class MonitoringDashboard:
     def _get_trade_analysis(self, days: int = 30) -> dict[str, Any]:
         """Analyze trade patterns and performance."""
         try:
+            validated_days = self._normalize_days(days)
             query = f"""
             SELECT
                 symbol, side, entry_price, exit_price, quantity,
                 entry_time, exit_time, pnl, pnl_percent,
                 strategy_name, exit_reason
             FROM trades
-            WHERE exit_time > NOW() - INTERVAL '{days} DAYS'
+            WHERE exit_time > NOW() - INTERVAL '{validated_days} DAYS'
             AND exit_time IS NOT NULL
             ORDER BY exit_time
-            """  # nosec B608: days validated in calling function
-            if days <= 0 or days > 365:
-                days = 30
+            """
             result = self.db_manager.execute_query(query)
 
             if not result:
                 return {"error": "No trades found"}
 
             df = pd.DataFrame(result)
+            df["pnl"] = df["pnl"].apply(self._safe_float)
 
             # Trade duration analysis
             df["duration"] = (
@@ -2159,14 +2184,13 @@ class MonitoringDashboard:
     def _get_trade_distribution(self, days: int = 30, bins: int = 20) -> dict[str, Any]:
         """Get trade P&L distribution for histogram."""
         try:
+            validated_days = self._normalize_days(days)
             query = f"""
             SELECT pnl
             FROM trades
-            WHERE exit_time > NOW() - INTERVAL '{days} DAYS'
+            WHERE exit_time > NOW() - INTERVAL '{validated_days} DAYS'
             AND exit_time IS NOT NULL
-            """  # nosec B608: days validated below
-            if days <= 0 or days > 365:
-                days = 30
+            """
             result = self.db_manager.execute_query(query)
 
             if not result:
@@ -2189,6 +2213,7 @@ class MonitoringDashboard:
     def _get_model_performance_data(self, model_name: str = "", days: int = 30) -> dict[str, Any]:
         """Get ML model performance metrics."""
         try:
+            validated_days = self._normalize_days(days)
             # Query prediction_performance table
             query = """
             SELECT
@@ -2198,7 +2223,7 @@ class MonitoringDashboard:
             FROM prediction_performance
             WHERE timestamp > NOW() - INTERVAL '%s DAYS'
             """
-            params = [days]
+            params = [validated_days]
 
             if model_name:
                 query += " AND model_name = %s"
@@ -2275,12 +2300,7 @@ class MonitoringDashboard:
     def _get_detailed_system_health(self) -> dict[str, Any]:
         """Get detailed system health metrics."""
         try:
-            # Database metrics
-            db_query_time_start = time.time()
-            self.db_manager.execute_query("SELECT 1")
-            db_latency = (time.time() - db_query_time_start) * 1000
-
-            # Error rate (last hour)
+            # Error rate (last hour) – also used to measure DB latency
             error_query = """
             SELECT
                 COUNT(*) as total_events,
@@ -2289,7 +2309,9 @@ class MonitoringDashboard:
             FROM system_events
             WHERE timestamp > NOW() - INTERVAL '1 hour'
             """
+            db_query_time_start = time.time()
             error_result = self.db_manager.execute_query(error_query)
+            db_latency = (time.time() - db_query_time_start) * 1000
             error_data = (
                 error_result[0] if error_result else {"total_events": 0, "errors": 0, "warnings": 0}
             )
