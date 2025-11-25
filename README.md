@@ -144,25 +144,25 @@ bandit -c pyproject.toml -r src
 
 ```text
 src/
-  backtesting/       # Vectorised simulation engine
-  config/            # Typed configuration loader + constants + feature flags  
-  dashboards/        # Web-based monitoring and analysis dashboards
-  data_providers/    # Market & sentiment providers (+ caching wrapper)
-  database/          # SQLAlchemy models + DatabaseManager + Flask-Admin UI
-  indicators/        # Technical indicators (pure functions)
-  infrastructure/    # Cross-cutting logging/config/runtime helpers
-  live/              # Live trading engine
-  ml/                # Trained models (.onnx/.keras) + metadata
-  optimizer/         # Parameter optimization and strategy tuning
-  performance/       # Performance metrics utilities
-  position_management/  # Position sizing and portfolio management
-  prediction/        # Centralized model registry, ONNX runtime, caching
-  regime/            # Market regime detection and analysis
-  risk/              # Risk parameters and position sizing utilities
-  sentiment/         # Sentiment adapters
-  strategies/        # Built-in strategies (ML basic, sentiment, adaptive, bull/bear)
-  tech/              # Shared indicator math, adapters, and feature builders
-  trading/           # Core trading interfaces and shared functionality
+  backtesting/          # Vectorised simulation engine and utilities
+  config/               # Typed configuration loader, constants, feature flags
+  dashboards/           # Web monitoring and analytics dashboards
+  data_providers/       # Market, sentiment, and cache-aware data sources
+  database/             # SQLAlchemy models, DatabaseManager, admin UI
+  infrastructure/       # Logging config, runtime helpers, secrets/paths
+  live/                 # Live trading engine, runners, sync utilities
+  ml/                   # Training pipeline plus versioned model registry artifacts
+  optimizer/            # Parameter optimization and analyzer tooling
+  performance/          # Performance metrics and reporting helpers
+  position_management/  # Partial exits, trailing stops, dynamic risk policies
+  prediction/           # Prediction engine, feature pipeline, ONNX runners
+  regime/               # Market regime detection and analysis
+  risk/                 # Global risk manager, exposure controls
+  sentiment/            # Sentiment adapters and data mergers
+  strategies/           # Component-based strategies and factories
+  tech/                 # Indicator math, feature builders, adapters
+  trading/              # Trading interfaces, symbols, and shared helpers
+  indicators/           # Legacy shim that re-exports `src.tech` (kept for compatibility)
 ```
 
 ---
