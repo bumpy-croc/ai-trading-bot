@@ -1,52 +1,32 @@
 # Trading Core
 
-Base classes and shared utilities for trading strategies and components.
+Helper utilities that sit next to the strategy framework. The package currently exposes the symbol-normalisation helpers used by
+CLI commands, providers, and strategy factories.
 
-## Overview
+## Structure
 
-This module provides the foundational interfaces and shared functionality used across the trading system. It defines base strategy classes, component interfaces, and common helpers for backtesting and live trading, including symbol utilities under `symbols/`.
+- `symbols/factory.py` – `SymbolFactory` converts between human-friendly tickers (`BTC-USD`, `ETH/USDT`) and the formats required by each exchange.
+- `symbols/README.md` – usage notes for the helper.
 
-## Modules
-
-- `symbols/`: Symbol normalization helpers for exchange-specific formats.
-
-## Key Components
-
-### Base Strategy Classes
-Abstract base classes for implementing trading strategies. All custom strategies should inherit from `BaseStrategy`.
-
-### Component Interfaces
-Contracts defining the interface for:
-- Signal generators
-- Risk managers
-- Position sizers
-- Entry/exit logic
-
-### Shared Utilities
-Common helpers used by strategies and engines including validation, error handling, and data processing utilities.
+Strategy composition now lives under `src/strategies/components/strategy.py`, so this package intentionally stays slim and focused on
+shared trading utilities.
 
 ## Usage
 
 ```python
-# Import base strategy class
-from src.strategies.base import BaseStrategy
+from src.trading.symbols.factory import SymbolFactory
 
-class MyStrategy(BaseStrategy):
-    def calculate_indicators(self, df):
-        # Add indicators to dataframe
-        return df
-    
-    def check_entry_conditions(self, df):
-        # Return entry signal
-        return signal
-    
-    def check_exit_conditions(self, df, position):
-        # Return exit signal
-        return signal
+binance_symbol = SymbolFactory.to_exchange_symbol("BTC-USD", "binance")  # BTCUSDT
+coinbase_symbol = SymbolFactory.to_exchange_symbol("ETHUSDT", "coinbase")  # ETH-USD
+
+print(binance_symbol, coinbase_symbol)
 ```
 
-## See Also
+Pass the `SymbolFactory` output directly to data providers, strategies, or CLI commands to guarantee consistent ticker formatting across
+backtesting and live trading.
 
-- [strategies/README.md](../strategies/README.md) - Strategy implementation examples
-- [docs/backtesting.md](../../docs/backtesting.md) - Backtesting strategies
-- [docs/live_trading.md](../../docs/live_trading.md) - Live trading usage
+## Related docs
+
+- `src/strategies/README.md` – component-based strategy architecture
+- `docs/backtesting.md` – how the engines use the trading helpers
+- `docs/live_trading.md` – live runner flags and symbol requirements

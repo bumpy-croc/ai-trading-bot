@@ -108,6 +108,9 @@ atb data cache-manager clear-old --hours 24
 atb data prefill-cache --symbols BTCUSDT ETHUSDT --timeframes 1h 4h --years 4
 ```
 
+> `cache-manager list|clear|clear-old` still target the legacy `.pkl` cache files. Use `cache-manager info`
+> or delete the `.parquet` files (via `CachedDataProvider.clear_cache`) when working with the current hashed Parquet cache.
+
 ## Architecture & Key Concepts
 
 ### High-Level Data Flow

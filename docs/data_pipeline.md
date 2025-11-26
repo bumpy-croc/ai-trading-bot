@@ -1,6 +1,6 @@
 # Data pipeline
 
-> **Last Updated**: 2025-11-18  
+> **Last Updated**: 2025-11-26  
 > **Related Documentation**: [Backtesting](backtesting.md), [Configuration](configuration.md)
 
 Market, sentiment, and cached data access lives under `src/data_providers`. The system exposes a consistent `DataProvider`
@@ -55,8 +55,10 @@ The `atb data` command family in `cli/commands/data.py` covers the most common w
 - `atb data preload-offline --symbols BTCUSDT --timeframes 1h --years-back 10 --test-offline` – ensures the cache contains enough
   history for air-gapped environments, optionally forcing refreshes with `--force-refresh`, and verifies offline reads when
   `--test-offline` is set.
-- `atb data cache-manager info|list|clear|clear-old` – inspect, reset, or prune cached files. The commands reuse
-  `CachedDataProvider` instrumentation and normalise output sizes/timestamps for easier monitoring.
+- `atb data cache-manager info|list|clear|clear-old` – inspect, reset, or prune cached files. `info` relies on
+  `CachedDataProvider.get_cache_info()` so it reports Parquet caches correctly, whereas `list`/`clear`/`clear-old`
+  still scan the legacy `.pkl` cache files (they print zero entries for `.parquet` caches until the CLI refresh
+  is shipped).
 - `atb data populate-dummy --trades 100 --confirm` – write deterministic mock trades/positions into PostgreSQL so dashboards have
   data even before the first real session runs.
 

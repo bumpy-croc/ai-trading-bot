@@ -182,7 +182,7 @@ railway up              # Deploy
 ### Performance & Monitoring
 ```bash
 atb dashboards run monitoring --port 8000  # Real-time monitoring
-atb data cache-manager info  # Cache status
+atb data cache-manager info  # Cache status (list/clear still target legacy `.pkl` caches)
 python src/database_manager/app.py          # DB admin UI
 ```
 

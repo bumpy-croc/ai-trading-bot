@@ -101,6 +101,10 @@ atb live-control swap-strategy --strategy ml_basic
 atb data populate-dummy --trades 100 --confirm
 ```
 
+> **Heads-up**: `cache-manager list|clear|clear-old` still targets the legacy `.pkl` cache files.
+> Parquet-based caches created by `CachedDataProvider` and the newer preload commands
+> show up under `cache-manager info`, but you need to remove the `.parquet` files manually (or via `CachedDataProvider.clear_cache`) until the CLI catches up.
+
 7) Tests
 
 ```bash
