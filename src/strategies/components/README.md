@@ -46,6 +46,11 @@ The main orchestrator that composes all components into a unified trading strate
 - Regime-aware decision making
 - Component parameter introspection
 
+`MLSignalGenerator` loads bundles via `PredictionModelRegistry`. Supply a `model_name`
+matching `StrategyModel.key` (`<symbol>:<timeframe>:<model_type>:<version>`) when you
+need to pin a specific artifact; otherwise the generator falls back to the registry’s
+default selection.
+
 **Usage**:
 ```python
 from src.strategies.components import Strategy, MLSignalGenerator, VolatilityRiskManager, ConfidenceWeightedSizer
@@ -133,10 +138,12 @@ Abstract base class for generating trading signals based on market data.
 from src.strategies.components import MLSignalGenerator, TechnicalSignalGenerator
 
 # ML-based signal generator
-# Note: Supports both flat (src/ml/*.onnx) and nested (src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx) paths
+# Provide a registry key (<symbol>:<timeframe>:<type>:<version>) to pin a specific bundle.
+# When model_name is omitted the generator defers to the registry default.
 ml_gen = MLSignalGenerator(
-    model_path="src/ml/btcusdt_price.onnx",
-    sequence_length=120
+    name="btc_ml_generator",
+    sequence_length=120,
+    model_name="BTCUSDT:1h:basic:2025-10-30_12h_v1",
 )
 
 # Technical indicator-based generator
@@ -430,14 +437,19 @@ Machine learning-based signal generator using ONNX models.
 
 **Usage**:
 ```python
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
 from src.strategies.components import MLSignalGenerator
 
-# Create ML signal generator
+config = PredictionConfig.from_config_manager()
+registry = PredictionModelRegistry(config)
+bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+
+# Create ML signal generator (PredictionEngine is always enabled internally)
 ml_gen = MLSignalGenerator(
     name="btc_ml_generator",
-    model_path="src/ml/btcusdt_price.onnx",
     sequence_length=120,
-    use_prediction_engine=True
+    model_name=bundle.key,
 )
 
 # Generate signal
@@ -604,25 +616,35 @@ For detailed testing framework documentation, see [testing/README.md](testing/RE
 ### Example 1: Creating a Simple ML Strategy
 
 ```python
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
 from src.strategies.components import (
-    Strategy, MLSignalGenerator, VolatilityRiskManager, 
-    ConfidenceWeightedSizer, EnhancedRegimeDetector
+    Strategy,
+    MLSignalGenerator,
+    VolatilityRiskManager,
+    ConfidenceWeightedSizer,
+    EnhancedRegimeDetector,
 )
+
+# Prepare registry selection
+config = PredictionConfig.from_config_manager()
+registry = PredictionModelRegistry(config)
+bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
 
 # Create components
 signal_gen = MLSignalGenerator(
-    model_path="src/ml/btcusdt_price.onnx",
-    sequence_length=120
+    sequence_length=120,
+    model_name=bundle.key,
 )
 
 risk_mgr = VolatilityRiskManager(
     base_risk=0.02,
-    atr_multiplier=2.0
+    atr_multiplier=2.0,
 )
 
 pos_sizer = ConfidenceWeightedSizer(
     base_fraction=0.04,
-    min_confidence=0.4
+    min_confidence=0.4,
 )
 
 regime_detector = EnhancedRegimeDetector()
@@ -633,7 +655,7 @@ strategy = Strategy(
     signal_generator=signal_gen,
     risk_manager=risk_mgr,
     position_sizer=pos_sizer,
-    regime_detector=regime_detector
+    regime_detector=regime_detector,
 )
 
 # Use strategy
@@ -932,6 +954,6 @@ For questions or issues:
 
 ---
 
-**Last Updated**: November 2025  
+**Last Updated**: 2025-11-27
 **Version**: 1.0.0  
 **Status**: Production Ready
