@@ -18,8 +18,9 @@ continuous polling, account synchronisation, and resilience features required fo
 - **Account synchronisation** – `AccountSynchronizer` periodically reconciles balances, open positions, and open orders using the
   exchange API (`src/live/account_sync.py`). It stores the results through `DatabaseManager` so restarts can resume from the last
   known state.
-- **Sentiment and regime inputs** – pass a `SentimentDataProvider` (Fear & Greed) or enable the `RegimeStrategySwitcher` to swap
-  strategies when market conditions change.
+- **Sentiment and regime inputs** – the CLI keeps the `--use-sentiment` flag for backwards compatibility but currently emits a
+  warning and runs without attaching a provider while the live ingestion refresh is underway. Pass a `SentimentDataProvider`
+  (Fear & Greed) programmatically, or enable the `RegimeStrategySwitcher`, when you need sentiment-aware switching.
 
 ## State recovery & account sync
 
@@ -82,14 +83,16 @@ The control surface lives under `atb live-control`:
 ## Programmatic usage
 
 ```python
-from src.live.trading_engine import LiveTradingEngine
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
+from src.data_providers.feargreed_provider import FearGreedProvider
+from src.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
 
 engine = LiveTradingEngine(
     strategy=create_ml_basic_strategy(),
     data_provider=CachedDataProvider(BinanceProvider(), cache_ttl_hours=1),
+    sentiment_provider=FearGreedProvider(),  # attach manually when running live
     check_interval=60,
     max_position_size=0.1,
     enable_live_trading=False,  # keep paper trading unless explicitly enabled

@@ -19,8 +19,10 @@ underlying exchange format.
 ## Sentiment data
 
 `FearGreedProvider` (`src/data_providers/feargreed_provider.py`) downloads the Alternative.me Fear & Greed index and exposes
-`get_historical_sentiment()` plus aggregation helpers that align the series with OHLCV data. Both the backtesting CLI (`--use-sentiment`)
-and the live trading engine accept an optional `SentimentDataProvider` to enrich decisions.
+`get_historical_sentiment()` plus aggregation helpers that align the series with OHLCV data. The backtesting CLI wires the provider
+through the `--use-sentiment` flag today. The live trading engine still supports `SentimentDataProvider` instances, but the CLI’s
+`--use-sentiment` flag currently issues a warning and no-ops while the ingestion refresh stabilises, so attach the provider directly
+when instantiating `LiveTradingEngine` in long-running services.
 
 ## Cached access
 

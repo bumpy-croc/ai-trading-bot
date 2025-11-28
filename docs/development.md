@@ -67,7 +67,7 @@ succinct changelog, bumps the semantic version, and auto-stages the updated mani
 
 - `atb backtest ml_basic --days 30` – quick simulations while iterating on strategies.
 - `atb live ml_basic --paper-trading` – start the live runner in paper trading mode.
-- `atb live-health --port 8000 -- ml_basic --paper-trading` – start live trading with health endpoint.
+- `PORT=8000 atb live-health -- ml_basic --paper-trading` – start live trading with health endpoint (reads `PORT`/`HEALTH_CHECK_PORT`, defaults to 8000).
 - `atb optimizer --strategy ml_basic --days 30` – trigger the optimisation CLI.
 
 Use these commands to mirror CI behaviour locally before opening pull requests.

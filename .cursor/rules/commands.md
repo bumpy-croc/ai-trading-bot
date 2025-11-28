@@ -18,7 +18,7 @@ alwaysApply: false
 ### Live Trading
 - Paper: `atb live ml_basic --symbol BTCUSDT --paper-trading`
 - Live (requires explicit ack): `atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks`
-- Health: `atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading`
+- Health (set `PORT`/`HEALTH_CHECK_PORT`): `PORT=8000 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading`
 
 ### Monitoring & Utilities
 - Dashboard: `atb dashboards run monitoring --port 8000`

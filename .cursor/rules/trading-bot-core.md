@@ -101,8 +101,8 @@ max_drawdown = 0.20
 # Stop live trading immediately
 atb live-control emergency-stop
 
-# Check current positions and health
-atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading
+# Check current positions and health (set PORT/HEALTH_CHECK_PORT if needed)
+PORT=8000 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading
 
 # Emergency database backup
 python scripts/backup_database.py --emergency
@@ -175,7 +175,7 @@ atb live-control emergency-stop
 - "start dashboard" → `atb dashboards run monitoring --port 8000`
 
 ### Health & Monitoring
-- "check health" → `atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading`
+- "check health" → `PORT=8000 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading`
 - "check positions" → `atb db verify`
 - "check cache" → `atb data cache-manager info`
 
