@@ -31,9 +31,11 @@ rewriting strategy logic.
 ## Typical usage
 
 ```python
+from src.database.manager import DatabaseManager
 from src.risk.risk_manager import RiskManager
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 
+database_manager = DatabaseManager()
 risk = RiskManager()
 dyn = DynamicRiskManager(DynamicRiskConfig(enabled=True), database_manager)
 
