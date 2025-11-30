@@ -2,7 +2,7 @@
 
 A modular cryptocurrency trading system focused on long-term, risk-balanced trend following. It supports backtesting, live trading (paper and live), ML-driven models (price and sentiment), PostgreSQL logging, and optional Railway deployment.
 
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 > **Requirements**: Python 3.11+ (the repository uses 3.11+ typing features)
 
@@ -78,9 +78,11 @@ atb live ml_basic --symbol BTCUSDT --paper-trading
 # Live trading (requires explicit confirmation)
 atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
-# Live trading + health endpoint
-atb live-health --port 8000 -- ml_basic --paper-trading
+# Live trading + health endpoint (override port via PORT/HEALTH_CHECK_PORT)
+PORT=8000 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading
 ```
+
+Set `PORT` (or `HEALTH_CHECK_PORT`) before running to change the HTTP listener; arguments after `--` are forwarded to the live runner just like `atb live`.
 
 6) Utilities
 
@@ -246,6 +248,7 @@ Sentiment data and ML training are supported. Pretrained models live in `src/ml`
 ## Logging
 - Centralized logging via `src.infrastructure.logging.config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
 - JSON logs default to enabled in production-like environments (Railway or ENV/APP_ENV=production).
+- Health/`live-health` endpoints read the `PORT` (or `HEALTH_CHECK_PORT`) env var; set it before invoking `atb live-health` to override the default 8000 listener.
 - See `docs/monitoring.md` for structured events, context, and operations guidance.
 
 ---

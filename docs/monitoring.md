@@ -40,9 +40,10 @@ underlying dashboard supports them.
 
 ## Health endpoints
 
-`atb live-health --port 9000 -- ml_basic --paper-trading` runs the trading engine with an HTTP server exposing `/health` and
-`/status`. The status payload checks configuration providers, database connectivity, and Binance API reachability so you can wire
-it into uptime monitors or Kubernetes liveness probes.
+`PORT=9000 atb live-health -- ml_basic --paper-trading` runs the trading engine with an HTTP server exposing `/health` and
+`/status`. The health listener reads the `PORT` (or `HEALTH_CHECK_PORT`) environment variable—set it before invoking the CLI to
+override the default 8000 port. The status payload checks configuration providers, database connectivity, and Binance API
+reachability so you can wire it into uptime monitors or Kubernetes liveness probes.
 
 ## Operational tips
 

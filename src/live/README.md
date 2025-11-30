@@ -13,9 +13,12 @@ atb live ml_basic --symbol BTCUSDT --paper-trading
 # Live trading (explicit confirmation required)
 atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
-# Live trading with health endpoint
-atb live-health --port 8000 -- ml_basic --symbol BTCUSDT --paper-trading
+# Live trading with health endpoint (override port via PORT/HEALTH_CHECK_PORT)
+PORT=8000 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading
 ```
+
+`live-health` reads the HTTP listener port from `PORT` (falling back to `HEALTH_CHECK_PORT` or 8000). Set it before running if you
+need the health server on a custom port; arguments after `--` flow directly into the `atb live` runner.
 
 ## Programmatic
 ```python
