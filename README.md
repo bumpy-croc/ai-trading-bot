@@ -146,14 +146,14 @@ bandit -c pyproject.toml -r src
 src/
   backtesting/          # Vectorised simulation engine and utilities
   config/               # Typed configuration loader, constants, feature flags
-  dashboards/           # Web monitoring and analytics dashboards
+  dashboards/           # Monitoring, backtesting, and prediction dashboards
   data_providers/       # Market, sentiment, and cache-aware data sources
   database/             # SQLAlchemy models, DatabaseManager, admin UI
-  infrastructure/       # Logging config, runtime helpers, secrets/paths
+  infrastructure/       # Logging config, runtime helpers, cache/secret tooling
   live/                 # Live trading engine, runners, sync utilities
   ml/                   # Training pipeline plus versioned model registry artifacts
   optimizer/            # Parameter optimization and analyzer tooling
-  performance/          # Performance metrics and reporting helpers
+  performance/          # Shared performance and diagnostics helpers
   position_management/  # Partial exits, trailing stops, dynamic risk policies
   prediction/           # Prediction engine, feature pipeline, ONNX runners
   regime/               # Market regime detection and analysis
@@ -161,7 +161,7 @@ src/
   sentiment/            # Sentiment adapters and data mergers
   strategies/           # Component-based strategies and factories
   tech/                 # Indicator math, feature builders, adapters
-  trading/              # Trading interfaces, symbols, and shared helpers
+  trading/              # Trading interfaces plus symbol utilities
   indicators/           # Legacy shim that re-exports `src.tech` (kept for compatibility)
 ```
 
@@ -176,8 +176,8 @@ src/
 - Live engine: `live.trading_engine.LiveTradingEngine` (CLI: `atb live`, `atb live-health`)
 - Risk: `risk.risk_manager.RiskManager`
 - Database: `database.manager.DatabaseManager` (PostgreSQL)
-- Monitoring: `dashboards.monitoring.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
-- Admin UI: `database.admin_ui.app` (Flask-Admin), run `python src/database/admin_ui/app.py`
+- Monitoring dashboard: `src.dashboards.monitoring.dashboard.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
+- Admin UI: `src.database.admin_ui.app:create_app` (Flask-Admin), run `python src/database/admin_ui/app.py`
 
 ---
 
