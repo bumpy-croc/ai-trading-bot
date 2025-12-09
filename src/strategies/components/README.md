@@ -178,7 +178,6 @@ Abstract base class for managing position sizing and risk controls.
 - `FixedRiskManager` - Fixed percentage risk per trade
 - `VolatilityRiskManager` - Risk adjusted for market volatility
 - `RegimeAdaptiveRiskManager` - Risk adjusted for market regime
-- `KellyRiskManager` - Kelly criterion-based sizing
 
 **Usage**:
 ```python
@@ -322,7 +321,7 @@ custom_strategy = (StrategyBuilder("MyCustom")
     .build())
 ```
 
-### 2. StrategyManager (`strategy_manager.py`)
+### 2. ComponentStrategyManager (`strategy_manager.py`)
 
 Strategy orchestration with versioning capabilities for A/B testing and rollbacks.
 
@@ -336,10 +335,10 @@ Strategy orchestration with versioning capabilities for A/B testing and rollback
 
 **Usage**:
 ```python
-    from src.strategies.components import ComponentStrategyManager
+from src.strategies.components import ComponentStrategyManager
 
 # Create strategy manager
-manager = StrategyManager(
+manager = ComponentStrategyManager(
     name="my_strategy_manager",
     signal_generator=MLSignalGenerator(),
     risk_manager=VolatilityRiskManager(),
@@ -683,10 +682,10 @@ for i, result in enumerate(results, 1):
 ### Example 3: Strategy Version Management
 
 ```python
-    from src.strategies.components import ComponentStrategyManager, StrategyRegistry
+from src.strategies.components import ComponentStrategyManager, StrategyRegistry
 
 # Create strategy manager
-manager = StrategyManager(
+manager = ComponentStrategyManager(
     name="production_strategy",
     signal_generator=MLSignalGenerator(),
     risk_manager=VolatilityRiskManager(),
@@ -895,7 +894,7 @@ strategy = Strategy(
 
 - **StrategyFactory**: Pre-configured strategy creation
 - **StrategyBuilder**: Fluent interface for custom strategies
-- **StrategyManager**: Strategy execution with versioning
+- **ComponentStrategyManager**: Strategy execution with versioning
 - **StrategyRegistry**: Centralized strategy management
 
 ### Specialized Classes
@@ -926,12 +925,12 @@ strategy = Strategy(
 For questions or issues:
 
 1. Check this README and the testing framework documentation
-2. Review the design documentation in `.kiro/specs/strategy-system-redesign/`
+2. Review the exec plan in `docs/execplans/platform_modularization_plan.md`
 3. Look at existing tests in `tests/unit/strategies/components/`
 4. Check the main strategy system documentation
 
 ---
 
-**Last Updated**: November 2025  
+**Last Updated**: December 2025  
 **Version**: 1.0.0  
 **Status**: Production Ready
