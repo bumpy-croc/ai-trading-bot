@@ -49,4 +49,4 @@ Models are automatically discovered from the structured registry rooted at `src/
 - `model.keras` and `saved_model/` preserve the TensorFlow export for retracing.
 - `metadata.json`, `feature_schema.json`, and optional `metrics.json` drive selection, validation, and CLI summaries.
 
-CLI helpers under `atb models` (`list`, `compare`, `validate`, `promote`) and `atb live-control` reuse this registry, so documentation changes here should stay in sync with [docs/prediction.md](../../docs/prediction.md).
+CLI helpers under `atb models` (`list`, `compare`, `validate`, `promote`) and `atb live-control` reuse this registry, so documentation changes here should stay in sync with [docs/prediction.md](../../../docs/prediction.md).
