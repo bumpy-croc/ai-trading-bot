@@ -78,8 +78,8 @@ atb live ml_basic --symbol BTCUSDT --paper-trading
 # Live trading (requires explicit confirmation)
 atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
-# Live trading + health endpoint
-atb live-health --port 8000 -- ml_basic --paper-trading
+# Live trading + health endpoint (set PORT or HEALTH_CHECK_PORT to override)
+PORT=8000 atb live-health -- ml_basic --paper-trading
 ```
 
 6) Utilities
