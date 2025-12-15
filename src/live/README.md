@@ -1,6 +1,6 @@
 # Live Trading Engine
 
-> **Last Updated**: 2025-12-14  
+> **Last Updated**: 2025-12-15  
 > **Related Documentation**: See [docs/live_trading.md](../../docs/live_trading.md) for comprehensive guide and safety controls
 
 Executes strategies in real time with risk controls, data providers, and database logging.
@@ -30,3 +30,9 @@ engine = LiveTradingEngine(
 )
 engine.start("BTCUSDT", "1h")
 ```
+
+## Sentiment flag status
+
+The runner logs `Sentiment analysis not available` and ignores `--use-sentiment` (or a provided `sentiment_provider`) because the
+production images no longer include the Fear & Greed feed. Keep sentiment experiments inside the backtester until a replacement
+provider is available.

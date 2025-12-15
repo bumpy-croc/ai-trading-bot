@@ -1,6 +1,6 @@
 # Data pipeline
 
-> **Last Updated**: 2025-11-18  
+> **Last Updated**: 2025-12-15  
 > **Related Documentation**: [Backtesting](backtesting.md), [Configuration](configuration.md)
 
 Market, sentiment, and cached data access lives under `src/data_providers`. The system exposes a consistent `DataProvider`
@@ -19,8 +19,9 @@ underlying exchange format.
 ## Sentiment data
 
 `FearGreedProvider` (`src/data_providers/feargreed_provider.py`) downloads the Alternative.me Fear & Greed index and exposes
-`get_historical_sentiment()` plus aggregation helpers that align the series with OHLCV data. Both the backtesting CLI (`--use-sentiment`)
-and the live trading engine accept an optional `SentimentDataProvider` to enrich decisions.
+`get_historical_sentiment()` plus aggregation helpers that align the series with OHLCV data. The backtesting CLI (`--use-sentiment`)
+still attaches a `SentimentDataProvider`, but the live trading runner now ignores the flag and logs a warning because production builds
+ship without the sentiment providers. Keep sentiment disabled in live workflows until a replacement feed is restored.
 
 ## Cached access
 

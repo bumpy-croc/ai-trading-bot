@@ -1,6 +1,6 @@
 # Live trading
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-12-15  
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
 `src/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
@@ -18,8 +18,10 @@ continuous polling, account synchronisation, and resilience features required fo
 - **Account synchronisation** – `AccountSynchronizer` periodically reconciles balances, open positions, and open orders using the
   exchange API (`src/live/account_sync.py`). It stores the results through `DatabaseManager` so restarts can resume from the last
   known state.
-- **Sentiment and regime inputs** – pass a `SentimentDataProvider` (Fear & Greed) or enable the `RegimeStrategySwitcher` to swap
-  strategies when market conditions change.
+- **Sentiment flag status** – the CLI still accepts `--use-sentiment`, but live runs log a warning and continue without the provider
+  because the Fear & Greed feed was removed from production builds. Sentiment-aware behaviour remains backtest-only for now.
+- **Regime switching roadmap** – `RegimeStrategySwitcher` lives under `src/live/regime_strategy_switcher.py`, yet only the backtester
+  wires it in today. Live sessions operate a single strategy until you manually swap it out.
 
 ## State recovery & account sync
 
@@ -70,6 +72,8 @@ Useful flags:
 - `--risk-per-trade`, `--max-risk-per-trade`, `--max-drawdown` – inject custom `RiskParameters` values.
 - `--no-cache` – disable `CachedDataProvider` wrapping when live candles must always be fresh.
 - `--mock-data` – run the engine loop without touching the exchange (useful in CI).
+- `--use-sentiment` – accepted for compatibility with the backtester, but currently ignored (the runner prints a warning and keeps
+  price-only execution).
 
 The control surface lives under `atb live-control`:
 
@@ -78,6 +82,17 @@ The control surface lives under `atb live-control`:
 - `atb live-control deploy-model --model-path <staging-dir> --close-positions` – promote a staged bundle into the live strategy
   directory.
 - `atb live-control list-models` / `status` / `emergency-stop` – quick operational actions when supervising a running engine.
+- `atb live-control swap-strategy --strategy ml_adaptive` – currently a simulated helper that logs the request; restart the runner or
+  redeploy with the desired strategy to make the change effective.
+
+## Sentiment & regime status
+
+- The live runner disables sentiment enrichment by default and simply logs `Sentiment analysis not available - sentiment providers have been removed`
+  when `--use-sentiment` is supplied (see `src/live/runner.py`). Keep sentiment-focused experiments inside the backtester until the
+  new provider ships.
+- Regime-aware hot swapping remains a backtesting feature (`Backtester(enable_regime_switching=True)`) while the live engine focuses on
+  deterministic runs. Operationally, swap strategies by stopping the current session or using infrastructure tooling (`atb live-control swap-strategy`)
+  to stage the replacement before restarting the runner.
 
 ## Programmatic usage
 
