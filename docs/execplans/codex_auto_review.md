@@ -20,12 +20,12 @@ Ship a repeatable command-line workflow that pairs the local Codex CLI with our 
 ## Surprises & Discoveries
 
 - Observation: Running the CLI with the system Python 3.9 interpreter crashes because the codebase assumes 3.10+ union syntax.
-  Evidence: `python -m cli codex auto-review --help` raised `TypeError: unsupported operand type(s) for |`.
+  Evidence: invoking the workflow via `python -m cli codex auto-review --help` raised `TypeError: unsupported operand type(s) for |`.
   Mitigation: Use the project’s Python 3.11 environment (`python3.11` or `.venv/bin/python`) when invoking the workflow.
 
 ## Decision Log
 
-- Decision: Manage the workflow through a new `python -m cli codex auto-review` command instead of an ad-hoc shell script so it benefits from existing CLI ergonomics.
+- Decision: Manage the workflow through the `atb codex auto-review` command (also available via `python -m cli codex auto-review`) instead of an ad-hoc shell script so it benefits from existing CLI ergonomics.
   Rationale: Keeps tooling discoverable, reuses logging, and aligns with how other automation lives under `cli/`.
   Date/Author: 2025-10-23, Codex agent.
 - Decision: Default validation commands to `atb test unit` and `atb dev quality`, with `--check` extensions when contributors need a tighter loop.
@@ -46,7 +46,7 @@ Ship a repeatable command-line workflow that pairs the local Codex CLI with our 
 
 ## Outcomes & Retrospective
 
-The automated loop now lives under `python -m cli codex auto-review`, storing artefacts per run and enforcing structured review output. Unit tests cover helper logic and guard-rails, while manual smoke checks confirm the CLI wiring and early-exit behaviour. Next improvement opportunity: once Codex credentials are available in CI, add an integration test (or recorded transcript) that demonstrates a full review/fix cycle on a seeded failing scenario.
+The automated loop now lives under `atb codex auto-review` (still invokable directly via `python -m cli codex auto-review`), storing artefacts per run and enforcing structured review output. Unit tests cover helper logic and guard-rails, while manual smoke checks confirm the CLI wiring and early-exit behaviour. Next improvement opportunity: once Codex credentials are available in CI, add an integration test (or recorded transcript) that demonstrates a full review/fix cycle on a seeded failing scenario.
 
 ## Context and Orientation
 

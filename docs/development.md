@@ -1,6 +1,6 @@
 # Development workflow
 
-> **Last Updated**: 2025-12-14
+> **Last Updated**: 2025-12-16
 
 This project ships a command-line interface and Makefile targets that standardise local setup, quality checks, and diagnostics.
 
@@ -72,12 +72,22 @@ succinct changelog, bumps the semantic version, and auto-stages the updated mani
 
 Use these commands to mirror CI behaviour locally before opening pull requests.
 
+## Documentation maintenance
+
+Run the markdown validator before shipping doc-heavy changes so broken links, outdated commands, and missing module readmes never sneak into `develop`:
+
+```bash
+atb docs validate
+```
+
+If the `atb` entry point is unavailable (for example in a bare Python environment), run `python -m cli docs validate` instead. The validator scans `docs/`, every `src/**/README.md`, and the project root `README.md`, checking relative links, flagging stale `docker-compose` references, and ensuring each top-level module ships a README.
+
 ## Codex auto-review workflow
 
 The repository includes a Codex-driven loop that keeps running fast validations, requests a structured review, and lets Codex apply fixes until the review comes back clean.
 
 ```bash
-python -m cli codex auto-review \
+atb codex auto-review \
   --plan-path docs/execplans/codex_auto_review.md \
   --max-iterations 3
 ```
@@ -90,6 +100,6 @@ Key behaviour:
 - The review step enforces `cli/core/schemas/codex_review.schema.json`, so Codex replies with machine-readable findings. When the findings array is empty and validations pass, the command exits with status 0.
 - Fix iterations run in `--full-auto` mode by default. Pass `--dangerous-fix` to let Codex bypass sandboxing/approvals entirely (recommended only in a disposable environment).
 - Artifacts live under `.codex/workflows/<timestamp>/` and include validation logs, structured review JSON, and Codex fix transcripts for auditability.
-- Run the command through the project’s Python 3.11 environment (`python3.11 -m cli ...` or `.venv/bin/python -m cli ...`) because the codebase relies on 3.10+ typing features. The loop also injects that interpreter as the `PYTHON` environment variable so Makefile targets like `make test` work even if `python` is not on your PATH (override with `--python-bin`).
+- Run the command through the project’s Python 3.11 environment to satisfy the 3.11-only typing features. The installed `atb` entry point already routes through the active interpreter; if you need to bypass it (for example when invoking directly from CI), call `python3.11 -m cli codex auto-review ...` or `.venv/bin/python -m cli ...`. The loop also injects that interpreter as the `PYTHON` environment variable so Makefile targets like `make test` work even if `python` is not on your PATH (override with `--python-bin`).
 
 You can point `--plan-path` to the ExecPlan that guided the change so Codex understands the intended milestones, but the flag is optional—leaving it out simply tells Codex to review the diff/validations. Use `--profile <name>` to select an alternate Codex configuration, or `--max-iterations 0` for a dry run that just prints the help/exit path without calling Codex.
