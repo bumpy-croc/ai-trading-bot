@@ -24,11 +24,12 @@ and the live trading engine accept an optional `SentimentDataProvider` to enrich
 
 ## Cached access
 
-`CachedDataProvider` wraps any market provider and persists yearly partitions as zipped Parquet files (see
-`src/data_providers/cached_data_provider.py`). Each partition uses a deterministic hash-based filename so the CLI cache tools can
-identify duplicates quickly even when multiple processes are warming the cache. Cached entries remain valid forever for completed
-calendar years and respect a configurable TTL (24 hours by default) for the current year. If the default cache directory cannot be
-created, the helper falls back to a project-local temporary directory instead of silently disabling caching.
+`CachedDataProvider` wraps any market provider and persists yearly partitions as `.parquet` snapshots (see
+`src/data_providers/cached_data_provider.py`). Each partition uses a deterministic SHA-256 filename so the CLI cache tools can
+identify duplicates quickly even when multiple processes are warming the cache. The `cache_ttl_hours` setting defaults to 24 hours
+for the in-progress calendar year, while all completed years are treated as permanently valid because that data is immutable. When
+the default cache directory cannot be created, the helper logs the error and falls back to a project-local temporary directory
+instead of silently disabling caching.
 
 ```python
 from datetime import datetime, timedelta

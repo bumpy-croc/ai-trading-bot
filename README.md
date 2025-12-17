@@ -138,6 +138,16 @@ python bin/run_mypy.py
 bandit -c pyproject.toml -r src
 ```
 
+## Documentation maintenance
+
+Run the bundled validator to catch broken relative links, outdated Docker commands, or missing module READMEs before opening a pull request:
+
+```bash
+python -m cli docs validate
+```
+
+The check scans `docs/`, the root `README.md`, and every module README under `src/` so nightly runs stay in sync with the codebase.
+
 ---
 
 ## Project structure

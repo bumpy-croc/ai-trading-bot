@@ -21,18 +21,32 @@ mutation, and document column expectations.
 
 ## Usage Example
 
-    from src.tech.indicators.core import (
-        calculate_atr,
-        calculate_bollinger_bands,
-        calculate_moving_averages,
-        calculate_rsi,
-    )
+```python
+import pandas as pd
 
-    df = calculate_moving_averages(raw_df, periods=[20, 50])
-    df["rsi"] = calculate_rsi(df, period=14)
-    df = calculate_atr(df, period=14)
-    df = calculate_bollinger_bands(df, period=20, std_dev=2.0)
-    print(df[["close", "ma_20", "ma_50", "rsi", "atr", "bb_upper", "bb_lower"]].tail())
+from src.tech.indicators.core import (
+    calculate_atr,
+    calculate_bollinger_bands,
+    calculate_moving_averages,
+    calculate_rsi,
+)
+
+raw_df = pd.DataFrame(
+    {
+        "open": range(1, 101),
+        "high": range(2, 102),
+        "low": range(0, 100),
+        "close": range(1, 101),
+    },
+    index=pd.date_range("2024-01-01", periods=100, freq="h"),
+)
+
+df = calculate_moving_averages(raw_df, periods=[10, 20])
+df["rsi"] = calculate_rsi(df, period=14)
+df = calculate_atr(df, period=14)
+df = calculate_bollinger_bands(df, period=20, std_dev=2.0)
+print(df[["close", "ma_10", "ma_20", "rsi", "atr", "bb_upper", "bb_lower"]].tail())
+```
 
 ## Tests
 
