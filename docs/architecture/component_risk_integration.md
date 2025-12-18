@@ -13,7 +13,7 @@ This note summarises recommended architectural adjustments for aligning `positio
 - **Module**: `src/strategies/components/risk_adapter.py`
 - **Purpose**: Wrap `src/risk/risk_manager.RiskManager` and expose the existing component contract (`calculate_position_size`, `should_exit`, `get_stop_loss`, `get_take_profit`).
 - **Implementation steps**:
-  1. Inject the engine `RiskManager` plus portfolio context (`PositionTracker`, daily exposure state) into the adapter constructor so the adapter works in simulations and live trading.
+  1. Bind the engine `RiskManager` via `CoreRiskAdapter.bind_core_manager()` and register `PortfolioStateHooks` callbacks so `on_fill`, `on_close`, `on_partial_exit`, and `on_scale_in` keep `RiskManager.positions` and `daily_risk_used` in sync across simulations and live trading.
   2. Delegate calculations directly to the engine manager, passing through instrument identifiers and risk parameters supplied by the strategy component.
   3. Propagate any exceptions or risk-limit breaches (e.g., daily loss limits) so components can surface them in diagnostics instead of silently diverging.
   4. Export the adapter from `src/strategies/components/__init__.py` and update factories (e.g., `src/strategies/ml_basic.py`, `src/strategies/ensemble.py`) to instantiate it.
@@ -26,9 +26,9 @@ This note summarises recommended architectural adjustments for aligning `positio
 
 ### 3. Share Portfolio State Across Contexts
 
-- Provide the adapter with read/write access to the same position ledger (`src/position_management/position_tracker.py`) that the engine uses. For backtests, inject a simulated ledger; for live trading, inject the real one.
+- Use the adapter's portfolio callbacks (`on_fill`, `on_close`, `on_partial_exit`, `on_scale_in`) to mutate the canonical `RiskManager` state instead of maintaining a parallel ledger. Backtests can attach lightweight telemetry through `PortfolioStateHooks`, while live trading feeds the same callbacks into `DatabaseManager`.
 - Mirror correlation and exposure caches by sharing the risk manager's stateful collaborators (e.g., `ExposureMonitor`, `CorrelationMatrix`). Avoid duplicating these structures in component land—always pass the canonical instances.
-- Expose hooks (such as `on_fill` or `on_position_closed`) on the adapter so component harnesses can notify the engine modules about simulated fills, keeping drawdown tracking aligned.
+- Register `PortfolioStateHooks` when component harnesses need notifications immediately after `RiskManager` mutates state; this keeps drawdown tracking aligned without polling bespoke ledgers.
 
 ## Clarify Strategy Management Responsibilities
 

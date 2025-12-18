@@ -16,10 +16,10 @@ Environment-specific configuration providers for the configuration system.
 
 ## Usage
 
-Configuration providers are automatically initialized by the `ConfigManager` and should not be used directly. Use the config manager instead:
+Configuration providers are automatically initialized by the `ConfigManager` (`src/config/config_manager.py`) and should not be used directly. Use the config manager instead:
 
 ```python
-from config import get_config
+from src.config.config_manager import get_config
 
 config = get_config()
 value = config.get_required("API_KEY")

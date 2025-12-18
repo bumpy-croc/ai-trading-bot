@@ -1,6 +1,6 @@
 # Development workflow
 
-> **Last Updated**: 2025-12-14
+> **Last Updated**: 2025-12-18
 
 This project ships a command-line interface and Makefile targets that standardise local setup, quality checks, and diagnostics.
 
@@ -46,6 +46,7 @@ Run `atb dev setup` to execute helper scripts (pre-commit hooks, git config) use
 - `atb tests db` – verify database connectivity end-to-end.
 - `atb tests download` – smoke test data downloads via CCXT.
 - `atb tests parse-junit tests/reports/unit.xml --label "Unit Tests"` – parse a JUnit XML report and print condensed failure summaries in CI logs.
+- `python -m cli docs validate` – check every markdown/README file for broken links, outdated commands, and missing module docs before shipping documentation-only changes.
 
 ## Code quality
 
