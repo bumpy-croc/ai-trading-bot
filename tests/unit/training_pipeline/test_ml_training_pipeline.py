@@ -198,7 +198,7 @@ class TestRunTrainingPipeline:
     @patch("src.ml.training_pipeline.pipeline.create_sequences")
     @patch("src.ml.training_pipeline.pipeline.split_sequences")
     @patch("src.ml.training_pipeline.pipeline.build_tf_datasets")
-    @patch("src.ml.training_pipeline.pipeline.create_adaptive_model")
+    @patch("src.ml.training_pipeline.pipeline.create_model")
     @patch("src.ml.training_pipeline.pipeline.save_artifacts")
     @patch("src.ml.training_pipeline.pipeline.enable_mixed_precision")
     def test_successful_training_price_only(

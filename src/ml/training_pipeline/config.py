@@ -50,6 +50,7 @@ class TrainingConfig:
     force_sentiment: bool = False
     force_price_only: bool = False
     mixed_precision: bool = True
+    early_stopping_patience: int = 15  # Patience for early stopping callback
     diagnostics: DiagnosticsOptions = field(default_factory=DiagnosticsOptions)
 
     def days_requested(self) -> int:

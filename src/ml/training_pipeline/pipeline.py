@@ -36,7 +36,7 @@ from src.ml.training_pipeline.features import (
 )
 from src.ml.training_pipeline.gpu_config import configure_gpu
 from src.ml.training_pipeline.ingestion import download_price_data, load_sentiment_data
-from src.ml.training_pipeline.models import create_adaptive_model, default_callbacks
+from src.ml.training_pipeline.models import create_model, default_callbacks
 
 logger = logging.getLogger(__name__)
 
@@ -189,15 +189,16 @@ def run_training_pipeline(ctx: TrainingContext) -> TrainingResult:
             "full_sentiment",
             "hybrid_with_fallback",
         ]
-        model = create_adaptive_model(
-            (ctx.config.sequence_length, len(feature_names)), has_sentiment
+        model = create_model(
+            (ctx.config.sequence_length, len(feature_names)),
+            has_sentiment=has_sentiment,
         )
 
         history = model.fit(
             train_ds,
             validation_data=val_ds,
             epochs=ctx.config.epochs,
-            callbacks=default_callbacks(),
+            callbacks=default_callbacks(patience=ctx.config.early_stopping_patience),
             verbose=1,
         )
 
