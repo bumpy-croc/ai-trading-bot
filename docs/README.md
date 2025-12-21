@@ -1,6 +1,6 @@
 # Documentation
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-12-01  
 > **Maintained By**: AI Trading Bot Team
 
 This folder contains reference guides for the main subsystems that make up the AI trading platform. Each document focuses on how the runtime works today and includes links to relevant code and operational commands.
@@ -21,6 +21,9 @@ This folder contains reference guides for the main subsystems that make up the A
 ### Operations
 - [Database](database.md) - PostgreSQL setup, migrations, and backups
 - [Monitoring & observability](monitoring.md) - Logging, dashboards, and health endpoints
+
+### Architecture
+- [Component risk integration](architecture/component_risk_integration.md) - Coordination between position management, risk, and strategy layers
 
 ## Quick Links
 
