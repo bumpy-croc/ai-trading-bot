@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
@@ -189,12 +190,10 @@ def create_robust_features(
             col = f"sma_{window}"
             data[col] = data["close"].rolling(window=window).mean()
 
-        # Calculate RSI (produces NaNs for initial window)
-        delta = data["close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=RSI_WINDOW).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=RSI_WINDOW).mean()
-        rs = gain / loss
-        data["rsi"] = RSI_MAX - (RSI_MAX / (1 + rs))
+        # Calculate RSI using optimized numpy implementation
+        close_prices = data["close"].values
+        rsi_values = _calculate_rsi_fast(close_prices, window=RSI_WINDOW)
+        data["rsi"] = rsi_values
 
         # Drop NaNs before scaling to avoid MinMaxScaler ValueError
         rows_before = len(data)
