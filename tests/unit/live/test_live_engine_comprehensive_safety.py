@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from threading import Event
 from typing import Any
+from types import MethodType
 from unittest.mock import Mock, MagicMock, patch, PropertyMock
 
 import pandas as pd
@@ -65,12 +66,11 @@ def minimal_strategy():
 def risk_parameters():
     """Create standard risk parameters"""
     return RiskParameters(
+        base_risk_per_trade=0.01,
+        max_risk_per_trade=0.02,
+        max_position_size=0.10,
         max_daily_risk=0.02,
-        max_position_risk=0.01,
         max_drawdown=0.20,
-        max_positions=3,
-        stop_loss_pct=0.02,
-        take_profit_pct=0.04,
     )
 
 
@@ -251,7 +251,7 @@ class TestSafetyGuardrails:
 
     def test_max_positions_limit_respected(self, mock_data_provider, minimal_strategy):
         """Should not exceed maximum number of concurrent positions"""
-        risk_params = RiskParameters()
+        risk_params = RiskParameters(max_position_size=0.10)
 
         with patch("src.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
@@ -261,8 +261,9 @@ class TestSafetyGuardrails:
                 enable_live_trading=False,
             )
 
-            # Verify max positions is set
             engine.risk_manager.max_concurrent_positions = 2
+
+            # Verify max positions is set
             assert engine.risk_manager.get_max_concurrent_positions() == 2
 
     def test_max_drawdown_triggers_stop(self, mock_data_provider, minimal_strategy):
@@ -388,12 +389,16 @@ class TestErrorHandlingRecovery:
 
     def test_strategy_exception_handled(self, mock_data_provider, minimal_strategy):
         """Strategy exceptions should be caught"""
+        faulty_strategy = create_ml_basic_strategy()
 
-        minimal_strategy.process_candle = Mock(side_effect=RuntimeError("Strategy error"))
+        def raise_error(*args, **kwargs):
+            raise RuntimeError("Strategy error")
+
+        faulty_strategy.process_candle = MethodType(raise_error, faulty_strategy)
 
         with patch("src.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
-                strategy=minimal_strategy,
+                strategy=faulty_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
             )
@@ -615,9 +620,9 @@ class TestRiskManagementIntegration:
     def test_risk_manager_initialization(self, mock_data_provider, minimal_strategy):
         """Risk manager should be initialized with parameters"""
         risk_params = RiskParameters(
-            base_risk_per_trade=0.005,
+            base_risk_per_trade=0.01,
+            max_risk_per_trade=0.02,
             max_daily_risk=0.02,
-            max_risk_per_trade=0.01,
             max_drawdown=0.15,
         )
 

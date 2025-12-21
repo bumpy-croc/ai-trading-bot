@@ -101,12 +101,13 @@ def _resolve_version_path(path_str: str) -> Path:
     if not candidate.is_absolute():
         candidate = MODEL_REGISTRY / candidate
 
-    # Resolve ALL paths (including absolute) to follow symlinks and normalize
+    # Resolve all paths to follow symlinks and normalize before comparison.
     candidate = candidate.resolve()
+    registry_root = MODEL_REGISTRY.resolve()
 
     if not candidate.exists():
         raise FileNotFoundError(f"Model path does not exist: {candidate}")
-    if MODEL_REGISTRY not in candidate.parents:
+    if registry_root not in candidate.parents and candidate != registry_root:
         raise ValueError("Model path must be inside the registry")
     return candidate
 

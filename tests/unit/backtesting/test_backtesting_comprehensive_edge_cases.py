@@ -18,6 +18,7 @@ Test Categories:
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from types import MethodType
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -732,16 +733,15 @@ class TestErrorHandling:
     def test_strategy_exception_during_processing(self, mock_data_provider):
         """Strategy raises exception during processing"""
 
-        class FaultyStrategy(create_ml_basic_strategy().__class__):
-            """Strategy that raises exception"""
-
-            def process_candle(self, *args, **kwargs):
-                raise RuntimeError("Intentional strategy error")
-
         data = create_ohlcv_data(50)
         mock_data_provider.get_historical_data.return_value = data
 
-        strategy = FaultyStrategy()
+        strategy = create_ml_basic_strategy()
+
+        def raise_error(*args, **kwargs):
+            raise RuntimeError("Intentional strategy error")
+
+        strategy.process_candle = MethodType(raise_error, strategy)
 
         backtester = Backtester(
             strategy=strategy,
