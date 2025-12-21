@@ -46,6 +46,71 @@ jobs:
           echo "should_stop=false" >> $GITHUB_OUTPUT
         fi
 
+    - name: Get PR Branch Information
+      if: steps.check-comment.outputs.should_stop == 'false'
+      id: pr-info
+      run: |
+        echo "=== Getting PR branch information ==="
+
+        PR_NUMBER="${{ github.event.issue.number }}"
+        REPO="${{ github.repository }}"
+        TOKEN="${{ secrets.GITHUB_TOKEN }}"
+        echo "PR Number: $PR_NUMBER"
+        echo "Repository: $REPO"
+
+        # Ensure required tools are available
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "Error: jq is required but not available"
+          exit 1
+        fi
+
+        # Get PR details using GitHub REST API directly (more reliable than gh CLI)
+        API_URL="https://api.github.com/repos/$REPO/pulls/$PR_NUMBER"
+        echo "API URL: $API_URL"
+
+        if ! PR_DATA=$(curl -s -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github.v3+json" "$API_URL"); then
+          echo "Error: Failed to fetch PR data for #$PR_NUMBER"
+          exit 1
+        fi
+
+        # Check if API call was successful (GitHub API returns error objects)
+        if echo "$PR_DATA" | jq -e '.message' >/dev/null 2>&1; then
+          ERROR_MSG=$(echo "$PR_DATA" | jq -r '.message')
+          echo "Error: GitHub API returned error: $ERROR_MSG"
+          exit 1
+        fi
+
+        # Extract the head branch (the branch with the changes)
+        PR_BRANCH=$(echo "$PR_DATA" | jq -r '.head.ref')
+        PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+
+        # Validate that we got valid data
+        if [[ "$PR_BRANCH" == "null" || -z "$PR_BRANCH" ]]; then
+          echo "Error: Could not determine PR branch from API response"
+          echo "API Response: $PR_DATA"
+          echo "This likely means the PR does not exist or access is denied"
+          exit 1
+        fi
+
+        # Additional validation - ensure branch name looks reasonable
+        if [[ ! "$PR_BRANCH" =~ ^[a-zA-Z0-9._/-]+$ ]] || [[ ${#PR_BRANCH} -gt 255 ]]; then
+          echo "Error: PR branch name '$PR_BRANCH' appears invalid"
+          exit 1
+        fi
+
+        # Ensure this is not accidentally the default branch (main/master/develop)
+        DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+        if [[ "$PR_BRANCH" == "$DEFAULT_BRANCH" ]]; then
+          echo "Warning: PR branch matches repository default branch ($DEFAULT_BRANCH)"
+          echo "This might indicate an issue with the PR data retrieval"
+          # Don't exit here as it could be a legitimate case, but log the warning
+        fi
+
+        echo "PR Branch: $PR_BRANCH"
+        echo "PR Head SHA: $PR_HEAD_SHA"
+        echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
+        echo "pr_head_sha=$PR_HEAD_SHA" >> $GITHUB_OUTPUT
+
     - name: Launch Cursor Agent for PR Fix
       if: steps.check-comment.outputs.should_stop == 'false'
       run: |
@@ -53,10 +118,19 @@ jobs:
 
         # Get PR information
         PR_NUMBER="${{ github.event.issue.number }}"
-        PR_BRANCH="${{ github.event.repository.default_branch }}"
+        PR_BRANCH="${{ steps.pr-info.outputs.pr_branch }}"
+        PR_HEAD_SHA="${{ steps.pr-info.outputs.pr_head_sha }}"
         COMMENT_BODY="${{ github.event.comment.body }}"
 
+        # Validate that we have the required information
+        if [[ -z "$PR_BRANCH" ]]; then
+          echo "Error: PR branch information is missing - cannot proceed with agent launch"
+          exit 1
+        fi
+
         echo "PR Number: $PR_NUMBER"
+        echo "PR Branch: $PR_BRANCH"
+        echo "PR Head SHA: $PR_HEAD_SHA"
         echo "Repository: ${{ github.repository }}"
         echo "Comment author: ${{ github.event.comment.user.login }}"
 
@@ -92,6 +166,8 @@ jobs:
         echo "Comment author: ${{ github.event.comment.user.login }}"
         echo "Should stop: ${{ steps.check-comment.outputs.should_stop }}"
         if [[ "${{ steps.check-comment.outputs.should_stop }}" == "false" ]]; then
+          echo "PR Branch: ${{ steps.pr-info.outputs.pr_branch }}"
+          echo "PR Head SHA: ${{ steps.pr-info.outputs.pr_head_sha }}"
           echo "Cursor agent launched to fix PR comment issues"
         else
           echo "Workflow stopped - no major issues found in comment"
