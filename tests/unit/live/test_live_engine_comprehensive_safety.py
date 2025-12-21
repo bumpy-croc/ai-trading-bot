@@ -251,7 +251,7 @@ class TestSafetyGuardrails:
 
     def test_max_positions_limit_respected(self, mock_data_provider, minimal_strategy):
         """Should not exceed maximum number of concurrent positions"""
-        risk_params = RiskParameters(max_positions=2)
+        risk_params = RiskParameters()
 
         with patch("src.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
@@ -262,7 +262,8 @@ class TestSafetyGuardrails:
             )
 
             # Verify max positions is set
-            assert engine.risk_manager.params.max_positions == 2
+            engine.risk_manager.max_concurrent_positions = 2
+            assert engine.risk_manager.get_max_concurrent_positions() == 2
 
     def test_max_drawdown_triggers_stop(self, mock_data_provider, minimal_strategy):
         """Exceeding max drawdown should trigger protective stop"""
@@ -385,16 +386,14 @@ class TestErrorHandlingRecovery:
             # Engine should still function even if DB writes fail
             assert engine.db_manager is not None
 
-    def test_strategy_exception_handled(self, mock_data_provider):
+    def test_strategy_exception_handled(self, mock_data_provider, minimal_strategy):
         """Strategy exceptions should be caught"""
 
-        class FaultyStrategy(create_ml_basic_strategy().__class__):
-            def process_candle(self, *args, **kwargs):
-                raise RuntimeError("Strategy error")
+        minimal_strategy.process_candle = Mock(side_effect=RuntimeError("Strategy error"))
 
         with patch("src.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
-                strategy=FaultyStrategy(),
+                strategy=minimal_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
             )
@@ -616,8 +615,9 @@ class TestRiskManagementIntegration:
     def test_risk_manager_initialization(self, mock_data_provider, minimal_strategy):
         """Risk manager should be initialized with parameters"""
         risk_params = RiskParameters(
+            base_risk_per_trade=0.005,
             max_daily_risk=0.02,
-            max_position_risk=0.01,
+            max_risk_per_trade=0.01,
             max_drawdown=0.15,
         )
 
