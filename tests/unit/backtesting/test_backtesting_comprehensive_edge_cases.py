@@ -54,10 +54,11 @@ def risk_parameters():
     """Create standard risk parameters"""
     return RiskParameters(
         max_daily_risk=0.02,
-        max_position_risk=0.01,
+        base_risk_per_trade=0.01,
+        max_risk_per_trade=0.02,
+        max_position_size=0.25,
         max_drawdown=0.20,
-        stop_loss_pct=0.02,
-        take_profit_pct=0.04,
+        default_take_profit_pct=0.04,
     )
 
 

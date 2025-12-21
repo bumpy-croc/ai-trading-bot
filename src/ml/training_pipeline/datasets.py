@@ -100,7 +100,6 @@ def split_sequences(
     else:
         split_index = max(int(len(sequences) * split_ratio), 1)
         split_index = min(split_index, len(sequences) - 1)
-
     X_train = sequences[:split_index]
     y_train = targets[:split_index]
     X_val = sequences[split_index:]
