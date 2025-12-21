@@ -204,9 +204,9 @@ class TestSplitSequences:
         # Act
         X_train, y_train, X_val, y_val = split_sequences(sequences, targets, split_ratio=0.8)
 
-        # Assert - with only 1 sample, should still split properly
+        # Assert - with only 1 sample, train gets it, val is empty (split_index = min(0, 0) = 0)
         assert len(X_train) == 1
-        assert len(X_val) == 0 or len(X_val) > 0  # Either is valid
+        assert len(X_val) == 0  # With only 1 sample, validation set is empty (expected behavior)
 
 
 @pytest.mark.fast

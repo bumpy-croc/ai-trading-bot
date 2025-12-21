@@ -1,0 +1,97 @@
+name: Performance Tests
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  performance-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+      TEST_TYPE: integration
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: trading_bot
+          POSTGRES_PASSWORD: dev_password_123
+          POSTGRES_DB: trading_bot
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading_bot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Wait for PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5432 -U trading_bot; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+
+      - name: Set up database schema
+        env:
+          DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
+        run: |
+          echo "=== Setting up database schema ==="
+          python -c "
+          from src.database.manager import DatabaseManager
+          from src.database.models import Base
+          try:
+              db = DatabaseManager()
+              Base.metadata.create_all(db.engine)
+              print('✅ Database schema created successfully')
+          except Exception as e:
+              print(f'❌ Failed to create database schema: {e}')
+              raise
+          "
+
+      - name: Run performance integration tests
+        env:
+          DATABASE_URL: postgresql://trading_bot:dev_password_123@localhost:5432/trading_bot
+        run: |
+          echo "=== Starting performance integration tests ==="
+          echo "PYTHONPATH=$PYTHONPATH"
+          python tests/run_tests.py integration -q \
+            --pytest-args -m "integration and performance" --junitxml=junit-performance.xml
+
+      - name: Upload performance test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-test-reports
+          path: |
+            junit-performance.xml
+          retention-days: 14

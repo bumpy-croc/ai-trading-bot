@@ -6,21 +6,21 @@ from tensorflow.keras import callbacks
 
 from src.ml.training_pipeline.models import (
     build_price_only_model,
-    create_adaptive_model,
+    create_model,
     default_callbacks,
 )
 
 
 @pytest.mark.fast
 class TestCreateAdaptiveModel:
-    """Test create_adaptive_model function."""
+    """Test create_model function."""
 
     def test_creates_model_with_sentiment(self):
         # Arrange
         input_shape = (120, 15)  # sequence_length=120, num_features=15
 
         # Act
-        model = create_adaptive_model(input_shape, has_sentiment=True)
+        model = create_model(input_shape, has_sentiment=True)
 
         # Assert
         assert isinstance(model, tf.keras.Model)
@@ -32,7 +32,7 @@ class TestCreateAdaptiveModel:
         input_shape = (120, 10)  # sequence_length=120, num_features=10
 
         # Act
-        model = create_adaptive_model(input_shape, has_sentiment=False)
+        model = create_model(input_shape, has_sentiment=False)
 
         # Assert
         assert isinstance(model, tf.keras.Model)
@@ -44,7 +44,7 @@ class TestCreateAdaptiveModel:
         input_shape = (120, 15)
 
         # Act
-        model = create_adaptive_model(input_shape)
+        model = create_model(input_shape)
 
         # Assert
         assert model.optimizer is not None
@@ -56,7 +56,7 @@ class TestCreateAdaptiveModel:
         input_shape = (120, 15)
 
         # Act
-        model = create_adaptive_model(input_shape)
+        model = create_model(input_shape)
 
         # Assert
         assert isinstance(model.optimizer, tf.keras.optimizers.Adam)
@@ -66,7 +66,7 @@ class TestCreateAdaptiveModel:
         input_shape = (120, 15)
 
         # Act
-        model = create_adaptive_model(input_shape)
+        model = create_model(input_shape)
 
         # Assert
         # TensorFlow converts loss functions to their canonical form
@@ -77,7 +77,7 @@ class TestCreateAdaptiveModel:
         input_shape = (120, 15)
 
         # Act
-        model = create_adaptive_model(input_shape)
+        model = create_model(input_shape)
 
         # Assert - model should be compiled with at least one metric besides loss
         # In Keras 3, metrics are configured differently so we just check they exist
@@ -95,29 +95,29 @@ class TestCreateAdaptiveModel:
         input_shape = (120, 15)
 
         # Act
-        model = create_adaptive_model(input_shape)
+        model = create_model(input_shape)
 
         # Assert - check for Conv1D layers
         layer_types = [type(layer).__name__ for layer in model.layers]
         assert "Conv1D" in layer_types
 
-    def test_model_architecture_has_lstm_layers(self):
+    def test_model_architecture_has_gru_layers(self):
         # Arrange
         input_shape = (120, 15)
 
         # Act
-        model = create_adaptive_model(input_shape)
+        model = create_model(input_shape)
 
-        # Assert - check for LSTM layers
+        # Assert - check for GRU layers (balanced model uses GRU)
         layer_types = [type(layer).__name__ for layer in model.layers]
-        assert "LSTM" in layer_types
+        assert "GRU" in layer_types
 
     def test_model_architecture_has_dropout_layers(self):
         # Arrange
         input_shape = (120, 15)
 
         # Act
-        model = create_adaptive_model(input_shape)
+        model = create_model(input_shape)
 
         # Assert - check for Dropout layers
         layer_types = [type(layer).__name__ for layer in model.layers]
@@ -128,7 +128,7 @@ class TestCreateAdaptiveModel:
         import numpy as np
 
         input_shape = (120, 15)
-        model = create_adaptive_model(input_shape)
+        model = create_model(input_shape)
         test_input = np.random.rand(1, 120, 15).astype(np.float32)
 
         # Act
@@ -197,7 +197,7 @@ class TestBuildPriceOnlyModel:
         result = model.evaluate(test_input, test_target, verbose=0)
         assert len(result) >= 2  # Returns [loss, metric1, ...]
 
-    def test_model_architecture_has_lstm_layers(self):
+    def test_model_architecture_has_gru_layers(self):
         # Arrange
         sequence_length = 120
         num_features = 10
@@ -205,9 +205,9 @@ class TestBuildPriceOnlyModel:
         # Act
         model = build_price_only_model(sequence_length, num_features)
 
-        # Assert - check for LSTM layers
+        # Assert - check for GRU layers (uses balanced model which has GRU)
         layer_types = [type(layer).__name__ for layer in model.layers]
-        assert "LSTM" in layer_types
+        assert "GRU" in layer_types
 
     def test_model_architecture_has_dropout_layers(self):
         # Arrange
@@ -221,7 +221,7 @@ class TestBuildPriceOnlyModel:
         layer_types = [type(layer).__name__ for layer in model.layers]
         assert "Dropout" in layer_types
 
-    def test_model_output_activation_is_sigmoid(self):
+    def test_model_output_activation_is_linear(self):
         # Arrange
         sequence_length = 120
         num_features = 10
@@ -229,9 +229,9 @@ class TestBuildPriceOnlyModel:
         # Act
         model = build_price_only_model(sequence_length, num_features)
 
-        # Assert - output layer should use sigmoid activation
+        # Assert - output layer should use linear activation (balanced model uses linear)
         output_layer = model.layers[-1]
-        assert output_layer.activation.__name__ == "sigmoid"
+        assert output_layer.activation.__name__ == "linear"
 
     def test_model_can_predict(self):
         # Arrange

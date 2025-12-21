@@ -125,6 +125,48 @@ def merge_price_sentiment_data(
     return price_df.join(sentiment_resampled, how="left")
 
 
+def _calculate_rsi_fast(close_prices: np.ndarray, window: int = 14) -> np.ndarray:
+    """Calculate RSI using optimized numpy operations.
+
+    Args:
+        close_prices: 1D array of close prices
+        window: RSI window size
+
+    Returns:
+        1D array of RSI values (with NaNs for initial window)
+    """
+    # Calculate price changes
+    deltas = np.diff(close_prices, prepend=close_prices[0])
+
+    # Separate gains and losses
+    gains = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
+
+    # Check if we have enough data for RSI calculation
+    if len(close_prices) <= window:
+        # Return all NaNs if insufficient data
+        return np.full(len(close_prices), np.nan, dtype=np.float32)
+
+    # Calculate rolling averages using numpy (faster than pandas for this)
+    avg_gains = np.full(len(gains), np.nan, dtype=np.float32)
+    avg_losses = np.full(len(losses), np.nan, dtype=np.float32)
+
+    # Calculate initial averages
+    avg_gains[window] = np.mean(gains[1 : window + 1])
+    avg_losses[window] = np.mean(losses[1 : window + 1])
+
+    # Calculate subsequent averages using EMA-style smoothing
+    for i in range(window + 1, len(gains)):
+        avg_gains[i] = (avg_gains[i - 1] * (window - 1) + gains[i]) / window
+        avg_losses[i] = (avg_losses[i - 1] * (window - 1) + losses[i]) / window
+
+    # Calculate RS and RSI (only for valid indices)
+    rs = avg_gains / (avg_losses + 1e-10)  # Add epsilon to avoid division by zero
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+
+    return rsi.astype(np.float32)
+
+
 def create_robust_features(
     data: pd.DataFrame,
     sentiment_assessment: dict,

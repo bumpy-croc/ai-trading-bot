@@ -168,6 +168,9 @@ class Backtester:
         strategy_mapping: Any | None = None,
         switching_config: Any | None = None,
     ):
+        if initial_balance <= 0:
+            raise ValueError("Initial balance must be positive")
+
         self._runtime_dataset = None
         self._runtime_warmup = 0
         self._configure_strategy(strategy)

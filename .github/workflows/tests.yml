@@ -146,7 +146,7 @@ jobs:
         echo "=== Starting integration tests ==="
         echo "PYTHONPATH=$PYTHONPATH"
         python tests/run_tests.py integration -q \
-          --pytest-args --junitxml=junit-integration.xml
+          --pytest-args -m "integration and not performance and not slow" --junitxml=junit-integration.xml
     
     - name: Upload integration test reports
       if: always()
@@ -156,4 +156,3 @@ jobs:
         path: |
           junit-integration.xml
         retention-days: 7
-

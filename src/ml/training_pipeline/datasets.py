@@ -84,7 +84,23 @@ def split_sequences(
     targets: np.ndarray,
     split_ratio: float = 0.8,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    split_index = max(int(len(sequences) * split_ratio), 1)
+    """Split sequences into training and validation sets.
+
+    Args:
+        sequences: 3D array of sequences (samples, timesteps, features)
+        targets: 1D array of target values
+        split_ratio: Ratio of data to use for training (default 0.8)
+
+    Returns:
+        Tuple of (X_train, y_train, X_val, y_val)
+    """
+    # Ensure at least 1 sample in training set (if possible)
+    if len(sequences) == 1:
+        split_index = 1  # Put the single sample in training
+    else:
+        split_index = max(int(len(sequences) * split_ratio), 1)
+        split_index = min(split_index, len(sequences) - 1)
+
     X_train = sequences[:split_index]
     y_train = targets[:split_index]
     X_val = sequences[split_index:]
