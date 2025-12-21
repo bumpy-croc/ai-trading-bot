@@ -77,7 +77,7 @@ jobs:
           - Documentation is consistent with current code structure
 
           ## Deliverables
-          - Create a pull request with all documentation updates
+          - Create a pull request with all documentation updates. Make sure the PR is ready for review.
           - PR should target the $DEFAULT_BRANCH branch
           - Include a detailed summary of all changes made
           - Ensure all documentation changes are accurate and non-breaking
