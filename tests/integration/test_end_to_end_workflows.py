@@ -385,6 +385,8 @@ class TestErrorRecoveryIntegration:
 
 
 @pytest.mark.integration
+@pytest.mark.performance
+@pytest.mark.slow
 class TestPerformanceIntegration:
     """Test performance under realistic loads"""
 
