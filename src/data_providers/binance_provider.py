@@ -11,7 +11,7 @@ providing a single interface for all Binance operations including:
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -70,7 +70,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
     }
 
     def __init__(
-        self, api_key: Optional[str] = None, api_secret: Optional[str] = None, testnet: bool = False
+        self, api_key: str | None = None, api_secret: str | None = None, testnet: bool = False
     ):
         """
         Initialize the unified Binance provider.
@@ -114,8 +114,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
     @staticmethod
     def _validate_credentials(
-        api_key: Optional[str],
-        api_secret: Optional[str],
+        api_key: str | None,
+        api_secret: str | None,
         *,
         allow_test_credentials: bool = False,
     ) -> tuple[str, str]:
@@ -305,7 +305,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         return self._process_ohlcv([k[:6] for k in klines], timestamp_unit="ms")
 
     def get_historical_data(
-        self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> pd.DataFrame:
         """Fetch historical klines data from Binance"""
         try:
@@ -473,7 +473,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get balances: {e}")
             return []
 
-    def get_balance(self, asset: str) -> Optional[AccountBalance]:
+    def get_balance(self, asset: str) -> AccountBalance | None:
         """Get balance for a specific asset"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for balance")
@@ -502,7 +502,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get balance for {asset}: {e}")
             return None
 
-    def get_positions(self, symbol: Optional[str] = None) -> list[Position]:
+    def get_positions(self, symbol: str | None = None) -> list[Position]:
         """Get open positions (for spot trading, this returns holdings as positions)"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning empty positions")
@@ -548,7 +548,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get positions: {e}")
             return []
 
-    def get_open_orders(self, symbol: Optional[str] = None) -> list[Order]:
+    def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         """Get all open orders"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning empty orders")
@@ -591,7 +591,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get open orders: {e}")
             return []
 
-    def get_order(self, order_id: str, symbol: str) -> Optional[Order]:
+    def get_order(self, order_id: str, symbol: str) -> Order | None:
         """Get specific order by ID"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for order")
@@ -664,10 +664,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         side: OrderSide,
         order_type: OrderType,
         quantity: float,
-        price: Optional[float] = None,
-        stop_price: Optional[float] = None,
+        price: float | None = None,
+        stop_price: float | None = None,
         time_in_force: str = "GTC",
-    ) -> Optional[str]:
+    ) -> str | None:
         """Place a new order and return order ID"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place order")
@@ -736,7 +736,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Error cancelling order {order_id}: {e}")
             return False
 
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> bool:
+    def cancel_all_orders(self, symbol: str | None = None) -> bool:
         """Cancel all open orders"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot cancel orders")
@@ -758,7 +758,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to cancel all orders: {e}")
             return False
 
-    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
+    def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         """Get trading symbol information"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for symbol info")

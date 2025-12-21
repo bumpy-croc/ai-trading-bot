@@ -1,12 +1,12 @@
-name: Nightly Cursor Docs Agent
+name: Weekly Documentation Scan
 
 on:
   schedule:
-    - cron: "0 3 * * *"  # 03:00 UTC nightly
+    - cron: "0 3 * * 1"  # 03:00 UTC every Monday
   workflow_dispatch:
 
 concurrency:
-  group: nightly-cursor-docs-agent
+  group: weekly-documentation-scan
   cancel-in-progress: false
 
 jobs:
@@ -77,7 +77,7 @@ jobs:
           - Documentation is consistent with current code structure
 
           ## Deliverables
-          - Create a pull request with all documentation updates
+          - Create a pull request with all documentation updates. Make sure the PR is ready for review.
           - PR should target the $DEFAULT_BRANCH branch
           - Include a detailed summary of all changes made
           - Ensure all documentation changes are accurate and non-breaking

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from argparse import Namespace
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -56,7 +55,7 @@ def download_price_data(ctx: TrainingContext) -> pd.DataFrame:
     return df.sort_index()
 
 
-def load_sentiment_data(ctx: TrainingContext) -> Optional[pd.DataFrame]:
+def load_sentiment_data(ctx: TrainingContext) -> pd.DataFrame | None:
     """Retrieve sentiment data or return None if unavailable."""
 
     if ctx.config.force_price_only:

@@ -48,8 +48,8 @@ Cache metadata (file count, disk usage, entry age) is exposed through `get_cache
 
 The `atb data` command family in `cli/commands/data.py` covers the most common workflows:
 
-- `atb data download --symbol BTCUSDT --timeframe 1h --start-date 2024-01-01` – export a CSV/Feather dataset via CCXT without
-  touching the cache.
+- `atb data download BTCUSDT --timeframe 1h --start_date 2024-01-01 --end_date 2024-03-01` – export a CSV/Feather dataset via CCXT without
+  touching the cache (both `--start_date` and `--end_date` are optional; omit `--end_date` to pull through “now”).
 - `atb data prefill-cache --symbols BTCUSDT ETHUSDT --timeframes 1h 4h --years 3` – eagerly fetches year chunks so backtests can
   run offline.
 - `atb data preload-offline --symbols BTCUSDT --timeframes 1h --years-back 10 --test-offline` – ensures the cache contains enough

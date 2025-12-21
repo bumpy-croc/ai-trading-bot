@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
 
-import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
@@ -173,9 +171,9 @@ def create_robust_features(
     data: pd.DataFrame,
     sentiment_assessment: dict,
     time_steps: int,
-) -> Tuple[pd.DataFrame, Dict[str, MinMaxScaler], List[str]]:
-    feature_names: List[str] = []
-    scalers: Dict[str, MinMaxScaler] = {}
+) -> tuple[pd.DataFrame, dict[str, MinMaxScaler], list[str]]:
+    feature_names: list[str] = []
+    scalers: dict[str, MinMaxScaler] = {}
 
     price_features = ["open", "high", "low", "close", "volume"]
     for feature in price_features:

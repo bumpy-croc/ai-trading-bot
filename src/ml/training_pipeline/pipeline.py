@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -20,7 +19,7 @@ except ImportError:
     _TENSORFLOW_AVAILABLE = False
     tf = None  # type: ignore
 
-from src.ml.training_pipeline import DiagnosticsOptions, TrainingConfig, TrainingContext
+from src.ml.training_pipeline import TrainingContext
 from src.ml.training_pipeline.artifacts import (
     ArtifactPaths,
     create_training_plots,
@@ -45,7 +44,7 @@ logger = logging.getLogger(__name__)
 class TrainingResult:
     success: bool
     metadata: dict
-    artifact_paths: Optional[ArtifactPaths]
+    artifact_paths: ArtifactPaths | None
     duration_seconds: float
 
 

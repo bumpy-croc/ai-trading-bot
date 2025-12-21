@@ -1,11 +1,10 @@
 import logging
 import os
-import time
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import sqlalchemy.exc
-from werkzeug.security import check_password_hash, generate_password_hash  # type: ignore
 from sqlalchemy.orm import scoped_session  # type: ignore
+from werkzeug.security import check_password_hash, generate_password_hash  # type: ignore
 
 try:  # pragma: no cover - exercised indirectly in tests
     from flask_wtf.csrf import CSRFProtect  # type: ignore
@@ -71,7 +70,7 @@ def _ensure_secret_key() -> str:
     env_value = os.getenv("ENV")
     flask_env_value = os.getenv("FLASK_ENV")
 
-    normalized_env: Optional[str] = None
+    normalized_env: str | None = None
     for value in (env_value, flask_env_value):
         if value:
             normalized_env = value.lower()
@@ -314,7 +313,7 @@ def create_app() -> "Flask":
     # Clean up DB sessions after each request
     @app.teardown_appcontext
     def shutdown_session(
-        exception: Optional[Exception] = None,
+        exception: Exception | None = None,
     ) -> None:  # noqa: D401, pylint: disable=unused-argument
         """Remove the scoped SQLAlchemy session to avoid connection leaks."""
         db_session.remove()

@@ -4,7 +4,7 @@ This ExecPlan is a living document. Maintain Progress, Surprises & Discoveries, 
 
 ## Purpose / Big Picture
 
-`src/trading/shared` and `src/utils` have become catch-alls mixing logging glue, sentiment adapters, and position-sizing helpers. This plan consolidates those pieces into purpose-driven packages (`src/infrastructure`, `src/sentiment`, `src/position_management`, `src/trading/symbols`) so future contributors can immediately tell where to add or adjust infrastructure code. Completion means there are no leftover shims or unused directories, all imports target the new namespaces, and the backtester (`make backtest STRATEGY=ml_basic DAYS=5`) plus live engine (`make live-health STRATEGY=ml_basic PORT=8090`) continue to run on Python 3.11 with `python3.11 -m pytest -n 4` passing.
+`src/trading/shared` and `src/utils` have become catch-alls mixing logging glue, sentiment adapters, and position-sizing helpers. This plan consolidates those pieces into purpose-driven packages (`src/infrastructure`, `src/sentiment`, `src/position_management`, `src/trading/symbols`) so future contributors can immediately tell where to add or adjust infrastructure code. Completion means there are no leftover shims or unused directories, all imports target the new namespaces, and the backtester (`make backtest STRATEGY=ml_basic DAYS=5`) plus live engine (`PORT=8090 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading`) continue to run on Python 3.11 with `python3.11 -m pytest -n 4` passing.
 
 ## Progress
 
@@ -13,13 +13,13 @@ This ExecPlan is a living document. Maintain Progress, Surprises & Discoveries, 
 - [x] (2025-10-26 19:40Z) Relocated sentiment adapters, position sizing, and `SymbolFactory` into `src/sentiment`, `src/position_management/sizing.py`, and `src/trading/symbols/factory.py` with updated imports/tests.
 - [x] (2025-10-26 19:45Z) Removed `src/trading/shared` after confirming no remaining imports.
 - [x] (2025-10-26 19:50Z) Removed the legacy `src/utils` directory, added READMEs for new packages, and refreshed `AGENTS.md`/`docs/development.md` to describe the updated structure.
-- [ ] Re-run automated checks (`python3.11 -m pytest -n 4`, `make backtest STRATEGY=ml_basic DAYS=5`, `make live-health STRATEGY=ml_basic PORT=8090`) and update docs to describe the new structure. (Blocked: python3.11 interpreter segfaults because wheel dependencies are only built for Python 3.9, and `make` currently assumes a `python` binary that does not exist in the sandbox.)
+- [ ] Re-run automated checks (`python3.11 -m pytest -n 4`, `make backtest STRATEGY=ml_basic DAYS=5`, `PORT=8090 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading`) and update docs to describe the new structure. (Blocked: python3.11 interpreter segfaults because wheel dependencies are only built for Python 3.9, and `make` currently assumes a `python` binary that does not exist in the sandbox.)
 
 ## Surprises & Discoveries
 
 - Observation: `python3.11 -m pytest -n 4` segfaults immediately (Signal 11) because the shared environment only has pandas/numpy wheels compiled for macOS Python 3.9; importing them under 3.11 causes interpreter crashes before tests run.
   Evidence: Running `python3.11 -m pytest tests/unit/trading/test_shared_indicators.py -q` exits with `Sandbox(Signal(11))` on 2025-10-26.
-- Observation: `make backtest`/`make live-health` fail early because the sandbox lacks a `python` binary, and the Makefile's `install` target hardcodes `python -m pip ...`.
+- Observation: `make backtest`/`make live-health` (legacy wrappers around the `atb` commands) fail early because the sandbox lacks a `python` binary, and the Makefile's `install` target hardcodes `python -m pip ...`.
   Evidence: Commands exit with `python -m pip install --upgrade pip` followed by `make: python: No such file or directory` on 2025-10-26.
 
 ## Decision Log
@@ -99,7 +99,7 @@ To be filled in after completion: summarize what shipped, note any regressions a
 6. Run validations:
        python3.11 -m pytest -n 4
        make backtest STRATEGY=ml_basic DAYS=5
-       make live-health STRATEGY=ml_basic PORT=8090
+      PORT=8090 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading
    Capture outputs in the Surprises section if failures occur and fix issues before continuing.
 
 7. Update docs/logs:
@@ -110,7 +110,7 @@ To be filled in after completion: summarize what shipped, note any regressions a
 
 - `python3.11 -m pytest -n 4` passes without using deprecated modules.
 - `make backtest STRATEGY=ml_basic DAYS=5` finishes successfully and logs indicator extraction via the new modules.
-- `make live-health STRATEGY=ml_basic PORT=8090` starts, serves health metrics, and cleanly exits with Ctrl+C.
+- `PORT=8090 atb live-health -- ml_basic --symbol BTCUSDT --paper-trading` starts, serves health metrics, and cleanly exits with Ctrl+C.
 - `rg "src\.trading\.shared"` and `rg "src\.utils"` return no matches outside of changelog/docs referencing history.
 
 ## Idempotence and Recovery

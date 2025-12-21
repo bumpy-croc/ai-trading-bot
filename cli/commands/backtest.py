@@ -16,6 +16,7 @@ SRC_PATH = PROJECT_ROOT / "src"
 if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
+from src.infrastructure.logging.config import configure_logging
 from src.strategies import (
     create_ensemble_weighted_strategy,
     create_ml_adaptive_strategy,
@@ -23,7 +24,6 @@ from src.strategies import (
     create_ml_sentiment_strategy,
     create_momentum_leverage_strategy,
 )
-from src.infrastructure.logging.config import configure_logging
 from src.trading.symbols.factory import SymbolFactory
 
 logger = logging.getLogger("atb.backtest")

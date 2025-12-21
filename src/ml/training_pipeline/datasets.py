@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -28,7 +28,7 @@ DEFAULT_SHUFFLE_BUFFER_SIZE = (
 
 def create_sequences(
     feature_data: np.ndarray, target_data: np.ndarray, sequence_length: int
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Create sequences from feature and target data using sliding windows.
 
     Args:
@@ -83,7 +83,7 @@ def split_sequences(
     sequences: np.ndarray,
     targets: np.ndarray,
     split_ratio: float = 0.8,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Split sequences into training and validation sets.
 
     Args:
@@ -114,7 +114,7 @@ def build_tf_datasets(
     X_val: np.ndarray,
     y_val: np.ndarray,
     batch_size: int,
-) -> Tuple[Any, Any]:
+) -> tuple[Any, Any]:
     """Build TensorFlow datasets for training and validation."""
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(

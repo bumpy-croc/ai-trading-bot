@@ -9,7 +9,7 @@ or trades due to shutdowns or errors.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from src.data_providers.exchange_interface import (
     AccountBalance,
@@ -44,7 +44,7 @@ class AccountSynchronizer:
         self,
         exchange: ExchangeInterface,
         db_manager: DatabaseManager,
-        session_id: Optional[int] = None,
+        session_id: int | None = None,
     ):
         """
         Initialize the account synchronizer.
@@ -57,7 +57,7 @@ class AccountSynchronizer:
         self.exchange = exchange
         self.db_manager = db_manager
         self.session_id = session_id
-        self.last_sync_time: Optional[datetime] = None
+        self.last_sync_time: datetime | None = None
 
     def sync_account_data(self, force: bool = False) -> SyncResult:
         """

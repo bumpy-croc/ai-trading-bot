@@ -35,7 +35,7 @@ import logging
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, TypedDict
 
@@ -1796,13 +1796,7 @@ class MonitoringDashboard:
                         (
                             h["balance"]
                             for h in balance_history
-                            if (
-                                (
-                                    datetime.now(timezone.utc)
-                                    - h["timestamp"].astimezone(timezone.utc)
-                                ).days
-                                >= 1
-                            )
+                            if ((datetime.now(UTC) - h["timestamp"].astimezone(UTC)).days >= 1)
                         ),
                         recent_balance,
                     )

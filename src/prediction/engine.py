@@ -9,8 +9,8 @@ engineering, and model inference.
 import hashlib
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -26,8 +26,8 @@ from .exceptions import (
 )
 from .features.pipeline import FeaturePipeline
 from .features.selector import FeatureSelector
-from .models.registry import PredictionModelRegistry, StrategyModel
 from .models.onnx_runner import ModelPrediction
+from .models.registry import PredictionModelRegistry, StrategyModel
 from .utils.caching import PredictionCacheManager
 
 
@@ -43,14 +43,14 @@ class PredictionResult:
     inference_time: float
     features_used: int
     cache_hit: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class PredictionEngine:
     """Main prediction engine facade that orchestrates all components"""
 
-    def __init__(self, config: Optional[PredictionConfig] = None, database_manager=None):
+    def __init__(self, config: PredictionConfig | None = None, database_manager=None):
         """
         Initialize prediction engine with configuration
 
@@ -107,7 +107,7 @@ class PredictionEngine:
 
         # No cached structured selection helpers (avoid hidden state)
 
-    def predict(self, data: pd.DataFrame, model_name: Optional[str] = None) -> PredictionResult:
+    def predict(self, data: pd.DataFrame, model_name: str | None = None) -> PredictionResult:
         """
         Main prediction method - unified interface for all predictions
 
@@ -165,9 +165,7 @@ class PredictionEngine:
                 features_used = self._count_features_used(prepared_features)
 
                 # Apply rolling MinMax denormalization if needed
-                final_price = self._apply_rolling_denormalization(
-                    final_price, bundle, data
-                )
+                final_price = self._apply_rolling_denormalization(final_price, bundle, data)
             else:
                 # Run all available structured runners for ensemble
                 preds = []
@@ -232,7 +230,7 @@ class PredictionEngine:
                     confidence=0.0,
                     direction=0,
                     model_name=final_model_name,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     inference_time=inference_time,
                     features_used=features_used,
                     error=f"Prediction timeout after {inference_time:.3f}s (max: {self.config.max_prediction_latency}s)",
@@ -265,7 +263,7 @@ class PredictionEngine:
                 confidence=adjusted_conf,
                 direction=final_dir,
                 model_name=final_model_name,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 inference_time=inference_time,
                 features_used=features_used,
                 cache_hit=cache_hit,
@@ -306,7 +304,7 @@ class PredictionEngine:
                 confidence=0.0,
                 direction=0,
                 model_name=model_name or "unknown",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 inference_time=total_time,
                 features_used=0,
                 error=error_message,
@@ -319,10 +317,10 @@ class PredictionEngine:
     def predict_series(
         self,
         data: pd.DataFrame,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         batch_size: int = 1024,
         return_denormalized: bool = False,
-        sequence_length_override: Optional[int] = None,
+        sequence_length_override: int | None = None,
     ) -> dict[str, Any]:
         """
         Predict over a long OHLCV series efficiently.
@@ -339,7 +337,7 @@ class PredictionEngine:
         bundle = self._resolve_bundle(model_name)
         model = bundle.runner
 
-        features_df: Optional[pd.DataFrame]
+        features_df: pd.DataFrame | None
         if isinstance(features_df_or_arr, pd.DataFrame):
             features_df = features_df_or_arr
         else:
@@ -360,7 +358,7 @@ class PredictionEngine:
             base_features = np.asarray(features_df_or_arr, dtype=np.float32)
 
         feat = base_features
-        schema_sequence_length: Optional[int] = None
+        schema_sequence_length: int | None = None
         if features_df is not None and bundle.feature_schema:
             try:
                 aligned_matrix, schema_sequence_length = self._select_schema_features(
@@ -437,7 +435,7 @@ class PredictionEngine:
         return {"indices": indices, "preds": preds_denorm, "normalized": False}
 
     def predict_batch(
-        self, data_batches: list[pd.DataFrame], model_name: Optional[str] = None
+        self, data_batches: list[pd.DataFrame], model_name: str | None = None
     ) -> list[PredictionResult]:
         """
         Batch prediction for multiple data sets
@@ -465,7 +463,7 @@ class PredictionEngine:
                     confidence=0.0,
                     direction=0,
                     model_name=model_name or "unknown",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     inference_time=0.0,
                     features_used=0,
                     error=str(e),
@@ -521,9 +519,7 @@ class PredictionEngine:
                 prediction = model.predict(prepared_features)
 
                 # Apply rolling MinMax denormalization if needed
-                denorm_price = self._apply_rolling_denormalization(
-                    prediction.price, bundle, data
-                )
+                denorm_price = self._apply_rolling_denormalization(prediction.price, bundle, data)
 
                 # Calculate total inference time
                 inference_time = time.time() - start_time
@@ -534,7 +530,7 @@ class PredictionEngine:
                     confidence=prediction.confidence,
                     direction=prediction.direction,
                     model_name=prediction.model_name,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     inference_time=inference_time,
                     features_used=self._count_features_used(prepared_features),
                     cache_hit=self._was_cache_hit(),
@@ -559,7 +555,7 @@ class PredictionEngine:
                     confidence=0.0,
                     direction=0,
                     model_name=model_name or "unknown",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     inference_time=time.time() - start_time,
                     features_used=0,
                     error=str(e),
@@ -661,7 +657,7 @@ class PredictionEngine:
 
         return stats
 
-    def invalidate_model_cache(self, model_name: Optional[str] = None) -> int:
+    def invalidate_model_cache(self, model_name: str | None = None) -> int:
         """
         Invalidate prediction cache for specific model or all models.
 
@@ -695,7 +691,7 @@ class PredictionEngine:
         health = {
             "status": "healthy",
             "components": {},
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Check feature pipeline
@@ -842,7 +838,7 @@ class PredictionEngine:
         self,
         bundle: StrategyModel,
         raw_features: np.ndarray,
-        features_df: Optional[pd.DataFrame],
+        features_df: pd.DataFrame | None,
     ) -> np.ndarray:
         """Align feature matrix to a bundle's schema when available."""
 
@@ -869,7 +865,7 @@ class PredictionEngine:
             return int(features.shape[-1])
         return 0
 
-    def _resolve_bundle(self, model_name: Optional[str]) -> StrategyModel:
+    def _resolve_bundle(self, model_name: str | None) -> StrategyModel:
         """Resolve the model bundle to use for an inference request."""
 
         bundles = list(self.model_registry.list_bundles())
@@ -889,7 +885,7 @@ class PredictionEngine:
 
         raise ModelNotFoundError("No prediction models available")
 
-    def _get_model(self, model_name: Optional[str]):
+    def _get_model(self, model_name: str | None):
         """Get model runner for prediction (structured-only)."""
         bundle = self._resolve_bundle(model_name)
         return bundle.runner

@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -40,6 +40,13 @@ from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
+from src.infrastructure.logging.context import set_context, update_context
+from src.infrastructure.logging.events import (
+    log_data_event,
+    log_engine_event,
+    log_order_event,
+    log_risk_event,
+)
 from src.live.strategy_manager import StrategyManager
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
@@ -54,13 +61,6 @@ from src.strategies.components import MarketData as ComponentMarketData
 from src.strategies.components import Position as ComponentPosition
 from src.strategies.components import RuntimeContext, Signal, SignalDirection, StrategyRuntime
 from src.strategies.components import Strategy as ComponentStrategy
-from src.infrastructure.logging.context import set_context, update_context
-from src.infrastructure.logging.events import (
-    log_data_event,
-    log_engine_event,
-    log_order_event,
-    log_risk_event,
-)
 
 from .account_sync import AccountSynchronizer
 
@@ -323,7 +323,7 @@ class LiveTradingEngine:
         # Initialize database manager
         try:
             self.db_manager = DatabaseManager(database_url)
-        except Exception as e:
+        except (ConnectionError, OSError, ValueError) as e:
             print(
                 f"❌ Could not connect to the PostgreSQL database: {e}\nThe trading engine cannot start without a database connection. Exiting..."
             )
@@ -641,7 +641,18 @@ class LiveTradingEngine:
         engine_params: RiskParameters | None,
         component_params: RiskParameters | None,
     ) -> RiskParameters | None:
-        """Merge engine-provided and component-provided risk parameters."""
+        """Merges engine-provided and component-provided risk parameters.
+
+        Component parameters take precedence over engine parameters when both
+        are provided. Non-None component values override engine values.
+
+        Args:
+            engine_params: Risk parameters from the trading engine
+            component_params: Risk parameters from the strategy component
+
+        Returns:
+            Merged risk parameters, or None if both inputs are None
+        """
 
         if engine_params is None and component_params is None:
             return None
@@ -670,7 +681,14 @@ class LiveTradingEngine:
 
     @staticmethod
     def _clone_risk_parameters(params: RiskParameters | None) -> RiskParameters | None:
-        """Return a deep-cloned copy of risk parameters for safe reuse."""
+        """Creates a deep-cloned copy of risk parameters for safe reuse.
+
+        Args:
+            params: Risk parameters to clone
+
+        Returns:
+            Deep copy of the risk parameters, or None if input is None
+        """
 
         if params is None:
             return None
@@ -678,7 +696,14 @@ class LiveTradingEngine:
         return RiskParameters(**asdict(params))
 
     def _configure_strategy(self, strategy: ComponentStrategy | StrategyRuntime) -> None:
-        """Normalise strategy inputs and configure runtime bookkeeping."""
+        """Normalizes strategy inputs and configures runtime bookkeeping.
+
+        Handles both raw ComponentStrategy instances and wrapped StrategyRuntime
+        instances, extracting the underlying strategy and setting up engine state.
+
+        Args:
+            strategy: Strategy instance to configure (raw or wrapped)
+        """
 
         runtime = strategy if isinstance(strategy, StrategyRuntime) else None
         base_strategy = runtime.strategy if runtime is not None else strategy
@@ -710,7 +735,11 @@ class LiveTradingEngine:
         self._register_component_context_provider()
 
     def _register_component_context_provider(self) -> None:
-        """Attach the engine-provided risk context hook to component strategies."""
+        """Attaches the engine-provided risk context hook to component strategies.
+
+        Registers a callback function that allows component strategies to request
+        additional risk context (correlation data, etc.) during decision-making.
+        """
 
         strategy = getattr(self, "_component_strategy", None)
         if strategy is None:
@@ -725,7 +754,7 @@ class LiveTradingEngine:
 
         try:
             setter(provider)
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except (TypeError, AttributeError) as exc:  # pragma: no cover - defensive logging
             logger.debug("Failed to attach risk context provider to component strategy: %s", exc)
 
     def _component_risk_context(self, df: pd.DataFrame, index: int, signal) -> dict[str, Any]:
@@ -875,17 +904,28 @@ class LiveTradingEngine:
         return self._runtime is not None
 
     def _strategy_name(self) -> str:
-        """Return the configured strategy name for logging/reporting."""
+        """Returns the configured strategy name for logging and reporting.
+
+        Returns:
+            Strategy name, or "UnknownStrategy" if no strategy is configured
+        """
         strategy = getattr(self, "strategy", None)
         if strategy is None:
             return "UnknownStrategy"
         return getattr(strategy, "name", strategy.__class__.__name__)
 
     def _prepare_strategy_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Prepare dataframe for strategy processing.
+        """Prepares dataframe for strategy processing.
 
-        For component-based strategies, prepare the runtime dataset.
-        For legacy strategies, return the dataframe as-is (no indicator calculation).
+        Component-based strategies compute indicators on-demand in process_candle(),
+        so the dataframe is returned as-is. Legacy strategies would need upfront
+        indicator calculation (not currently used).
+
+        Args:
+            df: Raw market data dataframe
+
+        Returns:
+            Prepared dataframe ready for strategy processing
         """
         if not self._is_runtime_strategy():
             # Component-based strategies don't need upfront indicator calculation
@@ -960,7 +1000,7 @@ class LiveTradingEngine:
             decision = self._runtime.process(index, context)
             self._apply_policies_from_decision(decision)
             return decision
-        except Exception as exc:
+        except (ValueError, KeyError, IndexError, AttributeError) as exc:
             logger.warning("Runtime decision failed in live engine at index %s: %s", index, exc)
             return None
 
@@ -1042,7 +1082,7 @@ class LiveTradingEngine:
                 self._runtime_dataset = None
                 self._runtime_warmup = 0
 
-    def start(self, symbol: str, timeframe: str = "1h", max_steps: int = None):
+    def start(self, symbol: str, timeframe: str = "1h", max_steps: int | None = None) -> None:
         """Start the live trading engine"""
         if self.is_running:
             logger.warning("Trading engine is already running")
@@ -1090,7 +1130,7 @@ class LiveTradingEngine:
                     )
                 else:
                     logger.info(
-                        f"📅 No day start balance found, initializing to current balance (daily P&L tracking reset)"
+                        "📅 No day start balance found, initializing to current balance (daily P&L tracking reset)"
                     )
                 # Also recover active positions
                 self._recover_active_positions()
@@ -1207,7 +1247,7 @@ class LiveTradingEngine:
         finally:
             self.stop()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the trading engine gracefully"""
         if not self.is_running:
             return
@@ -1249,13 +1289,13 @@ class LiveTradingEngine:
 
         logger.info("Trading engine stopped")
 
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, signum: int, frame: Any) -> None:
         """Handle shutdown signals"""
         logger.info(f"Received signal {signum}")
         self.stop()
         sys.exit(0)
 
-    def _trading_loop(self, symbol: str, timeframe: str, max_steps: int = None):
+    def _trading_loop(self, symbol: str, timeframe: str, max_steps: int | None = None) -> None:
         """Main trading loop"""
         logger.info("Trading loop started")
         steps = 0
@@ -1757,7 +1797,7 @@ class LiveTradingEngine:
         except Exception:
             return None
 
-    def _update_position_pnl(self, current_price: float):
+    def _update_position_pnl(self, current_price: float) -> None:
         """Update unrealized PnL for all positions"""
         for position in self.positions.values():
             fraction = float(
@@ -1782,7 +1822,7 @@ class LiveTradingEngine:
             position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
             position.unrealized_pnl_percent = pnl_pct * 100.0
 
-    def _update_positions_mfe_mae(self, current_price: float):
+    def _update_positions_mfe_mae(self, current_price: float) -> None:
         """Compute and persist rolling MFE/MAE for active positions."""
         now = datetime.utcnow()
         for order_id, position in self.positions.items():
@@ -2796,7 +2836,7 @@ class LiveTradingEngine:
 
     def _check_and_update_trading_date(self):
         """Check if a new trading day has started and reset day_start_balance if so"""
-        current_date = datetime.now(timezone.utc).date()
+        current_date = datetime.now(UTC).date()
 
         if self.current_trading_date is None:
             # First time running - initialize with current date
@@ -2927,7 +2967,7 @@ class LiveTradingEngine:
                 break
             time.sleep(min(poll_interval, end_time - time.time()))
 
-    def _calculate_adaptive_interval(self, current_price: float = None) -> int:
+    def _calculate_adaptive_interval(self, current_price: float | None = None) -> int:
         """Calculate adaptive check interval based on recent trading activity and market conditions"""
         # Base interval from configuration
         interval = self.base_check_interval
@@ -3033,10 +3073,8 @@ class LiveTradingEngine:
 
         try:
             # Get start of current day in UTC
-            current_date = datetime.now(timezone.utc).date()
-            day_start = datetime.combine(current_date, datetime.min.time()).replace(
-                tzinfo=timezone.utc
-            )
+            current_date = datetime.now(UTC).date()
+            day_start = datetime.combine(current_date, datetime.min.time()).replace(tzinfo=UTC)
 
             # Query for the first account snapshot of the current day
             with self.db_manager.Session() as session:

@@ -4,8 +4,13 @@ Configuration management system.
 This module provides centralized configuration management.
 """
 
+from __future__ import annotations
+
 import threading
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from threading import Lock
 
 from .providers.base import ConfigProvider
 from .providers.dotenv_provider import DotEnvProvider
@@ -23,7 +28,7 @@ class ConfigManager:
     3. .env file
     """
 
-    def __init__(self, providers: Optional[list[ConfigProvider]] = None):
+    def __init__(self, providers: list[ConfigProvider] | None = None):
         """
         Initialize ConfigManager with providers.
 
@@ -46,7 +51,7 @@ class ConfigManager:
         else:
             print("Warning: No configuration providers available!")
 
-    def get(self, key: str, default: Optional[Any] = None) -> Optional[str]:
+    def get(self, key: str, default: Any | None = None) -> str | None:
         """
         Get a configuration value from the first available provider.
 
@@ -89,6 +94,8 @@ class ConfigManager:
     def get_int(self, key: str, default: int = 0) -> int:
         """Get configuration value as integer"""
         value = self.get(key, str(default))
+        if value is None:
+            return default
         try:
             return int(value)
         except (TypeError, ValueError):
@@ -97,6 +104,8 @@ class ConfigManager:
     def get_float(self, key: str, default: float = 0.0) -> float:
         """Get configuration value as float"""
         value = self.get(key, str(default))
+        if value is None:
+            return default
         try:
             return float(value)
         except (TypeError, ValueError):
@@ -112,7 +121,7 @@ class ConfigManager:
         return value.lower() in ("true", "1", "yes", "on", "enabled")
 
     def get_list(
-        self, key: str, delimiter: str = ",", default: Optional[list[str]] = None
+        self, key: str, delimiter: str = ",", default: list[str] | None = None
     ) -> list[str]:
         """Get configuration value as list"""
         value = self.get(key)
@@ -193,8 +202,8 @@ class ConfigManager:
 
 
 # Global configuration instance
-_config_instance: Optional[ConfigManager] = None
-_config_lock: Optional[threading.Lock] = None
+_config_instance: ConfigManager | None = None
+_config_lock: Lock | None = None
 
 
 def get_config() -> ConfigManager:

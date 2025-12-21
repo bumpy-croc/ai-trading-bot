@@ -8,13 +8,14 @@ cooling-off periods, audit trails, and performance impact analysis.
 import logging
 import threading
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -178,15 +179,15 @@ class SwitchRequest:
     request_id: str
     trigger: SwitchTrigger
     from_strategy: str
-    to_strategy: Optional[str]  # None for auto-selection
+    to_strategy: str | None  # None for auto-selection
     reason: str
     requested_at: datetime
     requested_by: str
     priority: int = 1  # 1=low, 2=medium, 3=high, 4=emergency
 
     # Switch decision context
-    switch_decision: Optional[SwitchDecision] = None
-    alternative_scores: Optional[list[StrategyScore]] = None
+    switch_decision: SwitchDecision | None = None
+    alternative_scores: list[StrategyScore] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -214,16 +215,16 @@ class SwitchRecord:
     request: SwitchRequest
     validation_result: ValidationResult
     status: SwitchStatus
-    executed_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    executed_at: datetime | None = None
+    completed_at: datetime | None = None
 
     # Performance tracking
-    pre_switch_performance: Optional[dict[str, float]] = None
-    post_switch_performance: Optional[dict[str, float]] = None
-    performance_impact: Optional[dict[str, float]] = None
+    pre_switch_performance: dict[str, float] | None = None
+    post_switch_performance: dict[str, float] | None = None
+    performance_impact: dict[str, float] | None = None
 
     # Error information
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -253,7 +254,7 @@ class StrategySwitcher:
         self,
         performance_monitor: PerformanceMonitor,
         strategy_selector: StrategySelector,
-        config: Optional[SwitchConfig] = None,
+        config: SwitchConfig | None = None,
     ):
         """
         Initialize strategy switcher
@@ -271,18 +272,18 @@ class StrategySwitcher:
         # Switch history and state
         self.switch_history: deque[SwitchRecord] = deque(maxlen=1000)
         self.pending_requests: dict[str, SwitchRequest] = {}
-        self.last_switch_time: Optional[datetime] = None
+        self.last_switch_time: datetime | None = None
 
         # Manual override controls
         self.manual_override_active = False
-        self.manual_override_until: Optional[datetime] = None
-        self.manual_override_reason: Optional[str] = None
+        self.manual_override_until: datetime | None = None
+        self.manual_override_reason: str | None = None
 
         # Circuit breaker for critical failures
         self.circuit_breaker_active = False
-        self.circuit_breaker_activated_at: Optional[datetime] = None
-        self.circuit_breaker_reason: Optional[str] = None
-        self.last_active_strategy: Optional[str] = None
+        self.circuit_breaker_activated_at: datetime | None = None
+        self.circuit_breaker_reason: str | None = None
+        self.last_active_strategy: str | None = None
 
         # Switch callbacks
         self.pre_switch_callbacks: list[Callable[[str, str], bool]] = []
@@ -299,8 +300,8 @@ class StrategySwitcher:
         performance_tracker: PerformanceTracker,
         available_strategies: dict[str, PerformanceTracker],
         market_data: pd.DataFrame,
-        current_regime: Optional[RegimeContext] = None,
-    ) -> Optional[SwitchRequest]:
+        current_regime: RegimeContext | None = None,
+    ) -> SwitchRequest | None:
         """
         Evaluate if a strategy switch is needed
 
@@ -410,7 +411,7 @@ class StrategySwitcher:
         self,
         request: SwitchRequest,
         strategy_activation_callback: Callable[[str], bool],
-        performance_trackers: Optional[dict[str, PerformanceTracker]] = None,
+        performance_trackers: dict[str, PerformanceTracker] | None = None,
     ) -> SwitchRecord:
         """
         Execute a strategy switch request
@@ -607,7 +608,7 @@ class StrategySwitcher:
         return switch_record
 
     def set_manual_override(
-        self, active: bool, duration_hours: Optional[int] = None, reason: Optional[str] = None
+        self, active: bool, duration_hours: int | None = None, reason: str | None = None
     ) -> None:
         """
         Set manual override to prevent/allow automatic switching
@@ -633,7 +634,7 @@ class StrategySwitcher:
         self.logger.info(f"Manual override {status}{duration_str}{reason_str}")
 
     def get_switch_history(
-        self, days: int = 30, strategy_id: Optional[str] = None
+        self, days: int = 30, strategy_id: str | None = None
     ) -> list[SwitchRecord]:
         """
         Get switch history for analysis
@@ -946,7 +947,7 @@ class StrategySwitcher:
             return 1  # Low
 
     def _capture_performance_snapshot(
-        self, strategy_id: str, performance_tracker: Optional[PerformanceTracker] = None
+        self, strategy_id: str, performance_tracker: PerformanceTracker | None = None
     ) -> dict[str, float]:
         """Capture performance snapshot before/after switch"""
         snapshot = {"timestamp": datetime.now().timestamp(), "strategy_id": strategy_id}
@@ -1086,7 +1087,7 @@ class StrategySwitcher:
         return impact
 
     def _activate_circuit_breaker(
-        self, reason: str, last_known_strategy: Optional[str] = None
+        self, reason: str, last_known_strategy: str | None = None
     ) -> None:
         """
         Activate circuit breaker to prevent further automatic switches

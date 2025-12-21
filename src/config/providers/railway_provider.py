@@ -5,7 +5,7 @@ This module provides configuration from Railway environment variables.
 """
 
 import os
-from typing import Any, Optional
+from typing import Any
 
 from .base import ConfigProvider
 
@@ -52,7 +52,7 @@ class RailwayProvider(ConfigProvider):
 
         return any(key in self._env_vars for key in railway_indicators)
 
-    def get(self, key: str, default: Optional[Any] = None) -> Optional[str]:
+    def get(self, key: str, default: Any | None = None) -> str | None:
         """Get configuration value from Railway environment variables."""
         # Railway-specific environment variable
         railway_key = f"RAILWAY_{key.upper()}"
@@ -77,7 +77,7 @@ class RailwayProvider(ConfigProvider):
         """Refresh environment variables"""
         self._load_env_vars()
 
-    def get_railway_info(self) -> dict[str, Optional[str]]:
+    def get_railway_info(self) -> dict[str, str | None]:
         """
         Get Railway-specific deployment information.
 

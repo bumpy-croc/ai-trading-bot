@@ -12,7 +12,7 @@ from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -55,8 +55,8 @@ class TradeResult:
     duration_hours: float
     strategy_id: str
     confidence: float
-    regime: Optional[str] = None
-    exit_reason: Optional[str] = None
+    regime: str | None = None
+    exit_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -164,7 +164,7 @@ class PerformanceTracker:
     """
 
     def __init__(
-        self, strategy_id: str, max_history: int = 10000, storage_backend: Optional[Any] = None
+        self, strategy_id: str, max_history: int = 10000, storage_backend: Any | None = None
     ):
         """
         Initialize performance tracker
@@ -269,8 +269,8 @@ class PerformanceTracker:
     def get_performance_metrics(
         self,
         period: PerformancePeriod = PerformancePeriod.ALL_TIME,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> PerformanceMetrics:
         """
         Get performance metrics for specified period
@@ -336,7 +336,7 @@ class PerformanceTracker:
 
         return metrics
 
-    def get_regime_performance(self, regime: Optional[str] = None) -> dict[str, RegimePerformance]:
+    def get_regime_performance(self, regime: str | None = None) -> dict[str, RegimePerformance]:
         """
         Get performance metrics by market regime
 
@@ -439,9 +439,9 @@ class PerformanceTracker:
 
     def get_trade_history(
         self,
-        limit: Optional[int] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        limit: int | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[TradeResult]:
         """
         Get trade history with optional filtering
@@ -548,8 +548,8 @@ class PerformanceTracker:
     def _filter_trades_by_period(
         self,
         period: PerformancePeriod,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> list[TradeResult]:
         """Filter trades by time period"""
         trades = list(self.trades)

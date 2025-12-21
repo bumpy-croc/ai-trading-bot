@@ -83,7 +83,7 @@ class DynamicRiskManager:
 
     def __init__(
         self,
-        config: Optional[DynamicRiskConfig] = None,
+        config: DynamicRiskConfig | None = None,
         db_manager: Optional["DatabaseManager"] = None,
     ):
         self.config = config or DynamicRiskConfig()
@@ -98,8 +98,8 @@ class DynamicRiskManager:
         self,
         current_balance: float,
         peak_balance: float,
-        session_id: Optional[int] = None,
-        previous_peak_balance: Optional[float] = None,
+        session_id: int | None = None,
+        previous_peak_balance: float | None = None,
     ) -> RiskAdjustments:
         """
         Calculate dynamic risk adjustments based on current performance metrics.
@@ -219,7 +219,7 @@ class DynamicRiskManager:
             return 0.0
         return max(0.0, (peak_balance - current_balance) / peak_balance)
 
-    def _get_performance_metrics(self, session_id: Optional[int]) -> dict[str, Any]:
+    def _get_performance_metrics(self, session_id: int | None) -> dict[str, Any]:
         """Get cached performance metrics or calculate new ones"""
         now = datetime.utcnow()
 
@@ -381,7 +381,7 @@ class DynamicRiskManager:
         else:
             return RiskAdjustments(primary_reason="normal_volatility")
 
-    def _calculate_correlation_adjustment(self, session_id: Optional[int]) -> RiskAdjustments:
+    def _calculate_correlation_adjustment(self, session_id: int | None) -> RiskAdjustments:
         """
         Calculate adjustments based on position correlation (placeholder implementation).
 

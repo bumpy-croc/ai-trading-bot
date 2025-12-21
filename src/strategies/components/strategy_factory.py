@@ -6,8 +6,10 @@ pre-configured strategies and custom strategy compositions.
 """
 
 from copy import deepcopy
-from typing import Any, Optional
+from typing import Any
 
+from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
+from .momentum_signal_generator import MomentumSignalGenerator
 from .position_sizer import (
     ConfidenceWeightedSizer,
     FixedFractionSizer,
@@ -30,8 +32,6 @@ from .signal_generator import (
     SignalGenerator,
     WeightedVotingSignalGenerator,
 )
-from .ml_signal_generator import MLBasicSignalGenerator, MLSignalGenerator
-from .momentum_signal_generator import MomentumSignalGenerator
 from .strategy import Strategy
 
 
@@ -223,7 +223,7 @@ class StrategyFactory:
     def create_ml_basic_strategy(
         name: str = "MLBasic",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         model_type: str = "basic",
         timeframe: str = "1h",
     ) -> Strategy:
@@ -270,7 +270,7 @@ class StrategyFactory:
     def create_ml_adaptive_strategy(
         name: str = "MLAdaptive",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
     ) -> Strategy:
         """
         Create ML Adaptive strategy with component-based architecture
@@ -310,7 +310,7 @@ class StrategyFactory:
     def create_ml_sentiment_strategy(
         name: str = "MLSentiment",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         model_type: str = "sentiment",
         timeframe: str = "1h",
     ) -> Strategy:
@@ -461,10 +461,10 @@ class StrategyBuilder:
             name: Strategy name
         """
         self.name = name
-        self._signal_generator: Optional[SignalGenerator] = None
-        self._risk_manager: Optional[RiskManager] = None
-        self._position_sizer: Optional[PositionSizer] = None
-        self._regime_detector: Optional[EnhancedRegimeDetector] = None
+        self._signal_generator: SignalGenerator | None = None
+        self._risk_manager: RiskManager | None = None
+        self._position_sizer: PositionSizer | None = None
+        self._regime_detector: EnhancedRegimeDetector | None = None
         self._enable_logging: bool = True
         self._max_history: int = 1000
 

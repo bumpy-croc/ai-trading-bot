@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -46,7 +46,7 @@ class TradingDecision:
     timestamp: datetime
     signal: Signal
     position_size: float
-    regime: Optional[RegimeContext]
+    regime: RegimeContext | None
     risk_metrics: dict[str, float]
     execution_time_ms: float
     metadata: dict[str, Any]
@@ -142,10 +142,10 @@ class Strategy:
 
         # Runtime configuration
         self._warmup_override: int | None = None
-        self._last_signal: Optional[Signal] = None
-        self._additional_risk_context_provider: Optional[
-            Callable[[pd.DataFrame, int, Signal], Optional[dict[str, Any]]]
-        ] = None
+        self._last_signal: Signal | None = None
+        self._additional_risk_context_provider: (
+            Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None
+        ) = None
 
         self.logger.info(
             f"Strategy '{name}' initialized with components: "
@@ -353,7 +353,7 @@ class Strategy:
         self,
         position: Position,
         current_data: MarketData,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
     ) -> bool:
         """
         Determine if a position should be exited
@@ -376,7 +376,7 @@ class Strategy:
         self,
         entry_price: float,
         signal: Signal,
-        regime: Optional[RegimeContext] = None,
+        regime: RegimeContext | None = None,
     ) -> float:
         """
         Get stop loss price for a position
@@ -488,7 +488,7 @@ class Strategy:
 
     def set_additional_risk_context_provider(
         self,
-        provider: Optional[Callable[[pd.DataFrame, int, Signal], Optional[dict[str, Any]]]],
+        provider: Callable[[pd.DataFrame, int, Signal], dict[str, Any] | None] | None,
     ) -> None:
         """Register a hook that can enrich the risk context before delegation."""
 
@@ -539,7 +539,7 @@ class Strategy:
                 params[attr] = getattr(self, attr)
         return params
 
-    def get_risk_overrides(self) -> Optional[dict[str, Any]]:
+    def get_risk_overrides(self) -> dict[str, Any] | None:
         """Return configured risk overrides when provided."""
         return getattr(self, "_risk_overrides", None)
 
@@ -560,7 +560,7 @@ class Strategy:
         if missing_columns:
             raise ValueError(f"DataFrame missing required columns: {missing_columns}")
 
-    def _detect_regime(self, df: pd.DataFrame, index: int) -> Optional[RegimeContext]:
+    def _detect_regime(self, df: pd.DataFrame, index: int) -> RegimeContext | None:
         """Detect market regime"""
         try:
             return self.regime_detector.detect_regime(df, index)
@@ -572,7 +572,7 @@ class Strategy:
         self,
         df: pd.DataFrame,
         index: int,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> Signal:
         """Generate trading signal"""
         try:
@@ -668,7 +668,7 @@ class Strategy:
         self,
         signal: Signal,
         balance: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
         context: dict[str, Any],
     ) -> float:
         """Calculate risk-based position size"""
@@ -691,7 +691,7 @@ class Strategy:
         signal: Signal,
         balance: float,
         risk_amount: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> float:
         """Calculate final position size using position sizer"""
         try:
@@ -705,7 +705,7 @@ class Strategy:
         position_size: float,
         signal: Signal,
         balance: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> float:
         """Validate and bound position size"""
         if signal.direction == SignalDirection.HOLD:
@@ -728,7 +728,7 @@ class Strategy:
         balance: float,
         risk_position_size: float,
         final_position_size: float,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
     ) -> dict[str, float]:
         """Calculate risk-related metrics"""
         return {
@@ -749,7 +749,7 @@ class Strategy:
         index: int,
         balance: float,
         current_positions: list[Position] | None,
-        regime: Optional[RegimeContext],
+        regime: RegimeContext | None,
         signal: Signal,
         risk_position_size: float,
         final_position_size: float,
