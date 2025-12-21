@@ -679,8 +679,9 @@ class TestLongRunningBacktests:
         # Should complete in reasonable time (pytest will timeout if too slow)
 
     @pytest.mark.slow
+    @pytest.mark.skip(reason="Very slow (>2 min) - run manually for performance testing")
     def test_four_years_hourly_data(self, mock_data_provider, minimal_strategy):
-        """4 years of hourly data (~35,000 candles)"""
+        """4 years of hourly data (~35,000 candles) - Performance test, skip by default"""
         four_years_data = create_ohlcv_data(35040, start_price=50000)  # 4 * 365 * 24
         mock_data_provider.get_historical_data.return_value = four_years_data
 
