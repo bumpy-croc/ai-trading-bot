@@ -11,9 +11,9 @@ permissions:
   issues: read
 
 jobs:
-  # Codex review autofix agent - triggers on PR comments by chatgpt-codex-connector
+  # Codex review autofix agent - triggers on PR comments by chatgpt-codex-connector (excluding agent completion comments)
   codex_review_autofix:
-    if: ${{ github.event.issue.pull_request && github.event.comment.user.login == 'chatgpt-codex-connector' }}
+    if: ${{ github.event.issue.pull_request && github.event.comment.user.login == 'chatgpt-codex-connector' && !contains(github.event.comment.body, '@codex review') && !contains(github.event.comment.body, 'Codex fixes applied') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -140,7 +140,7 @@ jobs:
 
         $COMMENT_BODY
 
-        Once you fixed the comment, leave another comment on the PR saying "@codex review"
+        Once you fixed the comment, leave another comment on the PR saying "Codex fixes applied - ready for review"
         EOF
 
         echo "=== Sending to Cursor Agent ==="
@@ -153,7 +153,7 @@ jobs:
 
         echo ""
         echo "=== Cursor Agent Launched ==="
-        echo "The agent will fix the issues mentioned in the PR comment and add a @codex review comment when done."
+        echo "The agent will fix the issues mentioned in the PR comment and add a completion comment when done."
 
         # Cleanup temporary files
         rm -f prompt.txt
