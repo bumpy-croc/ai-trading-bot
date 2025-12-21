@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -110,7 +110,7 @@ class StrategySelector:
     and correlation analysis.
     """
 
-    def __init__(self, config: Optional[SelectionConfig] = None):
+    def __init__(self, config: SelectionConfig | None = None):
         """
         Initialize strategy selector
 
@@ -128,7 +128,7 @@ class StrategySelector:
         # Correlation matrix cache
         self.correlation_matrix: dict[tuple[str, str], float] = {}
         self.correlation_cache_expiry = datetime.min
-        self.correlation_strategy_set: Optional[frozenset[str]] = (
+        self.correlation_strategy_set: frozenset[str] | None = (
             None  # Track which strategies are cached
         )
 
@@ -141,9 +141,9 @@ class StrategySelector:
     def select_best_strategy(
         self,
         available_strategies: dict[str, PerformanceTracker],
-        current_regime: Optional[RegimeContext] = None,
-        exclude_strategies: Optional[list[str]] = None,
-    ) -> Optional[str]:
+        current_regime: RegimeContext | None = None,
+        exclude_strategies: list[str] | None = None,
+    ) -> str | None:
         """
         Select the best strategy based on multi-criteria analysis
 
@@ -193,8 +193,8 @@ class StrategySelector:
     def rank_strategies(
         self,
         available_strategies: dict[str, PerformanceTracker],
-        current_regime: Optional[RegimeContext] = None,
-        exclude_strategies: Optional[list[str]] = None,
+        current_regime: RegimeContext | None = None,
+        exclude_strategies: list[str] | None = None,
     ) -> list[StrategyScore]:
         """
         Rank all strategies by their selection scores
@@ -227,7 +227,7 @@ class StrategySelector:
         self,
         strategy_ids: list[str],
         performance_trackers: dict[str, PerformanceTracker],
-        current_regime: Optional[RegimeContext] = None,
+        current_regime: RegimeContext | None = None,
     ) -> dict[str, Any]:
         """
         Compare specific strategies with detailed analysis
@@ -336,7 +336,7 @@ class StrategySelector:
         return eligible
 
     def _calculate_strategy_scores(
-        self, strategies: dict[str, PerformanceTracker], current_regime: Optional[RegimeContext]
+        self, strategies: dict[str, PerformanceTracker], current_regime: RegimeContext | None
     ) -> list[StrategyScore]:
         """Calculate comprehensive scores for all strategies"""
         strategy_scores = []
@@ -430,7 +430,7 @@ class StrategySelector:
         return scores
 
     def _calculate_regime_scores(
-        self, tracker: PerformanceTracker, current_regime: Optional[RegimeContext]
+        self, tracker: PerformanceTracker, current_regime: RegimeContext | None
     ) -> dict[str, float]:
         """Calculate regime-specific performance scores"""
         regime_scores = {}
@@ -529,7 +529,7 @@ class StrategySelector:
         regime_scores: dict[str, float],
         risk_adjusted_score: float,
         correlation_penalty: float,
-        current_regime: Optional[RegimeContext],
+        current_regime: RegimeContext | None,
     ) -> float:
         """Calculate total weighted score for strategy"""
         # Base score from criteria

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import platform
-from typing import Optional
 
 try:
     import tensorflow as tf
@@ -25,7 +24,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def configure_gpu() -> Optional[str]:
+def configure_gpu() -> str | None:
     """Configure TensorFlow to use available GPU devices.
 
     On Apple Silicon Macs, configures Metal Performance Shaders (MPS) backend.
@@ -105,4 +104,3 @@ def get_compute_device() -> str:
         return "CPU"
     except Exception:  # noqa: BLE001
         return "CPU"
-

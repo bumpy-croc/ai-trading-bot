@@ -1,1 +1,1 @@
-Merge develop and fix all conflicts. Push to origin. Make sure unit tests pass. The branch that should have develop merged into is
+Merge develop and fix all conflicts. Push to origin. Make sure unit tests pass. The branch that should have develop merged into is either the current branch or or the branch specified at the end this prompt

@@ -20,7 +20,7 @@ else:
 
 # Standard library imports
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +99,7 @@ class MarketPredictionDashboard:
 
     def _load_price_history(self, symbol: str) -> pd.DataFrame:
         """Load historical daily OHLCV for the symbol (lookback_days)."""
-        end_dt = datetime.now(timezone.utc)
+        end_dt = datetime.now(UTC)
         start_dt = end_dt - timedelta(days=self.lookback_days)
 
         provider = self._get_price_provider()
@@ -124,7 +124,7 @@ class MarketPredictionDashboard:
             df = df.loc[start_dt:]  # trim to lookback window
         # Ensure datetime index is timezone aware
         if df.index.tzinfo is None or df.index.tz is None:
-            df.index = df.index.tz_localize(timezone.utc)
+            df.index = df.index.tz_localize(UTC)
         return df
 
     def _linear_regression_forecast(self, close: pd.Series, horizon: int) -> dict[str, float]:

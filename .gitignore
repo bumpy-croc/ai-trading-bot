@@ -8,7 +8,7 @@ __pycache__/
 .vscode/
 .claude/
 .cursor/mcp.json
-.codex/workflows/
+.codex/
 
 .DS_Store
 

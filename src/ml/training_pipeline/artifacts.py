@@ -10,7 +10,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -62,9 +62,9 @@ class RobustnessValidationResult(TypedDict, total=False):
 class ArtifactPaths:
     directory: Path
     keras_path: Path
-    onnx_path: Optional[Path]
+    onnx_path: Path | None
     metadata_path: Path
-    plot_path: Optional[Path]
+    plot_path: Path | None
 
 
 def create_training_plots(
@@ -72,12 +72,12 @@ def create_training_plots(
     model: Any,
     X_test: np.ndarray,
     y_test: np.ndarray,
-    feature_names: List[str],
+    feature_names: list[str],
     symbol: str,
     model_type: str,
     output_dir: Path,
     enable_plots: bool,
-) -> Optional[Path]:
+) -> Path | None:
     """Create training plots."""
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(
@@ -135,7 +135,7 @@ def validate_model_robustness(
     model: Any,
     X_test: np.ndarray,
     y_test: np.ndarray,
-    feature_names: List[str],
+    feature_names: list[str],
     has_sentiment: bool,
 ) -> RobustnessValidationResult:
     """Validate model robustness."""
@@ -179,8 +179,8 @@ def evaluate_model_performance(
     y_train: np.ndarray,
     X_test: np.ndarray,
     y_test: np.ndarray,
-    close_scaler: Optional[Any] = None,
-) -> Dict[str, float]:
+    close_scaler: Any | None = None,
+) -> dict[str, float]:
     """Evaluate model performance."""
     if not _TENSORFLOW_AVAILABLE:
         raise ImportError(
@@ -220,7 +220,7 @@ def evaluate_model_performance(
     }
 
 
-def convert_to_onnx(model: Any, output_path: Path) -> Optional[Path]:
+def convert_to_onnx(model: Any, output_path: Path) -> Path | None:
     """Convert Keras model to ONNX format.
 
     Args:
@@ -301,7 +301,7 @@ def save_artifacts(
     keras_path = version_dir / "model.keras"
     model.save(keras_path)
 
-    onnx_path: Optional[Path] = None
+    onnx_path: Path | None = None
     if enable_onnx:
         candidate = version_dir / "model.onnx"
         onnx_path = convert_to_onnx(model, candidate)

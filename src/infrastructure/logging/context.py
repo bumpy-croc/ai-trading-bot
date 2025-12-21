@@ -7,8 +7,8 @@ from collections.abc import Iterator
 from typing import Any
 
 # * Holds per-request/per-cycle logging context
-_LOG_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-    "atb_log_context", default={}
+_LOG_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "atb_log_context", default=None
 )
 
 
@@ -16,7 +16,7 @@ def get_context() -> dict[str, Any]:
     """Return a shallow copy of the current logging context."""
     ctx = _LOG_CONTEXT.get()
     # Ensure we never leak internal mutable dict
-    return dict(ctx)
+    return dict(ctx) if ctx is not None else {}
 
 
 def set_context(**kwargs: Any) -> None:
@@ -24,7 +24,8 @@ def set_context(**kwargs: Any) -> None:
 
     Keys with value None are ignored.
     """
-    current = dict(_LOG_CONTEXT.get())
+    ctx = _LOG_CONTEXT.get()
+    current = dict(ctx) if ctx is not None else {}
     for key, value in kwargs.items():
         if value is None:
             continue
@@ -42,7 +43,8 @@ def clear_context(*keys: str) -> None:
     if not keys:
         _LOG_CONTEXT.set({})
         return
-    current = dict(_LOG_CONTEXT.get())
+    ctx = _LOG_CONTEXT.get()
+    current = dict(ctx) if ctx is not None else {}
     for key in keys:
         current.pop(key, None)
     _LOG_CONTEXT.set(current)

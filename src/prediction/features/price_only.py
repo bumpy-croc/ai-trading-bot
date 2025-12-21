@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 
 from src.config.constants import DEFAULT_NORMALIZATION_WINDOW
-
 from src.tech.features.base import FeatureExtractor
 
 

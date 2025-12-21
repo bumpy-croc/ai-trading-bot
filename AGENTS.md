@@ -54,7 +54,7 @@ atb dashboards run monitoring
 
 ## ExecPlans
 
-When writing complex features or significant refactors, use an ExecPlan (as described in .agent/PLANS.md) from design to implementation.
+When writing complex features or significant refactors, use an ExecPlan (as described in .agent/PLANS.md) from design to implementation. Store all execplans in the `.agents/plans` folder.
 
 ## Coding Style & Naming Conventions
 
@@ -160,6 +160,10 @@ When writing complex features or significant refactors, use an ExecPlan (as desc
 - Only commit the changes you made during a session, not the whole working tree.
 - Verify correct branch before committing.
 - When performiung a merge or rebase, fetch from remote first. Use non interactive mode.
+- Commit and push directly after you make changes only if all of the following are true
+    - I ask you to make a small change or fix a PR comment
+    - You are certain that the fix/change is correct
+    - You've checked you are on the correct branch
 
 ## Pull Request Guidelines
 - Always follow the `.github/pull_request_template.md`.

@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +74,15 @@ class Order:
     side: OrderSide
     order_type: OrderType
     quantity: float
-    price: Optional[float]  # None for market orders
+    price: float | None  # None for market orders
     status: OrderStatus
     filled_quantity: float
-    average_price: Optional[float]
+    average_price: float | None
     commission: float
     commission_asset: str
     create_time: datetime
     update_time: datetime
-    stop_price: Optional[float] = None
+    stop_price: float | None = None
     time_in_force: str = "GTC"
 
 
@@ -146,22 +146,22 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
-    def get_balance(self, asset: str) -> Optional[AccountBalance]:
+    def get_balance(self, asset: str) -> AccountBalance | None:
         """Get balance for a specific asset"""
         pass
 
     @abstractmethod
-    def get_positions(self, symbol: Optional[str] = None) -> list[Position]:
+    def get_positions(self, symbol: str | None = None) -> list[Position]:
         """Get open positions (for futures/margin trading)"""
         pass
 
     @abstractmethod
-    def get_open_orders(self, symbol: Optional[str] = None) -> list[Order]:
+    def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         """Get all open orders"""
         pass
 
     @abstractmethod
-    def get_order(self, order_id: str, symbol: str) -> Optional[Order]:
+    def get_order(self, order_id: str, symbol: str) -> Order | None:
         """Get specific order by ID"""
         pass
 
@@ -177,10 +177,10 @@ class ExchangeInterface(ABC):
         side: OrderSide,
         order_type: OrderType,
         quantity: float,
-        price: Optional[float] = None,
-        stop_price: Optional[float] = None,
+        price: float | None = None,
+        stop_price: float | None = None,
         time_in_force: str = "GTC",
-    ) -> Optional[str]:
+    ) -> str | None:
         """Place a new order and return order ID"""
         pass
 
@@ -190,12 +190,12 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> bool:
+    def cancel_all_orders(self, symbol: str | None = None) -> bool:
         """Cancel all open orders"""
         pass
 
     @abstractmethod
-    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
+    def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         """Get trading symbol information (min qty, price precision, etc.)"""
         pass
 
@@ -247,8 +247,8 @@ class ExchangeInterface(ABC):
         side: OrderSide,
         order_type: OrderType,
         quantity: float,
-        price: Optional[float] = None,
-    ) -> tuple[bool, Optional[str]]:
+        price: float | None = None,
+    ) -> tuple[bool, str | None]:
         """
         Validate order parameters before placing.
 

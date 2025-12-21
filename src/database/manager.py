@@ -461,8 +461,18 @@ class DatabaseManager:
         time_exit_config: dict | None = None,
         market_timezone: str | None = None,
     ) -> int:
-        """
-        Create a new trading session.
+        """Creates a new trading session.
+
+        Args:
+            strategy_name: Name of the trading strategy
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            timeframe: Candlestick timeframe (e.g., "1h", "4h")
+            mode: Trading mode (LIVE, BACKTEST, or PAPER)
+            initial_balance: Starting balance for the session
+            strategy_config: Optional strategy configuration parameters
+            session_name: Optional custom session name (auto-generated if None)
+            time_exit_config: Optional time-based exit configuration
+            market_timezone: Optional market timezone for time-based exits
 
         Returns:
             Trading session ID
@@ -515,7 +525,7 @@ class DatabaseManager:
 
     def end_trading_session(
         self, session_id: int | None = None, final_balance: float | None = None
-    ):
+    ) -> None:
         """End a trading session and calculate final metrics."""
         session_id = session_id or self._current_session_id
         if not session_id:
@@ -613,8 +623,34 @@ class DatabaseManager:
         mfe_time: datetime | None = None,
         mae_time: datetime | None = None,
     ) -> int:
-        """
-        Log a completed trade to the database.
+        """Logs a completed trade to the database.
+
+        Args:
+            symbol: Trading pair symbol
+            side: Position side (LONG or SHORT)
+            entry_price: Entry price for the position
+            exit_price: Exit price for the position
+            size: Position size as fraction of balance
+            entry_time: Time when position was opened
+            exit_time: Time when position was closed
+            pnl: Profit/loss in currency units
+            exit_reason: Reason for position exit
+            strategy_name: Name of the strategy that generated the trade
+            source: Trade source (LIVE, BACKTEST, or PAPER)
+            stop_loss: Stop loss price if set
+            take_profit: Take profit price if set
+            exit_order_id: Exchange order ID for the exit
+            confidence_score: ML model confidence if applicable
+            strategy_config: Strategy configuration at trade time
+            session_id: Trading session ID
+            quantity: Actual quantity traded
+            commission: Trading commission paid
+            mfe: Maximum favorable excursion (%)
+            mae: Maximum adverse excursion (%)
+            mfe_price: Price at MFE
+            mae_price: Price at MAE
+            mfe_time: Timestamp of MFE
+            mae_time: Timestamp of MAE
 
         Returns:
             Trade ID
@@ -1822,16 +1858,16 @@ class DatabaseManager:
     def log_dynamic_performance_metrics(
         self,
         session_id: int,
-        rolling_win_rate: float = None,
-        rolling_sharpe_ratio: float = None,
-        current_drawdown: float = None,
-        volatility_30d: float = None,
+        rolling_win_rate: float | None = None,
+        rolling_sharpe_ratio: float | None = None,
+        current_drawdown: float | None = None,
+        volatility_30d: float | None = None,
         consecutive_losses: int = 0,
         consecutive_wins: int = 0,
         risk_adjustment_factor: float = 1.0,
-        profit_factor: float = None,
-        expectancy: float = None,
-        avg_trade_duration_hours: float = None,
+        profit_factor: float | None = None,
+        expectancy: float | None = None,
+        avg_trade_duration_hours: float | None = None,
     ) -> int:
         """
         Log dynamic performance metrics for adaptive risk management.
@@ -1904,12 +1940,12 @@ class DatabaseManager:
         original_value: float,
         adjusted_value: float,
         adjustment_factor: float,
-        current_drawdown: float = None,
-        performance_score: float = None,
-        volatility_level: float = None,
-        duration_minutes: int = None,
+        current_drawdown: float | None = None,
+        performance_score: float | None = None,
+        volatility_level: float | None = None,
+        duration_minutes: int | None = None,
         trades_during_adjustment: int = 0,
-        pnl_during_adjustment: float = None,
+        pnl_during_adjustment: float | None = None,
     ) -> int:
         """
         Log a risk parameter adjustment for tracking and analysis.
@@ -1974,7 +2010,7 @@ class DatabaseManager:
             raise
 
     def get_dynamic_risk_performance_metrics(
-        self, session_id: int, start_date: datetime = None, end_date: datetime = None
+        self, session_id: int, start_date: datetime | None = None, end_date: datetime | None = None
     ) -> dict[str, Any]:
         """
         Get recent performance metrics for dynamic risk calculation.

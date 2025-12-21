@@ -19,14 +19,12 @@ Research-backed approach:
 Key insight: Beat buy-and-hold by being MORE aggressive, not more conservative.
 """
 
-from typing import Any
-
 from src.strategies.components import (
-    Strategy,
-    MomentumSignalGenerator,
-    VolatilityRiskManager,
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
+    MomentumSignalGenerator,
+    Strategy,
+    VolatilityRiskManager,
 )
 
 

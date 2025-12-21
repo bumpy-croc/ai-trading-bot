@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 
@@ -73,7 +73,7 @@ class ComparisonConfig:
     # Reporting configuration
     generate_detailed_report: bool = True
     export_results: bool = True
-    export_directory: Optional[str] = None
+    export_directory: str | None = None
 
     # Validation requirements
     require_statistical_equivalence: bool = True
@@ -95,19 +95,19 @@ class StrategyComparisonResult:
     parity_report: PerformanceComparisonReport
 
     # Statistical test results
-    statistical_tests: Dict[str, List[StatisticalTestResult]]
+    statistical_tests: dict[str, list[StatisticalTestResult]]
 
     # Equivalence test results
-    equivalence_tests: List[StatisticalTestResult]
+    equivalence_tests: list[StatisticalTestResult]
 
     # Overall assessment
     overall_validation_result: ValidationResult
     certification_status: str
-    recommendations: List[str] = field(default_factory=list)
+    recommendations: list[str] = field(default_factory=list)
 
     # Raw data for further analysis
-    legacy_backtest_results: Optional[pd.DataFrame] = None
-    new_backtest_results: Optional[pd.DataFrame] = None
+    legacy_backtest_results: pd.DataFrame | None = None
+    new_backtest_results: pd.DataFrame | None = None
 
 
 class PerformanceComparisonEngine:
@@ -124,8 +124,8 @@ class PerformanceComparisonEngine:
 
     def __init__(
         self,
-        config: Optional[ComparisonConfig] = None,
-        backtest_engine: Optional[BacktestEngineProtocol] = None,
+        config: ComparisonConfig | None = None,
+        backtest_engine: BacktestEngineProtocol | None = None,
     ):
         """
         Initialize the performance comparison engine.
@@ -151,7 +151,7 @@ class PerformanceComparisonEngine:
         legacy_strategy: Strategy,
         new_strategy: Strategy,
         market_data: pd.DataFrame,
-        comparison_id: Optional[str] = None,
+        comparison_id: str | None = None,
     ) -> StrategyComparisonResult:
         """
         Perform comprehensive comparison between legacy and new strategies.
@@ -293,7 +293,7 @@ class PerformanceComparisonEngine:
 
     def _perform_statistical_analysis(
         self, legacy_results: pd.DataFrame, new_results: pd.DataFrame
-    ) -> Dict[str, List[StatisticalTestResult]]:
+    ) -> dict[str, list[StatisticalTestResult]]:
         """Perform comprehensive statistical analysis."""
 
         # Extract return series
@@ -307,7 +307,7 @@ class PerformanceComparisonEngine:
 
     def _perform_equivalence_tests(
         self, legacy_results: pd.DataFrame, new_results: pd.DataFrame
-    ) -> List[StatisticalTestResult]:
+    ) -> list[StatisticalTestResult]:
         """Perform equivalence tests."""
 
         legacy_returns = legacy_results["balance"].pct_change().dropna()
@@ -525,7 +525,7 @@ def quick_strategy_comparison(
     legacy_strategy: Strategy,
     new_strategy: Strategy,
     market_data: pd.DataFrame,
-    tolerance_config: Optional[ToleranceConfig] = None,
+    tolerance_config: ToleranceConfig | None = None,
 ) -> StrategyComparisonResult:
     """
     Quick strategy comparison with default settings.
@@ -552,7 +552,7 @@ def validate_migration_readiness(
     new_strategy: Strategy,
     market_data: pd.DataFrame,
     strict_validation: bool = True,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """
     Validate if a strategy migration is ready for production.
 

@@ -27,7 +27,7 @@ class TrainingPaths:
     models_dir: Path
 
     @classmethod
-    def default(cls) -> "TrainingPaths":
+    def default(cls) -> TrainingPaths:
         root = get_project_root()
         data_dir = root / "data"
         models_dir = root / "src" / "ml" / "models"

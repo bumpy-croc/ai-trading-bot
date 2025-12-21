@@ -11,7 +11,7 @@ from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any
 from uuid import uuid4
 
 # Removed networkx dependency - using simple graph implementation
@@ -59,7 +59,7 @@ class ChangeRecord:
     impact_level: ImpactLevel
     changed_components: list[str]
     parameter_changes: dict[str, Any]
-    performance_impact: Optional[dict[str, float]]
+    performance_impact: dict[str, float] | None
     created_at: datetime
     created_by: str
 
@@ -164,7 +164,7 @@ class StrategyLineageTracker:
     of strategy development over time.
     """
 
-    def __init__(self, storage_backend: Optional[Any] = None):
+    def __init__(self, storage_backend: Any | None = None):
         """
         Initialize lineage tracker
 
@@ -192,8 +192,8 @@ class StrategyLineageTracker:
     def register_strategy(
         self,
         strategy_id: str,
-        parent_id: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        parent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """
         Register a strategy in the lineage system
@@ -249,9 +249,9 @@ class StrategyLineageTracker:
         change_type: ChangeType,
         description: str,
         impact_level: ImpactLevel = ImpactLevel.MEDIUM,
-        changed_components: Optional[list[str]] = None,
-        parameter_changes: Optional[dict[str, Any]] = None,
-        performance_impact: Optional[dict[str, float]] = None,
+        changed_components: list[str] | None = None,
+        parameter_changes: dict[str, Any] | None = None,
+        performance_impact: dict[str, float] | None = None,
         created_by: str = "system",
     ) -> str:
         """
@@ -391,7 +391,7 @@ class StrategyLineageTracker:
         target_strategy_id: str,
         source_strategy_ids: list[str],
         merge_strategy: str = "best_performance",
-        conflict_resolution: Optional[dict[str, Any]] = None,
+        conflict_resolution: dict[str, Any] | None = None,
         created_by: str = "system",
     ) -> str:
         """
@@ -728,9 +728,7 @@ class StrategyLineageTracker:
 
         return metrics
 
-    def visualize_lineage(
-        self, strategy_id: str, format: str = "dict"
-    ) -> Union[dict[str, Any], str]:
+    def visualize_lineage(self, strategy_id: str, format: str = "dict") -> dict[str, Any] | str:
         """
         Create visualization data for strategy lineage
 

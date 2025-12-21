@@ -6,32 +6,48 @@
 Centralized ONNX model loading, inference, and caching for all ML strategies.
 
 ## Components
-- `config.py`: `PredictionConfig` (paths, thresholds, cache TTL)
-- `models/onnx_runner.py`: ONNX loader and inference (`OnnxRunner`)
-- `models/registry.py`: `PredictionModelRegistry` (discovers models in `src/ml/models/`)
-- `utils/caching.py`: TTL-based prediction cache and decorators
+- `config.py`: `PredictionConfig` (model registry paths, cache knobs, thresholds).
+- `engine.py`: `PredictionEngine` that wires feature extraction, registry selection, and caching.
+- `features/`: FeaturePipeline modules (technical, sentiment, market microstructure).
+- `models/onnx_runner.py`: `OnnxRunner` executing ONNX artifacts with provider negotiation and caching.
+- `models/registry.py`: `PredictionModelRegistry` that discovers bundles under `src/ml/models/`.
+- `utils/caching.py`: TTL-based prediction cache plus helpers shared by runners and the engine.
 
-Note: `sitecustomize.py` adds both project root and `src/` to `sys.path`, so imports like `from prediction...` resolve when running scripts.
+`sitecustomize.py` injects both the project root and `src/` onto `sys.path`, so imports like `from prediction.engine import PredictionEngine` resolve for CLI and ad-hoc scripts alike.
 
 ## Usage
 ```python
-from src.prediction.config import PredictionConfig
-from src.prediction.models.registry import PredictionModelRegistry
 import numpy as np
 
-config = PredictionConfig()
-registry = PredictionModelRegistry(config)
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
 
-features = np.random.rand(120, 5).astype(np.float32)
-pred = registry.predict('btcusdt_price', features)
-print(pred.price, pred.confidence, pred.direction)
+config = PredictionConfig.from_config_manager()
+registry = PredictionModelRegistry(config)
+bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+
+# Build a zeroed feature tensor that matches the bundle schema (sequence_length x features)
+sequence_length = int(bundle.metadata.get("sequence_length", 120))
+feature_count = len(bundle.metadata.get("feature_names", [])) or len(
+    bundle.feature_schema.get("features", [])
+) or 5
+features = np.zeros((1, sequence_length, feature_count), dtype=np.float32)
+
+prediction = bundle.runner.predict(features)
+print(bundle.version_id, prediction.price, prediction.confidence)
 ```
+
+`PredictionModelRegistry` exposes additional helpers:
+- `list_bundles()` – enumerate every discovered `(symbol, timeframe, model_type)` tuple.
+- `select_bundle(symbol=..., model_type=..., timeframe=...)` – fetch the active bundle (latest symlink wins).
+- `reload_models()` – refresh in-memory bundles after adding artifacts.
+- `invalidate_cache(model_name=None)` – forward eviction requests to `PredictionCacheManager`.
 
 ## Model Storage
 
 All models are now stored in the **structured registry format**:
 - **Registry structure**: `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`)
-- Each model directory contains: `model.onnx`, `metadata.json`, and `feature_schema.json`
+- Each model directory contains: `model.onnx`, `model.keras`, `saved_model/`, `metadata.json`, and `feature_schema.json`
 - The `latest/` symlink in each type directory points to the current production version
 
 ## Status

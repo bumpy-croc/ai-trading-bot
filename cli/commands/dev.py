@@ -565,7 +565,7 @@ def _quality(ns: argparse.Namespace) -> int:
 
             if result.returncode == 0:
                 print(f"✅ {tool['name']} passed")
-                results[tool['name']] = True
+                results[tool["name"]] = True
             else:
                 print(f"❌ {tool['name']} failed")
                 # Show stdout and stderr (black/ruff emit diagnostics on stdout)
@@ -575,14 +575,14 @@ def _quality(ns: argparse.Namespace) -> int:
                 if result.stderr:
                     print(f"\n{tool['name']} errors:")
                     print(result.stderr)
-                results[tool['name']] = False
+                results[tool["name"]] = False
 
         except FileNotFoundError:
             print(f"⚠️ {tool['name']} not found - skipping")
-            results[tool['name']] = None
+            results[tool["name"]] = None
         except Exception as e:
             print(f"❌ {tool['name']} failed with exception: {e}")
-            results[tool['name']] = False
+            results[tool["name"]] = False
 
     # Print summary
     print("\n" + "=" * 60)

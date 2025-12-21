@@ -6,14 +6,13 @@ feature extraction from multiple extractors with caching and error handling.
 """
 
 import time
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from src.config.constants import DEFAULT_FEATURE_CACHE_TTL
 from src.prediction.utils.caching import FeatureCache
-
 from src.tech.features.base import FeatureExtractor
 from src.tech.features.technical import TechnicalFeatureExtractor
 
@@ -39,7 +38,7 @@ class FeaturePipeline:
         config: dict,
         use_cache: bool = True,
         cache_ttl: int = DEFAULT_FEATURE_CACHE_TTL,
-        custom_extractors: Optional[list[FeatureExtractor]] = None,
+        custom_extractors: list[FeatureExtractor] | None = None,
     ):
         """
         Initialize feature pipeline.
@@ -67,7 +66,7 @@ class FeaturePipeline:
             "total_time": 0.0,
         }
 
-    def _initialize_extractors(self, custom_extractors: Optional[list[FeatureExtractor]] = None):
+    def _initialize_extractors(self, custom_extractors: list[FeatureExtractor] | None = None):
         """Initialize feature extractors based on configuration."""
         # Add technical feature extractor (MVP)
         if self.config.get("technical_features", {}).get("enabled", True):
@@ -98,7 +97,7 @@ class FeaturePipeline:
             for extractor in custom_extractors:
                 self.extractors[extractor.__class__.__name__] = extractor
 
-    def transform(self, data: pd.DataFrame, use_cache: Optional[bool] = None) -> pd.DataFrame:
+    def transform(self, data: pd.DataFrame, use_cache: bool | None = None) -> pd.DataFrame:
         """
         Transform raw OHLCV data into ML-ready features.
 
@@ -299,7 +298,7 @@ class FeaturePipeline:
         if self.cache:
             self.cache.clear()
 
-    def get_cache_stats(self) -> Optional[dict[str, Any]]:
+    def get_cache_stats(self) -> dict[str, Any] | None:
         """
         Get cache statistics.
 

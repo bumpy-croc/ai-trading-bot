@@ -7,11 +7,8 @@ regime-aware threshold adjustments and confidence calculations.
 """
 
 import logging
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import numpy as np
-import onnxruntime as ort
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -20,7 +17,6 @@ from src.config.config_manager import get_config
 from src.prediction import PredictionConfig, PredictionEngine
 from src.prediction.features.pipeline import FeaturePipeline
 from src.prediction.features.price_only import PriceOnlyFeatureExtractor
-from src.tech.features.technical import TechnicalFeatureExtractor
 from src.regime.detector import TrendLabel, VolLabel
 from src.strategies.components.regime_context import RegimeContext
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
@@ -56,7 +52,7 @@ class MLSignalGenerator(SignalGenerator):
         self,
         name: str = "ml_signal_generator",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
     ):
         """
         Initialize ML Signal Generator
@@ -138,7 +134,7 @@ class MLSignalGenerator(SignalGenerator):
             self.prediction_engine = None
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """
         Generate trading signal based on ML prediction
@@ -247,7 +243,7 @@ class MLSignalGenerator(SignalGenerator):
 
         return self._calculate_confidence(predicted_return)
 
-    def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> Optional[float]:
+    def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> float | None:
         """
         Get ML prediction for the given index
 
@@ -259,20 +255,8 @@ class MLSignalGenerator(SignalGenerator):
             Predicted price or None if prediction fails
         """
         try:
-            # Prepare input features
-            price_features = ["close", "volume", "high", "low", "open"]
-            feature_columns = [f"{feature}_normalized" for feature in price_features]
-
-            # Check if features exist
-            missing_features = [col for col in feature_columns if col not in df.columns]
-            if missing_features:
-                # Apply feature pipeline if features are missing
-                df_processed = self.feature_pipeline.transform(df.copy())
-                input_data = (
-                    df_processed[feature_columns].iloc[index - self.sequence_length : index].values
-                )
-            else:
-                input_data = df[feature_columns].iloc[index - self.sequence_length : index].values
+            # Feature pipeline transformation currently not used
+            # (prediction engine handles raw price data directly)
 
             # Get prediction from prediction engine
             if self.prediction_engine is None:
@@ -293,7 +277,7 @@ class MLSignalGenerator(SignalGenerator):
             return None
 
     def _should_generate_short_signal(
-        self, predicted_return: float, regime: Optional[RegimeContext]
+        self, predicted_return: float, regime: RegimeContext | None
     ) -> bool:
         """
         Determine if a short signal should be generated based on predicted return and regime
@@ -400,9 +384,9 @@ class MLBasicSignalGenerator(SignalGenerator):
         self,
         name: str = "ml_basic_signal_generator",
         sequence_length: int = 120,
-        model_name: Optional[str] = None,
-        model_type: Optional[str] = None,
-        timeframe: Optional[str] = None,
+        model_name: str | None = None,
+        model_type: str | None = None,
+        timeframe: str | None = None,
     ):
         """
         Initialize ML Basic Signal Generator
@@ -497,7 +481,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             self.prediction_engine = None
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         """
         Generate trading signal based on ML prediction (basic, no regime awareness)
@@ -602,7 +586,7 @@ class MLBasicSignalGenerator(SignalGenerator):
 
         return self._calculate_confidence(predicted_return)
 
-    def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> Optional[float]:
+    def _get_ml_prediction(self, df: pd.DataFrame, index: int) -> float | None:
         """
         Get ML prediction for the given index using prediction engine
 

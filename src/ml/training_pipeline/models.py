@@ -42,8 +42,8 @@ except ImportError:
     LayerNormalization = None  # type: ignore
 
 if TYPE_CHECKING:
-    from tensorflow.keras.models import Model as ModelType
     from tensorflow.keras import callbacks as CallbacksType
+    from tensorflow.keras.models import Model as ModelType
 else:
     ModelType = Any  # type: ignore
     CallbacksType = Any  # type: ignore

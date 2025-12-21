@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -87,8 +87,8 @@ class MetricComparison:
     relative_difference: float
     tolerance: float
     result: ValidationResult
-    p_value: Optional[float] = None
-    confidence_interval: Optional[Tuple[float, float]] = None
+    p_value: float | None = None
+    confidence_interval: tuple[float, float] | None = None
     notes: str = ""
 
 
@@ -105,12 +105,12 @@ class PerformanceComparisonReport:
     overall_result: ValidationResult
 
     # Individual metric comparisons
-    metric_comparisons: List[MetricComparison] = field(default_factory=list)
+    metric_comparisons: list[MetricComparison] = field(default_factory=list)
 
     # Statistical tests
     equity_curve_correlation: float = 0.0
-    kolmogorov_smirnov_test: Optional[Tuple[float, float]] = None
-    mann_whitney_test: Optional[Tuple[float, float]] = None
+    kolmogorov_smirnov_test: tuple[float, float] | None = None
+    mann_whitney_test: tuple[float, float] | None = None
 
     # Trade-level analysis
     trade_count_legacy: int = 0
@@ -125,11 +125,11 @@ class PerformanceComparisonReport:
 
     # Certification
     certified: bool = False
-    certification_timestamp: Optional[datetime] = None
+    certification_timestamp: datetime | None = None
     certification_notes: str = ""
 
     # Detailed analysis
-    detailed_analysis: Dict[str, Any] = field(default_factory=dict)
+    detailed_analysis: dict[str, Any] = field(default_factory=dict)
 
 
 class PerformanceParityValidator:
@@ -141,7 +141,7 @@ class PerformanceParityValidator:
     equivalence within acceptable tolerances.
     """
 
-    def __init__(self, tolerance_config: Optional[ToleranceConfig] = None):
+    def __init__(self, tolerance_config: ToleranceConfig | None = None):
         """
         Initialize the performance parity validator.
 
@@ -632,7 +632,7 @@ class PerformanceParityValidator:
 
     def _calculate_temporal_overlap(
         self, legacy_results: pd.DataFrame, new_results: pd.DataFrame
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Calculate temporal overlap statistics."""
 
         legacy_start = legacy_results["timestamp"].min()
@@ -659,7 +659,7 @@ class PerformanceParityValidator:
 
         lines = [
             "=" * 80,
-            f"PERFORMANCE PARITY VALIDATION REPORT",
+            "PERFORMANCE PARITY VALIDATION REPORT",
             "=" * 80,
             f"Strategy: {report.strategy_name}",
             f"Comparison Period: {report.comparison_period}",

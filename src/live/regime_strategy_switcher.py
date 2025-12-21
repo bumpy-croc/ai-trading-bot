@@ -6,9 +6,10 @@ based on detected market regimes for optimal performance.
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -75,9 +76,9 @@ class RegimeStrategySwitcher:
     def __init__(
         self,
         strategy_manager: StrategyManager,
-        regime_config: Optional[RegimeConfig] = None,
-        strategy_mapping: Optional[RegimeStrategyMapping] = None,
-        switching_config: Optional[SwitchingConfig] = None,
+        regime_config: RegimeConfig | None = None,
+        strategy_mapping: RegimeStrategyMapping | None = None,
+        switching_config: SwitchingConfig | None = None,
     ):
         self.strategy_manager = strategy_manager
         self.regime_detector = RegimeDetector(regime_config or RegimeConfig())
@@ -89,11 +90,11 @@ class RegimeStrategySwitcher:
             self.switching_config.timeframes = ["1h", "4h", "1d"]
 
         # State tracking
-        self.current_regime: Optional[str] = None
+        self.current_regime: str | None = None
         self.regime_confidence: float = 0.0
-        self.regime_start_time: Optional[datetime] = None
-        self.regime_start_candle_index: Optional[int] = None
-        self.last_switch_time: Optional[datetime] = None
+        self.regime_start_time: datetime | None = None
+        self.regime_start_candle_index: int | None = None
+        self.last_switch_time: datetime | None = None
         self.regime_duration: int = 0
 
         # Multi-timeframe regime detectors
@@ -109,8 +110,8 @@ class RegimeStrategySwitcher:
         self.regime_history: list = []
 
         # Callbacks
-        self.on_regime_change: Optional[Callable] = None
-        self.on_strategy_switch: Optional[Callable] = None
+        self.on_regime_change: Callable | None = None
+        self.on_strategy_switch: Callable | None = None
 
         logger.info("RegimeStrategySwitcher initialized")
 
@@ -237,7 +238,7 @@ class RegimeStrategySwitcher:
         }
 
     def should_switch_strategy(
-        self, regime_analysis: dict[str, Any], current_candle_index: Optional[int] = None
+        self, regime_analysis: dict[str, Any], current_candle_index: int | None = None
     ) -> dict[str, Any]:
         """Determine if strategy should be switched based on regime analysis
 
