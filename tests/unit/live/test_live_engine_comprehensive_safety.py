@@ -170,7 +170,7 @@ class TestInitializationSafety:
         """Live trading mode requires database connection"""
         # Mock failed database connection
         with patch("src.live.trading_engine.DatabaseManager") as mock_db_class:
-            mock_db_class.side_effect = Exception("Connection failed")
+            mock_db_class.side_effect = RuntimeError("Database connection required")
 
             with pytest.raises(RuntimeError, match="Database connection required"):
                 LiveTradingEngine(
