@@ -1,6 +1,6 @@
 # Configuration
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-12-21  
 > **Related Documentation**: [Development workflow](development.md), [Database](database.md)
 
 The configuration system centralises access to environment settings so that every service (CLI commands, backtesting, live
