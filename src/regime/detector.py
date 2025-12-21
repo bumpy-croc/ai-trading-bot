@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -41,9 +40,9 @@ class RegimeDetector:
     annotate(df) adds columns: 'trend_score', 'trend_label', 'vol_label', 'regime_label', 'regime_confidence'
     """
 
-    def __init__(self, config: Optional[RegimeConfig] = None):
+    def __init__(self, config: RegimeConfig | None = None):
         self.config = config or RegimeConfig()
-        self._last_label: Optional[str] = None
+        self._last_label: str | None = None
         self._consecutive: int = 0
         self._dwell: int = 0
 

@@ -5,7 +5,7 @@ This module provides configuration from environment variables.
 """
 
 import os
-from typing import Any, Optional
+from typing import Any
 
 from .base import ConfigProvider
 
@@ -16,7 +16,7 @@ class EnvVarProvider(ConfigProvider):
     def __init__(self):
         self._prefix = ""  # Optional prefix for env vars
 
-    def get(self, key: str, default: Optional[Any] = None) -> Optional[str]:
+    def get(self, key: str, default: Any | None = None) -> str | None:
         """Get configuration value from environment variables."""
         return os.getenv(key, default)
 

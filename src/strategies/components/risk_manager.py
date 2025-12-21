@@ -7,9 +7,10 @@ strategy architecture.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
@@ -104,10 +105,10 @@ class MarketData:
     symbol: str
     price: float
     volume: float
-    bid: Optional[float] = None
-    ask: Optional[float] = None
-    timestamp: Optional[datetime] = None
-    volatility: Optional[float] = None
+    bid: float | None = None
+    ask: float | None = None
+    timestamp: datetime | None = None
+    volatility: float | None = None
 
     def __post_init__(self):
         """Validate market data parameters after initialization"""
@@ -135,13 +136,13 @@ class MarketData:
                 f"volatility must be non-negative when provided, got {self.volatility}"
             )
 
-    def get_spread(self) -> Optional[float]:
+    def get_spread(self) -> float | None:
         """Get bid-ask spread if both bid and ask are available"""
         if self.bid is not None and self.ask is not None:
             return self.ask - self.bid
         return None
 
-    def get_spread_percentage(self) -> Optional[float]:
+    def get_spread_percentage(self) -> float | None:
         """Get bid-ask spread as percentage of mid price"""
         spread = self.get_spread()
         if spread is not None and self.bid is not None and self.ask is not None:
@@ -659,9 +660,7 @@ class RegimeAdaptiveRiskManager(RiskManager):
     with different risk profiles for different market conditions.
     """
 
-    def __init__(
-        self, base_risk: float = 0.02, regime_multipliers: Optional[dict[str, float]] = None
-    ):
+    def __init__(self, base_risk: float = 0.02, regime_multipliers: dict[str, float] | None = None):
         """
         Initialize regime-adaptive risk manager
 

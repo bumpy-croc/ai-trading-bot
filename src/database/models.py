@@ -4,6 +4,7 @@ Database models for trade logging and performance tracking
 
 import enum
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -43,7 +44,8 @@ class PortableJSON(TypeDecorator):
 
 JSONType = PortableJSON
 
-Base = declarative_base()
+# Type Base as Any to allow mypy to accept dynamic SQLAlchemy base class
+Base: Any = declarative_base()
 
 
 class PositionSide(enum.Enum):

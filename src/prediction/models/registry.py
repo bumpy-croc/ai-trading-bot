@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
@@ -33,9 +33,9 @@ class StrategyModel:
         model_type: str,
         version_id: str,
         directory: Path,
-        metadata: Optional[dict[str, Any]],
-        feature_schema: Optional[dict[str, Any]],
-        metrics: Optional[dict[str, Any]],
+        metadata: dict[str, Any] | None,
+        feature_schema: dict[str, Any] | None,
+        metrics: dict[str, Any] | None,
         runner: OnnxRunner,
     ) -> None:
         self.symbol = symbol
@@ -61,7 +61,7 @@ class PredictionModelRegistry:
     """Registry for model bundles and simple selection API."""
 
     def __init__(
-        self, config: PredictionConfig, cache_manager: Optional[PredictionCacheManager] = None
+        self, config: PredictionConfig, cache_manager: PredictionCacheManager | None = None
     ):
         """
         Initialize the prediction model registry.
@@ -152,7 +152,7 @@ class PredictionModelRegistry:
                 timeframe = parts[1]
 
         # Optional schema/metrics
-        def _load_json(p: Path) -> Optional[dict[str, Any]]:
+        def _load_json(p: Path) -> dict[str, Any] | None:
             if not p.exists():
                 return None
             import json
@@ -200,7 +200,7 @@ class PredictionModelRegistry:
         symbol: str,
         model_type: str,
         timeframe: str,
-        stage: Optional[str] = None,
+        stage: str | None = None,
     ) -> StrategyModel:
         """Select a bundle for symbol/model_type/timeframe.
 
@@ -255,7 +255,7 @@ class PredictionModelRegistry:
         self._production_index.clear()
         self._load()
 
-    def invalidate_cache(self, model_name: Optional[str] = None) -> int:
+    def invalidate_cache(self, model_name: str | None = None) -> int:
         """
         Invalidate cache entries for the provided model or all models.
 
@@ -296,7 +296,7 @@ class PredictionModelRegistry:
 
             # Runner path / filename also acts as an alias
             runner_path = getattr(bundle.runner, "model_path", None)
-            runner_name: Optional[str] = None
+            runner_name: str | None = None
             if runner_path:
                 runner_path_str = str(runner_path)
                 candidate_names.add(runner_path_str)

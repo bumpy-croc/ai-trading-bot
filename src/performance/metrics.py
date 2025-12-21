@@ -8,12 +8,11 @@ Any percentage outputs are marked in the docstrings.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Union
 
 import numpy as np
 import pandas as pd
 
-Number = Union[int, float]
+Number = int | float
 
 
 class Side(str, Enum):

@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from pathlib import Path
-from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -32,7 +30,7 @@ PROJECT_ROOT = get_project_root()
 MODEL_REGISTRY = PROJECT_ROOT / "src" / "ml" / "models"
 
 
-def _parse_dates(start: str, end: str) -> Tuple[datetime, datetime]:
+def _parse_dates(start: str, end: str) -> tuple[datetime, datetime]:
     try:
         start_dt = datetime.strptime(start, "%Y-%m-%d")
         end_dt = datetime.strptime(end, "%Y-%m-%d")
@@ -92,13 +90,12 @@ def train_model_main(args) -> int:
         print(f"❌ Training failed: {result.metadata.get('error')}")
         return 1
 
-    print("✅ Training complete in %.1fs" % result.duration_seconds)
+    print(f"✅ Training complete in {result.duration_seconds:.1f}s")
     eval_results = result.metadata.get("evaluation_results", {})
     if eval_results:
-        print(
-            "📊 Test RMSE: %.6f | MAPE: %.2f%%"
-            % (eval_results.get("test_rmse", 0.0), eval_results.get("mape", 0.0))
-        )
+        test_rmse = eval_results.get("test_rmse", 0.0)
+        mape = eval_results.get("mape", 0.0)
+        print(f"📊 Test RMSE: {test_rmse:.6f} | MAPE: {mape:.2f}%")
     artifacts = result.artifact_paths
     if artifacts:
         print(f"Keras model: {artifacts.keras_path}")
@@ -116,7 +113,7 @@ def train_model_main(args) -> int:
 def _prepare_price_only_sequences(
     df: pd.DataFrame,
     sequence_length: int,
-) -> Tuple[np.ndarray, np.ndarray, list[str]]:
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     extractor = PriceOnlyFeatureExtractor(normalization_window=sequence_length)
     enriched = extractor.extract(df.copy())
     feature_cols = [

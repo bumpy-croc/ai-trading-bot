@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -83,7 +83,7 @@ class FeatureCache:
             shape_arr = np.asarray(data.shape, dtype=np.int64)
             hasher.update(shape_arr.tobytes())
             # Columns and dtypes (order matters)
-            for col, dtype in zip(data.columns, data.dtypes):
+            for col, dtype in zip(data.columns, data.dtypes, strict=True):
                 hasher.update(str(col).encode("utf-8", "ignore"))
                 hasher.update(str(dtype).encode("utf-8", "ignore"))
             # Sample first and last few rows
@@ -162,7 +162,7 @@ class FeatureCache:
 
     def _find_by_quick_hash(
         self, data: pd.DataFrame, extractor_name: str, config: dict[str, Any]
-    ) -> Optional[tuple[str, CacheEntry]]:
+    ) -> tuple[str, CacheEntry] | None:
         """
         Find cache entry using quick hash first, then verify with full hash.
 
@@ -195,7 +195,7 @@ class FeatureCache:
 
     def get(
         self, data: pd.DataFrame, extractor_name: str, config: dict[str, Any], copy: bool = True
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """
         Get cached feature extraction result using two-tier hashing.
 
@@ -232,7 +232,7 @@ class FeatureCache:
         extractor_name: str,
         config: dict[str, Any],
         result: pd.DataFrame,
-        ttl: Optional[int] = None,
+        ttl: int | None = None,
     ) -> None:
         """
         Cache feature extraction result using two-tier hashing.
@@ -354,7 +354,7 @@ class FeatureCache:
 
 
 # Global feature cache instance
-_global_feature_cache: Optional[FeatureCache] = None
+_global_feature_cache: FeatureCache | None = None
 
 
 class PredictionCacheManager:
@@ -438,7 +438,7 @@ class PredictionCacheManager:
         config_hash = self._generate_config_hash(model_name, config)
         return f"{features_hash}_{config_hash}"
 
-    def get(self, features: np.ndarray, model_name: str, config: dict) -> Optional[dict]:
+    def get(self, features: np.ndarray, model_name: str, config: dict) -> dict | None:
         """
         Get cached prediction result.
 
@@ -755,7 +755,7 @@ class ModelCache:
         self.cache: dict[str, tuple[Any, float]] = {}
         self.ttl = ttl
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Get cached value if not expired"""
         if key in self.cache:
             value, timestamp = self.cache[key]

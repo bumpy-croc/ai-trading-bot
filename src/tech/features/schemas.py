@@ -6,7 +6,6 @@ This module defines the schema for features and feature extractors.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class FeatureType(Enum):
@@ -40,10 +39,10 @@ class FeatureDefinition:
     description: str
     normalization: NormalizationMethod = NormalizationMethod.NONE
     required: bool = True
-    default_value: Optional[float] = None
-    min_value: Optional[float] = None
-    max_value: Optional[float] = None
-    dependencies: Optional[list[str]] = None
+    default_value: float | None = None
+    min_value: float | None = None
+    max_value: float | None = None
+    dependencies: list[str] | None = None
 
     def __post_init__(self):
         if self.dependencies is None:

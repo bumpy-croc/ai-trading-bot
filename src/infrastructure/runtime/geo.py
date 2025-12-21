@@ -3,17 +3,16 @@ Geo-location detection utilities for determining the appropriate Binance API end
 """
 
 import logging
-from typing import Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 # Cache for geo-location to avoid repeated API calls
-_geo_cache: Optional[tuple[str, str]] = None
+_geo_cache: tuple[str, str] | None = None
 
 
-def get_country_code() -> Optional[str]:
+def get_country_code() -> str | None:
     """
     Get the current country code using IP geolocation.
 

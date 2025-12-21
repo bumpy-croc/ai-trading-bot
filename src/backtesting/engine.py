@@ -40,6 +40,8 @@ from src.data_providers.data_provider import DataProvider
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
+from src.infrastructure.logging.context import set_context, update_context
+from src.infrastructure.logging.events import log_engine_event
 from src.performance.metrics import cash_pnl
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
@@ -63,8 +65,6 @@ from src.strategies.components import (
 from src.strategies.components import (
     Strategy as ComponentStrategy,
 )
-from src.infrastructure.logging.context import set_context, update_context
-from src.infrastructure.logging.events import log_engine_event
 
 logger = logging.getLogger(__name__)
 
@@ -571,7 +571,10 @@ class Backtester:
         try:
             partial_descriptor = getattr(bundle, "partial_exit", None)
             if partial_descriptor is not None:
-                if getattr(self, "_partial_operations_opt_in", False) or self.partial_manager is not None:
+                if (
+                    getattr(self, "_partial_operations_opt_in", False)
+                    or self.partial_manager is not None
+                ):
                     self.partial_manager = partial_descriptor.to_policy()
                     self._partial_operations_opt_in = True
                 else:
@@ -584,7 +587,10 @@ class Backtester:
         try:
             trailing_descriptor = getattr(bundle, "trailing_stop", None)
             if trailing_descriptor is not None:
-                if getattr(self, "_trailing_stop_opt_in", False) or self.trailing_stop_policy is not None:
+                if (
+                    getattr(self, "_trailing_stop_opt_in", False)
+                    or self.trailing_stop_policy is not None
+                ):
                     self.trailing_stop_policy = trailing_descriptor.to_policy()
                     self._trailing_stop_opt_in = True
                 else:
@@ -605,7 +611,9 @@ class Backtester:
                 manager = getattr(self, "dynamic_risk_manager", None)
                 needs_new_manager = manager is None or getattr(manager, "config", None) != config
                 if needs_new_manager:
-                    self.dynamic_risk_manager = DynamicRiskManager(config=config, db_manager=self.db_manager)
+                    self.dynamic_risk_manager = DynamicRiskManager(
+                        config=config, db_manager=self.db_manager
+                    )
                 else:
                     try:
                         self.dynamic_risk_manager.config = config

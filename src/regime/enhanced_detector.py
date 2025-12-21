@@ -343,9 +343,7 @@ class EnhancedRegimeDetector:
             stats[f"{label}_pct"] = (count / total_periods) * 100
 
         transitions = self.detect_regime_transitions(df, lookback_periods)
-        stats["transition_frequency"] = (
-            len(transitions) / total_periods if total_periods > 0 else 0
-        )
+        stats["transition_frequency"] = len(transitions) / total_periods if total_periods > 0 else 0
 
         return stats
 
@@ -382,9 +380,7 @@ class EnhancedRegimeDetector:
                 break
         return duration
 
-    def _calculate_regime_strength(
-        self, df: pd.DataFrame, index: int, window: int = 20
-    ) -> float:
+    def _calculate_regime_strength(self, df: pd.DataFrame, index: int, window: int = 20) -> float:
         if index < window:
             return 0.5
 
@@ -470,19 +466,25 @@ def evaluate_regime_accuracy(
     evaluation["target_trend"] = annotated_df[target_trend_col]
     evaluation["target_volatility"] = annotated_df[target_vol_col]
 
-    mask = evaluation[["predicted_trend", "predicted_volatility", "target_trend", "target_volatility"]].notna().all(axis=1)
+    mask = (
+        evaluation[["predicted_trend", "predicted_volatility", "target_trend", "target_volatility"]]
+        .notna()
+        .all(axis=1)
+    )
 
-    evaluation["trend_correct"] = (evaluation["predicted_trend"] == evaluation["target_trend"]).where(mask)
+    evaluation["trend_correct"] = (
+        evaluation["predicted_trend"] == evaluation["target_trend"]
+    ).where(mask)
     evaluation["volatility_correct"] = (
         evaluation["predicted_volatility"] == evaluation["target_volatility"]
     ).where(mask)
-    evaluation["regime_correct"] = (
-        evaluation["trend_correct"] & evaluation["volatility_correct"]
-    )
+    evaluation["regime_correct"] = evaluation["trend_correct"] & evaluation["volatility_correct"]
 
     support = int(mask.sum())
     if support == 0:
-        metrics = RegimeEvaluationMetrics(accuracy=np.nan, trend_accuracy=np.nan, volatility_accuracy=np.nan, support=0)
+        metrics = RegimeEvaluationMetrics(
+            accuracy=np.nan, trend_accuracy=np.nan, volatility_accuracy=np.nan, support=0
+        )
         return metrics, evaluation
 
     trend_accuracy = float(evaluation.loc[mask, "trend_correct"].mean())

@@ -6,8 +6,9 @@ automatic strategy switching components together in a complete system.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -29,10 +30,10 @@ class PerformanceMonitoringSystem:
 
     def __init__(
         self,
-        performance_config: Optional[PerformanceDegradationConfig] = None,
-        selection_config: Optional[SelectionConfig] = None,
-        switch_config: Optional[SwitchConfig] = None,
-        emergency_config: Optional[EmergencyConfig] = None,
+        performance_config: PerformanceDegradationConfig | None = None,
+        selection_config: SelectionConfig | None = None,
+        switch_config: SwitchConfig | None = None,
+        emergency_config: EmergencyConfig | None = None,
     ):
         """
         Initialize the performance monitoring system
@@ -54,9 +55,9 @@ class PerformanceMonitoringSystem:
         self.emergency_controls = EmergencyControls(self.strategy_switcher, emergency_config)
 
         # System state
-        self.current_strategy_id: Optional[str] = None
+        self.current_strategy_id: str | None = None
         self.available_strategies: dict[str, PerformanceTracker] = {}
-        self.strategy_activation_callback: Optional[Callable[[str], bool]] = None
+        self.strategy_activation_callback: Callable[[str], bool] | None = None
 
         # Monitoring state
         self.last_monitoring_update = datetime.now()
@@ -107,7 +108,7 @@ class PerformanceMonitoringSystem:
         self.strategy_activation_callback = callback
 
     def update_monitoring(
-        self, market_data: pd.DataFrame, current_regime: Optional[RegimeContext] = None
+        self, market_data: pd.DataFrame, current_regime: RegimeContext | None = None
     ) -> dict[str, Any]:
         """
         Update all monitoring components and check for necessary actions
@@ -250,7 +251,7 @@ class PerformanceMonitoringSystem:
         )
 
     def approve_request(
-        self, request_id: str, approved_by: str, rejection_reason: Optional[str] = None
+        self, request_id: str, approved_by: str, rejection_reason: str | None = None
     ) -> bool:
         """
         Approve or reject a pending request
@@ -292,7 +293,7 @@ class PerformanceMonitoringSystem:
         return self.emergency_controls.deactivate_emergency_stop(reason, deactivated_by)
 
     def set_manual_override(
-        self, active: bool, duration_hours: Optional[int] = None, reason: Optional[str] = None
+        self, active: bool, duration_hours: int | None = None, reason: str | None = None
     ) -> None:
         """
         Set manual override for automatic switching
@@ -329,7 +330,7 @@ class PerformanceMonitoringSystem:
         """
         return self.emergency_controls.resolve_alert(alert_id)
 
-    def get_strategy_rankings(self, current_regime: Optional[RegimeContext] = None) -> list:
+    def get_strategy_rankings(self, current_regime: RegimeContext | None = None) -> list:
         """
         Get current strategy rankings
 
@@ -385,7 +386,7 @@ class PerformanceMonitoringSystem:
         self.emergency_controls.add_approval_callback(callback)
 
     def add_switch_callback(
-        self, pre_switch: Optional[Callable] = None, post_switch: Optional[Callable] = None
+        self, pre_switch: Callable | None = None, post_switch: Callable | None = None
     ) -> None:
         """Add callbacks for strategy switches"""
         if pre_switch:

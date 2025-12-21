@@ -6,9 +6,10 @@ for generating trading signals in the component-based strategy architecture.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional
 
 import pandas as pd
 
@@ -205,7 +206,7 @@ class RandomSignalGenerator(SignalGenerator):
     Generates random signals with configurable probabilities
     """
 
-    def __init__(self, buy_prob: float = 0.3, sell_prob: float = 0.3, seed: Optional[int] = None):
+    def __init__(self, buy_prob: float = 0.3, sell_prob: float = 0.3, seed: int | None = None):
         """
         Initialize random signal generator
 
