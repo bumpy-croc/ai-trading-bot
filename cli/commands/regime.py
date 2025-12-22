@@ -277,11 +277,12 @@ def _handle_assess(ns: argparse.Namespace) -> int:
                     trend_labels.append(regime_ctx.trend.value)
                     vol_labels.append(regime_ctx.volatility.value)
                     confidences.append(regime_ctx.confidence)
-                except (IndexError, ValueError):
-                    # Fallback for edge cases
-                    trend_labels.append(df_for_enhanced.iloc[i]["trend_label"])
-                    vol_labels.append(df_for_enhanced.iloc[i]["vol_label"])
-                    confidences.append(df_for_enhanced.iloc[i].get("regime_confidence", 0.5))
+                except (IndexError, ValueError, KeyError):
+                    # Fallback for edge cases - use base detector values
+                    row = df_for_enhanced.iloc[i]
+                    trend_labels.append(str(row.get("trend_label", "range")))
+                    vol_labels.append(str(row.get("vol_label", "low_vol")))
+                    confidences.append(float(row.get("regime_confidence", 0.5)))
 
             df_enhanced = df_for_enhanced.copy()
             df_enhanced["trend_label"] = trend_labels
@@ -346,6 +347,7 @@ def _handle_assess(ns: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001
         LOGGER.exception("Assessment failed")
         print(f"❌ Assessment failed: {exc}")
+        plt.close("all")  # Clean up any open figures
         return 1
 
 

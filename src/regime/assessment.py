@@ -548,7 +548,7 @@ class RegimeAssessment:
             output_path: Path to output JSON file
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(self.metrics.to_dict(), f, indent=2)
         logger.info("Metrics saved to %s", output_path)
 
