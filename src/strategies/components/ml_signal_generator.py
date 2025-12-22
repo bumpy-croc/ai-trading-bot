@@ -673,7 +673,8 @@ class MLBasicSignalGenerator(SignalGenerator):
             'index': index,
             'model_path': self.model_path,
             'sequence_length': self.sequence_length,
-            'short_threshold': self.SHORT_ENTRY_THRESHOLD
+            'short_threshold': self.SHORT_ENTRY_THRESHOLD,
+            'enter_short': direction == SignalDirection.SELL,
         }
         
         # Add prediction engine metadata
