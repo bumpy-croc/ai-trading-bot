@@ -82,6 +82,8 @@ The control surface lives under `atb live-control`:
 ## Programmatic usage
 
 ```python
+import os
+
 from src.live.trading_engine import LiveTradingEngine
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
@@ -93,8 +95,9 @@ engine = LiveTradingEngine(
     check_interval=60,
     max_position_size=0.1,
     enable_live_trading=False,  # keep paper trading unless explicitly enabled
+    database_url=os.environ["DATABASE_URL"],  # LiveTradingEngine requires PostgreSQL
 )
-engine.start("BTCUSDT", "1h")
+# engine.start("BTCUSDT", "1h")  # blocking loop (prefer running via `atb live` / `atb live-health`)
 ```
 
 In production deployments wrap the engine in a supervisor (systemd, Docker, Kubernetes) so that `SIGTERM` triggers the graceful
