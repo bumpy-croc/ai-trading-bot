@@ -104,10 +104,14 @@ atb data populate-dummy --trades 100 --confirm
 7) Tests
 
 ```bash
-# Run test suite
+# Run test suite (recommended)
 atb test unit                # Unit tests only
 atb test integration         # Integration tests
 atb test all                 # All tests
+
+# Alternative: use test runner directly for parallelism control
+python tests/run_tests.py unit          # Unit tests with parallelism
+python tests/run_tests.py integration   # Integration tests (sequential)
 
 # Or use pytest directly
 pytest -q
