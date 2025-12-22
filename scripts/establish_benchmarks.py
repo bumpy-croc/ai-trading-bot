@@ -52,6 +52,8 @@ def run_benchmark(
     print(f"{'='*70}")
 
     # Create strategy and data provider
+    # IMPORTANT: Uses default position_fraction=1.0 (100% invested)
+    # This is TRUE buy-and-hold - fully invested, not a hybrid portfolio
     strategy = create_buy_and_hold_strategy()
     provider = BinanceProvider()
     cached_provider = CachedDataProvider(provider, cache_ttl_hours=24)

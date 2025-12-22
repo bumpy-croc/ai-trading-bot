@@ -109,7 +109,7 @@ class BuyAndHoldSignalGenerator(SignalGenerator):
 
 def create_buy_and_hold_strategy(
     name: str = "BuyAndHold",
-    position_fraction: float = 0.5,  # 50% (max allowed by position sizer)
+    position_fraction: float = 1.0,  # 100% (TRUE buy-and-hold - fully invested)
 ) -> Strategy:
     """
     Create a buy-and-hold strategy for benchmarking
@@ -121,6 +121,9 @@ def create_buy_and_hold_strategy(
     Args:
         name: Strategy name for identification
         position_fraction: Fraction of capital to invest (default: 1.0 = 100%)
+            IMPORTANT: Should always be 1.0 for true buy-and-hold benchmark.
+            Any value < 1.0 creates a hybrid cash/investment portfolio that
+            artificially reduces returns and makes the baseline easier to beat.
 
     Returns:
         Configured Strategy instance that buys and holds

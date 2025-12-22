@@ -145,8 +145,8 @@ class FixedFractionSizer(PositionSizer):
         """
         super().__init__("fixed_fraction_sizer")
 
-        if not 0.001 <= fraction <= 0.5:  # 0.1% to 50%
-            raise ValueError(f"fraction must be between 0.001 and 0.5, got {fraction}")
+        if not 0.001 <= fraction <= 1.0:  # 0.1% to 100%
+            raise ValueError(f"fraction must be between 0.001 and 1.0, got {fraction}")
 
         self.fraction = fraction
         self.adjust_for_confidence = adjust_for_confidence
@@ -253,8 +253,8 @@ class ConfidenceWeightedSizer(PositionSizer):
         """
         super().__init__("confidence_weighted_sizer")
 
-        if not 0.001 <= base_fraction <= 0.5:
-            raise ValueError(f"base_fraction must be between 0.001 and 0.5, got {base_fraction}")
+        if not 0.001 <= base_fraction <= 1.0:
+            raise ValueError(f"base_fraction must be between 0.001 and 1.0, got {base_fraction}")
 
         if not 0.0 <= min_confidence <= 1.0:
             raise ValueError(f"min_confidence must be between 0.0 and 1.0, got {min_confidence}")
