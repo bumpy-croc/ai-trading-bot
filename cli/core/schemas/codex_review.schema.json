@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CodexReviewResult",
+  "type": "object",
+  "required": ["summary", "findings"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "High-level verdict on the review iteration."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Actionable issues discovered during review.",
+      "items": {
+        "type": "object",
+        "required": ["description", "recommendation", "severity", "file", "line", "category"],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Problem statement in plain language."
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "Suggested fix or mitigation."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "major", "minor", "nit", "info"],
+            "description": "Relative impact of the finding."
+          },
+          "file": {
+            "type": ["string", "null"],
+            "description": "Repository-relative file path for the issue. Use null for repo-wide findings."
+          },
+          "line": {
+            "type": ["integer", "string", "null"],
+            "description": "Line number or identifier within the file."
+          },
+          "category": {
+            "type": ["string", "null"],
+            "description": "Optional category label (e.g. testing, security)."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

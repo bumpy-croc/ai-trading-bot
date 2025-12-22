@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.indicators import technical
+from src.tech.indicators import core as technical
 
 
 def test_calculate_atr_adds_column():

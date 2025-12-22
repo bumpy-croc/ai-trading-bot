@@ -5,7 +5,6 @@ Tests the Phase 2 methods: create_order, update_order_status_new,
 get_orders_for_position, get_pending_orders_new.
 """
 
-
 import pytest
 
 from src.database.manager import DatabaseManager
@@ -41,7 +40,7 @@ class TestOrderManagementMethods:
             size=0.02,
             strategy_name="test_strategy",
             entry_order_id=unique_id,
-            session_id=session_id
+            session_id=session_id,
         )
 
         return {"position_id": position_id, "session_id": session_id}
@@ -56,9 +55,9 @@ class TestOrderManagementMethods:
             quantity=0.001,
             strategy_name="test_strategy",
             session_id=test_position["session_id"],
-            price=50000.0
+            price=50000.0,
         )
-        
+
         assert order_id is not None
         assert isinstance(order_id, int)
         assert order_id > 0
@@ -74,11 +73,11 @@ class TestOrderManagementMethods:
             strategy_name="test_strategy",
             session_id=test_position["session_id"],
             target_level=1,
-            size_fraction=0.5
+            size_fraction=0.5,
         )
-        
+
         assert order_id is not None
-        
+
         # * Verify the order was created correctly
         orders = db_manager.get_orders_for_position(test_position["position_id"])
         created_order = next(o for o in orders if o["id"] == order_id)
@@ -96,12 +95,12 @@ class TestOrderManagementMethods:
             side=PositionSide.LONG,
             quantity=0.0005,
             strategy_name="test_strategy",
-            session_id=test_position["session_id"]
+            session_id=test_position["session_id"],
         )
-        
+
         orders = db_manager.get_orders_for_position(test_position["position_id"])
         created_order = next(o for o in orders if o["id"] == order_id)
-        
+
         # * Should have generated internal order ID
         assert created_order["internal_order_id"] is not None
         assert "scale_in" in created_order["internal_order_id"]
@@ -117,9 +116,9 @@ class TestOrderManagementMethods:
             side=PositionSide.LONG,
             quantity=0.001,
             strategy_name="test_strategy",
-            session_id=test_position["session_id"]
+            session_id=test_position["session_id"],
         )
-        
+
         # * Update to filled with execution details
         success = db_manager.update_order_status_new(
             order_id=order_id,
@@ -127,15 +126,15 @@ class TestOrderManagementMethods:
             filled_quantity=0.001,
             filled_price=50100.0,
             exchange_order_id="binance_67890",
-            commission=0.5
+            commission=0.5,
         )
-        
+
         assert success is True
-        
+
         # * Verify the update
         orders = db_manager.get_orders_for_position(test_position["position_id"])
         updated_order = next(o for o in orders if o["id"] == order_id)
-        
+
         assert updated_order["status"] == "FILLED"
         assert updated_order["filled_quantity"] == 0.001
         assert updated_order["filled_price"] == 50100.0
@@ -153,21 +152,20 @@ class TestOrderManagementMethods:
             side=PositionSide.SHORT,
             quantity=0.0005,
             strategy_name="test_strategy",
-            session_id=test_position["session_id"]
+            session_id=test_position["session_id"],
         )
-        
+
         # * Cancel the order
         success = db_manager.update_order_status_new(
-            order_id=order_id,
-            status="CANCELLED"  # Test string enum conversion
+            order_id=order_id, status="CANCELLED"  # Test string enum conversion
         )
-        
+
         assert success is True
-        
+
         # * Verify cancellation
         orders = db_manager.get_orders_for_position(test_position["position_id"])
         cancelled_order = next(o for o in orders if o["id"] == order_id)
-        
+
         assert cancelled_order["status"] == "CANCELLED"
         assert cancelled_order["cancelled_at"] is not None
 
@@ -181,7 +179,7 @@ class TestOrderManagementMethods:
             side=PositionSide.LONG,
             quantity=0.001,
             strategy_name="test_strategy",
-            session_id=test_position["session_id"]
+            session_id=test_position["session_id"],
         )
 
         db_manager.create_order(
@@ -192,7 +190,7 @@ class TestOrderManagementMethods:
             quantity=0.0005,
             strategy_name="test_strategy",
             session_id=test_position["session_id"],
-            target_level=1
+            target_level=1,
         )
 
         # * Retrieve all orders
@@ -219,9 +217,9 @@ class TestOrderManagementMethods:
             side=PositionSide.LONG,
             quantity=0.001,
             strategy_name="test_strategy",
-            session_id=test_position["session_id"]
+            session_id=test_position["session_id"],
         )
-        
+
         filled_order = db_manager.create_order(
             position_id=test_position["position_id"],
             order_type=OrderType.PARTIAL_EXIT,
@@ -229,15 +227,15 @@ class TestOrderManagementMethods:
             side=PositionSide.SHORT,
             quantity=0.0005,
             strategy_name="test_strategy",
-            session_id=test_position["session_id"]
+            session_id=test_position["session_id"],
         )
-        
+
         # * Update one to filled
         db_manager.update_order_status_new(filled_order, OrderStatus.FILLED)
-        
+
         # * Get pending orders
         pending_orders = db_manager.get_pending_orders_new(test_position["session_id"])
-        
+
         # * Should only return the pending order
         assert len(pending_orders) == 1
         assert pending_orders[0]["id"] == pending_order
@@ -246,10 +244,9 @@ class TestOrderManagementMethods:
     def test_update_nonexistent_order(self, db_manager):
         """Test updating a non-existent order."""
         success = db_manager.update_order_status_new(
-            order_id=99999,  # Non-existent ID
-            status=OrderStatus.FILLED
+            order_id=99999, status=OrderStatus.FILLED  # Non-existent ID
         )
-        
+
         assert success is False
 
     def test_order_creation_duplicate_internal_id_handling(self, db_manager, test_position):
@@ -265,7 +262,7 @@ class TestOrderManagementMethods:
             quantity=0.001,
             strategy_name="test_strategy",
             session_id=test_position["session_id"],
-            internal_order_id=internal_id
+            internal_order_id=internal_id,
         )
 
         # * Try to create another order with same internal ID
@@ -277,7 +274,7 @@ class TestOrderManagementMethods:
             quantity=0.0005,
             strategy_name="test_strategy",
             session_id=test_position["session_id"],
-            internal_order_id=internal_id  # Same ID
+            internal_order_id=internal_id,  # Same ID
         )
 
         # * Both should succeed with different internal IDs

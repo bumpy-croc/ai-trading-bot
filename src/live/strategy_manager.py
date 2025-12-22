@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.prediction.models.execution_providers import get_preferred_providers
 from src.strategies.components import Strategy
 from src.strategies.versioning import StrategyVersionRecord
 
@@ -34,7 +35,7 @@ class StrategyManager:
     def __init__(
         self,
         strategies_dir: str = "strategies",
-        models_dir: str = "src/ml",
+        models_dir: str = "src/ml/models",
         staging_dir: str | None = None,
     ):
         self.strategies_dir = Path(strategies_dir)
@@ -55,34 +56,39 @@ class StrategyManager:
 
         # Strategy registry with factory functions
         self.strategy_registry = {}
-            
+
         # Register strategy factory functions
         try:
             from src.strategies.ml_basic import create_ml_basic_strategy
+
             self.strategy_registry["ml_basic"] = create_ml_basic_strategy
         except Exception as e:
             logger.debug(f"ML Basic strategy not available: {e}")
-            
+
         try:
             from src.strategies.ml_adaptive import create_ml_adaptive_strategy
+
             self.strategy_registry["ml_adaptive"] = create_ml_adaptive_strategy
         except Exception as e:
             logger.debug(f"ML Adaptive strategy not available: {e}")
-            
+
         try:
             from src.strategies.ensemble_weighted import create_ensemble_weighted_strategy
+
             self.strategy_registry["ensemble_weighted"] = create_ensemble_weighted_strategy
         except Exception as e:
             logger.debug(f"Ensemble Weighted strategy not available: {e}")
-            
+
         try:
             from src.strategies.momentum_leverage import create_momentum_leverage_strategy
+
             self.strategy_registry["momentum_leverage"] = create_momentum_leverage_strategy
         except Exception as e:
             logger.debug(f"Momentum Leverage strategy not available: {e}")
-            
+
         try:
             from src.strategies.ml_sentiment import create_ml_sentiment_strategy
+
             self.strategy_registry["ml_sentiment"] = create_ml_sentiment_strategy
         except Exception as e:
             logger.debug(f"ML Sentiment strategy not available: {e}")
@@ -113,7 +119,7 @@ class StrategyManager:
         self, strategy_name: str, version: str, config: dict[str, Any] | None = None
     ) -> tuple[Strategy, StrategyVersionRecord]:
         """Create a strategy instance and version record without mutating state.
-        
+
         Uses factory functions to create component-based Strategy instances.
         """
 
@@ -143,7 +149,7 @@ class StrategyManager:
         self, strategy_name: str, version: str = "latest", config: dict[str, Any] | None = None
     ) -> Strategy:
         """Load a strategy with version control.
-        
+
         Uses factory functions to create component-based Strategy instances.
         """
 
@@ -345,19 +351,11 @@ class StrategyManager:
         """Apply model update"""
         try:
             strategy_name = update_data["strategy_name"]
-            new_model_path = update_data["new_model_path"]
 
-            # Update model path in current strategy
-            if hasattr(self.current_strategy, "_load_model"):
-                old_path = self.current_strategy.model_path
-                self.current_strategy.model_path = new_model_path
-                self.current_strategy._load_model()
-
-                logger.info(f"✅ Model updated for {strategy_name}: {old_path} → {new_model_path}")
-                return True
-            else:
-                logger.warning(f"Strategy {strategy_name} doesn't support model updates")
-                return False
+            logger.warning(
+                f"Strategy {strategy_name} doesn't support model updates in component-based architecture"
+            )
+            return False
 
         except Exception as e:
             logger.error(f"Model update failed: {e}")
@@ -373,8 +371,9 @@ class StrategyManager:
             model = onnx.load(model_path)
             onnx.checker.check_model(model)
 
-            # Test inference session
-            session = ort.InferenceSession(model_path)
+            # Test inference session using the preferred execution providers
+            providers = get_preferred_providers()
+            session = ort.InferenceSession(model_path, providers=providers)
             input_shape = session.get_inputs()[0].shape
 
             logger.info(f"Model validation passed: {model_path} (input shape: {input_shape})")

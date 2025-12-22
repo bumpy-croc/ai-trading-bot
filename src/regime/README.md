@@ -1,126 +1,69 @@
 # Regime Detection
 
-Market regime detection and analysis for adaptive trading strategies.
+Market regime detection utilities used across the trading system.
 
 ## Overview
 
-This module provides market regime detection capabilities to help strategies adapt to different market conditions (bull, bear, sideways, high volatility). The system uses multiple technical indicators and statistical measures to classify market regimes in real-time.
+The `src.regime` package provides:
 
-## Features
+- `RegimeDetector` – core regime annotations based on price action and volatility.
+- `EnhancedRegimeDetector` – strategy-facing wrapper with state tracking and
+  stability metrics.
+- Calibration helpers to tune detector parameters against labelled data.
+- Evaluation and plotting utilities for quantifying detection accuracy.
 
-- **Market regime classification** - Bull, bear, sideways, and transitional states
-- **Volatility regime detection** - High, normal, and low volatility periods
-- **Trend strength analysis** - Quantifies trend strength and direction
-- **Dynamic strategy adaptation** - Enable regime-aware strategy switching
-- **Confidence scoring** - Provides confidence levels for regime classifications
-- **Multi-timeframe analysis** - Analyze regimes across different timeframes
-
-## Modules
-
-- `detector.py` - Core regime detection logic with `RegimeDetector` class
-- `enhanced_detector.py` - Enhanced detector with machine learning capabilities
-
-## Configuration
+## Basic usage
 
 ```python
-from src.regime.detector import RegimeConfig
+from src.regime import RegimeDetector
 
-config = RegimeConfig(
-    slope_window=50,               # Window for trend slope calculation
-    band_window=20,                # Window for Bollinger bands
-    atr_window=14,                 # Window for ATR calculation
-    atr_percentile_lookback=252,   # Lookback for ATR percentile
-    trend_threshold=0.0,           # Threshold for trend detection
-    r2_min=0.2,                    # Minimum R² for trend confidence
-    atr_high_percentile=0.7,       # Percentile threshold for high volatility
-    hysteresis_k=3,                # Confirmations required to switch regime
-    min_dwell=12                   # Minimum bars to stay in regime
-)
+# df must contain open/high/low/close/volume columns indexed by time
+annotated = RegimeDetector().annotate(df)
+print(annotated[["trend_label", "vol_label", "regime_label", "regime_confidence"]].tail())
 ```
 
-## Usage
+## Enhanced detector for strategies
 
-### Basic Regime Detection
 ```python
-from src.regime.detector import RegimeDetector
-import pandas as pd
+from src.regime import EnhancedRegimeDetector
 
-# Load your OHLCV data
-df = pd.DataFrame({
-    'open': [...],
-    'high': [...],
-    'low': [...],
-    'close': [...],
-    'volume': [...]
-})
-
-# Detect regimes
-detector = RegimeDetector()
-df_with_regimes = detector.annotate(df)
-
-# Access regime information
-print(df_with_regimes[['trend_label', 'vol_label', 'regime_label', 'regime_confidence']].tail())
+detector = EnhancedRegimeDetector()
+regime_context = detector.detect_regime(annotated, -1)
+print(regime_context.get_regime_label(), regime_context.confidence)
 ```
 
-### Enhanced Detection
-```python
-from src.regime.enhanced_detector import EnhancedRegimeDetector, EnhancedRegimeConfig
+The enhanced detector maintains regime history, transition tracking and exposes
+helper methods for recent statistics.
 
-# Configure enhanced detector
-config = EnhancedRegimeConfig(
-    slope_window=40,
-    atr_window=14,
-    rsi_window=14,
-    volume_sma_window=20
+## Calibrating and evaluating accuracy
+
+```python
+from src.regime import calibrate_regime_detector
+
+# Provide labelled columns (e.g. produced from expert annotations or research data)
+calibration = calibrate_regime_detector(
+    annotated_df,
+    target_trend_col="target_trend",
+    target_vol_col="target_vol",
 )
 
-detector = EnhancedRegimeDetector(config)
-df_enhanced = detector.annotate(df)
-
-# Enhanced detector adds additional columns for momentum and volume analysis
-print(df_enhanced.columns)
+print(calibration.metrics)  # overall, trend and volatility accuracy
 ```
 
-### Regime-Aware Backtesting
-```bash
-# Strategies handle regime awareness internally during backtests
-atb backtest ml_basic --symbol BTCUSDT --days 365
-```
+To evaluate a specific configuration and visualise accuracy over time:
 
-### Live Trading with Regime Switching
 ```python
-from src.live.regime_strategy_switcher import RegimeStrategyMapping
+from src.regime import evaluate_regime_accuracy, plot_regime_accuracy
 
-# Configure strategy mapping per regime
-mapping = RegimeStrategyMapping(
-    bull_strategy='bull',
-    bear_strategy='bear',
-    sideways_strategy='ml_basic'
+metrics, evaluation_frame = evaluate_regime_accuracy(
+    annotated_df,
+    target_trend_col="target_trend",
+    target_vol_col="target_vol",
 )
 
-# Engine will automatically switch strategies based on detected regime
+fig = plot_regime_accuracy(evaluation_frame)
+fig.savefig("regime_accuracy.png")
 ```
 
-## Regime Types
-
-| Regime | Description | Characteristics |
-|--------|-------------|-----------------|
-| **Bull** | Strong uptrend | Rising prices, high momentum, low volatility |
-| **Bear** | Strong downtrend | Falling prices, negative momentum, increasing volatility |
-| **Sideways** | Range-bound | Minimal trend, mean-reverting, moderate volatility |
-| **High Volatility** | Volatile market | Large price swings, unstable trends |
-| **Transitional** | Changing regime | Mixed signals, uncertain direction |
-
-## Indicators Used
-
-- **ATR (Average True Range)** - Volatility measurement
-- **ADX (Average Directional Index)** - Trend strength
-- **Moving Average Slopes** - Trend direction
-- **RSI (Relative Strength Index)** - Momentum
-- **Bollinger Band Width** - Volatility expansion/contraction
-- **Volume Analysis** - Confirmation signals
-
-## Documentation
-
-See [docs/backtesting.md](../../docs/backtesting.md#regime-detection) for an overview of regime switching workflows and CLI
-tooling.
+These helpers make it straightforward to quantify how well a configuration
+matches labelled data and to reason about performance drift.

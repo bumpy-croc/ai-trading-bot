@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -82,7 +82,9 @@ def _load_existing_version(strategy_name: str) -> dict[str, Any] | None:
     return None
 
 
-def _prompt_for_changes(default_message: str = "Updated strategy implementation") -> tuple[list[str], bool]:
+def _prompt_for_changes(
+    default_message: str = "Updated strategy implementation",
+) -> tuple[list[str], bool]:
     print("\nDescribe the changes made (one per line, empty line to finish):")
     changes: list[str] = []
     while True:
@@ -130,16 +132,15 @@ def _process_strategy_file(strategy_file: Path, auto_confirm: bool = False) -> b
         if not isinstance(component_strategy, Strategy):
             raise TypeError("Strategy builder did not return a Strategy instance")
     except Exception as exc:  # noqa: BLE001
-        print(
-            "✗ Failed to initialize component strategy: "
-            f"{exc}"
-        )
+        print("✗ Failed to initialize component strategy: " f"{exc}")
         return False
     current_hash = _calculate_strategy_hash(strategy_instance)
     existing_data = _load_existing_version(strategy_name)
     registry = StrategyRegistry()
     if existing_data:
-        latest_version = existing_data.get("versions", [])[-1] if existing_data.get("versions") else None
+        latest_version = (
+            existing_data.get("versions", [])[-1] if existing_data.get("versions") else None
+        )
         existing_hash = latest_version.get("component_hash", "") if latest_version else ""
         if current_hash == existing_hash:
             print("✓ No configuration changes detected, skipping version update")
@@ -148,7 +149,9 @@ def _process_strategy_file(strategy_file: Path, auto_confirm: bool = False) -> b
         print(f"  Old hash: {existing_hash[:16]}...")
         print(f"  New hash: {current_hash[:16]}...")
         strategy_id = registry.deserialize_strategy(existing_data)
-        changes, is_major = _prompt_for_changes() if not auto_confirm else (["Automated update"], False)
+        changes, is_major = (
+            _prompt_for_changes() if not auto_confirm else (["Automated update"], False)
+        )
         new_version = registry.update_strategy(
             strategy_id=strategy_id,
             strategy=component_strategy,
@@ -168,7 +171,9 @@ def _process_strategy_file(strategy_file: Path, auto_confirm: bool = False) -> b
         )
         print(f"✓ Registered {strategy_name} as version 1.0.0")
     config_file = STRATEGIES_DIR / f"{strategy_name}.json"
-    config_file.write_text(json.dumps(registry.serialize_strategy(strategy_id), indent=2, sort_keys=True))
+    config_file.write_text(
+        json.dumps(registry.serialize_strategy(strategy_id), indent=2, sort_keys=True)
+    )
     print(f"✓ Saved {strategy_name} version to {config_file.relative_to(PROJECT_ROOT)}")
     try:
         subprocess.run(["git", "add", str(config_file)], check=False)

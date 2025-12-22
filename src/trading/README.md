@@ -1,55 +1,43 @@
 # Trading Core
 
-Base classes and shared utilities for trading strategies and components.
+`src/trading` is a small package that keeps exchange-specific glue isolated from
+strategies. Today it primarily exposes the shared `SymbolFactory`, which turns
+human-friendly tickers into the formats required by each exchange adapter.
 
-## Overview
+## Symbol utilities
 
-This module provides the foundational interfaces and shared functionality used across the trading system. It defines base strategy classes, component interfaces, and common utilities for backtesting and live trading.
+- `symbols/factory.py` – Implements `SymbolFactory`, the single point of truth
+  for mapping tickers such as `BTCUSDT`, `BTC-USD`, or `btc/usd` to whatever the
+  underlying provider expects. The factory also performs light validation so CLI
+  commands and engines can fail fast when a symbol is unknown.
 
-## Modules
-
-- `shared/`: Common trading interfaces and utilities used across the system
-
-## Key Components
-
-### Base Strategy Classes
-Abstract base classes for implementing trading strategies. All custom strategies should inherit from `BaseStrategy`.
-
-### Component Interfaces
-Contracts defining the interface for:
-- Signal generators
-- Risk managers
-- Position sizers
-- Entry/exit logic
-
-### Shared Utilities
-Common helpers used by strategies and engines including validation, error handling, and data processing utilities.
-
-## Usage
+### Example
 
 ```python
-# Import shared trading interfaces
-from src.trading.shared import TradingInterface
+from src.trading.symbols.factory import SymbolFactory
 
-# Import base strategy class
-from src.strategies.base import BaseStrategy
+# Normalize a user-supplied value before handing it to providers
+symbol = SymbolFactory.to_exchange_symbol("btc-usd", "binance")
+assert symbol == "BTCUSDT"
 
-class MyStrategy(BaseStrategy):
-    def calculate_indicators(self, df):
-        # Add indicators to dataframe
-        return df
-    
-    def check_entry_conditions(self, df):
-        # Return entry signal
-        return signal
-    
-    def check_exit_conditions(self, df, position):
-        # Return exit signal
-        return signal
+# Convert a Binance symbol back to a dash-separated variant for logging/UI
+display = SymbolFactory.to_exchange_symbol("ETHUSDT", "coinbase")
+assert display == "ETH-USD"
 ```
 
-## See Also
+## When to use this package
 
-- [strategies/README.md](../strategies/README.md) - Strategy implementation examples
-- [docs/backtesting.md](../../docs/backtesting.md) - Backtesting strategies
-- [docs/live_trading.md](../../docs/live_trading.md) - Live trading usage
+- CLI commands need to accept flexible inputs (`BTC-USD`, `BTCUSDT`, etc.) while
+  still calling provider methods with canonical names.
+- Backtesting and live trading engines must log symbols consistently so metrics
+  and dashboards can be merged across venues.
+- New exchanges or quote formats should be added to `SymbolFactory` instead of
+  scattering `replace("USDT", "-USD")` logic throughout the codebase.
+
+## Related documentation
+
+- [docs/data_pipeline.md](../../docs/data_pipeline.md) – explains how data
+  providers rely on `SymbolFactory`.
+- [docs/backtesting.md](../../docs/backtesting.md) and
+  [docs/live_trading.md](../../docs/live_trading.md) – both describe how engines
+  normalise symbols before running strategies.

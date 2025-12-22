@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 # Ensure project root and src are in sys.path for absolute imports
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -55,6 +55,8 @@ def _get_secure_engine_config() -> dict[str, Any]:
             "application_name": "ai-trading-bot:db-nuke",
         },
     }
+
+
 MIGRATIONS_PATH = os.getenv("ATB_MIGRATIONS_PATH", str(PROJECT_ROOT / "migrations"))
 
 
@@ -148,13 +150,13 @@ def _complete_database_reset(cfg: Config) -> bool:
             # Force drop all known enum types with multiple attempts
             print("🔄 Force dropping all custom types...")
             known_types = [
-                'tradesource',
-                'eventtype',
-                'positionstatus',
-                'ordertype',
-                'orderstatus',
-                'positionside',
-                'partialoperationtype'
+                "tradesource",
+                "eventtype",
+                "positionstatus",
+                "ordertype",
+                "orderstatus",
+                "positionside",
+                "partialoperationtype",
             ]
 
             # First pass: try to drop with CASCADE
@@ -167,12 +169,16 @@ def _complete_database_reset(cfg: Config) -> bool:
 
             # Second pass: try to drop any remaining enum types
             try:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT typname
                     FROM pg_type
                     WHERE typtype = 'e'
                     AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
-                """))
+                """
+                    )
+                )
                 remaining_enums = [row[0] for row in result.fetchall()]
 
                 for enum_name in remaining_enums:
@@ -187,7 +193,9 @@ def _complete_database_reset(cfg: Config) -> bool:
             # Drop all tables
             print("🔄 Dropping all tables...")
             try:
-                result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+                result = conn.execute(
+                    text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+                )
                 tables = result.fetchall()
 
                 for (table_name,) in tables:
@@ -202,7 +210,9 @@ def _complete_database_reset(cfg: Config) -> bool:
             # Drop all sequences
             print("🔄 Dropping all sequences...")
             try:
-                result = conn.execute(text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'"))
+                result = conn.execute(
+                    text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'")
+                )
                 sequences = result.fetchall()
 
                 for (seq_name,) in sequences:
@@ -227,6 +237,7 @@ def _complete_database_reset(cfg: Config) -> bool:
     except Exception as e:
         print(f"❌ Complete database reset failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -241,6 +252,7 @@ def _apply_migrations(cfg: Config) -> bool:
 
         # Verify migration status after applying
         from alembic.runtime.migration import MigrationContext  # type: ignore
+
         script = ScriptDirectory.from_config(cfg)
         db_url = cfg.get_main_option("sqlalchemy.url")
         # * Use secure engine configuration for consistency
@@ -429,10 +441,10 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
                 except Exception:
                     exp_str = str(exp_type).lower().replace(" ", "")
                 act_str = actual_types_map.get(col_name, "")
+
                 def _norm(s: str) -> str:
                     return (
-                        s
-                        .replace("jsonb", "json")
+                        s.replace("jsonb", "json")
                         .replace("timestampwithouttimezone", "timestamp")
                         # Normalize PostgreSQL float synonyms
                         .replace("doubleprecision", "float")
@@ -440,6 +452,7 @@ def _verify_schema(db_url: str) -> dict[str, Any]:
                         .replace("float4", "float")
                         .replace("real", "float")
                     )
+
                 if _norm(exp_str) != _norm(act_str):
                     result["ok"] = False
                     result.setdefault("type_mismatches", {}).setdefault(table, {})[col_name] = {
@@ -499,7 +512,11 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
                     except Exception:
                         exp_str = str(exp_type).lower()
                     if "jsonb" in exp_str and "json" in actual_t and "jsonb" not in actual_t:
-                        conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {col_name} TYPE jsonb USING {col_name}::jsonb"))
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE {table} ALTER COLUMN {col_name} TYPE jsonb USING {col_name}::jsonb"
+                            )
+                        )
 
             # Add missing nullable columns (without defaults) only
             for table in expected["tables"]:
@@ -521,7 +538,9 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
                         type_sql = str(type_expr)
                     except Exception:
                         type_sql = str(exp_type)
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {type_sql}"))
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {type_sql}")
+                    )
     finally:
         try:
             engine.dispose()
@@ -529,10 +548,9 @@ def _apply_safe_fixes(db_url: str, verify: dict[str, Any], expected: dict[str, A
             pass
 
 
-
 def _migrate(ns: argparse.Namespace) -> int:
     """Run database migrations"""
-    env = getattr(ns, 'env', None)
+    env = getattr(ns, "env", None)
     env_name = f" ({env})" if env else " (default)"
 
     print("🔄 Running database migrations..." + env_name)
@@ -553,7 +571,7 @@ def _migrate(ns: argparse.Namespace) -> int:
                 cwd=PROJECT_ROOT,
                 env=env_vars,
                 capture_output=True,
-                text=True
+                text=True,
             )
 
             if result.returncode == 0:
@@ -571,7 +589,7 @@ def _migrate(ns: argparse.Namespace) -> int:
             cwd=PROJECT_ROOT,
             env=env_vars,
             capture_output=True,
-            text=True
+            text=True,
         )
 
         if result.returncode == 0:
@@ -592,7 +610,7 @@ def _migrate(ns: argparse.Namespace) -> int:
 
 
 def _verify(ns: argparse.Namespace) -> int:
-    env = getattr(ns, 'env', None)
+    env = getattr(ns, "env", None)
     env_name = f" ({env})" if env else " (default)"
 
     print("🔍 Database Integrity & Migration Check" + env_name)
@@ -650,9 +668,11 @@ def _verify(ns: argparse.Namespace) -> int:
                 verify_result = _verify_schema(db_url)
 
                 # Check for significant schema differences
-                if (verify_result.get("missing_tables") or
-                    verify_result.get("missing_columns") or
-                    verify_result.get("type_mismatches")):
+                if (
+                    verify_result.get("missing_tables")
+                    or verify_result.get("missing_columns")
+                    or verify_result.get("type_mismatches")
+                ):
                     schema_out_of_sync = True
                     print("⚠️  Schema is out of sync with models - migrations needed")
                 else:
@@ -723,7 +743,9 @@ def _verify(ns: argparse.Namespace) -> int:
                 print("  - Column type mismatches:")
                 for tbl, cols in verify["type_mismatches"].items():
                     for col, info in cols.items():
-                        print(f"    • {tbl}.{col}: expected={info['expected']} actual={info['actual']}")
+                        print(
+                            f"    • {tbl}.{col}: expected={info['expected']} actual={info['actual']}"
+                        )
             # Optionally apply safe fixes
             if ns.apply_fixes:
                 print("\nApplying Safe Fixes")
@@ -753,7 +775,7 @@ def _verify(ns: argparse.Namespace) -> int:
 
 
 def _backup(ns: argparse.Namespace) -> int:
-    env = getattr(ns, 'env', None)
+    env = getattr(ns, "env", None)
     env_name = f" ({env})" if env else " (default)"
 
     backup_dir = ns.backup_dir
@@ -872,9 +894,7 @@ def _setup_railway(ns: argparse.Namespace) -> int:
     # Default: print instructions
     print("🚀 Railway PostgreSQL Database Setup")
     print("=" * 60)
-    print(
-        "\n📋 Step-by-Step Instructions:\n... (see docs/database.md#railway-deployments)"
-    )
+    print("\n📋 Step-by-Step Instructions:\n... (see docs/database.md#railway-deployments)")
     return 0
 
 
@@ -940,7 +960,7 @@ def _get_database_url_for_env(env: str | None = None) -> str:
     env_var_map = {
         "development": "RAILWAY_DEVELOPMENT_DATABASE_URL",
         "staging": "RAILWAY_STAGING_DATABASE_URL",
-        "production": "RAILWAY_PRODUCTION_DATABASE_URL"
+        "production": "RAILWAY_PRODUCTION_DATABASE_URL",
     }
 
     env_var = env_var_map.get(env)
@@ -974,7 +994,9 @@ def _confirm_nuke_operation(env: str | None, db_url: str) -> bool:
     print("💡 Consider creating a backup first with: atb db backup --env", env or "development")
 
     # First confirmation
-    confirm1 = input(f"\nType 'NUKE' to confirm you want to destroy the {env or 'default'} database: ").strip()
+    confirm1 = input(
+        f"\nType 'NUKE' to confirm you want to destroy the {env or 'default'} database: "
+    ).strip()
     if confirm1 != "NUKE":
         print("❌ First confirmation failed. Operation cancelled.")
         return False
@@ -1008,13 +1030,13 @@ def _nuke_database(db_url: str) -> bool:
             # Step 1: Force drop all known enum types
             print("🔄 Step 1: Dropping custom types...")
             known_types = [
-                'tradesource',
-                'eventtype',
-                'positionstatus',
-                'ordertype',
-                'orderstatus',
-                'positionside',
-                'partialoperationtype'
+                "tradesource",
+                "eventtype",
+                "positionstatus",
+                "ordertype",
+                "orderstatus",
+                "positionside",
+                "partialoperationtype",
             ]
 
             for type_name in known_types:
@@ -1026,12 +1048,16 @@ def _nuke_database(db_url: str) -> bool:
 
             # Step 2: Drop any remaining enum types
             try:
-                result = conn.execute(text("""
+                result = conn.execute(
+                    text(
+                        """
                     SELECT typname
                     FROM pg_type
                     WHERE typtype = 'e'
                     AND typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
-                """))
+                """
+                    )
+                )
                 remaining_enums = [row[0] for row in result.fetchall()]
 
                 for enum_name in remaining_enums:
@@ -1046,7 +1072,9 @@ def _nuke_database(db_url: str) -> bool:
             # Step 3: Drop all tables
             print("🔄 Step 2: Dropping all tables...")
             try:
-                result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+                result = conn.execute(
+                    text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+                )
                 tables = result.fetchall()
 
                 for (table_name,) in tables:
@@ -1061,7 +1089,9 @@ def _nuke_database(db_url: str) -> bool:
             # Step 4: Drop all sequences
             print("🔄 Step 3: Dropping all sequences...")
             try:
-                result = conn.execute(text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'"))
+                result = conn.execute(
+                    text("SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'")
+                )
                 sequences = result.fetchall()
 
                 for (seq_name,) in sequences:
@@ -1088,11 +1118,12 @@ def _nuke_database(db_url: str) -> bool:
     except Exception as e:
         print(f"❌ Database nuke operation failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
     finally:
         try:
-            if 'engine' in locals():
+            if "engine" in locals():
                 engine.dispose()
         except Exception:
             pass
@@ -1100,7 +1131,7 @@ def _nuke_database(db_url: str) -> bool:
 
 def _nuke(ns: argparse.Namespace) -> int:
     """Handle database nuke command."""
-    env = getattr(ns, 'env', None)
+    env = getattr(ns, "env", None)
     env_name = f" ({env})" if env else " (default)"
 
     _print_header(f"Database Nuke Operation{env_name}")
@@ -1219,7 +1250,9 @@ def _collation_fix(env: str | None) -> int:
                 if "REFRESH COLLATION VERSION" not in str(exc):
                     print(f"❌ ALTER DATABASE failed: {exc}")
                     return 1
-                print("⚠️  REFRESH COLLATION VERSION not supported; falling back to manual rebuild...")
+                print(
+                    "⚠️  REFRESH COLLATION VERSION not supported; falling back to manual rebuild..."
+                )
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1278,7 +1311,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     # Import railway commands
     from cli.commands import railway
 
-    p_verify = sub.add_parser("verify", help="Verify database integrity, migrations, and schema sync status")
+    p_verify = sub.add_parser(
+        "verify", help="Verify database integrity, migrations, and schema sync status"
+    )
     p_verify.add_argument(
         "--apply-migrations",
         action="store_true",
@@ -1294,12 +1329,20 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Force apply migrations even if schema appears up-to-date (bypasses duplicate column prevention)",
     )
-    p_verify.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_verify.add_argument(
+        "--env",
+        choices=["development", "staging", "production"],
+        help="Target environment (default: uses DATABASE_URL)",
+    )
     p_verify.set_defaults(func=_verify)
 
     p_migrate = sub.add_parser("migrate", help="Run database migrations")
     p_migrate.add_argument("--check", action="store_true", help="Check migration status only")
-    p_migrate.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_migrate.add_argument(
+        "--env",
+        choices=["development", "staging", "production"],
+        help="Target environment (default: uses DATABASE_URL)",
+    )
     p_migrate.set_defaults(func=_migrate)
 
     p_backup = sub.add_parser("backup", help="Backup database")
@@ -1307,7 +1350,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_backup.add_argument(
         "--retention", type=int, default=int(os.getenv("BACKUP_RETENTION_DAYS", 7))
     )
-    p_backup.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_backup.add_argument(
+        "--env",
+        choices=["development", "staging", "production"],
+        help="Target environment (default: uses DATABASE_URL)",
+    )
     p_backup.set_defaults(func=_backup)
 
     p_reset = sub.add_parser("reset-railway", help="Reset Railway database")
@@ -1321,15 +1368,27 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_setup.set_defaults(func=_setup_railway)
 
     p_nuke = sub.add_parser("nuke", help="⚠️  DANGEROUS: Completely destroy and reset database")
-    p_nuke.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_nuke.add_argument(
+        "--env",
+        choices=["development", "staging", "production"],
+        help="Target environment (default: uses DATABASE_URL)",
+    )
     p_nuke.set_defaults(func=_nuke)
 
     p_coll_check = sub.add_parser("check-collation", help="Inspect database collation status")
-    p_coll_check.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_coll_check.add_argument(
+        "--env",
+        choices=["development", "staging", "production"],
+        help="Target environment (default: uses DATABASE_URL)",
+    )
     p_coll_check.set_defaults(func=lambda ns: _collation_check(getattr(ns, "env", None)))
 
     p_coll_fix = sub.add_parser("fix-collation", help="Fix PostgreSQL collation mismatches")
-    p_coll_fix.add_argument("--env", choices=["development", "staging", "production"], help="Target environment (default: uses DATABASE_URL)")
+    p_coll_fix.add_argument(
+        "--env",
+        choices=["development", "staging", "production"],
+        help="Target environment (default: uses DATABASE_URL)",
+    )
     p_coll_fix.set_defaults(func=lambda ns: _collation_fix(getattr(ns, "env", None)))
 
     # Register railway subcommands

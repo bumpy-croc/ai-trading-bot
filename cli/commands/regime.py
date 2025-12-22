@@ -10,7 +10,7 @@ import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -48,7 +48,9 @@ def _apply_regime_detection(df: pd.DataFrame) -> pd.DataFrame:
     return detector.annotate(df)
 
 
-def _create_visualization(df: pd.DataFrame, symbol: str, timeframe: str, days: int, output: Path) -> None:
+def _create_visualization(
+    df: pd.DataFrame, symbol: str, timeframe: str, days: int, output: Path
+) -> None:
     fig = plt.figure(figsize=(16, 12))
     gs = fig.add_gridspec(4, 1, height_ratios=[3, 1, 1, 1], hspace=0.3)
     ax1 = fig.add_subplot(gs[0])
@@ -157,7 +159,13 @@ def _create_visualization(df: pd.DataFrame, symbol: str, timeframe: str, days: i
     plt.setp(ax2.get_xticklabels(), visible=False)
     plt.setp(ax3.get_xticklabels(), visible=False)
     legend_elements = [patches.Patch(color=c, alpha=0.3, label=r) for r, c in regime_colors.items()]
-    ax1.legend(handles=legend_elements, loc="upper left", fontsize=8, title="Market Regimes", title_fontsize=9)
+    ax1.legend(
+        handles=legend_elements,
+        loc="upper left",
+        fontsize=8,
+        title="Market Regimes",
+        title_fontsize=9,
+    )
     stats_text = (
         "Regime Statistics:\n"
         f"• Total periods: {len(df)}\n"
@@ -208,7 +216,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_viz = sub.add_parser("visualize", help="Generate regime visualization for a symbol")
     p_viz.add_argument("symbol", help="Trading pair symbol (e.g., BTCUSDT)")
     p_viz.add_argument("--timeframe", default="1h", help="Candle timeframe (default: 1h)")
-    p_viz.add_argument("--days", type=int, default=30, help="Number of days to analyse (default: 30)")
+    p_viz.add_argument(
+        "--days", type=int, default=30, help="Number of days to analyse (default: 30)"
+    )
     p_viz.add_argument(
         "--output",
         default="artifacts/regime_visualizations/regime_analysis.png",

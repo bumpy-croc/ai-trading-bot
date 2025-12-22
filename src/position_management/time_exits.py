@@ -123,9 +123,10 @@ class TimeExitPolicy:
             return dt.replace(tzinfo=ZoneInfo("UTC")) if ZoneInfo else dt
         return dt.astimezone(ZoneInfo("UTC")) if ZoneInfo else dt
 
-    def check_time_exit_conditions(self, entry_time: datetime, now_time: datetime) -> tuple[bool, str | None]:
-        """Return (should_exit, reason). Times can be naive (assumed UTC) or tz-aware.
-        """
+    def check_time_exit_conditions(
+        self, entry_time: datetime, now_time: datetime
+    ) -> tuple[bool, str | None]:
+        """Return (should_exit, reason). Times can be naive (assumed UTC) or tz-aware."""
         now_utc = self._as_utc(now_time)
         entry_utc = self._as_utc(entry_time)
 
@@ -155,7 +156,11 @@ class TimeExitPolicy:
             if not self.market_session.is_open_at(now_utc):
                 return True, "Outside trading hours"
 
-        if self.time_restrictions.no_overnight and self.market_session and not self.market_session.is_24h:
+        if (
+            self.time_restrictions.no_overnight
+            and self.market_session
+            and not self.market_session.is_24h
+        ):
             # If session is currently closed (overnight), exit
             if not self.market_session.is_open_at(now_utc):
                 return True, "No overnight"
@@ -167,8 +172,7 @@ class TimeExitPolicy:
         return False, None
 
     def get_next_exit_time(self, entry_time: datetime, now_time: datetime) -> datetime | None:
-        """Return the next scheduled exit time (UTC) based on policy, if any.
-        """
+        """Return the next scheduled exit time (UTC) based on policy, if any."""
         # Preserve naivety if both inputs are naive
         preserve_naive = entry_time.tzinfo is None and now_time.tzinfo is None
         now_utc = self._as_utc(now_time)
@@ -205,4 +209,3 @@ class TimeExitPolicy:
             except Exception:
                 return nxt
         return nxt
-

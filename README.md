@@ -4,7 +4,7 @@ A modular cryptocurrency trading system focused on long-term, risk-balanced tren
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/) [![DB](https://img.shields.io/badge/DB-PostgreSQL-informational)](docs/database.md) [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
-> **Requirements**: Python 3.9+ (Python 3.11+ recommended for development)
+> **Requirements**: Python 3.11+ (the repository uses 3.11+ typing features)
 
 ---
 
@@ -28,10 +28,10 @@ python -m venv .venv && source .venv/bin/activate
 
 # Install CLI and dependencies
 make install                 # Install CLI (atb) + upgrade pip
-make deps                    # Install dev dependencies (can timeout - see workarounds)
+make deps-dev                # Install dev dependencies (can timeout - see workarounds)
 
 # Alternative: use server dependencies for faster install
-make deps-server             # Lighter production dependencies
+make deps-server             # Lighter server/production dependencies
 ```
 
 **Note**: If pip install times out due to large packages (TensorFlow ~500MB), try:
@@ -78,8 +78,8 @@ atb live ml_basic --symbol BTCUSDT --paper-trading
 # Live trading (requires explicit confirmation)
 atb live ml_basic --symbol BTCUSDT --live-trading --i-understand-the-risks
 
-# Live trading + health endpoint
-atb live-health --port 8000 -- ml_basic --paper-trading
+# Live trading + health endpoint (set PORT or HEALTH_CHECK_PORT to override)
+PORT=8000 atb live-health -- ml_basic --paper-trading
 ```
 
 6) Utilities
@@ -104,11 +104,18 @@ atb data populate-dummy --trades 100 --confirm
 7) Tests
 
 ```bash
+# Run test suite
+atb test unit                # Unit tests only
+atb test integration         # Integration tests
+atb test all                 # All tests
+
+# Or use pytest directly
 pytest -q
 
 # Diagnostics
 atb db verify
 atb tests heartbeat
+atb tests parse-junit tests/reports/unit.xml --label "Unit Tests"
 ```
 
 8) Development setup
@@ -116,12 +123,15 @@ atb tests heartbeat
 ```bash
 # Setup development environment
 python -m venv .venv && source .venv/bin/activate
-make install && make deps
+make install && make deps-dev
 
 # Run code quality checks
-make code-quality  # ruff + black + mypy + bandit
+atb dev quality            # Run all: black + ruff + mypy + bandit
 
-# Or run individually:
+# Clean caches and build artifacts
+atb dev clean              # Remove .pytest_cache, .ruff_cache, etc.
+
+# Or run individual tools:
 black .
 ruff check . --fix
 python bin/run_mypy.py
@@ -134,27 +144,25 @@ bandit -c pyproject.toml -r src
 
 ```text
 src/
-  backtesting/       # Vectorised simulation engine
-  config/            # Typed configuration loader + constants + feature flags  
-  dashboards/        # Web-based monitoring and analysis dashboards
-  data/              # Data management and caching utilities
-  data_providers/    # Market & sentiment providers (+ caching wrapper)
-  database/          # SQLAlchemy models + DatabaseManager (PostgreSQL-only)
-  database_manager/  # Flask-Admin UI for DB inspection
-  examples/          # Minimal runnable examples demonstrating core features
-  indicators/        # Technical indicators (pure functions)
-  live/              # Live trading engine
-  ml/                # Trained models (.onnx/.keras) + metadata
-  monitoring/        # Real-time monitoring dashboard (Flask + Socket.IO)
-  optimizer/         # Parameter optimization and strategy tuning
-  performance/       # Performance metrics utilities
-  position_management/  # Position sizing and portfolio management
-  prediction/        # Centralized model registry, ONNX runtime, caching
-  regime/            # Market regime detection and analysis
-  risk/              # Risk parameters and position sizing utilities
-  strategies/        # Built-in strategies (ML basic, sentiment, adaptive, bull/bear)
-  trading/           # Core trading interfaces and shared functionality
-  utils/             # Shared utilities (paths, symbols, etc.)
+  backtesting/          # Vectorised simulation engine and utilities
+  config/               # Typed configuration loader, constants, feature flags
+  dashboards/           # Monitoring, backtesting, and prediction dashboards
+  data_providers/       # Market, sentiment, and cache-aware data sources
+  database/             # SQLAlchemy models, DatabaseManager, admin UI
+  infrastructure/       # Logging config, runtime helpers, cache/secret tooling
+  live/                 # Live trading engine, runners, sync utilities
+  ml/                   # Training pipeline plus versioned model registry artifacts
+  optimizer/            # Parameter optimization and analyzer tooling
+  performance/          # Shared performance and diagnostics helpers
+  position_management/  # Partial exits, trailing stops, dynamic risk policies
+  prediction/           # Prediction engine, feature pipeline, ONNX runners
+  regime/               # Market regime detection and analysis
+  risk/                 # Global risk manager, exposure controls
+  sentiment/            # Sentiment adapters and data mergers
+  strategies/           # Component-based strategies and factories
+  tech/                 # Indicator math, feature builders, adapters
+  trading/              # Trading interfaces plus symbol utilities
+  indicators/           # Legacy shim that re-exports `src.tech` (kept for compatibility)
 ```
 
 ---
@@ -168,8 +176,8 @@ src/
 - Live engine: `live.trading_engine.LiveTradingEngine` (CLI: `atb live`, `atb live-health`)
 - Risk: `risk.risk_manager.RiskManager`
 - Database: `database.manager.DatabaseManager` (PostgreSQL)
-- Monitoring: `dashboards.monitoring.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
-- Admin UI: `database_manager.app` (Flask-Admin), run `python src/database_manager/app.py`
+- Monitoring dashboard: `src.dashboards.monitoring.dashboard.MonitoringDashboard` (CLI: `atb dashboards run monitoring`)
+- Admin UI: `src.database.admin_ui.app:create_app` (Flask-Admin), run `python src/database/admin_ui/app.py`
 
 ---
 
@@ -236,7 +244,7 @@ Sentiment data and ML training are supported. Pretrained models live in `src/ml`
 - Do not commit secrets. Use `.env` (see `.env.example`) and environment variables.
 
 ## Logging
-- Centralized logging via `src.utils.logging_config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
+- Centralized logging via `src.infrastructure.logging.config.configure_logging()` with env `LOG_LEVEL` and `LOG_JSON`.
 - JSON logs default to enabled in production-like environments (Railway or ENV/APP_ENV=production).
 - See `docs/monitoring.md` for structured events, context, and operations guidance.
 

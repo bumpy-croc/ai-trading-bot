@@ -16,14 +16,21 @@ class SimpleMockProvider(MockDataProvider):
         self._prices = prices
 
     def get_historical_data(self, symbol, timeframe, start=None, end=None):
-        idx = pd.date_range(start=datetime.utcnow() - timedelta(minutes=len(self._prices)), periods=len(self._prices), freq="T")
-        df = pd.DataFrame({
-            "open": self._prices,
-            "high": self._prices,
-            "low": self._prices,
-            "close": self._prices,
-            "volume": [1.0] * len(self._prices),
-        }, index=idx)
+        idx = pd.date_range(
+            start=datetime.utcnow() - timedelta(minutes=len(self._prices)),
+            periods=len(self._prices),
+            freq="T",
+        )
+        df = pd.DataFrame(
+            {
+                "open": self._prices,
+                "high": self._prices,
+                "low": self._prices,
+                "close": self._prices,
+                "volume": [1.0] * len(self._prices),
+            },
+            index=idx,
+        )
         df["onnx_pred"] = df["close"] * 1.001
         df["prediction_confidence"] = 0.8
         return df

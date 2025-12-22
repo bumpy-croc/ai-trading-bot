@@ -267,7 +267,6 @@ class TestDatabaseLogging:
             assert trading_session is not None
         db_manager.end_trading_session(session_id)
 
-
     def test_trading_decision_logged_to_database(self, mock_strategy, mock_data_provider):
         """Test that TradingDecision objects are properly logged to database"""
         try:
@@ -280,7 +279,7 @@ class TestDatabaseLogging:
             import pandas as pd
         except ImportError:
             pytest.skip("Component strategy not available")
-        
+
         db_manager = DatabaseManager()
         session_id = db_manager.create_trading_session(
             strategy_name="TestComponentStrategy",
@@ -289,51 +288,54 @@ class TestDatabaseLogging:
             initial_balance=10000,
             mode="live",
         )
-        
+
         # Create component strategy
         signal_generator = MLBasicSignalGenerator(name="test_db_sg")
         risk_manager = FixedRiskManager(risk_per_trade=0.02)
         position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-        
+
         strategy = Strategy(
             name="test_db_strategy",
             signal_generator=signal_generator,
             risk_manager=risk_manager,
-            position_sizer=position_sizer
+            position_sizer=position_sizer,
         )
-        
+
         # Create test data
-        df = pd.DataFrame({
-            'open': [50000 + i * 10 for i in range(150)],
-            'high': [50100 + i * 10 for i in range(150)],
-            'low': [49900 + i * 10 for i in range(150)],
-            'close': [50000 + i * 10 for i in range(150)],
-            'volume': [1000 + i * 10 for i in range(150)]
-        }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-        
+        df = pd.DataFrame(
+            {
+                "open": [50000 + i * 10 for i in range(150)],
+                "high": [50100 + i * 10 for i in range(150)],
+                "low": [49900 + i * 10 for i in range(150)],
+                "close": [50000 + i * 10 for i in range(150)],
+                "volume": [1000 + i * 10 for i in range(150)],
+            },
+            index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+        )
+
         # Get trading decision
         decision = strategy.process_candle(df, 149, 10000)
-        
+
         # Convert decision to dict for logging
         decision_dict = decision.to_dict()
-        
+
         # Log strategy execution with TradingDecision data
         # Store regime and risk data in indicators dict since they're not separate fields
         # Use signal metadata instead of full decision metadata to avoid serialization issues
         indicators_data = decision.signal.metadata.copy() if decision.signal.metadata else {}
-        
+
         # Add regime data to indicators
         if decision.regime:
-            indicators_data['regime'] = {
+            indicators_data["regime"] = {
                 "trend": decision.regime.trend.value,
                 "volatility": decision.regime.volatility.value,
-                "confidence": decision.regime.confidence
+                "confidence": decision.regime.confidence,
             }
-        
+
         # Add risk metrics to indicators
         if decision.risk_metrics:
-            indicators_data['risk_metrics'] = decision.risk_metrics
-        
+            indicators_data["risk_metrics"] = decision.risk_metrics
+
         execution_data = {
             "strategy_name": "TestComponentStrategy",
             "symbol": "BTCUSDT",
@@ -345,12 +347,12 @@ class TestDatabaseLogging:
             "confidence_score": decision.signal.confidence,
             "indicators": indicators_data,
             "position_size": decision.position_size,
-            "reasons": [decision.signal.metadata.get('reason', 'component_decision')],
+            "reasons": [decision.signal.metadata.get("reason", "component_decision")],
             "session_id": session_id,
         }
-        
+
         db_manager.log_strategy_execution(**execution_data)
-        
+
         # Verify the data was logged
         with db_manager.get_session() as session:
             exec_record = session.query(StrategyExecution).filter_by(session_id=session_id).first()
@@ -359,8 +361,10 @@ class TestDatabaseLogging:
             assert exec_record.signal_strength == decision.signal.strength
             assert exec_record.confidence_score == decision.signal.confidence
             # Use float comparison for position_size due to Decimal conversion
-            assert float(exec_record.position_size) == pytest.approx(decision.position_size, rel=1e-6)
-        
+            assert float(exec_record.position_size) == pytest.approx(
+                decision.position_size, rel=1e-6
+            )
+
         db_manager.end_trading_session(session_id)
 
     def test_signal_direction_logged_correctly(self, mock_strategy, mock_data_provider):
@@ -376,7 +380,7 @@ class TestDatabaseLogging:
             import pandas as pd
         except ImportError:
             pytest.skip("Component strategy not available")
-        
+
         db_manager = DatabaseManager()
         session_id = db_manager.create_trading_session(
             strategy_name="TestSignalLogging",
@@ -385,31 +389,34 @@ class TestDatabaseLogging:
             initial_balance=10000,
             mode="live",
         )
-        
+
         # Create component strategy
         signal_generator = MLBasicSignalGenerator(name="test_signal_sg")
         risk_manager = FixedRiskManager(risk_per_trade=0.02)
         position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-        
+
         strategy = Strategy(
             name="test_signal_strategy",
             signal_generator=signal_generator,
             risk_manager=risk_manager,
-            position_sizer=position_sizer
+            position_sizer=position_sizer,
         )
-        
+
         # Create test data
-        df = pd.DataFrame({
-            'open': [50000 + i * 10 for i in range(150)],
-            'high': [50100 + i * 10 for i in range(150)],
-            'low': [49900 + i * 10 for i in range(150)],
-            'close': [50000 + i * 10 for i in range(150)],
-            'volume': [1000 + i * 10 for i in range(150)]
-        }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-        
+        df = pd.DataFrame(
+            {
+                "open": [50000 + i * 10 for i in range(150)],
+                "high": [50100 + i * 10 for i in range(150)],
+                "low": [49900 + i * 10 for i in range(150)],
+                "close": [50000 + i * 10 for i in range(150)],
+                "volume": [1000 + i * 10 for i in range(150)],
+            },
+            index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+        )
+
         # Get trading decision
         decision = strategy.process_candle(df, 149, 10000)
-        
+
         # Log the signal
         execution_data = {
             "strategy_name": "TestSignalLogging",
@@ -423,16 +430,16 @@ class TestDatabaseLogging:
             "position_size": decision.position_size,
             "session_id": session_id,
         }
-        
+
         db_manager.log_strategy_execution(**execution_data)
-        
+
         # Verify signal direction was logged
         with db_manager.get_session() as session:
             exec_record = session.query(StrategyExecution).filter_by(session_id=session_id).first()
             assert exec_record is not None
-            assert exec_record.signal_type in ['buy', 'sell', 'hold']
+            assert exec_record.signal_type in ["buy", "sell", "hold"]
             assert exec_record.signal_type == decision.signal.direction.value
-        
+
         db_manager.end_trading_session(session_id)
 
     def test_regime_context_logged_to_database(self, mock_strategy, mock_data_provider):
@@ -447,7 +454,7 @@ class TestDatabaseLogging:
             import pandas as pd
         except ImportError:
             pytest.skip("Component strategy not available")
-        
+
         db_manager = DatabaseManager()
         session_id = db_manager.create_trading_session(
             strategy_name="TestRegimeLogging",
@@ -456,31 +463,34 @@ class TestDatabaseLogging:
             initial_balance=10000,
             mode="live",
         )
-        
+
         # Create component strategy
         signal_generator = MLBasicSignalGenerator(name="test_regime_sg")
         risk_manager = FixedRiskManager(risk_per_trade=0.02)
         position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-        
+
         strategy = Strategy(
             name="test_regime_strategy",
             signal_generator=signal_generator,
             risk_manager=risk_manager,
-            position_sizer=position_sizer
+            position_sizer=position_sizer,
         )
-        
+
         # Create test data
-        df = pd.DataFrame({
-            'open': [50000 + i * 10 for i in range(150)],
-            'high': [50100 + i * 10 for i in range(150)],
-            'low': [49900 + i * 10 for i in range(150)],
-            'close': [50000 + i * 10 for i in range(150)],
-            'volume': [1000 + i * 10 for i in range(150)]
-        }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-        
+        df = pd.DataFrame(
+            {
+                "open": [50000 + i * 10 for i in range(150)],
+                "high": [50100 + i * 10 for i in range(150)],
+                "low": [49900 + i * 10 for i in range(150)],
+                "close": [50000 + i * 10 for i in range(150)],
+                "volume": [1000 + i * 10 for i in range(150)],
+            },
+            index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+        )
+
         # Get trading decision
         decision = strategy.process_candle(df, 149, 10000)
-        
+
         # Log with regime data
         execution_data = {
             "strategy_name": "TestRegimeLogging",
@@ -494,7 +504,7 @@ class TestDatabaseLogging:
             "position_size": decision.position_size,
             "session_id": session_id,
         }
-        
+
         # Add regime context to indicators if available
         indicators_data = {}
         if decision.regime:
@@ -503,20 +513,20 @@ class TestDatabaseLogging:
                 "volatility": decision.regime.volatility.value,
                 "confidence": decision.regime.confidence,
                 "duration": decision.regime.duration,
-                "strength": decision.regime.strength
+                "strength": decision.regime.strength,
             }
             execution_data["indicators"] = indicators_data
-        
+
         db_manager.log_strategy_execution(**execution_data)
-        
+
         # Verify regime data was logged
         with db_manager.get_session() as session:
             exec_record = session.query(StrategyExecution).filter_by(session_id=session_id).first()
             assert exec_record is not None
             # Regime data should be in indicators
             if decision.regime and exec_record.indicators:
-                assert 'regime' in exec_record.indicators
-        
+                assert "regime" in exec_record.indicators
+
         db_manager.end_trading_session(session_id)
 
     def test_risk_metrics_logged_to_database(self, mock_strategy, mock_data_provider):
@@ -531,7 +541,7 @@ class TestDatabaseLogging:
             import pandas as pd
         except ImportError:
             pytest.skip("Component strategy not available")
-        
+
         db_manager = DatabaseManager()
         session_id = db_manager.create_trading_session(
             strategy_name="TestRiskMetrics",
@@ -540,31 +550,34 @@ class TestDatabaseLogging:
             initial_balance=10000,
             mode="live",
         )
-        
+
         # Create component strategy
         signal_generator = MLBasicSignalGenerator(name="test_risk_sg")
         risk_manager = FixedRiskManager(risk_per_trade=0.02)
         position_sizer = ConfidenceWeightedSizer(base_fraction=0.02)
-        
+
         strategy = Strategy(
             name="test_risk_strategy",
             signal_generator=signal_generator,
             risk_manager=risk_manager,
-            position_sizer=position_sizer
+            position_sizer=position_sizer,
         )
-        
+
         # Create test data
-        df = pd.DataFrame({
-            'open': [50000 + i * 10 for i in range(150)],
-            'high': [50100 + i * 10 for i in range(150)],
-            'low': [49900 + i * 10 for i in range(150)],
-            'close': [50000 + i * 10 for i in range(150)],
-            'volume': [1000 + i * 10 for i in range(150)]
-        }, index=pd.date_range('2024-01-01', periods=150, freq='1h'))
-        
+        df = pd.DataFrame(
+            {
+                "open": [50000 + i * 10 for i in range(150)],
+                "high": [50100 + i * 10 for i in range(150)],
+                "low": [49900 + i * 10 for i in range(150)],
+                "close": [50000 + i * 10 for i in range(150)],
+                "volume": [1000 + i * 10 for i in range(150)],
+            },
+            index=pd.date_range("2024-01-01", periods=150, freq="1h"),
+        )
+
         # Get trading decision
         decision = strategy.process_candle(df, 149, 10000)
-        
+
         # Log with risk metrics
         execution_data = {
             "strategy_name": "TestRiskMetrics",
@@ -578,21 +591,21 @@ class TestDatabaseLogging:
             "position_size": decision.position_size,
             "session_id": session_id,
         }
-        
+
         # Add risk metrics to indicators
         indicators_data = {}
         if decision.risk_metrics:
             indicators_data["risk_metrics"] = decision.risk_metrics
             execution_data["indicators"] = indicators_data
-        
+
         db_manager.log_strategy_execution(**execution_data)
-        
+
         # Verify risk metrics were logged
         with db_manager.get_session() as session:
             exec_record = session.query(StrategyExecution).filter_by(session_id=session_id).first()
             assert exec_record is not None
             # Risk metrics should be in indicators
             if decision.risk_metrics and exec_record.indicators:
-                assert 'risk_metrics' in exec_record.indicators
-        
+                assert "risk_metrics" in exec_record.indicators
+
         db_manager.end_trading_session(session_id)

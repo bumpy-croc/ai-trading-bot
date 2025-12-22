@@ -109,7 +109,9 @@ class MockDatabaseManager:
 
         return session_id
 
-    def end_trading_session(self, session_id: Optional[int] = None, final_balance: Optional[float] = None):
+    def end_trading_session(
+        self, session_id: Optional[int] = None, final_balance: Optional[float] = None
+    ):
         """End a trading session"""
         if session_id is None:
             session_id = self._current_session_id
@@ -249,7 +251,17 @@ class MockDatabaseManager:
             if notes is not None:
                 position["notes"] = notes
             # Optional extended fields
-            for k in ("mfe", "mae", "mfe_price", "mae_price", "mfe_time", "mae_time", "unrealized_pnl", "unrealized_pnl_percent", "size"):
+            for k in (
+                "mfe",
+                "mae",
+                "mfe_price",
+                "mae_price",
+                "mfe_time",
+                "mae_time",
+                "unrealized_pnl",
+                "unrealized_pnl_percent",
+                "size",
+            ):
                 if k in kwargs and kwargs[k] is not None:
                     position[k] = kwargs[k]
             position["last_updated"] = datetime.now()

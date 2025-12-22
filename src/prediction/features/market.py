@@ -7,8 +7,7 @@ This module provides features related to market microstructure analysis.
 import pandas as pd
 
 from src.config.constants import DEFAULT_ENABLE_MARKET_MICROSTRUCTURE
-
-from .base import FeatureExtractor
+from src.tech.features.base import FeatureExtractor
 
 
 class MarketFeatureExtractor(FeatureExtractor):

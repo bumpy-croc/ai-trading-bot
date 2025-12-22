@@ -137,7 +137,9 @@ class TestPredictionConfig:
             model_cache_ttl=600,
         )
 
-        with pytest.raises(ValueError, match="min_confidence_threshold must be between 0.0 and 1.0"):
+        with pytest.raises(
+            ValueError, match="min_confidence_threshold must be between 0.0 and 1.0"
+        ):
             invalid_config_high.validate()
 
         # Test confidence < 0
@@ -152,7 +154,9 @@ class TestPredictionConfig:
             model_cache_ttl=600,
         )
 
-        with pytest.raises(ValueError, match="min_confidence_threshold must be between 0.0 and 1.0"):
+        with pytest.raises(
+            ValueError, match="min_confidence_threshold must be between 0.0 and 1.0"
+        ):
             invalid_config_low.validate()
 
     def test_prediction_config_validation_negative_latency(self):

@@ -1069,9 +1069,9 @@ When adding new test capabilities:
 
 ## Related Documentation
 
-- **Strategy System Design**: `.kiro/specs/strategy-system-redesign/design.md`
+- **Strategy System Design**: `docs/execplans/platform_modularization_plan.md`
 - **Component Interfaces**: `src/strategies/components/README.md`
-- **Strategy Manager**: `src/strategies/components/strategy_registry.py`
+- **Strategy Manager**: `src/strategies/components/strategy_manager.py`
 - **Example Usage**: `examples/component_testing_example.py`
 
 ---
@@ -1081,12 +1081,12 @@ When adding new test capabilities:
 For questions or issues with the testing framework:
 
 1. Check this README and the examples
-2. Review the design documentation in `.kiro/specs/strategy-system-redesign/`
-3. Look at existing tests in `tests/strategies/components/test_component_testing_framework.py`
+2. Review the design documentation in `docs/execplans/platform_modularization_plan.md`
+3. Look at existing tests in `tests/unit/strategies/components/test_component_testing_framework.py`
 4. Check the main strategy system documentation
 
 ---
 
-**Last Updated**: October 2025  
+**Last Updated**: 2025-10-27  
 **Version**: 1.0.0  
 **Status**: Production Ready

@@ -44,14 +44,16 @@ def upgrade():
     op.execute("UPDATE positions SET scale_ins_taken = COALESCE(scale_ins_taken, 0)")
 
     # Create enum for partial operation type
-    op.execute("""
+    op.execute(
+        """
     DO $$
     BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'partialoperationtype') THEN
             CREATE TYPE partialoperationtype AS ENUM ('partial_exit', 'scale_in');
         END IF;
     END$$;
-    """)
+    """
+    )
 
     # Create partial_trades table and index (idempotent)
     bind = op.get_bind()
@@ -61,7 +63,11 @@ def upgrade():
             "partial_trades",
             sa.Column("id", sa.Integer(), primary_key=True),
             sa.Column("position_id", sa.Integer(), sa.ForeignKey("positions.id"), nullable=False),
-            sa.Column("operation_type", sa.Enum("partial_exit", "scale_in", name="partialoperationtype"), nullable=False),
+            sa.Column(
+                "operation_type",
+                sa.Enum("partial_exit", "scale_in", name="partialoperationtype"),
+                nullable=False,
+            ),
             sa.Column("size", sa.Numeric(18, 8), nullable=False),
             sa.Column("price", sa.Numeric(18, 8), nullable=False),
             sa.Column("pnl", sa.Numeric(18, 8), nullable=True),
@@ -75,7 +81,9 @@ def upgrade():
     except Exception:
         existing_indexes = []
     if not any(i.get("name") == "idx_partial_trade_position" for i in existing_indexes):
-        op.execute("CREATE INDEX IF NOT EXISTS idx_partial_trade_position ON partial_trades (position_id, timestamp)")
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS idx_partial_trade_position ON partial_trades (position_id, timestamp)"
+        )
 
 
 def downgrade():

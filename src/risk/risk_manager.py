@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -20,7 +22,7 @@ from src.config.constants import (
     DEFAULT_TRAILING_DISTANCE_ATR_MULT,
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
-from src.indicators.technical import calculate_atr
+from src.tech.indicators.core import calculate_atr
 
 
 @dataclass
@@ -34,10 +36,10 @@ class RiskParameters:
     max_correlated_risk: float = 0.10  # 10% maximum risk for correlated positions
     max_drawdown: float = 0.20  # 20% maximum drawdown (fraction)
     position_size_atr_multiplier: float = 1.0
-    default_take_profit_pct: Optional[float] = None  # if None, engine/strategy may supply
+    default_take_profit_pct: float | None = None  # if None, engine/strategy may supply
     atr_period: int = 14
     # Time exit config (optional; strategies may override)
-    time_exits: Optional[dict] = None
+    time_exits: dict | None = None
     # Partial operations (defaults can be overridden by strategies)
     partial_exit_targets: list[float] | None = None
     partial_exit_sizes: list[float] | None = None
@@ -46,8 +48,8 @@ class RiskParameters:
     max_scale_ins: int = DEFAULT_MAX_SCALE_INS
     # Trailing stop config (engine/backtester may override via strategy.get_risk_overrides())
     trailing_activation_threshold: float = DEFAULT_TRAILING_ACTIVATION_THRESHOLD
-    trailing_distance_pct: Optional[float] = DEFAULT_TRAILING_DISTANCE_PCT
-    trailing_atr_multiplier: Optional[float] = DEFAULT_TRAILING_DISTANCE_ATR_MULT
+    trailing_distance_pct: float | None = DEFAULT_TRAILING_DISTANCE_PCT
+    trailing_atr_multiplier: float | None = DEFAULT_TRAILING_DISTANCE_ATR_MULT
     breakeven_threshold: float = DEFAULT_BREAKEVEN_THRESHOLD
     breakeven_buffer: float = DEFAULT_BREAKEVEN_BUFFER
     # Correlation control configuration (used by correlation engine/integration)
@@ -109,9 +111,7 @@ class RiskParameters:
 class RiskManager:
     """Handles position sizing and risk management"""
 
-    def __init__(
-        self, parameters: Optional[RiskParameters] = None, max_concurrent_positions: int = 3
-    ):
+    def __init__(self, parameters: RiskParameters | None = None, max_concurrent_positions: int = 3):
         self.params = parameters or RiskParameters()
         self.daily_risk_used = 0.0
         self.positions: dict[str, dict] = {}
@@ -188,11 +188,11 @@ class RiskManager:
         df: pd.DataFrame,
         index: int,
         balance: float,
-        price: Optional[float] = None,
-        indicators: Optional[dict[str, Any]] = None,
-        strategy_overrides: Optional[dict[str, Any]] = None,
+        price: float | None = None,
+        indicators: dict[str, Any] | None = None,
+        strategy_overrides: dict[str, Any] | None = None,
         regime: str = "normal",
-        correlation_ctx: Optional[dict[str, Any]] = None,
+        correlation_ctx: dict[str, Any] | None = None,
     ) -> float:
         """
         Return the fraction of balance to allocate (0..1), enforcing risk limits.
@@ -217,18 +217,20 @@ class RiskManager:
         strategy_overrides = strategy_overrides or {}
         indicators = indicators or {}
         sizer = strategy_overrides.get("position_sizer", "fixed_fraction")
-        
+
         # * Handle Mock objects in tests by converting to float safely
         try:
             min_fraction = float(strategy_overrides.get("min_fraction", 0.0))
         except (TypeError, ValueError):
             min_fraction = 0.0
-            
+
         try:
-            max_fraction = float(strategy_overrides.get("max_fraction", self.params.max_position_size))
+            max_fraction = float(
+                strategy_overrides.get("max_fraction", self.params.max_position_size)
+            )
         except (TypeError, ValueError):
             max_fraction = float(self.params.max_position_size)
-            
+
         max_fraction = min(max_fraction, self.params.max_position_size)
 
         # Respect remaining daily risk
@@ -276,7 +278,7 @@ class RiskManager:
 
         # Clamp
         fraction = max(min_fraction, min(max_fraction, fraction))
-        
+
         # Optional correlation-based size reduction
         try:
             if correlation_ctx and fraction > 0:
@@ -308,8 +310,8 @@ class RiskManager:
         index: int,
         entry_price: float,
         side: str = "long",
-        strategy_overrides: Optional[dict[str, Any]] = None,
-    ) -> tuple[Optional[float], Optional[float]]:
+        strategy_overrides: dict[str, Any] | None = None,
+    ) -> tuple[float | None, float | None]:
         """
         Compute stop-loss and take-profit prices.
         Priority:
@@ -323,8 +325,8 @@ class RiskManager:
             "take_profit_pct", self.params.default_take_profit_pct
         )
 
-        sl_price: Optional[float] = None
-        tp_price: Optional[float] = None
+        sl_price: float | None = None
+        tp_price: float | None = None
 
         if stop_loss_pct is not None:
             if side == "long":
@@ -397,7 +399,12 @@ class RiskManager:
         """Calculate total position exposure (sum of fractions)"""
         return float(sum(pos["size"] for pos in self.positions.values()))
 
-    def get_position_correlation_risk(self, symbols: list, corr_matrix: pd.DataFrame | None = None, threshold: Optional[float] = None) -> float:
+    def get_position_correlation_risk(
+        self,
+        symbols: list,
+        corr_matrix: pd.DataFrame | None = None,
+        threshold: float | None = None,
+    ) -> float:
         """Calculate correlated exposure across provided symbols.
 
         If a correlation matrix is provided, group symbols whose pairwise correlation
@@ -412,9 +419,7 @@ class RiskManager:
             # Fallback: sum exposures for given symbols
             if corr_matrix is None or corr_matrix.empty:
                 exposure = sum(
-                    float(pos.get("size", 0.0))
-                    for s, pos in self.positions.items()
-                    if s in sym_set
+                    float(pos.get("size", 0.0)) for s, pos in self.positions.items() if s in sym_set
                 )
                 return round(float(exposure), 8)
 
@@ -440,7 +445,11 @@ class RiskManager:
             for i, a in enumerate(cols):
                 for j in range(i + 1, len(cols)):
                     b = cols[j]
-                    val = corr_matrix.at[a, b] if (a in corr_matrix.index and b in corr_matrix.columns) else None
+                    val = (
+                        corr_matrix.at[a, b]
+                        if (a in corr_matrix.index and b in corr_matrix.columns)
+                        else None
+                    )
                     if pd.notna(val) and float(val) >= thr:
                         union(a, b)
 
@@ -473,7 +482,9 @@ class RiskManager:
         """Return the maximum number of concurrent positions allowed."""
         return self.max_concurrent_positions
 
-    def adjust_position_after_partial_exit(self, symbol: str, executed_fraction_of_original: float) -> None:
+    def adjust_position_after_partial_exit(
+        self, symbol: str, executed_fraction_of_original: float
+    ) -> None:
         """Reduce tracked exposure after a partial exit.
 
         executed_fraction_of_original is the fraction of ORIGINAL size removed.
@@ -487,7 +498,9 @@ class RiskManager:
         # Reduce daily risk used proportionally (approximation)
         self.daily_risk_used = max(0.0, self.daily_risk_used - float(executed_fraction_of_original))
 
-    def adjust_position_after_scale_in(self, symbol: str, added_fraction_of_original: float) -> None:
+    def adjust_position_after_scale_in(
+        self, symbol: str, added_fraction_of_original: float
+    ) -> None:
         """Increase tracked exposure after a scale-in, enforcing daily and per-position caps."""
         pos = self.positions.get(symbol)
         if not pos:

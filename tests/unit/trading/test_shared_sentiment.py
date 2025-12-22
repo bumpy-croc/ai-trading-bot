@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from src.trading.shared.sentiment import apply_live_sentiment, merge_historical_sentiment
+from src.sentiment.adapters import apply_live_sentiment, merge_historical_sentiment
 
 
 class DummySentimentProvider:

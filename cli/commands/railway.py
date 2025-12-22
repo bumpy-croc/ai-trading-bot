@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 # Ensure project root and src are in sys.path for absolute imports
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,12 +27,7 @@ def _authenticate_railway() -> str | None:
     """Authenticate with Railway CLI and return the project ID."""
     try:
         # Check if already authenticated
-        result = subprocess.run(
-            ["railway", "whoami"],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        result = subprocess.run(["railway", "whoami"], capture_output=True, text=True, timeout=30)
 
         if result.returncode != 0:
             print("🔐 Railway CLI not authenticated. Please run 'railway login' first.")
@@ -46,10 +41,7 @@ def _authenticate_railway() -> str | None:
 
         # Verify project exists and is accessible
         result = subprocess.run(
-            ["railway", "list", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30
+            ["railway", "list", "--json"], capture_output=True, text=True, timeout=30
         )
 
         if result.returncode != 0:
@@ -62,13 +54,14 @@ def _authenticate_railway() -> str | None:
         # Parse JSON output to find project
         try:
             import json
+
             projects = json.loads(result.stdout)
             project_found = False
             available_projects = []
 
             for project in projects:
                 available_projects.append(f"{project['name']} (ID: {project['id']})")
-                if project['id'] == project_id:
+                if project["id"] == project_id:
                     project_found = True
                     break
 
@@ -81,7 +74,10 @@ def _authenticate_railway() -> str | None:
 
         except json.JSONDecodeError:
             print("❌ Failed to parse Railway project list.")
-            print("   Raw output:", result.stdout[:200] + "..." if len(result.stdout) > 200 else result.stdout)
+            print(
+                "   Raw output:",
+                result.stdout[:200] + "..." if len(result.stdout) > 200 else result.stdout,
+            )
             return None
 
         print(f"✅ Authenticated with Railway project: {project_id}")
@@ -91,7 +87,9 @@ def _authenticate_railway() -> str | None:
         print("❌ Railway CLI authentication timed out.")
         return None
     except FileNotFoundError:
-        print("❌ Railway CLI not installed. Please install it first: https://docs.railway.app/develop/cli")
+        print(
+            "❌ Railway CLI not installed. Please install it first: https://docs.railway.app/develop/cli"
+        )
         return None
     except Exception as e:
         print(f"❌ Railway authentication failed: {e}")
@@ -185,7 +183,7 @@ def _reset_database(env: str) -> int:
         return 1
     finally:
         try:
-            if 'conn' in locals():
+            if "conn" in locals():
                 conn.close()
         except Exception:
             pass
@@ -224,16 +222,14 @@ def _backup_database(env: str) -> int:
                 "pg_dump",
                 f"--dbname={db_url}",
                 "-Fc",  # Custom format
-                "-Z", "9",  # Maximum compression
-                "-f", str(backup_path)
+                "-Z",
+                "9",  # Maximum compression
+                "-f",
+                str(backup_path),
             ]
 
             result = subprocess.run(
-                cmd,
-                env=env_vars,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minute timeout
+                cmd, env=env_vars, capture_output=True, text=True, timeout=300  # 5 minute timeout
             )
 
             if result.returncode != 0:
@@ -309,7 +305,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--env",
         required=True,
         choices=["development", "staging", "production"],
-        help="Target Railway environment"
+        help="Target Railway environment",
     )
     p_reset.set_defaults(func=_railway_reset)
 
@@ -319,6 +315,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "--env",
         required=True,
         choices=["development", "staging", "production"],
-        help="Target Railway environment"
+        help="Target Railway environment",
     )
     p_backup.set_defaults(func=_railway_backup)

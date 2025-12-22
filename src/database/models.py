@@ -4,6 +4,7 @@ Database models for trade logging and performance tracking
 
 import enum
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -43,7 +44,8 @@ class PortableJSON(TypeDecorator):
 
 JSONType = PortableJSON
 
-Base = declarative_base()
+# Type Base as Any to allow mypy to accept dynamic SQLAlchemy base class
+Base: Any = declarative_base()
 
 
 class PositionSide(enum.Enum):
@@ -66,16 +68,18 @@ class OrderStatus(enum.Enum):
 
 class PositionStatus(enum.Enum):
     """Status of a trading position (distinct from order status)."""
-    OPEN = "OPEN"      # Position is active and being held
+
+    OPEN = "OPEN"  # Position is active and being held
     CLOSED = "CLOSED"  # Position has been closed/exited
 
 
 class OrderType(enum.Enum):
     """Type of order in relation to its position."""
-    ENTRY = "ENTRY"              # Initial order that creates the position
+
+    ENTRY = "ENTRY"  # Initial order that creates the position
     PARTIAL_EXIT = "PARTIAL_EXIT"  # Order that partially closes position
-    SCALE_IN = "SCALE_IN"        # Order that adds to existing position  
-    FULL_EXIT = "FULL_EXIT"      # Order that completely closes position
+    SCALE_IN = "SCALE_IN"  # Order that adds to existing position
+    FULL_EXIT = "FULL_EXIT"  # Order that completely closes position
 
 
 class TradeSource(enum.Enum):
@@ -108,7 +112,11 @@ class Trade(Base):
     id = Column(Integer, primary_key=True)
     symbol = Column(String(20), nullable=False, index=True)
     side = Column(Enum(PositionSide, native_enum=False, create_type=False), nullable=False)
-    source = Column(Enum(TradeSource, native_enum=False, create_type=False), nullable=False, default=TradeSource.LIVE)
+    source = Column(
+        Enum(TradeSource, native_enum=False, create_type=False),
+        nullable=False,
+        default=TradeSource.LIVE,
+    )
 
     # Trade details
     entry_price = Column(Numeric(18, 8), nullable=False)
@@ -172,7 +180,9 @@ class Position(Base):
     symbol = Column(String(20), nullable=False, index=True)
     side = Column(Enum(PositionSide, native_enum=False, create_type=False), nullable=False)
     status = Column(
-        Enum(PositionStatus, name="positionstatus", native_enum=False, create_type=False), nullable=False, default=PositionStatus.OPEN
+        Enum(PositionStatus, name="positionstatus", native_enum=False, create_type=False),
+        nullable=False,
+        default=PositionStatus.OPEN,
     )
 
     # Position details
@@ -182,7 +192,7 @@ class Position(Base):
     entry_balance = Column(Numeric(18, 8))
     # Partial operations tracking
     original_size = Column(Numeric(18, 8))  # initial position size fraction
-    current_size = Column(Numeric(18, 8))   # remaining size fraction
+    current_size = Column(Numeric(18, 8))  # remaining size fraction
     partial_exits_taken = Column(Integer, default=0)
     scale_ins_taken = Column(Integer, default=0)
     last_partial_exit_price = Column(Numeric(18, 8))
@@ -238,43 +248,45 @@ class Position(Base):
 
 class Order(Base):
     """Individual orders table - tracks all orders associated with positions."""
-    
+
     __tablename__ = "orders"
-    
+
     id = Column(Integer, primary_key=True)
     position_id = Column(Integer, ForeignKey("positions.id"), nullable=False, index=True)
     order_type = Column(Enum(OrderType, native_enum=False, create_type=False), nullable=False)
     status = Column(Enum(OrderStatus, native_enum=False, create_type=False), nullable=False)
-    
+
     # Order identification
     exchange_order_id = Column(String(100), unique=True, index=True)  # From exchange
     internal_order_id = Column(String(100), nullable=False, index=True)  # Our reference
-    
+
     # Order details
     symbol = Column(String(20), nullable=False)
-    side = Column(Enum(PositionSide, native_enum=False, create_type=False), nullable=False)  # BUY/SELL
+    side = Column(
+        Enum(PositionSide, native_enum=False, create_type=False), nullable=False
+    )  # BUY/SELL
     quantity = Column(Numeric(18, 8), nullable=False)
     price = Column(Numeric(18, 8))  # Limit price (null for market orders)
-    
+
     # Execution details
     filled_quantity = Column(Numeric(18, 8), default=0)
     filled_price = Column(Numeric(18, 8))
     commission = Column(Numeric(18, 8), default=0)
-    
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     filled_at = Column(DateTime)
     cancelled_at = Column(DateTime)
     last_update = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Strategy context
     strategy_name = Column(String(100), nullable=False)
     session_id = Column(Integer, ForeignKey("trading_sessions.id"))
-    
+
     # Partial operation context (if applicable)
     target_level = Column(Integer)  # For partial exits/scale-ins
     size_fraction = Column(Numeric(18, 8))  # Fraction of original position
-    
+
     __table_args__ = (
         Index("idx_order_position_type", "position_id", "order_type"),
         Index("idx_order_status_created", "status", "created_at"),
@@ -292,16 +304,16 @@ class PartialTrade(Base):
 
     id = Column(Integer, primary_key=True)
     position_id = Column(Integer, ForeignKey("positions.id"), index=True, nullable=False)
-    operation_type = Column(Enum(PartialOperationType, native_enum=False, create_type=False), nullable=False)
+    operation_type = Column(
+        Enum(PartialOperationType, native_enum=False, create_type=False), nullable=False
+    )
     size = Column(Numeric(18, 8), nullable=False)  # Fraction of original size executed
     price = Column(Numeric(18, 8), nullable=False)
     pnl = Column(Numeric(18, 8))  # Realized PnL in currency units
     target_level = Column(Integer)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
-    __table_args__ = (
-        Index("idx_partial_trade_position", "position_id", "timestamp"),
-    )
+    __table_args__ = (Index("idx_partial_trade_position", "position_id", "timestamp"),)
 
 
 class MarketSession(Base):
@@ -659,7 +671,7 @@ class DynamicPerformanceMetrics(Base):
 
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, nullable=False, index=True)
-    
+
     # Rolling performance metrics
     rolling_win_rate = Column(Numeric(18, 8))
     rolling_sharpe_ratio = Column(Numeric(18, 8))
@@ -667,18 +679,18 @@ class DynamicPerformanceMetrics(Base):
     volatility_30d = Column(Numeric(18, 8))
     consecutive_losses = Column(Integer, default=0)
     consecutive_wins = Column(Integer, default=0)
-    
+
     # Risk adjustment factor applied
     risk_adjustment_factor = Column(Numeric(18, 8), default=1.0)
-    
+
     # Additional performance indicators
     profit_factor = Column(Numeric(18, 8))
     expectancy = Column(Numeric(18, 8))
     avg_trade_duration_hours = Column(Numeric(18, 8))
-    
+
     # Session reference
     session_id = Column(Integer, ForeignKey("trading_sessions.id"), nullable=False)
-    
+
     __table_args__ = (
         Index("idx_dynamic_perf_timestamp", "timestamp"),
         Index("idx_dynamic_perf_session", "session_id"),
@@ -694,30 +706,32 @@ class RiskAdjustment(Base):
 
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, nullable=False, index=True)
-    
+
     # Adjustment type and trigger
     adjustment_type = Column(String(50), nullable=False)  # 'drawdown', 'performance', 'volatility'
     trigger_reason = Column(String(200))  # Detailed reason for adjustment
-    
+
     # Original and adjusted values
-    parameter_name = Column(String(100), nullable=False)  # e.g., 'position_size_factor', 'stop_loss_multiplier'
+    parameter_name = Column(
+        String(100), nullable=False
+    )  # e.g., 'position_size_factor', 'stop_loss_multiplier'
     original_value = Column(Numeric(18, 8), nullable=False)
     adjusted_value = Column(Numeric(18, 8), nullable=False)
     adjustment_factor = Column(Numeric(18, 8), nullable=False)
-    
+
     # Context for the adjustment
     current_drawdown = Column(Numeric(18, 8))
     performance_score = Column(Numeric(18, 8))
     volatility_level = Column(Numeric(18, 8))
-    
+
     # Duration and effectiveness
     duration_minutes = Column(Integer)  # How long the adjustment was active
     trades_during_adjustment = Column(Integer, default=0)
     pnl_during_adjustment = Column(Numeric(18, 8))
-    
+
     # Session reference
     session_id = Column(Integer, ForeignKey("trading_sessions.id"), nullable=False)
-    
+
     __table_args__ = (
         Index("idx_risk_adj_timestamp", "timestamp"),
         Index("idx_risk_adj_type", "adjustment_type"),
@@ -740,9 +754,7 @@ class CorrelationMatrix(Base):
     last_updated = Column(DateTime)
     window_days = Column(Integer)
 
-    __table_args__ = (
-        Index("idx_corr_pair_updated", "symbol_pair", "last_updated"),
-    )
+    __table_args__ = (Index("idx_corr_pair_updated", "symbol_pair", "last_updated"),)
 
 
 class PortfolioExposure(Base):
@@ -766,24 +778,24 @@ class PredictionCache(Base):
     id = Column(Integer, primary_key=True)
     cache_key = Column(String(255), nullable=False, unique=True, index=True)
     model_name = Column(String(100), nullable=False, index=True)
-    
+
     # Input features hash for cache key generation
     features_hash = Column(String(64), nullable=False, index=True)
-    
+
     # Cached prediction results
     predicted_price = Column(Numeric(18, 8), nullable=False)
     confidence = Column(Numeric(18, 8), nullable=False)
     direction = Column(Integer, nullable=False)  # 1, 0, -1
-    
+
     # Cache metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
     access_count = Column(Integer, default=0)
     last_accessed = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Configuration context for cache invalidation
     config_hash = Column(String(64), nullable=False)  # Hash of model configuration
-    
+
     __table_args__ = (
         Index("idx_pred_cache_expires", "expires_at"),
         Index("idx_pred_cache_model_config", "model_name", "config_hash"),
@@ -793,6 +805,7 @@ class PredictionCache(Base):
 
 class StrategyStatus(enum.Enum):
     """Strategy status enumeration"""
+
     EXPERIMENTAL = "EXPERIMENTAL"
     TESTING = "TESTING"
     PRODUCTION = "PRODUCTION"
@@ -802,49 +815,54 @@ class StrategyStatus(enum.Enum):
 
 class StrategyRegistry(Base):
     """Strategy registry with version control and metadata"""
-    
+
     __tablename__ = "strategy_registry"
-    
+
     id = Column(Integer, primary_key=True)
     strategy_id = Column(String(100), nullable=False, unique=True, index=True)
     name = Column(String(200), nullable=False, index=True)
     version = Column(String(20), nullable=False)
-    
+
     # Lineage tracking
     parent_id = Column(String(100), index=True)
     lineage_path = Column(JSONType, default=lambda: [])  # Path from root ancestor
     branch_name = Column(String(100))
     merge_source = Column(String(100))
-    
+
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     created_by = Column(String(100), nullable=False)
     description = Column(Text)
     tags = Column(JSONType, default=lambda: [])
-    status = Column(Enum(StrategyStatus, native_enum=False, create_type=False), 
-                   nullable=False, default=StrategyStatus.EXPERIMENTAL)
-    
+    status = Column(
+        Enum(StrategyStatus, native_enum=False, create_type=False),
+        nullable=False,
+        default=StrategyStatus.EXPERIMENTAL,
+    )
+
     # Component configurations
     signal_generator_config = Column(JSONType, nullable=False)
     risk_manager_config = Column(JSONType, nullable=False)
     position_sizer_config = Column(JSONType, nullable=False)
     regime_detector_config = Column(JSONType, nullable=False)
-    
+
     # Additional parameters and metadata
     parameters = Column(JSONType, default=lambda: {})
     performance_summary = Column(JSONType)
     validation_results = Column(JSONType)
-    
+
     # Integrity checksums
     config_hash = Column(String(64), nullable=False, index=True)
     component_hash = Column(String(64), nullable=False, index=True)
-    
+
     # Relationships
     # Note: parent relationship removed due to foreign key constraint issues
     # The foreign key constraint is handled in the migration file
     versions = relationship("StrategyVersion", backref="strategy", cascade="all, delete-orphan")
-    performance_records = relationship("StrategyPerformance", backref="strategy", cascade="all, delete-orphan")
-    
+    performance_records = relationship(
+        "StrategyPerformance", backref="strategy", cascade="all, delete-orphan"
+    )
+
     __table_args__ = (
         Index("idx_strategy_name_version", "name", "version"),
         Index("idx_strategy_status_created", "status", "created_at"),
@@ -852,127 +870,131 @@ class StrategyRegistry(Base):
         UniqueConstraint("name", "version", name="uq_strategy_name_version"),
         UniqueConstraint("strategy_id", name="uq_strategy_id"),
     )
-    
+
     created_at_db = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class StrategyVersion(Base):
     """Strategy version tracking"""
-    
+
     __tablename__ = "strategy_versions"
-    
+
     id = Column(Integer, primary_key=True)
-    strategy_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), 
-                        nullable=False, index=True)
+    strategy_id = Column(
+        String(100), ForeignKey("strategy_registry.strategy_id"), nullable=False, index=True
+    )
     version = Column(String(20), nullable=False)
-    
+
     # Version metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     changes = Column(JSONType, nullable=False)  # List of changes
     performance_delta = Column(JSONType)  # Performance comparison with previous version
     is_major = Column(Boolean, default=False)
-    
+
     # Version-specific data
     component_changes = Column(JSONType)  # Which components changed
     parameter_changes = Column(JSONType)  # Parameter differences
-    
+
     __table_args__ = (
         Index("idx_version_strategy_created", "strategy_id", "created_at"),
         UniqueConstraint("strategy_id", "version", name="uq_strategy_version"),
     )
-    
+
     created_at_db = Column(DateTime, default=datetime.utcnow)
 
 
 class StrategyPerformance(Base):
     """Strategy performance tracking and comparison"""
-    
+
     __tablename__ = "strategy_performance"
-    
+
     id = Column(Integer, primary_key=True)
-    strategy_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), 
-                        nullable=False, index=True)
+    strategy_id = Column(
+        String(100), ForeignKey("strategy_registry.strategy_id"), nullable=False, index=True
+    )
     version = Column(String(20), nullable=False)
-    
+
     # Performance period
     period_start = Column(DateTime, nullable=False, index=True)
     period_end = Column(DateTime, nullable=False, index=True)
     period_type = Column(String(20), nullable=False)  # 'backtest', 'paper', 'live'
-    
+
     # Core performance metrics
     total_return = Column(Numeric(18, 8), nullable=False)
     total_return_pct = Column(Numeric(18, 8), nullable=False)
     sharpe_ratio = Column(Numeric(18, 8))
     max_drawdown = Column(Numeric(18, 8))
     win_rate = Column(Numeric(18, 8))
-    
+
     # Trade statistics
     total_trades = Column(Integer, default=0)
     winning_trades = Column(Integer, default=0)
     losing_trades = Column(Integer, default=0)
     avg_trade_duration_hours = Column(Numeric(18, 8))
-    
+
     # Risk metrics
     volatility = Column(Numeric(18, 8))
     sortino_ratio = Column(Numeric(18, 8))
     calmar_ratio = Column(Numeric(18, 8))
     var_95 = Column(Numeric(18, 8))  # Value at Risk 95%
-    
+
     # Component attribution
     signal_generator_contribution = Column(Numeric(18, 8))
     risk_manager_contribution = Column(Numeric(18, 8))
     position_sizer_contribution = Column(Numeric(18, 8))
-    
+
     # Regime-specific performance
     regime_performance = Column(JSONType)  # Performance by regime type
-    
+
     # Additional metrics
     additional_metrics = Column(JSONType, default=lambda: {})
-    
+
     # Test configuration
     test_symbol = Column(String(20))
     test_timeframe = Column(String(10))
     test_parameters = Column(JSONType)
-    
+
     __table_args__ = (
         Index("idx_perf_strategy_period", "strategy_id", "period_start", "period_end"),
         Index("idx_perf_return_sharpe", "total_return_pct", "sharpe_ratio"),
         Index("idx_perf_period_type", "period_type", "period_start"),
     )
-    
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class StrategyLineage(Base):
     """Strategy lineage and evolutionary tracking"""
-    
+
     __tablename__ = "strategy_lineage"
-    
+
     id = Column(Integer, primary_key=True)
-    ancestor_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), 
-                        nullable=False, index=True)
-    descendant_id = Column(String(100), ForeignKey("strategy_registry.strategy_id"), 
-                          nullable=False, index=True)
-    
+    ancestor_id = Column(
+        String(100), ForeignKey("strategy_registry.strategy_id"), nullable=False, index=True
+    )
+    descendant_id = Column(
+        String(100), ForeignKey("strategy_registry.strategy_id"), nullable=False, index=True
+    )
+
     # Relationship metadata
     relationship_type = Column(String(20), nullable=False)  # 'parent', 'branch', 'merge'
     generation_distance = Column(Integer, nullable=False)  # How many generations apart
-    
+
     # Evolution tracking
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     evolution_reason = Column(String(200))  # Why this evolution was made
     change_impact = Column(JSONType)  # Impact analysis of changes
-    
+
     # Performance comparison
     performance_improvement = Column(Numeric(18, 8))  # Performance delta
     risk_change = Column(Numeric(18, 8))  # Risk profile change
-    
+
     __table_args__ = (
         Index("idx_lineage_ancestor", "ancestor_id", "generation_distance"),
         Index("idx_lineage_descendant", "descendant_id", "generation_distance"),
         UniqueConstraint("ancestor_id", "descendant_id", name="uq_lineage_pair"),
     )
-    
+
     created_at_db = Column(DateTime, default=datetime.utcnow)

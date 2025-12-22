@@ -35,7 +35,7 @@ These tests ensure that:
 - Performance metrics maintain the same structure
 
 ### 2. Component Unit Tests
-Located in: `tests/strategies/components/`
+Located in: `tests/unit/strategies/components/`
 
 Individual component tests:
 - `test_signal_generator.py` - Signal generation logic

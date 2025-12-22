@@ -11,12 +11,12 @@ providing a single interface for all Binance operations including:
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 
 from src.config import get_config
-from src.utils.symbol_factory import SymbolFactory
+from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
 from .exchange_interface import (
@@ -49,7 +49,7 @@ except ImportError:
     BINANCE_AVAILABLE = False
 
 # Import geo-detection utilities
-from src.utils.geo_detection import get_binance_api_endpoint, is_us_location
+from src.infrastructure.runtime.geo import get_binance_api_endpoint, is_us_location
 
 
 class BinanceProvider(DataProvider, ExchangeInterface):
@@ -70,7 +70,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
     }
 
     def __init__(
-        self, api_key: Optional[str] = None, api_secret: Optional[str] = None, testnet: bool = False
+        self, api_key: str | None = None, api_secret: str | None = None, testnet: bool = False
     ):
         """
         Initialize the unified Binance provider.
@@ -83,11 +83,21 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         # Initialize DataProvider
         DataProvider.__init__(self)
 
+        config = get_config()
+
         # Get credentials from config if not provided
-        if api_key is None or api_secret is None:
-            config = get_config()
-            api_key = api_key or config.get("BINANCE_API_KEY")
-            api_secret = api_secret or config.get("BINANCE_API_SECRET")
+        if api_key is None:
+            api_key = config.get("BINANCE_API_KEY")
+        if api_secret is None:
+            api_secret = config.get("BINANCE_API_SECRET")
+
+        env_name = str(config.get("ENV", "")).lower()
+        allow_test_credentials = testnet or env_name in {"test", "testing", "ci"}
+
+        # SEC-004 Fix: Validate credentials are properly formatted
+        api_key, api_secret = self._validate_credentials(
+            api_key, api_secret, allow_test_credentials=allow_test_credentials
+        )
 
         # Initialize ExchangeInterface
         if api_key and api_secret:
@@ -99,21 +109,67 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             self.api_secret = api_secret
             self.testnet = testnet
             self._client = None
-
-        # Only initialize the client here when ExchangeInterface was NOT initialized
-        # (i.e., when running without credentials in public/data-only mode)
-        if not (api_key and api_secret):
+            logger.info("Binance provider initialized in read-only mode (no credentials)")
             self._initialize_client()
 
-        if not api_key or not api_secret:
-            logger.warning(
-                "Binance API credentials not found – running in public-endpoint mode (read-only)."
+    @staticmethod
+    def _validate_credentials(
+        api_key: str | None,
+        api_secret: str | None,
+        *,
+        allow_test_credentials: bool = False,
+    ) -> tuple[str, str]:
+        """
+        Validate and normalize API credentials.
+
+        SEC-004 Fix: Ensure credentials are properly formatted or explicitly missing.
+
+        Args:
+            api_key: API key to validate
+            api_secret: API secret to validate
+
+        Returns:
+            Tuple of (api_key, api_secret) - empty strings if not provided
+
+        Raises:
+            ValueError: If credentials are provided but malformed
+        """
+        # If both are missing/None, return empty strings for read-only mode
+        if not api_key and not api_secret:
+            return "", ""
+
+        # If only one is provided, that's an error
+        if bool(api_key) != bool(api_secret):
+            raise ValueError(
+                "Binance credentials must be provided together. "
+                "Either provide both BINANCE_API_KEY and BINANCE_API_SECRET, or neither."
             )
+
+        # Validate credential format (reasonable minimum length)
+        if api_key and len(str(api_key).strip()) < 20:
+            if allow_test_credentials:
+                logger.debug("Binance provider allowing short API key for test environment")
+            else:
+                raise ValueError(
+                    f"Invalid BINANCE_API_KEY format (too short: {len(str(api_key))} chars)"
+                )
+        if api_secret and len(str(api_secret).strip()) < 20:
+            if allow_test_credentials:
+                logger.debug("Binance provider allowing short API secret for test environment")
+            else:
+                raise ValueError(
+                    f"Invalid BINANCE_API_SECRET format (too short: {len(str(api_secret))} chars)"
+                )
+
+        return (
+            str(api_key).strip() if api_key else "",
+            str(api_secret).strip() if api_secret else "",
+        )
 
     def _initialize_client(self):
         """Initialize Binance client with geo-aware API selection and error handling"""
         logger.debug(f"_initialize_client called - BINANCE_AVAILABLE: {BINANCE_AVAILABLE}")
-        
+
         if not BINANCE_AVAILABLE:
             logger.warning("Binance library not available - using mock client")
             self._client = self._create_offline_client()
@@ -122,18 +178,24 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         # Determine which Binance API to use based on location
         api_endpoint = get_binance_api_endpoint()
         is_us = is_us_location()
-        
-        logger.info(f"Geo-detection result: {'US location' if is_us else 'Non-US location'} - using {api_endpoint} API")
+
+        logger.info(
+            f"Geo-detection result: {'US location' if is_us else 'Non-US location'} - using {api_endpoint} API"
+        )
 
         try:
-            logger.debug(f"Attempting to create {api_endpoint} client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}")
-            
+            logger.debug(
+                f"Attempting to create {api_endpoint} client - has_credentials: {bool(self.api_key and self.api_secret)}, testnet: {self.testnet}"
+            )
+
             # Create client with appropriate API endpoint
             if self.api_key and self.api_secret:
                 logger.debug(f"Creating authenticated {api_endpoint} client...")
                 if api_endpoint == "binanceus":
                     # For Binance US, use tld='us' parameter
-                    self._client = Client(self.api_key, self.api_secret, testnet=self.testnet, tld='us')
+                    self._client = Client(
+                        self.api_key, self.api_secret, testnet=self.testnet, tld="us"
+                    )
                 else:
                     # For global Binance
                     self._client = Client(self.api_key, self.api_secret, testnet=self.testnet)
@@ -141,22 +203,22 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.debug(f"Creating public {api_endpoint} client...")
                 if api_endpoint == "binanceus":
                     # For Binance US public client
-                    self._client = Client(tld='us')
+                    self._client = Client(tld="us")
                 else:
                     # For global Binance public client
                     self._client = Client()
-            
+
             logger.info(
                 f"{api_endpoint.title()} client initialized successfully "
                 f"({'with credentials' if self.api_key and self.api_secret else 'public mode'}, "
                 f"testnet: {self.testnet})"
             )
-                
+
             # Test the client with a simple operation
             logger.debug("Testing client with server time request...")
             test_response = self._client.get_server_time()
             logger.debug(f"Server time test successful: {test_response}")
-            
+
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
@@ -243,7 +305,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         return self._process_ohlcv([k[:6] for k in klines], timestamp_unit="ms")
 
     def get_historical_data(
-        self, symbol: str, timeframe: str, start: datetime, end: Optional[datetime] = None
+        self, symbol: str, timeframe: str, start: datetime, end: datetime | None = None
     ) -> pd.DataFrame:
         """Fetch historical klines data from Binance"""
         try:
@@ -262,11 +324,17 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 # Check if this is expected (future dates) or an error
                 current_time = datetime.now()
                 if end is not None and end > current_time:
-                    logger.info(f"No data available for future dates: requested {start} to {end}, current time is {current_time}")
+                    logger.info(
+                        f"No data available for future dates: requested {start} to {end}, current time is {current_time}"
+                    )
                 elif end is not None and end > current_time - timedelta(hours=1):
-                    logger.info(f"No recent data available yet: requested {start} to {end}, current time is {current_time}")
+                    logger.info(
+                        f"No recent data available yet: requested {start} to {end}, current time is {current_time}"
+                    )
                 else:
-                    logger.warning(f"No data returned for {symbol} {timeframe} from {start} to {end}")
+                    logger.warning(
+                        f"No data returned for {symbol} {timeframe} from {start} to {end}"
+                    )
             return df
 
         except Exception as e:
@@ -330,9 +398,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return float(ticker["price"])
         except Exception as e:
             error_type = type(e).__name__
-            logger.error(
-                f"Error fetching current price for {symbol}: {error_type}: {str(e)}"
-            )
+            logger.error(f"Error fetching current price for {symbol}: {error_type}: {str(e)}")
             return 0.0
 
     # ========================================
@@ -407,7 +473,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get balances: {e}")
             return []
 
-    def get_balance(self, asset: str) -> Optional[AccountBalance]:
+    def get_balance(self, asset: str) -> AccountBalance | None:
         """Get balance for a specific asset"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for balance")
@@ -436,7 +502,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get balance for {asset}: {e}")
             return None
 
-    def get_positions(self, symbol: Optional[str] = None) -> list[Position]:
+    def get_positions(self, symbol: str | None = None) -> list[Position]:
         """Get open positions (for spot trading, this returns holdings as positions)"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning empty positions")
@@ -482,7 +548,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get positions: {e}")
             return []
 
-    def get_open_orders(self, symbol: Optional[str] = None) -> list[Order]:
+    def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         """Get all open orders"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning empty orders")
@@ -525,7 +591,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get open orders: {e}")
             return []
 
-    def get_order(self, order_id: str, symbol: str) -> Optional[Order]:
+    def get_order(self, order_id: str, symbol: str) -> Order | None:
         """Get specific order by ID"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for order")
@@ -598,10 +664,10 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         side: OrderSide,
         order_type: OrderType,
         quantity: float,
-        price: Optional[float] = None,
-        stop_price: Optional[float] = None,
+        price: float | None = None,
+        stop_price: float | None = None,
         time_in_force: str = "GTC",
-    ) -> Optional[str]:
+    ) -> str | None:
         """Place a new order and return order ID"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place order")
@@ -670,7 +736,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Error cancelling order {order_id}: {e}")
             return False
 
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> bool:
+    def cancel_all_orders(self, symbol: str | None = None) -> bool:
         """Cancel all open orders"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot cancel orders")
@@ -692,7 +758,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to cancel all orders: {e}")
             return False
 
-    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
+    def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         """Get trading symbol information"""
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - returning None for symbol info")

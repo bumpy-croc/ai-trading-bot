@@ -9,13 +9,14 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import onnxruntime as ort
 
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
+from .execution_providers import get_preferred_providers
 
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
@@ -35,7 +36,12 @@ class ModelPrediction:
 class OnnxRunner:
     """Handles ONNX model loading and inference"""
 
-    def __init__(self, model_path: str, config: PredictionConfig, cache_manager: Optional[PredictionCacheManager] = None):
+    def __init__(
+        self,
+        model_path: str,
+        config: PredictionConfig,
+        cache_manager: PredictionCacheManager | None = None,
+    ):
         """
         Initialize ONNX runner with model path and configuration.
 
@@ -54,8 +60,9 @@ class OnnxRunner:
     def _load_model(self) -> None:
         """Load ONNX model and metadata"""
         try:
-            # Load ONNX session
-            self.session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
+            # Load ONNX session with the best available execution providers
+            providers = get_preferred_providers()
+            self.session = ort.InferenceSession(self.model_path, providers=providers)
 
             # Load model metadata
             self.model_metadata = self._load_metadata()
@@ -121,7 +128,7 @@ class OnnxRunner:
         except Exception as e:
             raise RuntimeError(f"Prediction failed: {e}") from e
 
-    def _check_cache(self, features: np.ndarray) -> Optional[dict]:
+    def _check_cache(self, features: np.ndarray) -> dict | None:
         """Check cache for existing prediction result"""
         if not self.cache_manager:
             return None
@@ -131,7 +138,11 @@ class OnnxRunner:
             config = {
                 "confidence_scale_factor": self.config.confidence_scale_factor,
                 "direction_threshold": self.config.direction_threshold,
-                "normalization_params": self.model_metadata.get("normalization_params", {}) if self.model_metadata else {},
+                "normalization_params": (
+                    self.model_metadata.get("normalization_params", {})
+                    if self.model_metadata
+                    else {}
+                ),
             }
 
             return self.cache_manager.get(features, model_name, config)
@@ -139,7 +150,9 @@ class OnnxRunner:
             # Log cache errors at debug level to aid in troubleshooting while maintaining fallback behavior
             logging.debug(
                 "Cache lookup failed for model %s: %s: %s. Falling back to model inference.",
-                model_name, type(e).__name__, str(e)
+                model_name,
+                type(e).__name__,
+                str(e),
             )
             return None
 
@@ -153,18 +166,28 @@ class OnnxRunner:
             config = {
                 "confidence_scale_factor": self.config.confidence_scale_factor,
                 "direction_threshold": self.config.direction_threshold,
-                "normalization_params": self.model_metadata.get("normalization_params", {}) if self.model_metadata else {},
+                "normalization_params": (
+                    self.model_metadata.get("normalization_params", {})
+                    if self.model_metadata
+                    else {}
+                ),
             }
 
             self.cache_manager.set(
-                features, model_name, config,
-                prediction["price"], prediction["confidence"], prediction["direction"]
+                features,
+                model_name,
+                config,
+                prediction["price"],
+                prediction["confidence"],
+                prediction["direction"],
             )
         except Exception as e:
             # Log cache errors at debug level to aid in troubleshooting while not affecting prediction
             logging.debug(
                 "Failed to cache prediction result for model %s: %s: %s. Continuing with prediction.",
-                model_name, type(e).__name__, str(e)
+                model_name,
+                type(e).__name__,
+                str(e),
             )
 
     def _prepare_input(self, features: np.ndarray) -> np.ndarray:

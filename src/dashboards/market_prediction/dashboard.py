@@ -9,6 +9,7 @@ _WEB_SERVER_USE_GEVENT = os.environ.get("WEB_SERVER_USE_GEVENT", "0") == "1"
 
 if _WEB_SERVER_USE_GEVENT:
     import gevent.monkey
+
     # Full monkey patching for production WSGI server
     gevent.monkey.patch_all()
     _ASYNC_MODE = "gevent"
@@ -19,7 +20,7 @@ else:
 
 # Standard library imports
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +99,7 @@ class MarketPredictionDashboard:
 
     def _load_price_history(self, symbol: str) -> pd.DataFrame:
         """Load historical daily OHLCV for the symbol (lookback_days)."""
-        end_dt = datetime.now(timezone.utc)
+        end_dt = datetime.now(UTC)
         start_dt = end_dt - timedelta(days=self.lookback_days)
 
         provider = self._get_price_provider()
@@ -112,7 +113,8 @@ class MarketPredictionDashboard:
         if df is None or df.empty:
             # Fallback to bundled CSV (offline mode)
             symbol_csv = "BTCUSDT_1d.csv" if symbol == "BTCUSDT" else "ETHUSDT_1d.csv"
-            from src.utils.project_paths import get_project_root
+            from src.infrastructure.runtime.paths import get_project_root
+
             csv_path = get_project_root() / "src" / "data" / symbol_csv
             if not csv_path.exists():
                 logger.error("Offline price CSV not found at %s", csv_path)
@@ -122,7 +124,7 @@ class MarketPredictionDashboard:
             df = df.loc[start_dt:]  # trim to lookback window
         # Ensure datetime index is timezone aware
         if df.index.tzinfo is None or df.index.tz is None:
-            df.index = df.index.tz_localize(timezone.utc)
+            df.index = df.index.tz_localize(UTC)
         return df
 
     def _linear_regression_forecast(self, close: pd.Series, horizon: int) -> dict[str, float]:

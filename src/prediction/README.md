@@ -1,41 +1,66 @@
 # Prediction Engine
 
-> **Last Updated**: 2025-10-21  
+> **Last Updated**: 2025-11-10  
 > **Related Documentation**: See [docs/prediction.md](../../docs/prediction.md) for comprehensive guide
 
 Centralized ONNX model loading, inference, and caching for all ML strategies.
 
 ## Components
-- `config.py`: `PredictionConfig` (paths, thresholds, cache TTL)
-- `models/onnx_runner.py`: ONNX loader and inference (`OnnxRunner`)
-- `models/registry.py`: `PredictionModelRegistry` (discovers models in `src/ml` at project root)
-- `utils/caching.py`: TTL-based prediction cache and decorators
+- `config.py`: `PredictionConfig` (model registry paths, cache knobs, thresholds).
+- `engine.py`: `PredictionEngine` that wires feature extraction, registry selection, and caching.
+- `features/`: FeaturePipeline modules (technical, sentiment, market microstructure).
+- `models/onnx_runner.py`: `OnnxRunner` executing ONNX artifacts with provider negotiation and caching.
+- `models/registry.py`: `PredictionModelRegistry` that discovers bundles under `src/ml/models/`.
+- `utils/caching.py`: TTL-based prediction cache plus helpers shared by runners and the engine.
 
-Note: `sitecustomize.py` adds both project root and `src/` to `sys.path`, so imports like `from prediction...` resolve when running scripts.
+`sitecustomize.py` injects both the project root and `src/` onto `sys.path`, so imports like `from prediction.engine import PredictionEngine` resolve for CLI and ad-hoc scripts alike.
 
 ## Usage
 ```python
-from src.prediction.config import PredictionConfig
-from src.prediction.models.registry import PredictionModelRegistry
 import numpy as np
 
-config = PredictionConfig()
-registry = PredictionModelRegistry(config)
+from src.prediction.config import PredictionConfig
+from src.prediction.models.registry import PredictionModelRegistry
 
-features = np.random.rand(120, 5).astype(np.float32)
-pred = registry.predict('btcusdt_price', features)
-print(pred.price, pred.confidence, pred.direction)
+config = PredictionConfig.from_config_manager()
+registry = PredictionModelRegistry(config)
+bundle = registry.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
+
+# Build a zeroed feature tensor that matches the bundle schema (sequence_length x features)
+sequence_length = int(bundle.metadata.get("sequence_length", 120))
+feature_count = len(bundle.metadata.get("feature_names", [])) or len(
+    bundle.feature_schema.get("features", [])
+) or 5
+features = np.zeros((1, sequence_length, feature_count), dtype=np.float32)
+
+prediction = bundle.runner.predict(features)
+print(bundle.version_id, prediction.price, prediction.confidence)
 ```
+
+`PredictionModelRegistry` exposes additional helpers:
+- `list_bundles()` – enumerate every discovered `(symbol, timeframe, model_type)` tuple.
+- `select_bundle(symbol=..., model_type=..., timeframe=...)` – fetch the active bundle (latest symlink wins).
+- `reload_models()` – refresh in-memory bundles after adding artifacts.
+- `invalidate_cache(model_name=None)` – forward eviction requests to `PredictionCacheManager`.
 
 ## Model Storage
 
-Models are available in two structures:
-- **Flat (legacy)**: `src/ml/*.onnx` (e.g., `btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`) along with legacy artifacts (`.h5`, `.keras`, and `*_metadata.json` such as `btcusdt_price_metadata.json`)
-- **Nested (current)**: `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`) with colocated `metadata.json`
+All models are now stored in the **structured registry format**:
+- **Registry structure**: `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`)
+- Each model directory contains: `model.onnx`, `model.keras`, `saved_model/`, `metadata.json`, and `feature_schema.json`
+- The `latest/` symlink in each type directory points to the current production version
 
 ## Status
-- Strategies currently load ONNX directly from the legacy paths; migration to exclusive use of `PredictionModelRegistry` is planned.
-- Both storage layouts remain in place for backward compatibility:
-  - Flat structure (legacy, archival compatibility): `src/ml/btcusdt_price.onnx`, `btcusdt_price_v2.onnx`, `btcusdt_sentiment.onnx`, `ethusdt_sentiment.onnx`
-  - Nested structure (current default for component strategies): `src/ml/models/{SYMBOL}/{TYPE}/{VERSION}/model.onnx` (e.g., `BTCUSDT/basic/2025-09-17_1h_v1/model.onnx`)
-- Metadata lives alongside each model—legacy files keep the `*_metadata.json` naming, while the registry uses a single `metadata.json` per versioned directory.
+
+All strategies now exclusively use `PredictionModelRegistry` for model loading:
+- Legacy flat structure has been removed from `src/ml/` root
+- All signal generators (`MLSignalGenerator`, `MLBasicSignalGenerator`) use the registry by default
+- Strategy factory functions (`create_ml_basic_strategy`, `create_ml_adaptive_strategy`, `create_ml_sentiment_strategy`) only accept registry parameters
+
+## Migration (Completed October 2025)
+
+The dual-mode architecture has been removed:
+- ✅ Removed `DEFAULT_USE_PREDICTION_ENGINE` constant
+- ✅ Removed `model_path` and `use_prediction_engine` parameters from all strategies
+- ✅ Deleted legacy symlinks from `src/ml/` root
+- ✅ All strategies now use registry-based model loading exclusively

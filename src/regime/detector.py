@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -41,9 +40,9 @@ class RegimeDetector:
     annotate(df) adds columns: 'trend_score', 'trend_label', 'vol_label', 'regime_label', 'regime_confidence'
     """
 
-    def __init__(self, config: Optional[RegimeConfig] = None):
+    def __init__(self, config: RegimeConfig | None = None):
         self.config = config or RegimeConfig()
-        self._last_label: Optional[str] = None
+        self._last_label: str | None = None
         self._consecutive: int = 0
         self._dwell: int = 0
 
@@ -162,6 +161,7 @@ class RegimeDetector:
     @staticmethod
     def _percentile_rank(series: pd.Series, lookback: int) -> pd.Series:
         """Optimized percentile rank calculation"""
+
         def rank_last(window: pd.Series | np.ndarray) -> float:
             arr = np.asarray(window)
             if np.isnan(arr).any():
@@ -194,7 +194,7 @@ class RegimeDetector:
         # Use engine='numba' for better performance if available
         try:
             return series.rolling(window=lookback, min_periods=lookback).apply(
-                rank_last, raw=True, engine='numba'
+                rank_last, raw=True, engine="numba"
             )
         except Exception:
             # Fallback to default engine

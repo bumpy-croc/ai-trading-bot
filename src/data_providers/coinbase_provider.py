@@ -6,13 +6,13 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import requests
 
 from src.config import get_config
-from src.utils.symbol_factory import SymbolFactory
+from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
 from .exchange_interface import (
@@ -52,24 +52,117 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        passphrase: Optional[str] = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        passphrase: str | None = None,
         testnet: bool = False,
     ):
         # Initialize DataProvider
         DataProvider.__init__(self)
 
+        config = get_config()
+
         # Credentials from config if not provided
-        if api_key is None or api_secret is None:
-            config = get_config()
-            api_key = api_key or config.get("COINBASE_API_KEY")
-            api_secret = api_secret or config.get("COINBASE_API_SECRET")
-            passphrase = passphrase or config.get("COINBASE_API_PASSPHRASE")
+        if api_key is None:
+            api_key = config.get("COINBASE_API_KEY")
+        if api_secret is None:
+            api_secret = config.get("COINBASE_API_SECRET")
+        if passphrase is None:
+            passphrase = config.get("COINBASE_API_PASSPHRASE")
+
+        env_name = str(config.get("ENV", "")).lower()
+        allow_test_credentials = testnet or env_name in {"test", "testing", "ci"}
+
+        # SEC-004 Fix: Validate credentials are properly formatted
+        api_key, api_secret, passphrase = self._validate_credentials(
+            api_key,
+            api_secret,
+            passphrase,
+            allow_test_credentials=allow_test_credentials,
+        )
 
         # Initialize ExchangeInterface (will handle _initialize_client)
         ExchangeInterface.__init__(self, api_key or "", api_secret or "", testnet)
         self.passphrase = passphrase
+
+    @staticmethod
+    def _validate_credentials(
+        api_key: str | None,
+        api_secret: str | None,
+        passphrase: str | None,
+        *,
+        allow_test_credentials: bool = False,
+    ) -> tuple[str, str, str]:
+        """
+        Validate and normalize Coinbase API credentials.
+
+        SEC-004 Fix: Ensure credentials are properly formatted or explicitly missing.
+
+        Args:
+            api_key: API key to validate
+            api_secret: API secret to validate
+            passphrase: API passphrase to validate
+
+        Returns:
+            Tuple of (api_key, api_secret, passphrase) - empty strings if not provided
+
+        Raises:
+            ValueError: If credentials are provided but malformed
+        """
+        # If all are missing/None, return empty strings for public mode
+        if not api_key and not api_secret and not passphrase:
+            return "", "", ""
+
+        # Require key and secret to be provided together
+        if bool(api_key) != bool(api_secret):
+            raise ValueError(
+                "Coinbase API key and secret must be provided together. "
+                "Either supply both COINBASE_API_KEY and COINBASE_API_SECRET, or neither."
+            )
+
+        # Passphrase must align with key/secret usage
+        if passphrase and not (api_key and api_secret):
+            raise ValueError(
+                "Coinbase API passphrase provided without key/secret. "
+                "Provide COINBASE_API_KEY, COINBASE_API_SECRET, and COINBASE_API_PASSPHRASE together."
+            )
+        if api_key and api_secret and not passphrase:
+            if allow_test_credentials:
+                logger.debug("Coinbase provider allowing missing passphrase for test environment")
+                passphrase = ""
+            else:
+                raise ValueError(
+                    "Coinbase credentials must include COINBASE_API_PASSPHRASE when providing API key and secret"
+                )
+
+        # Validate credential format (reasonable minimum length)
+        if api_key and len(str(api_key).strip()) < 20:
+            if allow_test_credentials:
+                logger.debug("Coinbase provider allowing short API key for test environment")
+            else:
+                raise ValueError(
+                    f"Invalid COINBASE_API_KEY format (too short: {len(str(api_key))} chars)"
+                )
+        if api_secret and len(str(api_secret).strip()) < 20:
+            if allow_test_credentials:
+                logger.debug("Coinbase provider allowing short API secret for test environment")
+            else:
+                raise ValueError(
+                    f"Invalid COINBASE_API_SECRET format (too short: {len(str(api_secret))} chars)"
+                )
+        if passphrase and len(str(passphrase).strip()) < 5:
+            if allow_test_credentials:
+                logger.debug("Coinbase provider allowing short API passphrase for test environment")
+            else:
+                raise ValueError(
+                    f"Invalid COINBASE_API_PASSPHRASE format (too short: {len(str(passphrase))} chars)"
+                )
+
+        return (
+            str(api_key).strip() if api_key else "",
+            str(api_secret).strip() if api_secret else "",
+            str(passphrase).strip() if passphrase else "",
+        )
 
     # ---------------------- ExchangeInterface ---------------------
     def _initialize_client(self):
@@ -99,8 +192,8 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         self,
         method: str,
         path: str,
-        params: dict[str, Any] = None,
-        body: dict[str, Any] = None,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
         auth: bool = False,
     ):
         """Helper to perform HTTP request with optional Coinbase authentication."""
@@ -180,18 +273,18 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to fetch balances: {e}")
             return []
 
-    def get_balance(self, asset: str) -> Optional[AccountBalance]:
+    def get_balance(self, asset: str) -> AccountBalance | None:
         balances = self.get_balances()
         for bal in balances:
             if bal.asset.upper() == asset.upper():
                 return bal
         return None
 
-    def get_positions(self, symbol: Optional[str] = None) -> list[Position]:
+    def get_positions(self, symbol: str | None = None) -> list[Position]:
         logger.info("get_positions not implemented for Coinbase spot API (only holdings)")
         return []
 
-    def get_open_orders(self, symbol: Optional[str] = None) -> list[Order]:
+    def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         try:
             params = {"status": "open"}
             if symbol:
@@ -231,7 +324,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get open orders: {e}")
             return []
 
-    def get_order(self, order_id: str, symbol: str) -> Optional[Order]:
+    def get_order(self, order_id: str, symbol: str) -> Order | None:
         try:
             od = self._request("GET", f"/orders/{order_id}", auth=True)
             return Order(
@@ -296,10 +389,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         side: OrderSide,
         order_type: OrderType,
         quantity: float,
-        price: Optional[float] = None,
-        stop_price: Optional[float] = None,
+        price: float | None = None,
+        stop_price: float | None = None,
         time_in_force: str = "GTC",
-    ) -> Optional[str]:
+    ) -> str | None:
         try:
             cb_type = self._convert_to_cb_type(order_type)
             body: dict[str, Any] = {
@@ -335,7 +428,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
 
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> bool:
+    def cancel_all_orders(self, symbol: str | None = None) -> bool:
         try:
             params = (
                 {"product_id": SymbolFactory.to_exchange_symbol(symbol, "coinbase")}
@@ -348,7 +441,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to cancel all orders: {e}")
             return False
 
-    def get_symbol_info(self, symbol: str) -> Optional[dict[str, Any]]:
+    def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         try:
             product = self._request(
                 "GET", f"/products/{SymbolFactory.to_exchange_symbol(symbol, 'coinbase')}"
@@ -379,9 +472,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         self,
         product_id: str,
         granularity: int,
-        start: datetime = None,
-        end: datetime = None,
-        limit: int = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int | None = None,
     ) -> list[list[Any]]:
         """Fetch candle data from Coinbase public API."""
         params = {"granularity": granularity}
@@ -421,7 +514,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         symbol: str,
         timeframe: str,
         start: datetime,
-        end: Optional[datetime] = None,
+        end: datetime | None = None,
     ) -> pd.DataFrame:
         try:
             granularity = self._convert_timeframe(timeframe)
@@ -494,17 +587,17 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         }
         return mapping.get(order_type, OrderType.MARKET)
 
-    def _convert_order_status(self, status: str, done_reason: str = None) -> OrderStatus:
+    def _convert_order_status(self, status: str, done_reason: str | None = None) -> OrderStatus:
         """Convert Coinbase order status to internal OrderStatus enum.
-        
+
         Args:
             status: Coinbase order status
             done_reason: For 'done' orders, the reason (filled, cancelled, etc.)
         """
         if status == "open":
-            return OrderStatus.PENDING           # Order is live but not filled
+            return OrderStatus.PENDING  # Order is live but not filled
         elif status == "pending":
-            return OrderStatus.PENDING           # Order submission pending  
+            return OrderStatus.PENDING  # Order submission pending
         elif status == "active":
             return OrderStatus.PARTIALLY_FILLED  # Order partially executed
         elif status == "done":

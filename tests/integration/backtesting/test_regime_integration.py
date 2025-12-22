@@ -16,25 +16,25 @@ from src.strategies.components.position_sizer import PositionSizer
 
 class PeriodicSignalGenerator(SignalGenerator):
     """Signal generator that signals BUY every 15 candles"""
-    
+
     def __init__(self):
         super().__init__(name="periodic_signal")
-    
+
     def generate_signal(self, df: pd.DataFrame, index: int, regime=None) -> Signal:
         if index % 15 == 0 and index > 0:
             return Signal(
                 direction=SignalDirection.BUY,
                 confidence=0.7,
                 strength=1.0,
-                metadata={"timestamp": df.index[index]}
+                metadata={"timestamp": df.index[index]},
             )
         return Signal(
             direction=SignalDirection.HOLD,
             confidence=0.0,
             strength=0.0,
-            metadata={"timestamp": df.index[index]}
+            metadata={"timestamp": df.index[index]},
         )
-    
+
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
         if index % 15 == 0 and index > 0:
             return 0.7
@@ -43,27 +43,29 @@ class PeriodicSignalGenerator(SignalGenerator):
 
 class FixedRiskManager(RiskManager):
     """Risk manager with fixed risk"""
-    
+
     def __init__(self):
         super().__init__(name="fixed_risk")
-    
+
     def calculate_position_size(self, signal: Signal, balance: float, regime=None) -> float:
         return 0.05 * balance
-    
+
     def should_exit(self, position, current_data, regime=None) -> bool:
         return False
-    
+
     def get_stop_loss(self, entry_price: float, signal: Signal, regime=None) -> float:
         return entry_price * 0.99
 
 
 class FixedPositionSizer(PositionSizer):
     """Position sizer with fixed fraction"""
-    
+
     def __init__(self):
         super().__init__(name="fixed_sizer")
-    
-    def calculate_size(self, signal: Signal, balance: float, risk_amount: float, regime=None) -> float:
+
+    def calculate_size(
+        self, signal: Signal, balance: float, risk_amount: float, regime=None
+    ) -> float:
         return 0.05
 
 
@@ -73,7 +75,7 @@ def create_dummy_strategy() -> Strategy:
         name="DummyStrategy",
         signal_generator=PeriodicSignalGenerator(),
         risk_manager=FixedRiskManager(),
-        position_sizer=FixedPositionSizer()
+        position_sizer=FixedPositionSizer(),
     )
 
 
@@ -89,6 +91,7 @@ def test_backtester_regime_annotation(monkeypatch):
         initial_balance=1000,
         log_to_database=False,
     )
+
     # Inject a deterministic regime switcher so we can assert on regime metrics
     class StubRegimeSwitcher:
         def __init__(self):
@@ -152,7 +155,9 @@ def test_regime_switcher_respects_lookback(monkeypatch):
             return strategy_obj
 
     class DummySwitcher:
-        def __init__(self, strategy_manager, regime_config=None, strategy_mapping=None, switching_config=None):
+        def __init__(
+            self, strategy_manager, regime_config=None, strategy_mapping=None, switching_config=None
+        ):
             self.strategy_manager = strategy_manager
             self.regime_detector = RegimeDetector(
                 RegimeConfig(slope_window=30, atr_percentile_lookback=80)

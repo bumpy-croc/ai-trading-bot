@@ -173,6 +173,9 @@ class Backtester:
         use_next_bar_execution: bool = True,  # Execute on next candle's open
         use_high_low_for_stops: bool = True,  # Check high/low for SL/TP hits
     ):
+        if initial_balance <= 0:
+            raise ValueError("Initial balance must be positive")
+
         self._runtime_dataset = None
         self._runtime_warmup = 0
         self._configure_strategy(strategy)
@@ -2097,8 +2100,12 @@ class Backtester:
                     "mape_pct": mape,
                     "brier_score_direction": brier,
                 },
-                "dynamic_risk_adjustments": self.dynamic_risk_adjustments if self.enable_dynamic_risk else [],
-                "dynamic_risk_summary": self._summarize_dynamic_risk_adjustments() if self.enable_dynamic_risk else None,
+                "dynamic_risk_adjustments": (
+                    self.dynamic_risk_adjustments if self.enable_dynamic_risk else []
+                ),
+                "dynamic_risk_summary": (
+                    self._summarize_dynamic_risk_adjustments() if self.enable_dynamic_risk else None
+                ),
                 # Execution realism metrics
                 "total_fees": self.total_fees_paid,
                 "total_slippage_cost": self.total_slippage_cost,
@@ -2109,25 +2116,29 @@ class Backtester:
                     "use_high_low_for_stops": self.use_high_low_for_stops,
                 },
             }
-            
+
             # Add regime switching results if enabled
             if self.enable_regime_switching:
-                results.update({
-                    "regime_switching_enabled": True,
-                    "strategy_switches": self.strategy_switches,
-                    "regime_history": self.regime_history,
-                    "final_strategy": self.strategy.name,
-                    "initial_strategy": self.initial_strategy_name,  # Original strategy name
-                    "total_strategy_switches": len(self.strategy_switches)
-                })
+                results.update(
+                    {
+                        "regime_switching_enabled": True,
+                        "strategy_switches": self.strategy_switches,
+                        "regime_history": self.regime_history,
+                        "final_strategy": self.strategy.name,
+                        "initial_strategy": self.initial_strategy_name,  # Original strategy name
+                        "total_strategy_switches": len(self.strategy_switches),
+                    }
+                )
             else:
-                results.update({
-                    "regime_switching_enabled": False,
-                    "strategy_switches": [],
-                    "regime_history": [],
-                    "total_strategy_switches": 0
-                })
-            
+                results.update(
+                    {
+                        "regime_switching_enabled": False,
+                        "strategy_switches": [],
+                        "regime_history": [],
+                        "total_strategy_switches": 0,
+                    }
+                )
+
             return results
 
         except Exception as e:

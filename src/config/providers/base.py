@@ -5,14 +5,14 @@ This module defines the base interface for configuration providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 
 
 class ConfigProvider(ABC):
     """Abstract base class for configuration providers"""
 
     @abstractmethod
-    def get(self, key: str, default: Optional[Any] = None) -> Optional[Any]:
+    def get(self, key: str, default: Any | None = None) -> Any | None:
         """Get configuration value."""
         pass
 

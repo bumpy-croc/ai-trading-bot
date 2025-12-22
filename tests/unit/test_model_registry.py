@@ -38,10 +38,12 @@ def test_select_bundle_and_many(tmp_path: Path, monkeypatch):
     reg = PredictionModelRegistry(cfg)
     b = reg.select_bundle(symbol="BTCUSDT", model_type="basic", timeframe="1h")
     assert isinstance(b, StrategyModel)
-    sel = reg.select_many([
-        ("BTCUSDT", "basic", "1h"),
-        ("ETHUSDT", "basic", "1h"),
-    ])
+    sel = reg.select_many(
+        [
+            ("BTCUSDT", "basic", "1h"),
+            ("ETHUSDT", "basic", "1h"),
+        ]
+    )
     assert len(sel) == 2
 
 
@@ -54,10 +56,12 @@ def test_select_many_fail_fast(tmp_path: Path, monkeypatch):
     reg = PredictionModelRegistry(cfg)
 
     with pytest.raises(ModelLoadError):
-        reg.select_many([
-            ("BTCUSDT", "basic", "1h"),
-            ("ETHUSDT", "basic", "1h"),  # missing
-        ])
+        reg.select_many(
+            [
+                ("BTCUSDT", "basic", "1h"),
+                ("ETHUSDT", "basic", "1h"),  # missing
+            ]
+        )
 
 
 # ---- Cache invalidation tests ----
@@ -103,5 +107,3 @@ def test_invalidate_cache_clear_all(tmp_path: Path, monkeypatch):
 
     assert invalidated == 5
     mock_cache_manager.clear.assert_called_once_with()
-
-

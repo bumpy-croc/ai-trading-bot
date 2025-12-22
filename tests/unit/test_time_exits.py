@@ -88,22 +88,24 @@ def test_get_next_exit_time_returns_soonest():
 
 # Edge case tests for comprehensive coverage
 
+
 class TestTimeExitPolicyEdgeCases:
     """Test edge cases and comprehensive scenarios for TimeExitPolicy."""
 
     def test_timezone_aware_vs_naive_datetimes(self):
         """Test handling of timezone-aware vs naive datetimes."""
         policy = TimeExitPolicy(max_holding_hours=24)
-        
+
         # Naive datetimes
         entry_naive = datetime(2024, 1, 1, 0, 0)
         now_naive = datetime(2024, 1, 2, 1, 0)  # 25 hours later
         should_exit, reason = policy.check_time_exit_conditions(entry_naive, now_naive)
         assert should_exit
         assert reason == "Max holding period"
-        
+
         # Mixed timezone handling should work
         from datetime import timezone
+
         entry_utc = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
         now_utc = datetime(2024, 1, 2, 1, 0, tzinfo=timezone.utc)
         should_exit, reason = policy.check_time_exit_conditions(entry_utc, now_utc)
@@ -141,19 +143,19 @@ class TestTimeExitPolicyEdgeCases:
         """Test weekend flat with various weekend scenarios."""
         policy = TimeExitPolicy(weekend_flat=True)
         entry = datetime(2024, 1, 5, 12, 0)  # Friday
-        
+
         # Saturday
         now_sat = datetime(2024, 1, 6, 10, 0)
         should_exit, reason = policy.check_time_exit_conditions(entry, now_sat)
         assert should_exit
         assert reason == "Weekend flat"
-        
+
         # Sunday
         now_sun = datetime(2024, 1, 7, 10, 0)
         should_exit, reason = policy.check_time_exit_conditions(entry, now_sun)
         assert should_exit
         assert reason == "Weekend flat"
-        
+
         # Monday (not weekend)
         now_mon = datetime(2024, 1, 8, 10, 0)
         should_exit, reason = policy.check_time_exit_conditions(entry, now_mon)
@@ -167,7 +169,7 @@ class TestTimeExitPolicyEdgeCases:
         )
         entry = datetime(2024, 1, 5, 23, 0)  # Friday 23:00
         now = datetime(2024, 1, 6, 1, 0)  # Saturday 01:00 (both weekend and max holding)
-        
+
         should_exit, reason = policy.check_time_exit_conditions(entry, now)
         assert should_exit
         # Max holding period should be checked first
@@ -187,7 +189,7 @@ class TestTimeExitPolicyEdgeCases:
             time_restrictions=TimeRestrictions(no_overnight=True),
             market_session=session,
         )
-        
+
         entry = datetime(2024, 1, 2, 15, 0)  # Tuesday inside session
         now_after_close = datetime(2024, 1, 2, 22, 0)  # After close (overnight)
         should_exit, reason = policy.check_time_exit_conditions(entry, now_after_close)
@@ -196,10 +198,8 @@ class TestTimeExitPolicyEdgeCases:
 
     def test_time_restrictions_no_weekend(self):
         """Test no_weekend restriction."""
-        policy = TimeExitPolicy(
-            time_restrictions=TimeRestrictions(no_weekend=True)
-        )
-        
+        policy = TimeExitPolicy(time_restrictions=TimeRestrictions(no_weekend=True))
+
         entry = datetime(2024, 1, 5, 12, 0)  # Friday
         now_weekend = datetime(2024, 1, 6, 10, 0)  # Saturday
         should_exit, reason = policy.check_time_exit_conditions(entry, now_weekend)
@@ -217,7 +217,7 @@ class TestTimeExitPolicyEdgeCases:
             time_restrictions=TimeRestrictions(trading_hours_only=True, no_overnight=True),
             market_session=session,
         )
-        
+
         entry = datetime(2024, 1, 1, 0, 0)
         now = datetime(2024, 1, 1, 23, 0)
         should_exit, reason = policy.check_time_exit_conditions(entry, now)
@@ -235,7 +235,7 @@ class TestTimeExitPolicyEdgeCases:
             time_restrictions=TimeRestrictions(trading_hours_only=True),
             market_session=session,
         )
-        
+
         entry = datetime(2024, 1, 1, 0, 0)
         now = datetime(2024, 1, 1, 23, 0)
         should_exit, reason = policy.check_time_exit_conditions(entry, now)
@@ -253,13 +253,13 @@ class TestTimeExitPolicyEdgeCases:
         )
         policy = TimeExitPolicy(end_of_day_flat=True, market_session=session)
         entry = datetime(2024, 1, 2, 15, 0)
-        
+
         # Just before close (within 1-second tolerance)
         now_before = datetime(2024, 1, 2, 20, 59, 59, 500000)  # 0.5 seconds before
         should_exit, reason = policy.check_time_exit_conditions(entry, now_before)
         assert should_exit
         assert reason == "End of day flat"
-        
+
         # Exactly at close
         now_at = datetime(2024, 1, 2, 21, 0)
         should_exit, reason = policy.check_time_exit_conditions(entry, now_at)
@@ -278,7 +278,7 @@ class TestTimeExitPolicyEdgeCases:
         """Test that get_next_exit_time preserves naive datetime when both inputs are naive."""
         policy = TimeExitPolicy(max_holding_hours=24)
         entry = datetime(2024, 1, 1, 0, 0)  # Naive
-        now = datetime(2024, 1, 1, 1, 0)    # Naive
+        now = datetime(2024, 1, 1, 1, 0)  # Naive
         nxt = policy.get_next_exit_time(entry, now)
         assert nxt is not None
         assert nxt.tzinfo is None  # Should remain naive
@@ -319,7 +319,7 @@ class TestMarketSessionDefEdgeCases:
             days_of_week=[1, 2, 3, 4, 5],
             is_24h=False,
         )
-        
+
         # Test is_open_at
         dt = datetime(2024, 1, 2, 15, 0)  # Tuesday 15:00 UTC
         is_open = session.is_open_at(dt)
@@ -335,7 +335,7 @@ class TestMarketSessionDefEdgeCases:
             days_of_week=[],  # No valid days
             is_24h=False,
         )
-        
+
         dt = datetime(2024, 1, 2, 15, 0)  # Tuesday
         is_open = session.is_open_at(dt)
         # Empty days_of_week might be interpreted as "no restrictions" rather than "no valid days"
@@ -349,7 +349,7 @@ class TestMarketSessionDefEdgeCases:
             timezone="UTC",
             is_24h=True,
         )
-        
+
         dt = datetime(2024, 1, 1, 12, 0)
         next_close = session.next_close_after(dt)
         assert next_close is None  # 24h market has no close
@@ -362,7 +362,7 @@ class TestMarketSessionDefEdgeCases:
             # open_time and close_time are None
             is_24h=False,
         )
-        
+
         dt = datetime(2024, 1, 1, 12, 0)
         next_close = session.next_close_after(dt)
         assert next_close is None
@@ -379,7 +379,7 @@ class TestMarketSessionDefEdgeCases:
             days_of_week=[1],  # Only Monday
             is_24h=False,
         )
-        
+
         # Start from a Tuesday
         dt = datetime(2024, 1, 2, 12, 0)  # Tuesday
         next_close = session.next_close_after(dt)
@@ -391,12 +391,12 @@ class TestMarketSessionDefEdgeCases:
         session = MarketSessionDef(
             name="OVERNIGHT",
             timezone="UTC",
-            open_time=time(22, 0),   # 22:00
-            close_time=time(6, 0),   # 06:00 next day
+            open_time=time(22, 0),  # 22:00
+            close_time=time(6, 0),  # 06:00 next day
             days_of_week=[1, 2, 3, 4, 5],
             is_24h=False,
         )
-        
+
         # This is a tricky case - the session definition doesn't handle
         # cross-day sessions well, but we test the current behavior
         dt = datetime(2024, 1, 2, 23, 0)  # Tuesday 23:00
@@ -419,7 +419,7 @@ class TestTimeRestrictionsEdgeCases:
             days_of_week=[1, 2, 3, 4, 5],  # Weekdays only
             is_24h=False,
         )
-        
+
         policy = TimeExitPolicy(
             time_restrictions=TimeRestrictions(
                 no_overnight=True,
@@ -428,16 +428,16 @@ class TestTimeRestrictionsEdgeCases:
             ),
             market_session=session,
         )
-        
+
         entry = datetime(2024, 1, 2, 10, 0)  # Tuesday 10:00 (inside session)
-        
+
         # Test weekend restriction (should trigger first)
         now_weekend = datetime(2024, 1, 6, 10, 0)  # Saturday
         should_exit, reason = policy.check_time_exit_conditions(entry, now_weekend)
         assert should_exit
         # The order of checks might vary, so accept either restriction
         assert reason in ("No weekend", "Outside trading hours")
-        
+
         # Test after hours on weekday
         now_after_hours = datetime(2024, 1, 2, 18, 0)  # Tuesday 18:00 (after close)
         should_exit, reason = policy.check_time_exit_conditions(entry, now_after_hours)
@@ -453,7 +453,7 @@ class TestTimeRestrictionsEdgeCases:
             ),
             market_session=None,  # No session defined
         )
-        
+
         entry = datetime(2024, 1, 1, 0, 0)
         now = datetime(2024, 1, 1, 23, 0)
         should_exit, reason = policy.check_time_exit_conditions(entry, now)

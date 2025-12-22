@@ -31,7 +31,7 @@ def _apply_very_early_gevent_patching() -> None:
 # Apply gevent patching immediately if needed
 _apply_very_early_gevent_patching()
 
-from src.utils.logging_config import configure_logging
+from src.infrastructure.logging.config import configure_logging
 
 
 def load_env_file_to_environment() -> None:
@@ -70,11 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     # Import and register command groups
     from cli.commands import (
         backtest,
+        codex,
         dashboards,
         data,
         db,
         dev,
-        docs as docs_cmd,
         live,
         live_health,
         migration,
@@ -82,25 +82,42 @@ def build_parser() -> argparse.ArgumentParser:
         optimizer,
         regime,
         strategies,
+        test,
         tests,
         train,
     )
+    from cli.commands import (
+        docs as docs_cmd,
+    )
 
-    dashboards.register(subparsers)
+    # Core trading operations
     live.register(subparsers)
+    live_health.register(subparsers)
     backtest.register(subparsers)
     optimizer.register(subparsers)
-    models.register(subparsers)
-    live_health.register(subparsers)
-    data.register(subparsers)
-    db.register(subparsers)
-    dev.register(subparsers)
-    train.register(subparsers)
-    tests.register(subparsers)
-    migration.register(subparsers)
-    docs_cmd.register(subparsers)
+
+    # Strategy and model management
     strategies.register(subparsers)
+    models.register(subparsers)
+    train.register(subparsers)
     regime.register(subparsers)
+
+    # Development and testing
+    test.register(subparsers)
+    tests.register(subparsers)
+    dev.register(subparsers)
+
+    # Infrastructure and data
+    db.register(subparsers)
+    data.register(subparsers)
+    migration.register(subparsers)
+
+    # Monitoring and documentation
+    dashboards.register(subparsers)
+    docs_cmd.register(subparsers)
+
+    # Automation
+    codex.register(subparsers)
 
     return parser
 

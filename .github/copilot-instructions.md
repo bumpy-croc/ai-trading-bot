@@ -19,19 +19,19 @@ This is a modular cryptocurrency trading bot focused on long-term, risk-balanced
 
 ```bash
 # 1. Bootstrap environment
-python -m venv .venv            # Create .venv (or use make dev-setup)
+python -m venv .venv            # Create .venv (or use atb dev setup)
 source .venv/bin/activate       # Activate virtual environment
 make install                    # Install CLI (atb) + upgrade pip
-make deps                       # Install dev dependencies (can timeout - see workarounds)
+make deps-dev                   # Install dev dependencies (can timeout - see workarounds)
 
 # 2. Database setup (PostgreSQL required for most functionality)
 docker compose up -d postgres  # Start local PostgreSQL (note: 'docker compose', not 'docker-compose')
 export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
-python scripts/verify_database_connection.py  # Verify connection (requires sqlalchemy)
+atb db verify                  # Verify connection
 
 # 3. Test installation
 atb --help                   # Verify CLI works
-make test                    # Run test suite (requires DB)
+atb test unit                # Run test suite (requires DB)
 ```
 
 ### Build System Details
@@ -56,7 +56,7 @@ make deps-server             # Lighter requirements
 
 **Dependency Installation Timeout:**
 ```bash
-# If 'make deps' times out (common due to TensorFlow size), install server deps first:
+# If 'make deps-dev' times out (common due to TensorFlow size), install server deps first:
 make deps-server             # Lighter requirements
 # Then manually install missing dev dependencies as needed:
 # .venv/bin/pip install pytest pytest-mock ruff black mypy
@@ -155,13 +155,14 @@ utils/             # Shared utilities
 ### Development Workflow
 ```bash
 # Setup once
-make venv && make install && make deps
+python -m venv .venv && source .venv/bin/activate
+make install && make deps-dev
 docker compose up -d postgres  # Note: 'docker compose', not 'docker-compose'
 export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
 
 # Regular development
-make test                    # Run tests
-make code-quality            # Code quality
+atb test unit                # Run tests
+atb dev quality              # Code quality
 atb backtest ml_basic --symbol BTCUSDT --timeframe 1h --days 30  # Test functionality
 ```
 

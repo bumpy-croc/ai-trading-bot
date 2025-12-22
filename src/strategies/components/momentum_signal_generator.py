@@ -5,13 +5,12 @@ Generates momentum/trend-based signals derived from the prior MomentumLeverage
 strategy, designed for component-based composition.
 """
 
-from typing import Any, Optional
+from typing import Any
 
-import numpy as np
 import pandas as pd
 
-from .signal_generator import Signal, SignalDirection, SignalGenerator
 from .regime_context import RegimeContext
+from .signal_generator import Signal, SignalDirection, SignalGenerator
 
 
 class MomentumSignalGenerator(SignalGenerator):
@@ -45,7 +44,7 @@ class MomentumSignalGenerator(SignalGenerator):
         self.breakout_lookback = breakout_lookback
 
     def generate_signal(
-        self, df: pd.DataFrame, index: int, regime: Optional[RegimeContext] = None
+        self, df: pd.DataFrame, index: int, regime: RegimeContext | None = None
     ) -> Signal:
         self.validate_inputs(df, index)
 
@@ -79,7 +78,12 @@ class MomentumSignalGenerator(SignalGenerator):
 
         # Entry conditions
         decision_buy = (
-            (momentum_3 is not None and momentum_3 > self.momentum_entry_threshold and trend_strength and trend_strength > 0.005)
+            (
+                momentum_3 is not None
+                and momentum_3 > self.momentum_entry_threshold
+                and trend_strength
+                and trend_strength > 0.005
+            )
             or (breakout and momentum_3 and momentum_3 > 0.003)
             or (strong_momentum)
             or (bullish_trend and momentum_7 is not None and momentum_7 > 0.003)
@@ -125,7 +129,7 @@ class MomentumSignalGenerator(SignalGenerator):
         return float(max(0.0, min(1.0, abs(momentum_3) * 8)))
 
     @staticmethod
-    def _ema(df: pd.DataFrame, col: str, span: int, index: int) -> Optional[float]:
+    def _ema(df: pd.DataFrame, col: str, span: int, index: int) -> float | None:
         try:
             series = df[col].ewm(span=span).mean()
             return float(series.iloc[index])
@@ -133,11 +137,14 @@ class MomentumSignalGenerator(SignalGenerator):
             return None
 
     @staticmethod
-    def _pct_change(df: pd.DataFrame, col: str, periods: int, index: int) -> Optional[float]:
+    def _pct_change(df: pd.DataFrame, col: str, periods: int, index: int) -> float | None:
         if index < periods:
             return None
         try:
-            return float((df[col].iloc[index] - df[col].iloc[index - periods]) / max(df[col].iloc[index - periods], 1e-12))
+            return float(
+                (df[col].iloc[index] - df[col].iloc[index - periods])
+                / max(df[col].iloc[index - periods], 1e-12)
+            )
         except Exception:
             return None
 
@@ -152,7 +159,7 @@ class MomentumSignalGenerator(SignalGenerator):
             return False
 
     @staticmethod
-    def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    def _safe_div(a: float | None, b: float | None) -> float | None:
         try:
             if a is None or b is None or b == 0:
                 return None
@@ -176,5 +183,3 @@ class MomentumSignalGenerator(SignalGenerator):
             }
         )
         return params
-
-

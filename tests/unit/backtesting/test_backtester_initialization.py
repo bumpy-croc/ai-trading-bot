@@ -40,9 +40,7 @@ class TestBacktesterInitialization:
         assert backtester.initial_balance > 0
         assert backtester.balance == backtester.initial_balance
 
-    def test_backtester_with_sentiment_provider(
-        self, mock_data_provider, mock_sentiment_provider
-    ):
+    def test_backtester_with_sentiment_provider(self, mock_data_provider, mock_sentiment_provider):
         """Sentiment providers should be captured when supplied."""
 
         strategy = create_ml_basic_strategy()

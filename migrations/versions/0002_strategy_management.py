@@ -5,6 +5,7 @@ Revises: 0002_add_strategy_management
 Create Date: 2025-10-20 00:00:00.000000
 
 """
+
 # revision identifiers, used by Alembic.
 revision = "0002_strategy_management"
 down_revision = "0002_add_strategy_management"

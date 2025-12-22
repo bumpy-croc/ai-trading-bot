@@ -15,11 +15,12 @@ import sys
 _WEB_SERVER_USE_GEVENT = os.environ.get("WEB_SERVER_USE_GEVENT", "0") == "1"
 
 # Detect if gevent monkey patching was already applied
-if _WEB_SERVER_USE_GEVENT and 'gevent' in sys.modules:
+if _WEB_SERVER_USE_GEVENT and "gevent" in sys.modules:
     _ASYNC_MODE = "gevent"
 elif _WEB_SERVER_USE_GEVENT:
     # Fallback: apply monkey patching if not done yet (for standalone imports)
     import gevent.monkey
+
     gevent.monkey.patch_all()
     _ASYNC_MODE = "gevent"
 else:

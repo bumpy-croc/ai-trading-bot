@@ -34,7 +34,9 @@ class TestUtilityMethods:
 
         mock_connection = Mock()
         mock_connection.exec_driver_sql.return_value = mock_result
-        mock_postgresql_db._mock_engine.connect.return_value.__enter__.return_value = mock_connection
+        mock_postgresql_db._mock_engine.connect.return_value.__enter__.return_value = (
+            mock_connection
+        )
 
         result = mock_postgresql_db.execute_query("SELECT * FROM test")
 

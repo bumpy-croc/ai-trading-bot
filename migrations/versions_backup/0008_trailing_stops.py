@@ -26,11 +26,26 @@ def _has_column(table: str, column: str) -> bool:
 def upgrade():
     # Add columns to positions table (idempotent checks)
     if not _has_column("positions", "trailing_stop_activated"):
-        op.add_column("positions", sa.Column("trailing_stop_activated", sa.Boolean(), nullable=False, server_default=sa.text("false")))
+        op.add_column(
+            "positions",
+            sa.Column(
+                "trailing_stop_activated",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
+        )
     if not _has_column("positions", "trailing_stop_price"):
-        op.add_column("positions", sa.Column("trailing_stop_price", sa.Numeric(18, 8), nullable=True))
+        op.add_column(
+            "positions", sa.Column("trailing_stop_price", sa.Numeric(18, 8), nullable=True)
+        )
     if not _has_column("positions", "breakeven_triggered"):
-        op.add_column("positions", sa.Column("breakeven_triggered", sa.Boolean(), nullable=False, server_default=sa.text("false")))
+        op.add_column(
+            "positions",
+            sa.Column(
+                "breakeven_triggered", sa.Boolean(), nullable=False, server_default=sa.text("false")
+            ),
+        )
 
 
 def downgrade():

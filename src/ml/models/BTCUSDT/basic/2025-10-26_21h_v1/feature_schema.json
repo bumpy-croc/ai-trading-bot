@@ -1,0 +1,25 @@
+{
+  "sequence_length": 120,
+  "features": [
+    {
+      "name": "close_normalized",
+      "required": true
+    },
+    {
+      "name": "volume_normalized",
+      "required": true
+    },
+    {
+      "name": "high_normalized",
+      "required": true
+    },
+    {
+      "name": "low_normalized",
+      "required": true
+    },
+    {
+      "name": "open_normalized",
+      "required": true
+    }
+  ]
+}

@@ -67,5 +67,3 @@ class FeatureSelector:
             arr[:, j] = (arr[:, j] - mean) / std
 
         return arr
-
-

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 # Ensure project root and src are importable when packaged
-from src.utils.project_paths import get_project_root
+from src.infrastructure.runtime.paths import get_project_root
 
 PROJECT_ROOT = get_project_root()
 if str(PROJECT_ROOT) not in sys.path:
@@ -245,14 +245,14 @@ def _write_summary(results: list[dict[str, Any]]) -> None:
 
 def _handle_baseline(ns: argparse.Namespace) -> int:
     global _OUTPUT_DIR
-    
+
     # Set the output directory if provided
     if hasattr(ns, "output_dir") and ns.output_dir:
         output_path = Path(ns.output_dir)
         if not output_path.is_absolute():
             output_path = PROJECT_ROOT / output_path
         _OUTPUT_DIR = output_path
-    
+
     results: list[dict[str, Any]] = []
     for strategy in ns.strategies:
         print(f"Running backtest baseline for {strategy}...")

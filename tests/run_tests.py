@@ -824,7 +824,12 @@ def main():
     elif command == "benchmark":
         success = run_performance_benchmark()
     elif command == "all":
-        success = run_all_tests(coverage=args.coverage, verbose=args.verbose, quiet=args.quiet, pytest_args=args.pytest_args)
+        success = run_all_tests(
+            coverage=args.coverage,
+            verbose=args.verbose,
+            quiet=args.quiet,
+            pytest_args=args.pytest_args,
+        )
     elif command == "validate":
         success = validate_test_environment()
     elif command and command.endswith(".py"):

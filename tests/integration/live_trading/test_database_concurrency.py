@@ -58,5 +58,3 @@ def test_concurrent_open_close_with_database(tmp_path, mock_strategy, mock_data_
     assert isinstance(trades, list)
 
     engine.stop()
-
-
