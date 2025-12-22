@@ -63,8 +63,8 @@ from src.strategies.components import (
 from src.strategies.components import (
     Strategy as ComponentStrategy,
 )
-from src.utils.logging_context import set_context, update_context
-from src.utils.logging_events import log_engine_event
+from src.infrastructure.logging.context import set_context, update_context
+from src.infrastructure.logging.events import log_engine_event
 
 logger = logging.getLogger(__name__)
 
@@ -1003,6 +1003,22 @@ class Backtester:
                     # Clear MFE/MAE tracker for new position
                     self.mfe_mae_tracker.clear("active")
 
+                    # Update risk manager for the executed pending entry
+                    try:
+                        self.risk_manager.update_position(
+                            symbol=symbol,
+                            side=pending["side"],
+                            size=pending["size_fraction"],
+                            entry_price=entry_price_with_slippage,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to update risk manager for pending %s entry on %s: %s",
+                            pending["side"],
+                            symbol,
+                            e,
+                        )
+
                 runtime_decision = self._runtime_process_decision(
                     i,
                     self.balance,
@@ -1640,56 +1656,58 @@ class Backtester:
                             f"Entered {entry_side} at {entry_price_with_slippage:.2f} via immediate execution"
                         )
 
-                    if self.log_to_database and self.db_manager:
-                        indicators = self._extract_indicators(df, i)
-                        sentiment_data = self._extract_sentiment_data(df, i)
-                        ml_predictions = self._extract_ml_predictions(df, i)
+                    # Only log and update risk manager if trade was actually entered (not pending)
+                    if self.current_trade is not None:
+                        if self.log_to_database and self.db_manager:
+                            indicators = self._extract_indicators(df, i)
+                            sentiment_data = self._extract_sentiment_data(df, i)
+                            ml_predictions = self._extract_ml_predictions(df, i)
 
-                        self.db_manager.log_strategy_execution(
-                            strategy_name=self.strategy.__class__.__name__,
-                            symbol=symbol,
-                            signal_type="entry",
-                            action_taken="opened_long" if entry_side == "long" else "opened_short",
-                            price=current_price,
-                            timeframe=timeframe,
-                            signal_strength=runtime_decision.signal.strength if runtime_decision else 0.0,
-                            confidence_score=runtime_decision.signal.confidence if runtime_decision else 0.0,
-                            indicators=indicators,
-                            sentiment_data=sentiment_data if sentiment_data else None,
-                            ml_predictions=ml_predictions if ml_predictions else None,
-                            position_size=size_fraction,
-                            reasons=[
-                                "runtime_entry",
-                                f"side_{entry_side}",
-                                f"position_size_{size_fraction:.4f}",
-                                f"balance_{self.balance:.2f}",
-                                f"enter_short_{bool((runtime_decision.metadata if runtime_decision else {}).get('enter_short'))}",
-                            ],
-                            volume=indicators.get("volume"),
-                            volatility=indicators.get("volatility"),
-                            session_id=self.trading_session_id,
-                        )
+                            self.db_manager.log_strategy_execution(
+                                strategy_name=self.strategy.__class__.__name__,
+                                symbol=symbol,
+                                signal_type="entry",
+                                action_taken="opened_long" if entry_side == "long" else "opened_short",
+                                price=current_price,
+                                timeframe=timeframe,
+                                signal_strength=runtime_decision.signal.strength if runtime_decision else 0.0,
+                                confidence_score=runtime_decision.signal.confidence if runtime_decision else 0.0,
+                                indicators=indicators,
+                                sentiment_data=sentiment_data if sentiment_data else None,
+                                ml_predictions=ml_predictions if ml_predictions else None,
+                                position_size=size_fraction,
+                                reasons=[
+                                    "runtime_entry",
+                                    f"side_{entry_side}",
+                                    f"position_size_{size_fraction:.4f}",
+                                    f"balance_{self.balance:.2f}",
+                                    f"enter_short_{bool((runtime_decision.metadata if runtime_decision else {}).get('enter_short'))}",
+                                ],
+                                volume=indicators.get("volume"),
+                                volatility=indicators.get("volatility"),
+                                session_id=self.trading_session_id,
+                            )
 
-                    logger.info(
-                        "Entered %s position at %s via runtime decision",
-                        entry_side,
-                        current_price,
-                    )
-
-                    try:
-                        self.risk_manager.update_position(
-                            symbol=symbol,
-                            side=entry_side,
-                            size=size_fraction,
-                            entry_price=current_price,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to update risk manager for %s on %s: %s",
+                        logger.info(
+                            "Entered %s position at %s via runtime decision",
                             entry_side,
-                            symbol,
-                            e,
+                            current_price,
                         )
+
+                        try:
+                            self.risk_manager.update_position(
+                                symbol=symbol,
+                                side=entry_side,
+                                size=size_fraction,
+                                entry_price=current_price,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to update risk manager for %s on %s: %s",
+                                entry_side,
+                                symbol,
+                                e,
+                            )
 
                     continue
 
