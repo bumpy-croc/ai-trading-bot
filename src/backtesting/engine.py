@@ -170,7 +170,7 @@ class Backtester:
         # Realistic execution parameters
         fee_rate: float = 0.001,  # 0.1% per trade (entry and exit)
         slippage_rate: float = 0.0005,  # 0.05% slippage per trade
-        use_next_bar_execution: bool = True,  # Execute on next candle's open
+        use_next_bar_execution: bool = False,  # Execute on next candle's open (disabled by default for backward compatibility)
         use_high_low_for_stops: bool = True,  # Check high/low for SL/TP hits
     ):
         if initial_balance <= 0:
@@ -970,11 +970,15 @@ class Backtester:
                         # Shorting: slippage works against us (lower price)
                         entry_price_with_slippage = open_price * (1 - self.slippage_rate)
 
+                    # Calculate fees and slippage before reducing balance
+                    position_notional = self.balance * pending["size_fraction"]
+                    entry_fee = abs(position_notional * self.fee_rate)
+                    slippage_cost = abs(position_notional * self.slippage_rate)
+
                     # Apply entry fee
-                    entry_fee = abs(self.balance * pending["size_fraction"] * self.fee_rate)
                     self.balance -= entry_fee
                     self.total_fees_paid += entry_fee
-                    self.total_slippage_cost += abs(open_price - entry_price_with_slippage) * pending["size_fraction"] * self.balance / open_price
+                    self.total_slippage_cost += slippage_cost
 
                     # Recalculate SL/TP based on actual entry price
                     if pending["side"] == "long":
@@ -1388,6 +1392,8 @@ class Backtester:
 
                     if should_exit:
                         # Determine exit price based on exit reason
+                        # Priority: Stop Loss > Take Profit > Time/Signal Exit
+                        # This ensures losses are cut before profits are taken in the same candle
                         if hit_stop_loss:
                             base_exit_price = sl_exit_price
                         elif hit_take_profit:
@@ -1395,12 +1401,13 @@ class Backtester:
                         else:
                             base_exit_price = current_price
 
-                        # Apply slippage (adverse price movement)
+                        # Apply slippage (adverse price movement on exit)
+                        # Slippage cost is subtracted from PnL regardless of reason
                         if self.current_trade.side == "long":
-                            # Selling long: slippage works against us (lower price)
+                            # Selling long: slippage works against us (lower price than expected)
                             exit_price = base_exit_price * (1 - self.slippage_rate)
                         else:
-                            # Covering short: slippage works against us (higher price)
+                            # Covering short: slippage works against us (higher price than expected)
                             exit_price = base_exit_price * (1 + self.slippage_rate)
 
                         exit_time = current_time
@@ -1425,11 +1432,15 @@ class Backtester:
                         )
                         trade_pnl_cash = cash_pnl(trade_pnl_pct, basis_balance)
 
-                        # Apply exit fee
-                        exit_fee = abs(basis_balance * fraction * self.fee_rate)
+                        # Calculate exit fees and slippage cost
+                        exit_position_notional = basis_balance * fraction
+                        exit_fee = abs(exit_position_notional * self.fee_rate)
+                        exit_slippage = abs(exit_position_notional * self.slippage_rate)
+
+                        # Apply exit costs
                         trade_pnl_cash -= exit_fee
                         self.total_fees_paid += exit_fee
-                        self.total_slippage_cost += abs(base_exit_price - exit_price) * fraction * basis_balance / base_exit_price
+                        self.total_slippage_cost += exit_slippage
 
                         # Snapshot MFE/MAE
                         metrics = self.mfe_mae_tracker.get_position_metrics("active")
@@ -2155,6 +2166,15 @@ class Backtester:
                         "regime_history": [],
                         "total_strategy_switches": 0,
                     }
+                )
+
+            # Warn if backtest ended with unexecuted pending entry
+            if self._pending_entry is not None:
+                logger.warning(
+                    "Backtest ended with pending %s entry that was never executed. "
+                    "This can occur if: (1) next-bar execution was enabled but next bar "
+                    "was not available, (2) risk limits prevented execution, or (3) dataset ended.",
+                    self._pending_entry.get("side", "unknown")
                 )
 
             return results
