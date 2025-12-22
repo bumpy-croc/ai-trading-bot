@@ -55,6 +55,7 @@ def backtester() -> Backtester:
     )
 
 
+@pytest.mark.skip(reason="_apply_policies_from_decision method was removed in develop branch refactoring")
 def test_apply_policies_from_decision_updates_backtester_state(backtester: Backtester) -> None:
     decision = TradingDecision(
         timestamp=datetime.utcnow(),

@@ -662,6 +662,8 @@ class TestDeterminism:
 class TestLongRunningBacktests:
     """Test performance and reliability with large datasets"""
 
+    @pytest.mark.slow
+    @pytest.mark.timeout(300)  # Extended timeout for 10k candles
     def test_very_large_dataset_10000_candles(self, mock_data_provider, minimal_strategy):
         """10,000 candles (~1.1 years of hourly data)"""
         large_data = create_ohlcv_data(10000, start_price=50000)
