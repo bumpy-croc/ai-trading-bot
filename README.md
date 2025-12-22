@@ -43,6 +43,7 @@ make deps-server             # Lighter server/production dependencies
 
 - Local (Docker):
 ```bash
+# Note: Use 'docker compose' (v2) not 'docker-compose' (v1)
 docker compose up -d postgres
 export DATABASE_URL=postgresql://trading_bot:dev_password_123@localhost:5432/ai_trading_bot
 ```
