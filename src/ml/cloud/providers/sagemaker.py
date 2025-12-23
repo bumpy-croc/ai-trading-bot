@@ -85,6 +85,10 @@ class SageMakerProvider(CloudTrainingProvider):
     def is_available(self) -> bool:
         """Check if SageMaker credentials are configured."""
         if not self._role_arn or not self._s3_bucket:
+            logger.debug(
+                f"SageMaker not available: role_arn={self._role_arn}, "
+                f"s3_bucket={self._s3_bucket}"
+            )
             return False
 
         try:
@@ -93,7 +97,8 @@ class SageMakerProvider(CloudTrainingProvider):
             assert self._sagemaker_client is not None
             self._sagemaker_client.list_training_jobs(MaxResults=1)
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"SageMaker availability check failed: {exc}")
             return False
 
     def submit_training_job(self, spec: TrainingJobSpec) -> str:
@@ -138,6 +143,7 @@ class SageMakerProvider(CloudTrainingProvider):
 
         except Exception as exc:
             error_msg = str(exc)
+            logger.error(f"Raw SageMaker error: {exc.__class__.__name__}: {error_msg}")
             if "ResourceLimitExceeded" in error_msg:
                 raise JobSubmissionError(
                     f"SageMaker quota limit exceeded for {spec.instance_type}. "
@@ -296,8 +302,9 @@ class SageMakerProvider(CloudTrainingProvider):
             return self._docker_image_uri
 
         # Fallback to official TensorFlow GPU image
-        # Users should override with their own ECR image containing the training code
-        return f"763104351884.dkr.ecr.{self._region}.amazonaws.com/tensorflow-training:2.15.0-gpu-py310-cu118-ubuntu20.04-sagemaker"
+        # Using TensorFlow 2.15.1 (verified available) with Python 3.11 and CUDA 12.1
+        # Note: Using -ec2 tag as -sagemaker tags are not consistently available
+        return f"763104351884.dkr.ecr.{self._region}.amazonaws.com/tensorflow-training:2.15.1-gpu-py311-cu121-ubuntu22.04-ec2"
 
     def _parse_job_response(self, response: dict[str, Any]) -> TrainingJobStatus:
         """Parse SageMaker DescribeTrainingJob response."""
