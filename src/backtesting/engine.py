@@ -168,9 +168,13 @@ class Backtester:
         regime_config: Any | None = None,
         strategy_mapping: Any | None = None,
         switching_config: Any | None = None,
+        # Position size limit (parity with live engine)
+        max_position_size: float = 0.1,  # 10% of balance per position (match live default)
     ):
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
+        if max_position_size <= 0 or max_position_size > 1:
+            raise ValueError("Max position size must be between 0 and 1")
 
         self._runtime_dataset = None
         self._runtime_warmup = 0
@@ -188,6 +192,7 @@ class Backtester:
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.peak_balance = initial_balance
+        self.max_position_size = max_position_size
         self.trades: list[dict] = []
         self.current_trade: ActiveTrade | None = None
         self.dynamic_risk_adjustments: list[dict] = []  # Track dynamic risk adjustments
@@ -797,7 +802,7 @@ class Backtester:
 
         side = "long" if decision.signal.direction == SignalDirection.BUY else "short"
         size_fraction = float(decision.position_size) / float(balance)
-        size_fraction = max(0.0, min(1.0, size_fraction))
+        size_fraction = max(0.0, min(self.max_position_size, size_fraction))
         return side, size_fraction
 
     def _apply_correlation_control(
