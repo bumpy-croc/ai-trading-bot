@@ -1,7 +1,7 @@
 {
   "total_trades": 5,
   "win_rate": 40.0,
-  "total_return": 0.0013922830981449863,
+  "total_return": 0.000372514501267851,
   "strategy_switches": [
     {
       "timestamp": "2022-01-07T06:00:00",
@@ -11,7 +11,7 @@
       "regime": "trend_down:high_vol",
       "confidence": 0.85,
       "reason": "deterministic-switch",
-      "balance_at_switch": 10000.2395651616,
+      "balance_at_switch": 10000.1622033619,
       "agreement": 0.85
     }
   ],

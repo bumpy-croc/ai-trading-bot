@@ -149,6 +149,10 @@ def test_yearly_returns_positive_and_negative():
         risk_parameters=None,
         initial_balance=1000,
         log_to_database=False,
+        # Disable realistic execution for this test (legacy behavior)
+        fee_rate=0.0,
+        slippage_rate=0.0,
+        use_next_bar_execution=False,
     )
     result = backtester.run(symbol="TEST", timeframe="1h", start=df.index[0], end=df.index[-1])
     yr = result["yearly_returns"]
