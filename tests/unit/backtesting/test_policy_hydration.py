@@ -55,7 +55,6 @@ def backtester() -> Backtester:
     )
 
 
-@pytest.mark.skip(reason="_apply_policies_from_decision method was removed in develop branch refactoring")
 def test_apply_policies_from_decision_updates_backtester_state(backtester: Backtester) -> None:
     decision = TradingDecision(
         timestamp=datetime.utcnow(),
@@ -97,7 +96,5 @@ def test_apply_policies_from_decision_updates_backtester_state(backtester: Backt
     assert backtester.trailing_stop_policy.trailing_distance_pct == pytest.approx(0.01)
     assert backtester.enable_dynamic_risk is True
     assert backtester.dynamic_risk_manager is not None
-    assert (
-        backtester.dynamic_risk_manager.config.performance_window_days == 15
-    )
+    assert backtester.dynamic_risk_manager.config.performance_window_days == 15
     assert backtester.dynamic_risk_manager.config.drawdown_thresholds == [0.1]

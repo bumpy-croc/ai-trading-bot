@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -113,7 +113,7 @@ class RegimeAssessment:
     def __init__(
         self,
         annotated_df: pd.DataFrame,
-        config: Optional[RegimeAssessmentConfig] = None,
+        config: RegimeAssessmentConfig | None = None,
     ):
         """
         Initialize regime assessment.
@@ -166,7 +166,6 @@ class RegimeAssessment:
 
         # Calculate future returns
         future_returns = self.df["close"].shift(-lookahead) / self.df["close"] - 1
-        valid_mask = ~future_returns.isna()
 
         # Assess accuracy for each regime type
         results = []
@@ -237,7 +236,7 @@ class RegimeAssessment:
         current_duration = 0
         current_regime = None
 
-        for i, (is_change, regime) in enumerate(zip(regime_changes, regime_col)):
+        for _, (is_change, regime) in enumerate(zip(regime_changes, regime_col, strict=False)):
             if is_change or current_regime is None:
                 if current_duration > 0:
                     durations.append(current_duration)
@@ -287,7 +286,9 @@ class RegimeAssessment:
         regimes = regime_col.unique().tolist()
 
         # Build transition matrix
-        transition_matrix: dict[str, dict[str, int]] = {r: {r2: 0 for r2 in regimes} for r in regimes}
+        transition_matrix: dict[str, dict[str, int]] = {
+            r: {r2: 0 for r2 in regimes} for r in regimes
+        }
         transitions = []
 
         prev_regime = None
@@ -303,7 +304,8 @@ class RegimeAssessment:
             total = sum(transition_matrix[from_regime].values())
             if total > 0:
                 transition_probs[from_regime] = {
-                    to_regime: count / total for to_regime, count in transition_matrix[from_regime].items()
+                    to_regime: count / total
+                    for to_regime, count in transition_matrix[from_regime].items()
                 }
             else:
                 transition_probs[from_regime] = {r: 0.0 for r in regimes}
@@ -557,7 +559,7 @@ def compare_detectors(
     df: pd.DataFrame,
     detector1: RegimeDetector,
     detector2: RegimeDetector,
-    config: Optional[RegimeAssessmentConfig] = None,
+    config: RegimeAssessmentConfig | None = None,
 ) -> dict[str, AssessmentMetrics]:
     """
     Compare two regime detectors on the same data.

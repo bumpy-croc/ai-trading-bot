@@ -368,9 +368,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     p_viz.set_defaults(func=_handle_visualize)
 
     # Assess subcommand
-    p_assess = sub.add_parser(
-        "assess", help="Run regime detector assessment with historical data"
-    )
+    p_assess = sub.add_parser("assess", help="Run regime detector assessment with historical data")
     p_assess.add_argument("symbol", help="Trading pair symbol (e.g., BTCUSDT)")
     p_assess.add_argument(
         "--days", type=int, default=730, help="Number of days to analyse (default: 730)"

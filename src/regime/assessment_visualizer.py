@@ -6,7 +6,6 @@ Generates matplotlib charts for regime detector assessment results.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -24,7 +23,7 @@ class RegimeAssessmentVisualizer:
     regime distribution, and transition heatmaps.
     """
 
-    def __init__(self, metrics: AssessmentMetrics, output_dir: Optional[Path] = None):
+    def __init__(self, metrics: AssessmentMetrics, output_dir: Path | None = None):
         """
         Initialize visualizer.
 
@@ -74,7 +73,7 @@ class RegimeAssessmentVisualizer:
         ax1.legend(loc="upper right")
 
         # Add value labels on bars
-        for bar, acc in zip(bars, accuracies):
+        for bar, acc in zip(bars, accuracies, strict=False):
             ax1.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + 0.02,
@@ -91,7 +90,9 @@ class RegimeAssessmentVisualizer:
         vol_accuracies = [self.metrics.accuracy_by_volatility[v] for v in vol_types]
         vol_colors = [self.colors.get(v, "#95a5a6") for v in vol_types]
 
-        bars2 = ax2.bar(vol_types, vol_accuracies, color=vol_colors, edgecolor="black", linewidth=1.2)
+        bars2 = ax2.bar(
+            vol_types, vol_accuracies, color=vol_colors, edgecolor="black", linewidth=1.2
+        )
         ax2.axhline(y=0.5, color="red", linestyle="--", label="Random baseline (50%)")
         ax2.set_ylabel("Accuracy", fontsize=12)
         ax2.set_xlabel("Volatility Regime", fontsize=12)
@@ -99,7 +100,7 @@ class RegimeAssessmentVisualizer:
         ax2.set_ylim(0, 1)
         ax2.legend(loc="upper right")
 
-        for bar, acc in zip(bars2, vol_accuracies):
+        for bar, acc in zip(bars2, vol_accuracies, strict=False):
             ax2.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + 0.02,
@@ -135,7 +136,9 @@ class RegimeAssessmentVisualizer:
 
         curve = self.metrics.calibration_curve
         if not curve:
-            ax.text(0.5, 0.5, "No calibration data available", ha="center", va="center", fontsize=14)
+            ax.text(
+                0.5, 0.5, "No calibration data available", ha="center", va="center", fontsize=14
+            )
             return fig
 
         confidences = [p["avg_confidence"] for p in curve]
@@ -150,7 +153,9 @@ class RegimeAssessmentVisualizer:
         ax.plot([0, 1], [0, 1], "k--", linewidth=2, label="Perfect calibration")
 
         # Calibration curve
-        ax.scatter(confidences, accuracies, s=normalized_sizes, alpha=0.7, c="#3498db", edgecolors="black")
+        ax.scatter(
+            confidences, accuracies, s=normalized_sizes, alpha=0.7, c="#3498db", edgecolors="black"
+        )
         ax.plot(confidences, accuracies, "b-", alpha=0.5, linewidth=2)
 
         # ECE annotation
@@ -201,7 +206,7 @@ class RegimeAssessmentVisualizer:
         if regime_dist:
             labels = list(regime_dist.keys())
             sizes = list(regime_dist.values())
-            colors = [self.colors.get(l, "#95a5a6") for l in labels]
+            colors = [self.colors.get(label, "#95a5a6") for label in labels]
 
             wedges, texts, autotexts = ax1.pie(
                 sizes,
@@ -224,7 +229,7 @@ class RegimeAssessmentVisualizer:
         if vol_dist:
             labels = list(vol_dist.keys())
             sizes = list(vol_dist.values())
-            colors = [self.colors.get(l, "#95a5a6") for l in labels]
+            colors = [self.colors.get(label, "#95a5a6") for label in labels]
 
             wedges, texts, autotexts = ax2.pie(
                 sizes,
@@ -293,7 +298,15 @@ class RegimeAssessmentVisualizer:
         for i in range(n):
             for j in range(n):
                 text_color = "white" if matrix[i, j] > 0.5 else "black"
-                ax.text(j, i, f"{matrix[i, j]:.2f}", ha="center", va="center", color=text_color, fontsize=10)
+                ax.text(
+                    j,
+                    i,
+                    f"{matrix[i, j]:.2f}",
+                    ha="center",
+                    va="center",
+                    color=text_color,
+                    fontsize=10,
+                )
 
         ax.set_xlabel("To Regime", fontsize=12)
         ax.set_ylabel("From Regime", fontsize=12)
@@ -334,7 +347,9 @@ class RegimeAssessmentVisualizer:
         median = np.median(durations)
 
         ax.axvline(avg, color="red", linestyle="--", linewidth=2, label=f"Mean: {avg:.1f}")
-        ax.axvline(median, color="green", linestyle="-.", linewidth=2, label=f"Median: {median:.1f}")
+        ax.axvline(
+            median, color="green", linestyle="-.", linewidth=2, label=f"Median: {median:.1f}"
+        )
         ax.axvline(20, color="orange", linestyle=":", linewidth=2, label="Target: 20")
 
         ax.set_xlabel("Regime Duration (bars)", fontsize=12)
@@ -387,8 +402,14 @@ class RegimeAssessmentVisualizer:
         ax1.set_ylim(0, 1)
         ax1.legend()
 
-        for bar, acc in zip(bars, accuracies):
-            ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02, f"{acc:.1%}", ha="center", fontweight="bold")
+        for bar, acc in zip(bars, accuracies, strict=False):
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.02,
+                f"{acc:.1%}",
+                ha="center",
+                fontweight="bold",
+            )
 
         # ECE comparison
         ax2 = axes[1]
@@ -401,8 +422,14 @@ class RegimeAssessmentVisualizer:
         ax2.set_xticklabels(labels)
         ax2.legend()
 
-        for bar, ece in zip(bars, eces):
-            ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005, f"{ece:.3f}", ha="center", fontweight="bold")
+        for bar, ece in zip(bars, eces, strict=False):
+            ax2.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.005,
+                f"{ece:.3f}",
+                ha="center",
+                fontweight="bold",
+            )
 
         # Persistence comparison
         ax3 = axes[2]
@@ -415,8 +442,14 @@ class RegimeAssessmentVisualizer:
         ax3.set_xticklabels(labels)
         ax3.legend()
 
-        for bar, dur in zip(bars, durations):
-            ax3.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5, f"{dur:.1f}", ha="center", fontweight="bold")
+        for bar, dur in zip(bars, durations, strict=False):
+            ax3.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.5,
+                f"{dur:.1f}",
+                ha="center",
+                fontweight="bold",
+            )
 
         plt.tight_layout()
 
@@ -427,7 +460,7 @@ class RegimeAssessmentVisualizer:
 
         return fig
 
-    def save_all_charts(self, durations: Optional[list[int]] = None) -> list[Path]:
+    def save_all_charts(self, durations: list[int] | None = None) -> list[Path]:
         """
         Generate and save all charts.
 
