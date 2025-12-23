@@ -218,7 +218,7 @@ class TestJobIdValidation:
         mock_provider = MagicMock()
         orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
 
-        with pytest.raises(ArtifactSyncError, match="No S3 output path"):
+        with pytest.raises(ArtifactSyncError, match="No output path"):
             orchestrator._sync_artifacts("job-123", None)
 
     def test_job_id_with_special_chars_sanitized(

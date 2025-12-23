@@ -274,13 +274,13 @@ class CloudTrainingOrchestrator:
 
         Args:
             job_id: Job identifier
-            s3_output_path: S3 path to model artifacts
+            s3_output_path: S3 path to model artifacts (or local path for local provider)
 
         Returns:
             Path to local model directory
         """
         if not s3_output_path:
-            raise ArtifactSyncError("No S3 output path found for job")
+            raise ArtifactSyncError("No output path found for job")
 
         # Extract and validate job_id suffix for temp directory naming
         import re
@@ -295,11 +295,11 @@ class CloudTrainingOrchestrator:
             # Create temp directory inside try block
             temp_dir = Path("/tmp") / f"model-download-{job_suffix}"
 
-            # Download from S3
-            self.provider.download_artifacts(job_id, temp_dir)
+            # Download from provider (S3 for cloud, local path for local provider)
+            artifact_path = self.provider.download_artifacts(job_id, temp_dir)
 
             # Determine version ID from metadata
-            metadata_path = temp_dir / "metadata.json"
+            metadata_path = artifact_path / "metadata.json"
             if metadata_path.exists():
                 import json
 
@@ -317,14 +317,24 @@ class CloudTrainingOrchestrator:
             local_registry = get_project_root() / "src" / "ml" / "models"
             symbol = self.config.training_config.symbol.upper()
 
-            final_path = self.s3_manager.sync_to_local_registry(
-                s3_uri=s3_output_path,
-                local_registry=local_registry,
-                symbol=symbol,
-                model_type=model_type,
-                version_id=version_id,
-                update_latest=True,
-            )
+            # For local provider, artifacts are already on the filesystem
+            if self.provider.provider_name == "local":
+                final_path = self._sync_local_artifacts(
+                    artifact_path=artifact_path,
+                    local_registry=local_registry,
+                    symbol=symbol,
+                    model_type=model_type,
+                    version_id=version_id,
+                )
+            else:
+                final_path = self.s3_manager.sync_to_local_registry(
+                    s3_uri=s3_output_path,
+                    local_registry=local_registry,
+                    symbol=symbol,
+                    model_type=model_type,
+                    version_id=version_id,
+                    update_latest=True,
+                )
 
             return final_path
 
@@ -334,6 +344,53 @@ class CloudTrainingOrchestrator:
                 import shutil
 
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _sync_local_artifacts(
+        self,
+        artifact_path: Path,
+        local_registry: Path,
+        symbol: str,
+        model_type: str,
+        version_id: str,
+    ) -> Path:
+        """Sync locally trained artifacts to model registry.
+
+        Used when training on local provider (no S3 needed).
+
+        Args:
+            artifact_path: Local path to trained artifacts
+            local_registry: Local model registry root
+            symbol: Trading symbol
+            model_type: Model type (basic, sentiment, etc.)
+            version_id: Version identifier
+
+        Returns:
+            Path to synced model directory
+        """
+        import shutil
+
+        # Create expected registry directory path
+        version_dir = local_registry / symbol / model_type / version_id
+
+        # If artifact is already in the registry at the correct location, just update the symlink
+        if artifact_path.resolve() == version_dir.resolve():
+            logger.info(f"Artifacts already at correct registry location: {version_dir}")
+        else:
+            # Copy artifacts to registry
+            version_dir.parent.mkdir(parents=True, exist_ok=True)
+            if version_dir.exists():
+                shutil.rmtree(version_dir)
+            shutil.copytree(artifact_path, version_dir)
+            logger.info(f"Copied artifacts to {version_dir}")
+
+        # Update 'latest' symlink
+        latest_link = local_registry / symbol / model_type / "latest"
+        if latest_link.exists() or latest_link.is_symlink():
+            latest_link.unlink()
+        latest_link.symlink_to(version_id)
+        logger.info(f"Updated latest symlink: {latest_link} -> {version_id}")
+
+        return version_dir
 
 
 class CloudTrainingResult:
