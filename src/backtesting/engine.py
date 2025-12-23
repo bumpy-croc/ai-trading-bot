@@ -65,6 +65,45 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Regime lookback buffer for data fetching
+REGIME_LOOKBACK_BUFFER = 5
+
+
+def _compute_regime_lookback(regime_switcher: Any) -> int:
+    """Determine how many candles are needed for regime analysis.
+
+    Args:
+        regime_switcher: Regime switcher instance.
+
+    Returns:
+        Number of candles needed for regime lookback.
+    """
+    if not regime_switcher:
+        return 0
+
+    configs: list[Any] = []
+
+    detector = getattr(regime_switcher, "regime_detector", None)
+    if detector is not None:
+        cfg = getattr(detector, "config", None)
+        if cfg is not None:
+            configs.append(cfg)
+
+    timeframe_detectors = getattr(regime_switcher, "timeframe_detectors", {}) or {}
+    for detector in timeframe_detectors.values():
+        cfg = getattr(detector, "config", None)
+        if cfg is not None:
+            configs.append(cfg)
+
+    if not configs:
+        return 0
+
+    slope_window = max((getattr(cfg, "slope_window", 0) or 0) for cfg in configs)
+    atr_lookback = max((getattr(cfg, "atr_percentile_lookback", 0) or 0) for cfg in configs)
+
+    base_lookback = max(slope_window, atr_lookback)
+    return int(base_lookback + REGIME_LOOKBACK_BUFFER)
+
 
 class Backtester:
     """Backtesting engine for trading strategies.
@@ -271,6 +310,13 @@ class Backtester:
     def current_trade(self, value: ActiveTrade | None) -> None:
         """Set the current active trade (backward compatibility)."""
         self.position_tracker.current_trade = value
+
+    @property
+    def regime_switcher(self):
+        """Get regime switcher (backward compatibility)."""
+        if self.regime_handler:
+            return self.regime_handler.regime_switcher
+        return None
 
     @property
     def total_fees_paid(self) -> float:
@@ -1407,3 +1453,54 @@ class Backtester:
         """
         if self.balance > self.peak_balance:
             self.peak_balance = self.balance
+
+    def _apply_correlation_control(
+        self,
+        symbol: str,
+        timeframe: str,
+        df: pd.DataFrame,
+        index: int,
+        candidate_fraction: float,
+    ) -> float:
+        """Apply correlation control to candidate position size (backward compatibility).
+
+        This method is deprecated. The functionality has been moved to
+        CorrelationHandler.apply_correlation_control().
+
+        Args:
+            symbol: Trading symbol.
+            timeframe: Candle timeframe.
+            df: DataFrame with market data.
+            index: Current candle index.
+            candidate_fraction: Proposed position size fraction.
+
+        Returns:
+            Adjusted position size fraction.
+        """
+        if self.correlation_handler is None:
+            return candidate_fraction
+
+        return self.correlation_handler.apply_correlation_control(
+            symbol=symbol,
+            timeframe=timeframe,
+            df=df,
+            index=index,
+            candidate_fraction=candidate_fraction,
+        )
+
+    def _load_strategy_by_name(self, strategy_name: str):
+        """Load strategy by name (backward compatibility).
+
+        This method is deprecated. The functionality has been moved to
+        RegimeHandler._load_strategy().
+
+        Args:
+            strategy_name: Name of strategy to load.
+
+        Returns:
+            Strategy instance, or None on failure.
+        """
+        if self.regime_handler is None:
+            return None
+
+        return self.regime_handler._load_strategy(strategy_name)
