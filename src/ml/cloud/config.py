@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 
 from src.ml.training_pipeline.config import TrainingConfig
 
+# Default cloud instance configuration values
+DEFAULT_INSTANCE_TYPE = "ml.g4dn.xlarge"  # T4 GPU, good balance of cost/performance
+DEFAULT_MAX_RUNTIME_HOURS = 4  # Maximum training time before timeout
+DEFAULT_VOLUME_SIZE_GB = 30  # EBS volume size for training data
+
 
 @dataclass
 class CloudInstanceConfig:
@@ -23,10 +28,10 @@ class CloudInstanceConfig:
         volume_size_gb: EBS volume size for training data and artifacts
     """
 
-    instance_type: str = "ml.g4dn.xlarge"
+    instance_type: str = DEFAULT_INSTANCE_TYPE
     use_spot_instances: bool = True
-    max_runtime_hours: int = 4
-    volume_size_gb: int = 30
+    max_runtime_hours: int = DEFAULT_MAX_RUNTIME_HOURS
+    volume_size_gb: int = DEFAULT_VOLUME_SIZE_GB
 
 
 @dataclass
@@ -103,9 +108,11 @@ class CloudTrainingConfig:
         storage_config = CloudStorageConfig(s3_bucket=s3_bucket)
 
         instance_config = CloudInstanceConfig(
-            instance_type=os.getenv("SAGEMAKER_INSTANCE_TYPE", "ml.g4dn.xlarge"),
+            instance_type=os.getenv("SAGEMAKER_INSTANCE_TYPE", DEFAULT_INSTANCE_TYPE),
             use_spot_instances=os.getenv("SAGEMAKER_USE_SPOT", "true").lower() == "true",
-            max_runtime_hours=int(os.getenv("SAGEMAKER_MAX_RUNTIME_HOURS", "4")),
+            max_runtime_hours=int(
+                os.getenv("SAGEMAKER_MAX_RUNTIME_HOURS", str(DEFAULT_MAX_RUNTIME_HOURS))
+            ),
         )
 
         return cls(

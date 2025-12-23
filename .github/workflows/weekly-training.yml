@@ -29,14 +29,30 @@ env:
   PYTHON_VERSION: '3.11'
 
 jobs:
+  setup-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      symbols: ${{ steps.set-symbols.outputs.symbols }}
+    steps:
+    - name: Set symbols matrix
+      id: set-symbols
+      run: |
+        # Get input or use default
+        INPUT_SYMBOLS="${{ github.event.inputs.symbols || 'BTCUSDT,ETHUSDT' }}"
+        # Convert comma-separated string to JSON array
+        SYMBOLS_JSON=$(echo "$INPUT_SYMBOLS" | tr ',' '\n' | jq -R . | jq -s -c .)
+        echo "symbols=$SYMBOLS_JSON" >> $GITHUB_OUTPUT
+        echo "Matrix symbols: $SYMBOLS_JSON"
+
   train-models:
     runs-on: ubuntu-latest
+    needs: setup-matrix
     timeout-minutes: 360  # 6 hours max for all training
 
     strategy:
       fail-fast: false
       matrix:
-        symbol: ${{ fromJson(github.event.inputs.symbols && format('["{0}"]', join(fromJson(format('["{0}"]', github.event.inputs.symbols)), '","')) || '["BTCUSDT", "ETHUSDT"]') }}
+        symbol: ${{ fromJson(needs.setup-matrix.outputs.symbols) }}
 
     steps:
     - name: Checkout code
@@ -51,8 +67,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
-        pip install boto3
+        pip install -e '.[cloud]'
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
@@ -138,7 +153,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install boto3
+        pip install boto3  # Only need boto3 for S3 listing
 
     - name: Generate training summary
       env:

@@ -10,7 +10,7 @@ import logging
 import os
 import tarfile
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -78,7 +78,8 @@ class SageMakerProvider(CloudTrainingProvider):
                 self._s3_client = boto3.client("s3", region_name=self._region)
             except ImportError as exc:
                 raise ProviderNotAvailableError(
-                    "boto3 is required for SageMaker provider. Install with: pip install boto3"
+                    "boto3 is required for SageMaker provider. "
+                    "Install with: pip install '.[cloud]'"
                 ) from exc
 
     def is_available(self) -> bool:
@@ -244,7 +245,7 @@ class SageMakerProvider(CloudTrainingProvider):
         SageMaker job names must be unique and match pattern: ^[a-zA-Z0-9](-*[a-zA-Z0-9])*
         Max length: 63 characters
         """
-        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         return f"atb-{symbol.lower()}-{timeframe}-{timestamp}"
 
     def _extract_job_name(self, job_id: str) -> str:

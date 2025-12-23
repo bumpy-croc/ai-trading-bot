@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +60,7 @@ class LocalProvider(CloudTrainingProvider):
             self._jobs[job_id] = TrainingJobStatus(
                 job_name=job_id,
                 status="InProgress",
-                start_time=datetime.utcnow(),
+                start_time=datetime.now(UTC),
                 end_time=None,
                 failure_reason=None,
                 output_s3_path=None,
@@ -109,7 +109,7 @@ class LocalProvider(CloudTrainingProvider):
         with self._lock:
             if job_id in self._jobs:
                 self._jobs[job_id].status = "Stopped"
-                self._jobs[job_id].end_time = datetime.utcnow()
+                self._jobs[job_id].end_time = datetime.now(UTC)
                 logger.info(f"Marked local job as stopped: {job_id}")
 
     def download_artifacts(self, job_id: str, local_path: Path) -> Path:
@@ -192,14 +192,14 @@ class LocalProvider(CloudTrainingProvider):
                 )
                 if has_valid_artifacts:
                     self._jobs[job_id].status = "Completed"
-                    self._jobs[job_id].end_time = datetime.utcnow()
+                    self._jobs[job_id].end_time = datetime.now(UTC)
                     self._jobs[job_id].output_s3_path = str(result.artifact_paths.directory)
                     self._jobs[job_id].metrics = result.metadata.get("evaluation_results", {})
                     self._job_results[job_id] = result
                     logger.info(f"Local training completed: {job_id}")
                 else:
                     self._jobs[job_id].status = "Failed"
-                    self._jobs[job_id].end_time = datetime.utcnow()
+                    self._jobs[job_id].end_time = datetime.now(UTC)
                     self._jobs[job_id].failure_reason = result.metadata.get(
                         "error", "Unknown error"
                     )
@@ -208,6 +208,6 @@ class LocalProvider(CloudTrainingProvider):
         except Exception as exc:
             with self._lock:
                 self._jobs[job_id].status = "Failed"
-                self._jobs[job_id].end_time = datetime.utcnow()
+                self._jobs[job_id].end_time = datetime.now(UTC)
                 self._jobs[job_id].failure_reason = str(exc)
             logger.exception(f"Local training failed with exception: {job_id}")

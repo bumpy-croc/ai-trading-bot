@@ -9,8 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,7 +53,8 @@ class S3ArtifactManager:
                 self._s3_client = boto3.client("s3", region_name=self.region)
             except ImportError as exc:
                 raise ArtifactSyncError(
-                    "boto3 is required for S3 operations. Install with: pip install boto3"
+                    "boto3 is required for S3 operations. "
+                    "Install with: pip install '.[cloud]'"
                 ) from exc
 
     def upload_training_data(
@@ -81,7 +81,7 @@ class S3ArtifactManager:
         self._ensure_client()
         assert self._s3_client is not None
 
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
         s3_prefix = f"training-data/{symbol}/{timeframe}/{timestamp}"
 
         try:
@@ -366,8 +366,8 @@ class S3ArtifactManager:
             # Create new symlink with temporary name
             temp_link.symlink_to(version_dir.name)
 
-            # Atomically replace old symlink (rename is atomic on POSIX)
-            shutil.move(str(temp_link), str(latest_link))
+            # Atomically replace old symlink (os.replace is atomic on POSIX)
+            os.replace(str(temp_link), str(latest_link))
 
             logger.info(f"Updated 'latest' symlink to {version_dir.name}")
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 
@@ -282,17 +282,13 @@ class CloudTrainingOrchestrator:
         if not s3_output_path:
             raise ArtifactSyncError("No S3 output path found for job")
 
-        # Validate job_id to prevent path injection
-        if not job_id or "/" in job_id.split("/")[-1].replace("-", ""):
-            # Extract last segment and validate it contains only safe chars
-            job_suffix = job_id.split("/")[-1] if job_id else "unknown"
-            # Allow alphanumeric, hyphens, and underscores
-            import re
+        # Extract and validate job_id suffix for temp directory naming
+        import re
 
-            if not re.match(r"^[\w\-]+$", job_suffix):
-                job_suffix = "download"
-        else:
-            job_suffix = job_id.split("/")[-1]
+        job_suffix = job_id.split("/")[-1] if job_id else ""
+        # Only allow alphanumeric, hyphens, and underscores
+        if not job_suffix or not re.match(r"^[\w\-]+$", job_suffix):
+            job_suffix = "download"
 
         temp_dir: Path | None = None
         try:
@@ -310,11 +306,11 @@ class CloudTrainingOrchestrator:
                 with open(metadata_path) as f:
                     metadata = json.load(f)
                 version_id = metadata.get(
-                    "version_id", datetime.utcnow().strftime("%Y-%m-%d_%Hh_v1")
+                    "version_id", datetime.now(UTC).strftime("%Y-%m-%d_%Hh_v1")
                 )
                 model_type = metadata.get("model_type", "basic")
             else:
-                version_id = datetime.utcnow().strftime("%Y-%m-%d_%Hh_v1")
+                version_id = datetime.now(UTC).strftime("%Y-%m-%d_%Hh_v1")
                 model_type = "basic"
 
             # Sync to local registry

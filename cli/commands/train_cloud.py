@@ -105,7 +105,7 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         from src.ml.training_pipeline.config import DiagnosticsOptions, TrainingConfig
     except ImportError as exc:
         print(f"Error: Cloud training dependencies not available: {exc}")
-        print("Install with: pip install boto3")
+        print("Install with: pip install '.[cloud]'")
         return 1
 
     # Validate provider configuration
@@ -241,6 +241,7 @@ def _handle_cloud_status(ns: argparse.Namespace) -> int:
         from src.ml.cloud.providers import get_provider
     except ImportError as exc:
         print(f"Error: Cloud training dependencies not available: {exc}")
+        print("Install with: pip install '.[cloud]'")
         return 1
 
     provider = get_provider(args.provider)
@@ -303,6 +304,7 @@ def _handle_cloud_list(ns: argparse.Namespace) -> int:
         from src.ml.cloud.artifacts.s3_manager import S3ArtifactManager
     except ImportError as exc:
         print(f"Error: Cloud training dependencies not available: {exc}")
+        print("Install with: pip install '.[cloud]'")
         return 1
 
     bucket = os.getenv("SAGEMAKER_S3_BUCKET")
