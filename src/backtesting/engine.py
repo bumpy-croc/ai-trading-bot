@@ -143,6 +143,7 @@ class Backtester:
         slippage_rate: float = 0.0005,
         use_next_bar_execution: bool = False,
         use_high_low_for_stops: bool = True,
+        max_position_size: float | None = None,
     ) -> None:
         """Initialize backtester with strategy and configuration.
 
@@ -170,9 +171,15 @@ class Backtester:
             slippage_rate: Slippage percentage per trade.
             use_next_bar_execution: Execute entries on next bar's open.
             use_high_low_for_stops: Use high/low for SL/TP detection.
+            max_position_size: Maximum position size as fraction of balance (backward compatibility).
         """
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
+
+        # Validate max_position_size if provided
+        if max_position_size is not None:
+            if max_position_size <= 0 or max_position_size > 1:
+                raise ValueError("Max position size must be between 0 and 1")
 
         # Core state
         self.initial_balance = initial_balance
@@ -193,7 +200,16 @@ class Backtester:
         self.data_provider = data_provider
         self.sentiment_provider = sentiment_provider
 
-        # Risk management
+        # Risk management - handle backward compatibility for max_position_size
+        if max_position_size is not None:
+            from src.risk.risk_manager import RiskParameters
+            if risk_parameters is None:
+                risk_parameters = RiskParameters(max_position_size=max_position_size)
+            else:
+                # Update existing risk_parameters with max_position_size
+                if hasattr(risk_parameters, 'max_position_size'):
+                    risk_parameters.max_position_size = max_position_size
+
         self.risk_parameters = risk_parameters
         self.risk_manager = RiskManager(risk_parameters)
         self.enable_dynamic_risk = enable_dynamic_risk
@@ -347,6 +363,13 @@ class Backtester:
     def use_high_low_for_stops(self) -> bool:
         """Get high/low for stops setting (backward compatibility)."""
         return self.exit_handler.use_high_low_for_stops
+
+    @property
+    def max_position_size(self) -> float:
+        """Get max position size (backward compatibility)."""
+        if self.risk_parameters is None:
+            return 0.1  # Default 10% for backward compatibility
+        return self.risk_manager.params.max_position_size
 
     def _init_regime_switching(
         self,
@@ -1230,7 +1253,7 @@ class Backtester:
 
     def _build_empty_results(self) -> dict:
         """Build results for empty data case."""
-        return {
+        results = {
             "total_trades": 0,
             "final_balance": self.initial_balance,
             "total_return": 0.0,
@@ -1239,10 +1262,33 @@ class Backtester:
             "win_rate": 0.0,
             "avg_trade_duration": 0.0,
             "total_fees": 0.0,
+            "total_slippage_cost": 0.0,
             "trades": [],
             "hold_return": 0.0,
             "trading_vs_hold_difference": 0.0,
+            "annualized_return": 0.0,
+            "yearly_returns": {},
+            "prediction_metrics": {
+                "prediction_accuracy": 0.0,
+                "prediction_mae": 0.0,
+            },
+            "session_id": None,
+            "early_stop_reason": None,
+            "early_stop_date": None,
+            "early_stop_candle_index": None,
+            "dynamic_risk_adjustments": [],
+            "dynamic_risk_summary": None,
+            "execution_settings": self.execution_engine.get_execution_settings() if hasattr(self, 'execution_engine') else {},
         }
+
+        # Add regime switching results
+        if self.regime_handler:
+            results.update(self.regime_handler.get_results())
+            results["final_strategy"] = self.strategy.name
+        else:
+            results.update(RegimeHandler.get_disabled_results())
+
+        return results
 
     def _build_final_results(
         self,
