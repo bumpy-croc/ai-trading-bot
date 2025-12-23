@@ -90,6 +90,7 @@ class EntryHandler:
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
         self.default_take_profit_pct = default_take_profit_pct
+        self.dynamic_risk_adjustments: list[dict] = []
 
     def set_component_strategy(self, strategy: ComponentStrategy | None) -> None:
         """Update the component strategy (for regime switching).
@@ -487,7 +488,7 @@ class EntryHandler:
 
             adjusted_size = original_size * adjustments.position_size_factor
 
-            # Log significant adjustments
+            # Track significant adjustments
             if abs(adjustments.position_size_factor - 1.0) > 0.1:
                 logger.debug(
                     "Dynamic risk adjustment at %s: size factor=%.2f, reason=%s",
@@ -496,8 +497,33 @@ class EntryHandler:
                     adjustments.primary_reason,
                 )
 
+                self.dynamic_risk_adjustments.append(
+                    {
+                        "timestamp": current_time,
+                        "position_size_factor": adjustments.position_size_factor,
+                        "stop_loss_tightening": adjustments.stop_loss_tightening,
+                        "daily_risk_factor": adjustments.daily_risk_factor,
+                        "primary_reason": adjustments.primary_reason,
+                        "current_drawdown": adjustments.adjustment_details.get("current_drawdown"),
+                        "balance": balance,
+                        "peak_balance": peak_balance,
+                        "original_size": original_size,
+                        "adjusted_size": adjusted_size,
+                    }
+                )
+
             return adjusted_size
 
         except Exception as e:
             logger.warning("Failed to apply dynamic risk adjustment: %s", e)
             return original_size
+
+    def get_dynamic_risk_adjustments(self) -> list[dict]:
+        """Get and clear dynamic risk adjustments tracked by this handler.
+
+        Returns:
+            List of dynamic risk adjustment records.
+        """
+        adjustments = self.dynamic_risk_adjustments.copy()
+        self.dynamic_risk_adjustments.clear()
+        return adjustments
