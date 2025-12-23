@@ -170,6 +170,11 @@ class Backtester:
         switching_config: Any | None = None,
         # Position size limit (parity with live engine)
         max_position_size: float = 0.1,  # 10% of balance per position (match live default)
+        # Realistic execution parameters
+        fee_rate: float = 0.001,  # 0.1% per trade (entry and exit)
+        slippage_rate: float = 0.0005,  # 0.05% slippage per trade
+        use_next_bar_execution: bool = False,  # Execute on next candle's open (disabled by default for backward compatibility)
+        use_high_low_for_stops: bool = True,  # Check high/low for SL/TP hits
     ):
         if initial_balance <= 0:
             raise ValueError("Initial balance must be positive")
@@ -258,6 +263,16 @@ class Backtester:
         self.default_take_profit_pct = default_take_profit_pct
         self.legacy_stop_loss_indexing = legacy_stop_loss_indexing
         self.enable_engine_risk_exits = enable_engine_risk_exits
+
+        # Realistic execution parameters
+        self.fee_rate = fee_rate
+        self.slippage_rate = slippage_rate
+        self.use_next_bar_execution = use_next_bar_execution
+        self.use_high_low_for_stops = use_high_low_for_stops
+        self.total_fees_paid = 0.0
+        self.total_slippage_cost = 0.0
+        # Pending order for next-bar execution
+        self._pending_entry: dict | None = None
 
         # MFE/MAE tracker for active trade
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
@@ -1121,6 +1136,75 @@ class Backtester:
                 candle = df.iloc[i]
                 current_time = candle.name
                 current_price = float(candle["close"])
+                open_price = float(candle["open"])
+
+                # Process pending entry from previous candle (next-bar execution)
+                if self._pending_entry is not None and self.current_trade is None:
+                    pending = self._pending_entry
+                    self._pending_entry = None
+
+                    # Use open price for execution (with slippage)
+                    if pending["side"] == "long":
+                        # Buying: slippage works against us (higher price)
+                        entry_price_with_slippage = open_price * (1 + self.slippage_rate)
+                    else:
+                        # Shorting: slippage works against us (lower price)
+                        entry_price_with_slippage = open_price * (1 - self.slippage_rate)
+
+                    # Calculate fees and slippage before reducing balance
+                    position_notional = self.balance * pending["size_fraction"]
+                    entry_fee = abs(position_notional * self.fee_rate)
+                    slippage_cost = abs(position_notional * self.slippage_rate)
+
+                    # Apply entry fee
+                    self.balance -= entry_fee
+                    self.total_fees_paid += entry_fee
+                    self.total_slippage_cost += slippage_cost
+
+                    # Recalculate SL/TP based on actual entry price
+                    if pending["side"] == "long":
+                        stop_loss = entry_price_with_slippage * (1 - pending["sl_pct"])
+                        take_profit = entry_price_with_slippage * (1 + pending["tp_pct"])
+                    else:
+                        stop_loss = entry_price_with_slippage * (1 + pending["sl_pct"])
+                        take_profit = entry_price_with_slippage * (1 - pending["tp_pct"])
+
+                    self.current_trade = ActiveTrade(
+                        symbol=symbol,
+                        side=pending["side"],
+                        entry_price=entry_price_with_slippage,
+                        entry_time=current_time,
+                        size=pending["size_fraction"],
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                        entry_balance=float(self.balance),
+                    )
+                    self.current_trade.component_notional = pending.get(
+                        "component_notional", pending["size_fraction"] * self.balance
+                    )
+
+                    logger.info(
+                        f"Entered {pending['side']} at {entry_price_with_slippage:.2f} (open: {open_price:.2f}) via next-bar execution"
+                    )
+
+                    # Clear MFE/MAE tracker for new position
+                    self.mfe_mae_tracker.clear("active")
+
+                    # Update risk manager for the executed pending entry
+                    try:
+                        self.risk_manager.update_position(
+                            symbol=symbol,
+                            side=pending["side"],
+                            size=pending["size_fraction"],
+                            entry_price=entry_price_with_slippage,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to update risk manager for pending %s entry on %s: %s",
+                            pending["side"],
+                            symbol,
+                            e,
+                        )
 
                 runtime_decision = self._runtime_process_decision(
                     i,
@@ -1440,18 +1524,39 @@ class Backtester:
                         pass
 
                     # Additional parity checks: stop loss, take profit, and time-limit
+                    # Use high/low prices for more realistic SL/TP detection
                     hit_stop_loss = False
                     hit_take_profit = False
+                    sl_exit_price = current_price
+                    tp_exit_price = current_price
+
+                    if self.use_high_low_for_stops:
+                        candle_high = float(candle["high"])
+                        candle_low = float(candle["low"])
+                    else:
+                        candle_high = current_price
+                        candle_low = current_price
+
                     if self.enable_engine_risk_exits and self.current_trade.stop_loss is not None:
+                        stop_loss_val = float(self.current_trade.stop_loss)
                         if self.current_trade.side == "long":
-                            hit_stop_loss = current_price <= float(self.current_trade.stop_loss)
+                            hit_stop_loss = candle_low <= stop_loss_val
+                            if hit_stop_loss:
+                                sl_exit_price = stop_loss_val  # Exit at stop loss price
                         else:
-                            hit_stop_loss = current_price >= float(self.current_trade.stop_loss)
+                            hit_stop_loss = candle_high >= stop_loss_val
+                            if hit_stop_loss:
+                                sl_exit_price = stop_loss_val  # Exit at stop loss price
                     if self.enable_engine_risk_exits and self.current_trade.take_profit is not None:
+                        take_profit_val = float(self.current_trade.take_profit)
                         if self.current_trade.side == "long":
-                            hit_take_profit = current_price >= float(self.current_trade.take_profit)
+                            hit_take_profit = candle_high >= take_profit_val
+                            if hit_take_profit:
+                                tp_exit_price = take_profit_val  # Exit at take profit price
                         else:
-                            hit_take_profit = current_price <= float(self.current_trade.take_profit)
+                            hit_take_profit = candle_low <= take_profit_val
+                            if hit_take_profit:
+                                tp_exit_price = take_profit_val  # Exit at take profit price
                     hit_time_limit = False
                     if self.time_exit_policy is not None:
                         try:
@@ -1515,8 +1620,25 @@ class Backtester:
                         )
 
                     if should_exit:
-                        # Close the trade
-                        exit_price = current_price
+                        # Determine exit price based on exit reason
+                        # Priority: Stop Loss > Take Profit > Time/Signal Exit
+                        # This ensures losses are cut before profits are taken in the same candle
+                        if hit_stop_loss:
+                            base_exit_price = sl_exit_price
+                        elif hit_take_profit:
+                            base_exit_price = tp_exit_price
+                        else:
+                            base_exit_price = current_price
+
+                        # Apply slippage (adverse price movement on exit)
+                        # Slippage cost is subtracted from PnL regardless of reason
+                        if self.current_trade.side == "long":
+                            # Selling long: slippage works against us (lower price than expected)
+                            exit_price = base_exit_price * (1 - self.slippage_rate)
+                        else:
+                            # Covering short: slippage works against us (higher price than expected)
+                            exit_price = base_exit_price * (1 + self.slippage_rate)
+
                         exit_time = current_time
 
                         # Calculate PnL percent (sized) and then convert to cash
@@ -1540,6 +1662,16 @@ class Backtester:
                             else float(self.balance)
                         )
                         trade_pnl_cash = cash_pnl(trade_pnl_pct, basis_balance)
+
+                        # Calculate exit fees and slippage cost
+                        exit_position_notional = basis_balance * fraction
+                        exit_fee = abs(exit_position_notional * self.fee_rate)
+                        exit_slippage = abs(exit_position_notional * self.slippage_rate)
+
+                        # Apply exit costs
+                        trade_pnl_cash -= exit_fee
+                        self.total_fees_paid += exit_fee
+                        self.total_slippage_cost += exit_slippage
 
                         # Snapshot MFE/MAE
                         metrics = self.mfe_mae_tracker.get_position_metrics("active")
@@ -1695,96 +1827,141 @@ class Backtester:
                     if size_fraction <= 0:
                         continue
 
+                    # Calculate stop loss percentage from strategy
                     try:
-                        stop_loss = self._component_strategy.get_stop_loss_price(
+                        stop_loss_price = self._component_strategy.get_stop_loss_price(
                             current_price,
                             runtime_decision.signal if runtime_decision else None,
                             runtime_decision.regime if runtime_decision else None,
                         )
+                        if entry_side == "long":
+                            sl_pct = (current_price - stop_loss_price) / current_price
+                        else:
+                            sl_pct = (stop_loss_price - current_price) / current_price
+                        sl_pct = max(0.01, min(0.20, sl_pct))  # Clamp between 1% and 20%
                     except Exception:
-                        stop_loss = current_price * (0.95 if entry_side == "long" else 1.05)
+                        sl_pct = 0.05  # Default 5% stop loss
 
                     tp_pct = (
                         self.default_take_profit_pct
                         if self.default_take_profit_pct is not None
                         else getattr(self.strategy, "take_profit_pct", 0.04)
                     )
-                    take_profit = (
-                        current_price * (1 + tp_pct)
-                        if entry_side == "long"
-                        else current_price * (1 - tp_pct)
-                    )
 
-                    self.current_trade = ActiveTrade(
-                        symbol=symbol,
-                        side=entry_side,
-                        entry_price=current_price,
-                        entry_time=current_time,
-                        size=size_fraction,
-                        stop_loss=stop_loss,
-                        take_profit=take_profit,
-                        entry_balance=float(self.balance),
-                    )
-                    self.current_trade.component_notional = float(
-                        runtime_decision.position_size
-                        if runtime_decision
-                        else size_fraction * self.balance
-                    )
-
-                    if self.log_to_database and self.db_manager:
-                        indicators = self._extract_indicators(df, i)
-                        sentiment_data = self._extract_sentiment_data(df, i)
-                        ml_predictions = self._extract_ml_predictions(df, i)
-
-                        self.db_manager.log_strategy_execution(
-                            strategy_name=self.strategy.__class__.__name__,
-                            symbol=symbol,
-                            signal_type="entry",
-                            action_taken="opened_long" if entry_side == "long" else "opened_short",
-                            price=current_price,
-                            timeframe=timeframe,
-                            signal_strength=(
-                                runtime_decision.signal.strength if runtime_decision else 0.0
+                    # Use next-bar execution if enabled
+                    if self.use_next_bar_execution:
+                        # Store as pending entry - will execute on next candle's open
+                        self._pending_entry = {
+                            "side": entry_side,
+                            "size_fraction": size_fraction,
+                            "sl_pct": sl_pct,
+                            "tp_pct": tp_pct,
+                            "signal_time": current_time,
+                            "signal_price": current_price,
+                            "component_notional": float(
+                                runtime_decision.position_size
+                                if runtime_decision
+                                else size_fraction * self.balance
                             ),
-                            confidence_score=(
-                                runtime_decision.signal.confidence if runtime_decision else 0.0
-                            ),
-                            indicators=indicators,
-                            sentiment_data=sentiment_data if sentiment_data else None,
-                            ml_predictions=ml_predictions if ml_predictions else None,
-                            position_size=size_fraction,
-                            reasons=[
-                                "runtime_entry",
-                                f"side_{entry_side}",
-                                f"position_size_{size_fraction:.4f}",
-                                f"balance_{self.balance:.2f}",
-                                f"enter_short_{bool((runtime_decision.metadata if runtime_decision else {}).get('enter_short'))}",
-                            ],
-                            volume=indicators.get("volume"),
-                            volatility=indicators.get("volatility"),
-                            session_id=self.trading_session_id,
+                        }
+                        logger.info(
+                            f"Pending {entry_side} entry at signal price {current_price:.2f}, will execute on next bar open"
                         )
+                    else:
+                        # Immediate execution (legacy behavior with slippage/fees)
+                        if entry_side == "long":
+                            entry_price_with_slippage = current_price * (1 + self.slippage_rate)
+                            stop_loss = entry_price_with_slippage * (1 - sl_pct)
+                            take_profit = entry_price_with_slippage * (1 + tp_pct)
+                        else:
+                            entry_price_with_slippage = current_price * (1 - self.slippage_rate)
+                            stop_loss = entry_price_with_slippage * (1 + sl_pct)
+                            take_profit = entry_price_with_slippage * (1 - tp_pct)
 
-                    logger.info(
-                        "Entered %s position at %s via runtime decision",
-                        entry_side,
-                        current_price,
-                    )
+                        position_notional = self.balance * size_fraction
+                        entry_fee = abs(position_notional * self.fee_rate)
+                        slippage_cost = abs(position_notional * self.slippage_rate)
+                        self.balance -= entry_fee
+                        self.total_fees_paid += entry_fee
+                        self.total_slippage_cost += slippage_cost
 
-                    try:
-                        self.risk_manager.update_position(
+                        self.current_trade = ActiveTrade(
                             symbol=symbol,
                             side=entry_side,
+                            entry_price=entry_price_with_slippage,
+                            entry_time=current_time,
                             size=size_fraction,
-                            entry_price=current_price,
+                            stop_loss=stop_loss,
+                            take_profit=take_profit,
+                            entry_balance=float(self.balance),
                         )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to update risk manager for %s on %s: %s",
+                        self.current_trade.component_notional = float(
+                            runtime_decision.position_size
+                            if runtime_decision
+                            else size_fraction * self.balance
+                        )
+                        logger.info(
+                            f"Entered {entry_side} at {entry_price_with_slippage:.2f} via immediate execution"
+                        )
+
+                    # Only log and update risk manager if trade was actually entered (not pending)
+                    if self.current_trade is not None:
+                        if self.log_to_database and self.db_manager:
+                            indicators = self._extract_indicators(df, i)
+                            sentiment_data = self._extract_sentiment_data(df, i)
+                            ml_predictions = self._extract_ml_predictions(df, i)
+
+                            self.db_manager.log_strategy_execution(
+                                strategy_name=self.strategy.__class__.__name__,
+                                symbol=symbol,
+                                signal_type="entry",
+                                action_taken=(
+                                    "opened_long" if entry_side == "long" else "opened_short"
+                                ),
+                                price=current_price,
+                                timeframe=timeframe,
+                                signal_strength=(
+                                    runtime_decision.signal.strength if runtime_decision else 0.0
+                                ),
+                                confidence_score=(
+                                    runtime_decision.signal.confidence if runtime_decision else 0.0
+                                ),
+                                indicators=indicators,
+                                sentiment_data=sentiment_data if sentiment_data else None,
+                                ml_predictions=ml_predictions if ml_predictions else None,
+                                position_size=size_fraction,
+                                reasons=[
+                                    "runtime_entry",
+                                    f"side_{entry_side}",
+                                    f"position_size_{size_fraction:.4f}",
+                                    f"balance_{self.balance:.2f}",
+                                    f"enter_short_{bool((runtime_decision.metadata if runtime_decision else {}).get('enter_short'))}",
+                                ],
+                                volume=indicators.get("volume"),
+                                volatility=indicators.get("volatility"),
+                                session_id=self.trading_session_id,
+                            )
+
+                        logger.info(
+                            "Entered %s position at %s via runtime decision",
                             entry_side,
-                            symbol,
-                            e,
+                            current_price,
                         )
+
+                        try:
+                            self.risk_manager.update_position(
+                                symbol=symbol,
+                                side=entry_side,
+                                size=size_fraction,
+                                entry_price=current_price,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to update risk manager for %s on %s: %s",
+                                entry_side,
+                                symbol,
+                                e,
+                            )
 
                     continue
 
@@ -2225,6 +2402,15 @@ class Backtester:
                 "dynamic_risk_summary": (
                     self._summarize_dynamic_risk_adjustments() if self.enable_dynamic_risk else None
                 ),
+                # Execution realism metrics
+                "total_fees": self.total_fees_paid,
+                "total_slippage_cost": self.total_slippage_cost,
+                "execution_settings": {
+                    "fee_rate": self.fee_rate,
+                    "slippage_rate": self.slippage_rate,
+                    "use_next_bar_execution": self.use_next_bar_execution,
+                    "use_high_low_for_stops": self.use_high_low_for_stops,
+                },
             }
 
             # Add regime switching results if enabled
@@ -2247,6 +2433,15 @@ class Backtester:
                         "regime_history": [],
                         "total_strategy_switches": 0,
                     }
+                )
+
+            # Warn if backtest ended with unexecuted pending entry
+            if self._pending_entry is not None:
+                logger.warning(
+                    "Backtest ended with pending %s entry that was never executed. "
+                    "This can occur if: (1) next-bar execution was enabled but next bar "
+                    "was not available, (2) risk limits prevented execution, or (3) dataset ended.",
+                    self._pending_entry.get("side", "unknown"),
                 )
 
             return results

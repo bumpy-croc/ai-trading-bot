@@ -122,6 +122,7 @@ def test_runtime_short_entry_blocks_when_flag_false():
         log_to_database=False,
         enable_dynamic_risk=False,
         enable_engine_risk_exits=False,
+        use_next_bar_execution=False,  # Disable for this test
     )
 
     result = backtester.run(
@@ -146,6 +147,7 @@ def test_runtime_short_entry_honors_metadata():
         log_to_database=False,
         enable_dynamic_risk=False,
         enable_engine_risk_exits=False,
+        use_next_bar_execution=False,  # Disable for this test
     )
 
     result = backtester.run(
@@ -171,6 +173,7 @@ def test_runtime_short_entry_blocks_when_metadata_missing():
         log_to_database=False,
         enable_dynamic_risk=False,
         enable_engine_risk_exits=False,
+        use_next_bar_execution=False,  # Disable for this test
     )
 
     result = backtester.run(
