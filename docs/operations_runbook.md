@@ -73,17 +73,23 @@ This runbook provides operational procedures, troubleshooting guides, and recove
 # Check process
 ps aux | grep "atb live"
 
-# Check via health endpoint (if enabled)
+# If you started the engine via `atb live-health`, you also get an embedded HTTP server.
+# By default it listens on port 8000 (override with PORT or HEALTH_CHECK_PORT).
+#
+# Basic health (static service liveness):
 curl http://localhost:8000/health
-
-# Expected response:
-# {
-#   "status": "healthy",
-#   "uptime_seconds": 3600,
-#   "active_positions": 2,
-#   "balance": 10500.45,
-#   "last_data_update": "2025-11-21T15:30:00Z"
-# }
+#
+# Expected response (shape):
+# {"status":"healthy","timestamp":"...","service":"ai-trading-bot"}
+#
+# Detailed status (best-effort checks for config/DB/Binance reachability):
+curl http://localhost:8000/status
+#
+# Expected response includes:
+# - status: healthy|degraded
+# - components.config/providers
+# - components.database
+# - components.binance_api (when reachable)
 ```
 
 #### 2. Database Connectivity
@@ -93,22 +99,24 @@ curl http://localhost:8000/health
 atb db verify
 
 # Expected output:
-# ✅ Database connection successful
-# ✅ All tables exist
-# ✅ Schema version: v1.2.3
+# ✅ Connectivity OK
+# ✅ Alembic state consistent (or pending migrations listed)
+# ✅ Schema matches SQLAlchemy models (or deviations listed)
 ```
 
 #### 3. API Connectivity
 
 **Test exchange connectivity:**
 ```bash
-# Test Binance
-atb data test-provider binance BTCUSDT 1h
+# Smoke test Binance download (writes a small CSV under ./data by default)
+atb tests download
 
-# Test Coinbase
-atb data test-provider coinbase BTC-USD 1h
+# Optional: direct download helper (Binance / USDT pairs only)
+atb data download BTCUSDT --timeframe 1h --start_date 2024-01-01T00:00:00Z --end_date 2024-01-02T00:00:00Z --format csv
 
-# Expected: Recent OHLCV data without errors
+# Optional: basic external connectivity probes
+curl -I https://api.binance.com/api/v3/ping
+curl -I https://api.coinbase.com/v2/time
 ```
 
 #### 4. Data Freshness
@@ -306,10 +314,10 @@ atb live ml_basic --symbol BTCUSDT --resume-from-last-balance
 **Diagnosis:**
 ```bash
 # Check active positions
-atb db query "SELECT * FROM positions WHERE status = 'OPEN';"
+psql "$DATABASE_URL" -c "SELECT * FROM positions WHERE status = 'OPEN';"
 
 # Check stop loss values
-atb db query "SELECT symbol, entry_price, stop_loss, current_price FROM positions;"
+psql "$DATABASE_URL" -c "SELECT symbol, entry_price, stop_loss, current_price FROM positions;"
 
 # Review execution logs
 grep "stop_loss" logs/trading.log | tail -50
@@ -344,18 +352,19 @@ grep "stop_loss" logs/trading.log | tail -50
 **Diagnosis:**
 ```bash
 # Check account history
-atb db query "SELECT * FROM account_balances ORDER BY timestamp DESC LIMIT 20;"
+psql "$DATABASE_URL" -c "SELECT * FROM account_balances ORDER BY timestamp DESC LIMIT 20;"
 
 # Check trade history
-atb db query "SELECT * FROM trades ORDER BY exit_time DESC LIMIT 20;"
+psql "$DATABASE_URL" -c "SELECT * FROM trades ORDER BY exit_time DESC LIMIT 20;"
 
 # Calculate expected balance
-atb db query "SELECT initial_balance,
+psql "$DATABASE_URL" -c "SELECT initial_balance,
     (SELECT SUM(pnl) FROM trades WHERE session_id = trading_sessions.id) as total_pnl
 FROM trading_sessions ORDER BY start_time DESC LIMIT 1;"
 
-# Sync with exchange
-atb live sync-balance --provider binance
+# If you suspect exchange/account drift, prefer:
+# - restart the engine with --resume-from-last-balance (default behaviour)
+# - trigger an emergency account sync programmatically (see docs/live_trading.md)
 ```
 
 **Recovery:**
@@ -396,7 +405,7 @@ grep "LiveTradingEngine" logs/trading.log | tail -50
 
 #### Step 3: Verify System Health
 - [ ] Database connectivity (`atb db verify`)
-- [ ] API connectivity (test providers)
+- [ ] API connectivity (`atb tests download` or `atb data download ...`)
 - [ ] Disk space (`df -h`)
 - [ ] Memory usage (`free -h`)
 - [ ] Network connectivity (`ping api.binance.com`)
@@ -482,20 +491,17 @@ requests.exceptions.HTTPError: 429 Client Error: Too Many Requests
 1. **Assess damage:**
 ```bash
 # Check last known state
-atb db query "SELECT * FROM trading_sessions ORDER BY start_time DESC LIMIT 1;"
+psql "$DATABASE_URL" -c "SELECT * FROM trading_sessions ORDER BY start_time DESC LIMIT 1;"
 
 # Check open positions
-atb db query "SELECT * FROM positions WHERE status = 'OPEN';"
-
-# Get current balance from exchange
-atb live sync-balance --provider binance
+psql "$DATABASE_URL" -c "SELECT * FROM positions WHERE status = 'OPEN';"
 ```
 
 2. **Close at-risk positions (if needed):**
 ```bash
 # If positions are at high risk, close manually on exchange
-# Then record in database:
-atb db close-position --symbol BTCUSDT --exit-price 50000 --exit-reason "manual_close"
+# If you need to reconcile database state after manual intervention, use the admin UI
+# (`python src/database/admin_ui/app.py`) or run explicit SQL updates via psql.
 ```
 
 3. **Restart engine:**
@@ -535,7 +541,7 @@ psql -h localhost -U trading_bot -d ai_trading_bot < backups/backup_2025-11-21.s
 3. **Verify integrity:**
 ```bash
 atb db verify
-atb db query "SELECT COUNT(*) FROM trades;"
+psql "$DATABASE_URL" -c "SELECT COUNT(*) FROM trades;"
 ```
 
 4. **Restart services:**
@@ -555,11 +561,8 @@ pkill -9 -f "atb live"
 # Manually close all positions on exchange
 # (Log into exchange web interface)
 
-# Mark positions as closed in database
-atb db emergency-close-all --session-id $(atb db query "SELECT id FROM trading_sessions ORDER BY start_time DESC LIMIT 1;")
-
-# Verify no open positions
-atb db query "SELECT * FROM positions WHERE status = 'OPEN';"
+# Verify no open positions recorded in the database (best-effort)
+psql "$DATABASE_URL" -c "SELECT * FROM positions WHERE status = 'OPEN';"
 ```
 
 ---
@@ -575,8 +578,8 @@ psql -h localhost -U trading_bot -d ai_trading_bot -c "VACUUM ANALYZE;"
 # Reindex tables
 psql -h localhost -U trading_bot -d ai_trading_bot -c "REINDEX DATABASE ai_trading_bot;"
 
-# Check slow queries
-atb db query "SELECT query, mean_exec_time FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10;"
+# Check slow queries (requires pg_stat_statements extension enabled)
+psql "$DATABASE_URL" -c "SELECT query, mean_exec_time FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10;"
 ```
 
 ### Cache Optimization
@@ -623,7 +626,7 @@ pkill -9 -f "atb live"
 
 2. **Check positions:**
 ```bash
-atb db query "SELECT * FROM positions WHERE status = 'OPEN';"
+psql "$DATABASE_URL" -c "SELECT * FROM positions WHERE status = 'OPEN';"
 ```
 
 3. **Close all positions on exchange manually**
@@ -649,7 +652,8 @@ atb db query "SELECT * FROM positions WHERE status = 'OPEN';"
 
 ### Daily Tasks
 
-- [ ] Check system health (`atb health check`)
+- [ ] Check system health (if using `atb live-health`: `curl http://localhost:8000/status`)
+- [ ] Verify database connectivity (`atb db verify`)
 - [ ] Review overnight trade activity
 - [ ] Verify database backups completed
 - [ ] Check disk space (`df -h`)
@@ -698,6 +702,11 @@ Example using a simple monitoring script:
 ```bash
 #!/bin/bash
 # monitor.sh - Add to crontab to run every 5 minutes
+#
+# Prerequisites:
+# - psql client installed and DATABASE_URL exported
+# - bc installed (for floating point comparison)
+# - a configured mailer (mailx / sendmail) if you use the email notifications below
 
 # Check if engine is running
 if ! pgrep -f "atb live" > /dev/null; then
@@ -710,7 +719,7 @@ if ! atb db verify > /dev/null 2>&1; then
 fi
 
 # Check drawdown
-DRAWDOWN=$(atb db query "SELECT (peak_balance - current_balance) / peak_balance FROM trading_sessions ORDER BY start_time DESC LIMIT 1;")
+DRAWDOWN=$(psql "$DATABASE_URL" -t -A -c "SELECT (peak_balance - current_balance) / NULLIF(peak_balance, 0) FROM trading_sessions ORDER BY start_time DESC LIMIT 1;")
 if (( $(echo "$DRAWDOWN > 0.15" | bc -l) )); then
     echo "WARNING: High drawdown detected: $DRAWDOWN" | mail -s "Trading Alert" admin@example.com
 fi
@@ -831,7 +840,7 @@ ORDER BY trade_date DESC;
 - Review documentation
 
 **Tier 2 - Community:**
-- GitHub Issues: https://github.com/your-repo/ai-trading-bot/issues
+- GitHub Issues: https://github.com/bumpy-croc/ai-trading-bot/issues
 - Discord/Slack community
 
 **Tier 3 - Emergency:**

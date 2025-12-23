@@ -253,4 +253,3 @@ Sentiment data and ML training are supported. Pretrained models live in `src/ml`
 ## Disclaimer
 
 This project is for educational purposes only. Trading cryptocurrencies involves significant risk. Use paper trading, test thoroughly, and never risk funds you cannot afford to lose.
-<!-- chore: trigger CI test -->
