@@ -472,9 +472,44 @@ railway logs --environment production
 - For local databases: run `atb db migrate` after schema updates
 - Ensure backups in `backups/` are encrypted or excluded from commits
 
+## Regression Prevention
+
+When Claude makes a mistake or you discover a best practice during development, add it to the "Learned Constraints" section below. This builds institutional knowledge and prevents repeating mistakes.
+
+**How to add**: Simply tell Claude "Add to learned constraints: [your rule]" or use the `#` prefix pattern.
+
+### Learned Constraints
+
+- Always validate model paths with `.resolve()` before loading to prevent path traversal
+- Never use `.iloc[]` without bounds checking in the backtesting engine
+- ML models require feature schema validation even when features appear unused
+- Always run `atb dev quality` before committing to catch type errors early
+- Use `--paper-trading` flag when testing live trading changes
+- Check for existing branches before creating new ones to avoid duplicates
+- Verify database connection before running integration tests
+
+---
+
+## Automated Documentation
+
+The following documents are "living documents" that should be kept updated:
+
+| Document | Purpose | Update Frequency |
+|----------|---------|------------------|
+| `docs/changelog.md` | Timeline of all changes | After each feature/fix |
+| `docs/project_status.md` | Current milestones, last session summary | Start/end of sessions |
+| `docs/architecture.md` | System design overview | After architectural changes |
+
+**Update Command**: Use `/update-docs` to refresh all automated documentation.
+
+---
+
 ## Documentation References
 
 - **Full Docs**: `docs/README.md` - Complete documentation index
+- **Architecture**: `docs/architecture.md` - System design and components
+- **Changelog**: `docs/changelog.md` - Timeline of changes
+- **Project Status**: `docs/project_status.md` - Current milestones and focus
 - **Backtesting**: `docs/backtesting.md` - Engine internals and CLI usage
 - **Live Trading**: `docs/live_trading.md` - Safety controls and deployment
 - **Data Pipeline**: `docs/data_pipeline.md` - Offline cache and download utilities

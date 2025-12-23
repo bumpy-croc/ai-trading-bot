@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.strategies.components import (
     FixedFractionSizer,
     FixedRiskManager,
@@ -11,7 +12,6 @@ from src.strategies.components import (
     Strategy,
     StrategyRuntime,
 )
-from src.performance.metrics import Side, cash_pnl, pnl_percent
 
 
 @pytest.mark.parametrize(
@@ -36,6 +36,9 @@ def test_close_position_cash_matches_backtester(side, fraction, entry_price, exi
         initial_balance=initial_balance,
         enable_live_trading=False,
         log_trades=False,
+        # Disable fees/slippage to test pure P&L calculation
+        fee_rate=0.0,
+        slippage_rate=0.0,
     )
 
     position = Position(
@@ -81,6 +84,9 @@ def test_live_engine_accepts_strategy_runtime():
         enable_live_trading=False,
         log_trades=False,
         enable_hot_swapping=False,
+        # Disable fees/slippage for this structural test
+        fee_rate=0.0,
+        slippage_rate=0.0,
     )
 
     assert engine.strategy is component_strategy

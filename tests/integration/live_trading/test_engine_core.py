@@ -107,7 +107,12 @@ class TestLiveTradingEngine:
     @pytest.mark.live_trading
     def test_position_opening_paper_trading(self, mock_strategy, mock_data_provider):
         engine = LiveTradingEngine(
-            strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=False
+            strategy=mock_strategy,
+            data_provider=mock_data_provider,
+            enable_live_trading=False,
+            # Disable fees/slippage for this test
+            fee_rate=0.0,
+            slippage_rate=0.0,
         )
         if hasattr(engine, "_open_position"):
             engine._open_position(
