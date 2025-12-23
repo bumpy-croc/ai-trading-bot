@@ -37,6 +37,7 @@ from src.config.constants import (
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
@@ -179,7 +180,7 @@ class LiveTradingEngine:
         time_exit_policy: TimeExitPolicy | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
-        enable_partial_operations: bool = False,
+        enable_partial_operations: bool = True,
     ):
         """
         Initialize the live trading engine.
@@ -273,7 +274,7 @@ class LiveTradingEngine:
         self.enable_hot_swapping = enable_hot_swapping
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
-        # Partial operations policy (disabled by default for parity)
+        # Partial operations policy (enabled by default for better profit capture)
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
             self.partial_manager = partial_manager
@@ -417,6 +418,9 @@ class LiveTradingEngine:
         self.total_pnl = 0.0
         self.peak_balance = initial_balance
         self.max_drawdown = 0.0
+        # Daily P&L tracking
+        self.current_trading_date = None
+        self.day_start_balance = None
 
         # MFE/MAE tracker
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
@@ -2418,16 +2422,161 @@ class LiveTradingEngine:
     def _execute_order(
         self, symbol: str, side: PositionSide, value: float, price: float
     ) -> str | None:
-        """Execute a real market order (implement based on your exchange)"""
-        # This is a placeholder - implement actual order execution
-        logger.warning("Real order execution not implemented - using paper trading")
-        return f"real_{int(time.time())}"
+        """Execute a real market order via exchange"""
+        try:
+            # Safety check: Ensure we're in live trading mode
+            if not self.enable_live_trading:
+                logger.warning("Not in live trading mode - skipping real order execution")
+                return f"paper_{int(time.time())}"
+
+            # Safety check: Validate data provider has order execution capability
+            if not hasattr(self.data_provider, 'place_order'):
+                logger.error("Data provider does not support order execution")
+                return None
+
+            # Convert PositionSide to OrderSide
+            order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
+
+            # Calculate quantity from value and price
+            if price <= 0:
+                logger.error(f"Invalid price {price} for order execution")
+                return None
+
+            quantity = value / price
+
+            # Safety check: Validate quantity is reasonable
+            if quantity <= 0 or quantity > self.current_balance / price:
+                logger.error(f"Invalid quantity {quantity} for order (balance: {self.current_balance})")
+                return None
+
+            # Log the order attempt
+            logger.info(
+                f"🔷 Executing LIVE order: {symbol} {order_side.value} "
+                f"{quantity:.8f} @ ${price:.2f} (value: ${value:.2f})"
+            )
+            log_order_event(
+                "order_attempt",
+                symbol=symbol,
+                side=order_side.value,
+                quantity=quantity,
+                price=price,
+                value=value,
+            )
+
+            # Execute the order via exchange
+            order_id = self.data_provider.place_order(
+                symbol=symbol,
+                side=order_side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+            )
+
+            if order_id:
+                logger.info(f"✅ Order executed successfully: {order_id}")
+                log_order_event(
+                    "order_success",
+                    symbol=symbol,
+                    side=order_side.value,
+                    order_id=order_id,
+                    quantity=quantity,
+                    price=price,
+                )
+                return order_id
+            else:
+                logger.error(f"❌ Order execution failed: No order ID returned")
+                log_order_event("order_failed", symbol=symbol, side=order_side.value, reason="no_order_id")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Order execution exception: {e}", exc_info=True)
+            log_order_event(
+                "order_error",
+                symbol=symbol,
+                side=str(side),
+                error=str(e),
+            )
+            return None
 
     def _close_order(self, symbol: str, order_id: str) -> bool:
-        """Close a real market order (implement based on your exchange)"""
-        # This is a placeholder - implement actual order closing
-        logger.warning("Real order closing not implemented - using paper trading")
-        return True
+        """Close a position by placing an opposite market order"""
+        try:
+            # Safety check: Ensure we're in live trading mode
+            if not self.enable_live_trading:
+                logger.warning("Not in live trading mode - skipping real order closing")
+                return True  # Return True for paper trading
+
+            # Safety check: Validate data provider has order execution capability
+            if not hasattr(self.data_provider, 'place_order'):
+                logger.error("Data provider does not support order execution")
+                return False
+
+            # Find the position to close
+            position = self.positions.get(symbol)
+            if not position:
+                logger.warning(f"Position {symbol} not found - may already be closed")
+                return True
+
+            # Determine opposite side
+            close_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+
+            # Get current price
+            current_price = self.data_provider.get_current_price(symbol)
+            if not current_price:
+                logger.error(f"Cannot get current price for {symbol} - aborting close")
+                return False
+
+            current_price = float(current_price)
+
+            # Calculate quantity to close (use current_size if available, else original size)
+            fraction = float(position.current_size if position.current_size is not None else position.size)
+            quantity = (self.current_balance * fraction) / current_price
+
+            # Log the close attempt
+            logger.info(
+                f"🔷 Closing LIVE position: {symbol} {close_side.value} "
+                f"{quantity:.8f} @ ${current_price:.2f}"
+            )
+            log_order_event(
+                "close_attempt",
+                symbol=symbol,
+                side=close_side.value,
+                quantity=quantity,
+                price=current_price,
+                original_order_id=order_id,
+            )
+
+            # Execute the close order
+            close_order_id = self.data_provider.place_order(
+                symbol=symbol,
+                side=close_side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+            )
+
+            if close_order_id:
+                logger.info(f"✅ Position closed successfully: {close_order_id}")
+                log_order_event(
+                    "close_success",
+                    symbol=symbol,
+                    side=close_side.value,
+                    order_id=close_order_id,
+                    quantity=quantity,
+                )
+                return True
+            else:
+                logger.error(f"❌ Position close failed: No order ID returned")
+                log_order_event("close_failed", symbol=symbol, reason="no_order_id")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Position close exception: {e}", exc_info=True)
+            log_order_event(
+                "close_error",
+                symbol=symbol,
+                order_id=order_id,
+                error=str(e),
+            )
+            return False
 
     def _close_position(self, position: Position, reason: str):
         """Close a position and update balance"""
@@ -2879,8 +3028,13 @@ class LiveTradingEngine:
                     (self.peak_balance - self.current_balance) / self.peak_balance * 100
                 )
 
-            # TODO: Calculate daily P&L (requires tracking of day start balance)
-            daily_pnl = 0  # Placeholder
+            # Calculate daily P&L based on day start balance
+            daily_pnl = 0.0
+            if hasattr(self, "day_start_balance") and self.day_start_balance is not None:
+                daily_pnl = self.current_balance - self.day_start_balance
+                logger.debug(
+                    f"Daily P&L: ${daily_pnl:,.2f} (start: ${self.day_start_balance:,.2f}, current: ${self.current_balance:,.2f})"
+                )
 
             # Log snapshot to database
             if self.trading_session_id is not None:
