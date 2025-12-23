@@ -10,8 +10,11 @@ providing a single interface for all Binance operations including:
 """
 
 import logging
+import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any
+from functools import wraps
+from typing import Any, TypeVar
 
 import pandas as pd
 
@@ -50,6 +53,58 @@ except ImportError:
 
 # Import geo-detection utilities
 from src.infrastructure.runtime.geo import get_binance_api_endpoint, is_us_location
+
+# Type variable for generic return type
+T = TypeVar("T")
+
+# Rate limit error codes from Binance
+RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too many orders
+
+
+def with_rate_limit_retry(
+    max_retries: int = 3, base_delay: float = 1.0
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """
+    Decorator to handle rate limits with exponential backoff.
+
+    Args:
+        max_retries: Maximum number of retry attempts
+        base_delay: Base delay in seconds (doubles each retry)
+
+    Returns:
+        Decorated function that retries on rate limit errors
+    """
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> T:
+            last_exception = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except BinanceAPIException as e:
+                    error_code = getattr(e, "code", 0)
+                    if error_code in RATE_LIMIT_ERROR_CODES:
+                        if attempt < max_retries:
+                            delay = base_delay * (2**attempt)
+                            logger.warning(
+                                f"Rate limited (code {error_code}), retrying in {delay}s "
+                                f"(attempt {attempt + 1}/{max_retries})"
+                            )
+                            time.sleep(delay)
+                            last_exception = e
+                            continue
+                    raise
+                except Exception:
+                    raise
+            # All retries exhausted
+            if last_exception:
+                raise last_exception
+            raise RuntimeError(f"Rate limit exceeded after {max_retries} retries")
+
+        return wrapper
+
+    return decorator
 
 
 class BinanceProvider(DataProvider, ExchangeInterface):
@@ -658,6 +713,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get recent trades for {symbol}: {e}")
             return []
 
+    @with_rate_limit_retry(max_retries=3, base_delay=1.0)
     def place_order(
         self,
         symbol: str,
@@ -704,18 +760,94 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 order_params["timeInForce"] = time_in_force
 
             # Place the order
-            self._client.create_order(**order_params)
+            response = self._client.create_order(**order_params)
 
-            logger.info(f"Order placed successfully: {symbol} {side.value} {quantity}")
+            order_id = str(response.get("orderId", ""))
+            if not order_id:
+                logger.error(f"Order placed but no orderId in response: {response}")
+                return None
 
-            # In real returns we return order id; in offline mode we may not have it
-            return "order"
+            logger.info(
+                f"Order placed successfully: {symbol} {side.value} {quantity} order_id={order_id}"
+            )
+            return order_id
 
         except BinanceOrderException as e:
             logger.error(f"Binance order error: {e}")
             return None
         except Exception as e:
             logger.error(f"Failed to place order: {e}")
+            return None
+
+    @with_rate_limit_retry(max_retries=3, base_delay=1.0)
+    def place_stop_loss_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity: float,
+        stop_price: float,
+        limit_price: float | None = None,
+    ) -> str | None:
+        """
+        Place a server-side stop-loss order on Binance.
+
+        Uses STOP_LOSS_LIMIT order type which requires both a stop price
+        (trigger) and a limit price (execution price).
+        """
+        if not BINANCE_AVAILABLE or not self._client:
+            logger.warning("Binance not available - cannot place stop-loss order")
+            return None
+
+        try:
+            binance_side = SIDE_BUY if side == OrderSide.BUY else SIDE_SELL
+
+            # Calculate limit price if not provided
+            # For sells: limit slightly below stop to ensure fill
+            # For buys: limit slightly above stop to ensure fill
+            if limit_price is None:
+                if side == OrderSide.SELL:
+                    limit_price = stop_price * 0.995  # 0.5% below stop
+                else:
+                    limit_price = stop_price * 1.005  # 0.5% above stop
+
+            # Round prices to valid tick size
+            symbol_info = self.get_symbol_info(symbol)
+            if symbol_info:
+                tick_size = symbol_info.get("tick_size", 0.01)
+                if tick_size > 0:
+                    stop_price = round(stop_price / tick_size) * tick_size
+                    limit_price = round(limit_price / tick_size) * tick_size
+
+                step_size = symbol_info.get("step_size", 0.00001)
+                if step_size > 0:
+                    quantity = round(quantity / step_size) * step_size
+
+            response = self._client.create_order(
+                symbol=symbol,
+                side=binance_side,
+                type="STOP_LOSS_LIMIT",
+                quantity=quantity,
+                stopPrice=str(stop_price),
+                price=str(limit_price),
+                timeInForce="GTC",
+            )
+
+            order_id = str(response.get("orderId", ""))
+            if not order_id:
+                logger.error(f"Stop-loss order placed but no orderId in response: {response}")
+                return None
+
+            logger.info(
+                f"Stop-loss order placed: {symbol} {side.value} qty={quantity} "
+                f"stop={stop_price} limit={limit_price} order_id={order_id}"
+            )
+            return order_id
+
+        except BinanceOrderException as e:
+            logger.error(f"Binance stop-loss order error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to place stop-loss order: {e}")
             return None
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:

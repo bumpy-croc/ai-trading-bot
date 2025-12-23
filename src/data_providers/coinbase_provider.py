@@ -441,6 +441,28 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to cancel all orders: {e}")
             return False
 
+    def place_stop_loss_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity: float,
+        stop_price: float,
+        limit_price: float | None = None,
+    ) -> str | None:
+        """
+        Place a server-side stop-loss order on Coinbase.
+
+        Note: Coinbase Advanced Trade API supports stop orders.
+        This is a placeholder implementation - full Coinbase stop order
+        support would require Advanced Trade API integration.
+        """
+        logger.warning(
+            "Coinbase stop-loss orders not fully implemented - "
+            "positions may not be protected if bot goes offline"
+        )
+        # TODO: Implement Coinbase Advanced Trade API stop orders
+        return None
+
     def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         try:
             product = self._request(
