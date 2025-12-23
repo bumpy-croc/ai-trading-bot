@@ -26,6 +26,7 @@ This folder contains reference guides for the main subsystems that make up the A
 ### Operations
 - [Database](database.md) - PostgreSQL setup, migrations, and backups
 - [Monitoring & observability](monitoring.md) - Logging, dashboards, and health endpoints
+- [Operations runbook](operations_runbook.md) - Production troubleshooting and recovery procedures
 
 ### Architecture
 - [Component risk integration](architecture/component_risk_integration.md) - Coordination between position management, risk, and strategy layers
