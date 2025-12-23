@@ -5,6 +5,7 @@ This module provides a comprehensive backtesting framework.
 """
 
 import logging
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
@@ -50,7 +51,7 @@ from src.position_management.partial_manager import PositionState
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.regime.detector import RegimeDetector
-from src.risk.risk_manager import RiskManager
+from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import (
     MarketData as ComponentMarketData,
 )
@@ -257,7 +258,15 @@ class Backtester:
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
 
         # Risk manager (parity with live engine)
-        self.risk_manager = RiskManager(risk_parameters)
+        # Extract and merge component risk parameters for full parity
+        component_risk = None
+        component_risk_params = None
+        if self._component_strategy is not None:
+            component_risk = getattr(self._component_strategy, "risk_manager", None)
+            component_risk_params = self._extract_component_risk_parameters(component_risk)
+
+        merged_risk_parameters = self._merge_risk_parameters(risk_parameters, component_risk_params)
+        self.risk_manager = RiskManager(merged_risk_parameters)
         if not self._custom_trailing_stop_policy:
             self.trailing_stop_policy = self._build_trailing_policy()
         self._trailing_stop_opt_in = self.trailing_stop_policy is not None
@@ -514,6 +523,65 @@ class Backtester:
             self._runtime = StrategyRuntime(self._component_strategy)
         else:
             self._runtime = None
+
+    # Risk parameter helpers (parity with live engine) ----------------------------
+
+    def _extract_component_risk_parameters(
+        self, component_risk_manager: Any
+    ) -> RiskParameters | None:
+        """Clone risk parameters from a component adapter, if available."""
+        if component_risk_manager is None:
+            return None
+
+        core_manager = getattr(component_risk_manager, "_core_manager", None)
+        if core_manager is None:
+            return None
+
+        params = getattr(core_manager, "params", None)
+        if not isinstance(params, RiskParameters):
+            return None
+
+        return self._clone_risk_parameters(params)
+
+    def _merge_risk_parameters(
+        self,
+        engine_params: RiskParameters | None,
+        component_params: RiskParameters | None,
+    ) -> RiskParameters | None:
+        """Merges engine-provided and component-provided risk parameters.
+
+        Component parameters take precedence over engine parameters when both
+        are provided. Non-None component values override engine values.
+        """
+        if engine_params is None and component_params is None:
+            return None
+
+        if component_params is None:
+            return self._clone_risk_parameters(engine_params)
+
+        if engine_params is None:
+            return component_params
+
+        component_dict = asdict(component_params)
+        engine_dict = asdict(engine_params)
+        default_dict = asdict(RiskParameters())
+
+        merged = dict(component_dict)
+        for key, value in engine_dict.items():
+            default_value = default_dict.get(key)
+            # Preserve component overrides when the engine sticks with defaults.
+            if value == default_value:
+                continue
+            merged[key] = value
+
+        return RiskParameters(**merged)
+
+    @staticmethod
+    def _clone_risk_parameters(params: RiskParameters | None) -> RiskParameters | None:
+        """Creates a deep-cloned copy of risk parameters for safe reuse."""
+        if params is None:
+            return None
+        return RiskParameters(**asdict(params))
 
     # Runtime integration helpers -------------------------------------------------
 

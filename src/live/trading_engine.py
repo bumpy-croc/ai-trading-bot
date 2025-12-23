@@ -180,6 +180,10 @@ class LiveTradingEngine:
         trailing_stop_policy: TrailingStopPolicy | None = None,
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = False,
+        # Execution realism parameters (parity with backtest engine)
+        fee_rate: float = 0.001,  # 0.1% per trade (entry + exit)
+        slippage_rate: float = 0.0005,  # 0.05% slippage per trade
+        use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
     ):
         """
         Initialize the live trading engine.
@@ -268,6 +272,10 @@ class LiveTradingEngine:
         self.current_balance = initial_balance  # Will be updated during startup
         self.max_position_size = max_position_size
         self.enable_live_trading = enable_live_trading
+        # Execution realism (parity with backtest)
+        self.fee_rate = fee_rate
+        self.slippage_rate = slippage_rate
+        self.use_high_low_for_stops = use_high_low_for_stops
         self.log_trades = log_trades
         self.alert_webhook_url = alert_webhook_url
         self.enable_hot_swapping = enable_hot_swapping
@@ -417,6 +425,9 @@ class LiveTradingEngine:
         self.total_pnl = 0.0
         self.peak_balance = initial_balance
         self.max_drawdown = 0.0
+        # Fee and slippage tracking (parity with backtest)
+        self.total_fees_paid = 0.0
+        self.total_slippage_cost = 0.0
 
         # MFE/MAE tracker
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
@@ -1668,19 +1679,36 @@ class LiveTradingEngine:
     ):
         """Enforce only non-strategy exits: hard SL/TP and time exits."""
         try:
-            positions_to_close: list[tuple[Any, str]] = []
+            # Extract candle high/low for more realistic SL/TP detection
+            candle_high = None
+            candle_low = None
+            if df is not None and current_index < len(df):
+                row = df.iloc[current_index]
+                if "high" in df.columns:
+                    candle_high = float(row["high"])
+                if "low" in df.columns:
+                    candle_low = float(row["low"])
+
+            positions_to_close: list[tuple[Any, str, float | None]] = []
             for position in self.positions.values():
                 should_exit = False
                 exit_reason = ""
+                limit_price = None  # SL/TP level for exit pricing
 
-                # Stop loss
-                if position.stop_loss and self._check_stop_loss(position, current_price):
+                # Stop loss (priority over take profit for parity with backtest)
+                if position.stop_loss and self._check_stop_loss(
+                    position, current_price, candle_high, candle_low
+                ):
                     should_exit = True
                     exit_reason = "Stop loss"
+                    limit_price = position.stop_loss
                 # Take profit
-                elif position.take_profit and self._check_take_profit(position, current_price):
+                elif position.take_profit and self._check_take_profit(
+                    position, current_price, candle_high, candle_low
+                ):
                     should_exit = True
                     exit_reason = "Take profit"
+                    limit_price = position.take_profit
                 else:
                     # * Time-based exits only when policy is specified
                     hit_time_exit = False
@@ -1695,10 +1723,10 @@ class LiveTradingEngine:
                         exit_reason = reason or "Time exit"
 
                 if should_exit:
-                    positions_to_close.append((position, exit_reason))
+                    positions_to_close.append((position, exit_reason, limit_price))
 
-            for position, reason in positions_to_close:
-                self._close_position(position, reason)
+            for position, reason, limit_price in positions_to_close:
+                self._close_position(position, reason, limit_price)
         except Exception as e:
             logger.debug(f"Protective exits check failed: {e}")
 
@@ -1876,7 +1904,17 @@ class LiveTradingEngine:
         candle=None,
     ):
         """Check if any positions should be closed"""
-        positions_to_close = []
+        positions_to_close: list[tuple[Position, str, float | None]] = []
+
+        # Extract candle high/low for more realistic SL/TP detection (parity with backtest)
+        candle_high = None
+        candle_low = None
+        if df is not None and current_index < len(df):
+            row = df.iloc[current_index]
+            if "high" in df.columns:
+                candle_high = float(row["high"])
+            if "low" in df.columns:
+                candle_low = float(row["low"])
 
         # Extract context for logging
         indicators = self._extract_indicators(df, current_index)
@@ -1888,6 +1926,7 @@ class LiveTradingEngine:
         for position in self.positions.values():
             should_exit = False
             exit_reason = ""
+            limit_price = None  # SL/TP level for exit pricing
 
             # Check strategy exit conditions using component-based interface
             if self._is_runtime_strategy():
@@ -1935,23 +1974,25 @@ class LiveTradingEngine:
                     f"Strategy {self.strategy.name} does not support component-based exit checks"
                 )
 
-            # Check stop loss
+            # Check stop loss (priority over take profit for parity with backtest)
             if (
                 not should_exit
                 and position.stop_loss
-                and self._check_stop_loss(position, current_price)
+                and self._check_stop_loss(position, current_price, candle_high, candle_low)
             ):
                 should_exit = True
                 exit_reason = "Stop loss"
+                limit_price = position.stop_loss
 
             # Check take profit
             elif (
                 not should_exit
                 and position.take_profit
-                and self._check_take_profit(position, current_price)
+                and self._check_take_profit(position, current_price, candle_high, candle_low)
             ):
                 should_exit = True
                 exit_reason = "Take profit"
+                limit_price = position.take_profit
 
             # * Time-based exits only when policy is specified
             if not should_exit:
@@ -2040,11 +2081,11 @@ class LiveTradingEngine:
                 )
 
             if should_exit:
-                positions_to_close.append((position, exit_reason))
+                positions_to_close.append((position, exit_reason, limit_price))
 
         # Close positions
-        for position, reason in positions_to_close:
-            self._close_position(position, reason)
+        for position, reason, limit_price in positions_to_close:
+            self._close_position(position, reason, limit_price)
 
     def _check_entry_conditions(
         self,
@@ -2305,9 +2346,25 @@ class LiveTradingEngine:
                 size = self.max_position_size
 
             entry_balance = float(self.current_balance)
-            entry_price = float(price)
+            base_price = float(price)
+
+            # Apply slippage to entry price (price moves against us)
+            if side == PositionSide.LONG:
+                # Buying: slippage increases price
+                entry_price = base_price * (1 + self.slippage_rate)
+            else:
+                # Shorting: slippage decreases price
+                entry_price = base_price * (1 - self.slippage_rate)
+
             position_value = size * entry_balance
             quantity = position_value / entry_price if entry_price else 0.0
+
+            # Calculate and deduct entry fee
+            entry_fee = abs(position_value * self.fee_rate)
+            entry_slippage_cost = abs(position_value * self.slippage_rate)
+            self.current_balance -= entry_fee
+            self.total_fees_paid += entry_fee
+            self.total_slippage_cost += entry_slippage_cost
 
             if self.enable_live_trading:
                 # Execute real order
@@ -2429,37 +2486,61 @@ class LiveTradingEngine:
         logger.warning("Real order closing not implemented - using paper trading")
         return True
 
-    def _close_position(self, position: Position, reason: str):
-        """Close a position and update balance"""
+    def _close_position(self, position: Position, reason: str, limit_price: float | None = None):
+        """Close a position and update balance.
+
+        Parameters
+        ----------
+        position : Position
+            The position to close.
+        reason : str
+            The reason for closing (e.g., "stop_loss", "take_profit", "signal").
+        limit_price : float, optional
+            If provided, use this price as the base exit price (for SL/TP exits).
+            Otherwise, fetch the current market price.
+        """
         try:
-            current_price_raw = self.data_provider.get_current_price(position.symbol)
-            try:
-                current_price = float(current_price_raw)
-            except Exception:
-                current_price = None
-            if not current_price:
-                # Fallback: try latest data frame
+            # Determine base exit price
+            if limit_price is not None:
+                # Use the limit price (SL/TP level) for parity with backtest
+                base_exit_price = float(limit_price)
+            else:
+                current_price_raw = self.data_provider.get_current_price(position.symbol)
                 try:
-                    df = self._get_latest_data(position.symbol, "1m")
-                    if df is not None and not df.empty and "close" in df.columns:
-                        current_price = float(df["close"].iloc[-1])
+                    base_exit_price = float(current_price_raw)
                 except Exception:
-                    current_price = None
-            if not current_price:
-                # As a last resort use entry price to allow cleanup and logging
-                logger.warning(
-                    f"Falling back to entry price for {position.symbol} during close; live price unavailable"
-                )
-                current_price = float(position.entry_price)
+                    base_exit_price = None
+                if not base_exit_price:
+                    # Fallback: try latest data frame
+                    try:
+                        df = self._get_latest_data(position.symbol, "1m")
+                        if df is not None and not df.empty and "close" in df.columns:
+                            base_exit_price = float(df["close"].iloc[-1])
+                    except Exception:
+                        base_exit_price = None
+                if not base_exit_price:
+                    # As a last resort use entry price to allow cleanup and logging
+                    logger.warning(
+                        f"Falling back to entry price for {position.symbol} during close; live price unavailable"
+                    )
+                    base_exit_price = float(position.entry_price)
+
+            # Apply slippage to exit price (adverse price movement)
+            if position.side == PositionSide.LONG:
+                # Selling long: slippage decreases price (worse for us)
+                exit_price = base_exit_price * (1 - self.slippage_rate)
+            else:
+                # Covering short: slippage increases price (worse for us)
+                exit_price = base_exit_price * (1 + self.slippage_rate)
 
             # Calculate P&L based on CURRENT remaining size
             fraction = float(
                 position.current_size if position.current_size is not None else position.size
             )
             if position.side == PositionSide.LONG:
-                pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
+                pnl_pct = pnl_percent(position.entry_price, exit_price, Side.LONG, fraction)
             else:
-                pnl_pct = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
+                pnl_pct = pnl_percent(position.entry_price, exit_price, Side.SHORT, fraction)
 
             # Update balance using sized percentage P&L (parity with backtester)
             balance_before = self.current_balance
@@ -2469,6 +2550,14 @@ class LiveTradingEngine:
                 else balance_before
             )
             realized_pnl = cash_pnl(pnl_pct, basis_balance)
+
+            # Calculate and apply exit fee and slippage cost
+            exit_position_notional = basis_balance * fraction
+            exit_fee = abs(exit_position_notional * self.fee_rate)
+            exit_slippage_cost = abs(exit_position_notional * self.slippage_rate)
+            realized_pnl -= exit_fee
+            self.total_fees_paid += exit_fee
+            self.total_slippage_cost += exit_slippage_cost
             self.current_balance = balance_before + realized_pnl
             self.total_pnl += realized_pnl
 
@@ -2485,7 +2574,7 @@ class LiveTradingEngine:
                 side=position.side,
                 size=fraction,
                 entry_price=position.entry_price,
-                exit_price=current_price,
+                exit_price=exit_price,
                 entry_time=position.entry_time,
                 exit_time=datetime.now(),
                 pnl=realized_pnl,
@@ -2509,7 +2598,7 @@ class LiveTradingEngine:
                     symbol=position.symbol,
                     side=position.side.value,
                     entry_price=position.entry_price,
-                    exit_price=current_price,
+                    exit_price=exit_price,
                     size=fraction,
                     pnl=realized_pnl,
                     strategy_name=self._strategy_name(),
@@ -2550,7 +2639,7 @@ class LiveTradingEngine:
                 order_id=position.order_id,
                 symbol=position.symbol,
                 side=position.side.value,
-                exit_price=current_price,
+                exit_price=exit_price,
                 pnl=realized_pnl,
                 pnl_percent=pnl_pct,
                 reason=reason,
@@ -2723,25 +2812,91 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.debug(f"DB scale-in update failed: {e}")
 
-    def _check_stop_loss(self, position: Position, current_price: float) -> bool:
-        """Check if stop loss should be triggered"""
+    def _check_stop_loss(
+        self,
+        position: Position,
+        current_price: float,
+        candle_high: float | None = None,
+        candle_low: float | None = None,
+    ) -> bool:
+        """Check if stop loss should be triggered.
+
+        Parameters
+        ----------
+        position : Position
+            The position to check.
+        current_price : float
+            The current (close) price.
+        candle_high : float, optional
+            The candle high price for more realistic detection.
+        candle_low : float, optional
+            The candle low price for more realistic detection.
+
+        Returns
+        -------
+        bool
+            True if stop loss was triggered.
+        """
         if not position.stop_loss:
             return False
 
-        if position.side == PositionSide.LONG:
-            return current_price <= position.stop_loss
+        # Use high/low prices for more realistic detection (parity with backtest)
+        if self.use_high_low_for_stops and candle_low is not None and candle_high is not None:
+            if position.side == PositionSide.LONG:
+                # For long, check if low breached stop loss
+                return candle_low <= position.stop_loss
+            else:
+                # For short, check if high breached stop loss
+                return candle_high >= position.stop_loss
         else:
-            return current_price >= position.stop_loss
+            # Fallback to close price only
+            if position.side == PositionSide.LONG:
+                return current_price <= position.stop_loss
+            else:
+                return current_price >= position.stop_loss
 
-    def _check_take_profit(self, position: Position, current_price: float) -> bool:
-        """Check if take profit should be triggered"""
+    def _check_take_profit(
+        self,
+        position: Position,
+        current_price: float,
+        candle_high: float | None = None,
+        candle_low: float | None = None,
+    ) -> bool:
+        """Check if take profit should be triggered.
+
+        Parameters
+        ----------
+        position : Position
+            The position to check.
+        current_price : float
+            The current (close) price.
+        candle_high : float, optional
+            The candle high price for more realistic detection.
+        candle_low : float, optional
+            The candle low price for more realistic detection.
+
+        Returns
+        -------
+        bool
+            True if take profit was triggered.
+        """
         if not position.take_profit:
             return False
 
-        if position.side == PositionSide.LONG:
-            return current_price >= position.take_profit
+        # Use high/low prices for more realistic detection (parity with backtest)
+        if self.use_high_low_for_stops and candle_low is not None and candle_high is not None:
+            if position.side == PositionSide.LONG:
+                # For long, check if high reached take profit
+                return candle_high >= position.take_profit
+            else:
+                # For short, check if low reached take profit
+                return candle_low <= position.take_profit
         else:
-            return current_price <= position.take_profit
+            # Fallback to close price only
+            if position.side == PositionSide.LONG:
+                return current_price >= position.take_profit
+            else:
+                return current_price <= position.take_profit
 
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
