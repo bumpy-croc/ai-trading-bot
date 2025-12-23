@@ -64,6 +64,9 @@ def test_partial_exits_and_scale_ins_execution(monkeypatch):
         resume_from_last_balance=False,
         partial_manager=pem,
         max_position_size=0.5,  # Allow 50% position size for testing
+        # Disable fees/slippage for this test to match expected price levels
+        fee_rate=0.0,
+        slippage_rate=0.0,
     )
 
     # Open a position manually at 100, size 0.5
