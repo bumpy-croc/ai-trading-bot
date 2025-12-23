@@ -28,6 +28,18 @@ ACTION_SETS = {
         "sagemaker:ListTrainingJobs",
         "sagemaker:StopTrainingJob",
     ],
+    "ecr": [
+        "ecr:CreateRepository",
+        "ecr:DescribeRepositories",
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:ListImages",
+        "ecr:BatchDeleteImage",
+    ],
 }
 
 
@@ -110,6 +122,10 @@ class MlCloudTrainingStack(Stack):
                 iam.PolicyStatement(
                     actions=ACTION_SETS["logs"],
                     resources=[self._sagemaker_log_group_arn()],
+                ),
+                iam.PolicyStatement(
+                    actions=ACTION_SETS["ecr"],
+                    resources=["*"],
                 ),
             ],
         )
