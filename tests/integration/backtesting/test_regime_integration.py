@@ -122,7 +122,19 @@ def test_backtester_regime_annotation(monkeypatch):
             }
 
     backtester.enable_regime_switching = True
-    backtester.regime_switcher = StubRegimeSwitcher()
+
+    # Manually initialize regime handler with stub switcher
+    from src.backtesting.regime.regime_handler import RegimeHandler
+    from src.live.strategy_manager import StrategyManager
+
+    strategy_manager = StrategyManager()
+    regime_switcher = StubRegimeSwitcher()
+    backtester.regime_handler = RegimeHandler(
+        regime_switcher=regime_switcher,
+        strategy_manager=strategy_manager,
+        initial_strategy_name="DummyStrategy",
+    )
+
     result = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)
     # Detector should be initialized and run without error
     assert backtester.regime_detector is not None
@@ -132,7 +144,7 @@ def test_backtester_regime_annotation(monkeypatch):
     assert result["regime_switching_enabled"] is True
     assert result["total_strategy_switches"] == 0
     assert len(result["regime_history"]) == 7
-    assert result["regime_history"] == backtester.regime_history
+    assert result["regime_history"] == backtester.regime_handler.regime_history
     regime_indices = [entry["candle_index"] for entry in result["regime_history"]]
     assert regime_indices == [100, 150, 200, 250, 300, 350, 400]
     last_regime = result["regime_history"][-1]
