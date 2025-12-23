@@ -1,11 +1,16 @@
 # Documentation
 
-> **Last Updated**: 2025-12-22  
+> **Last Updated**: 2025-12-22
 > **Maintained By**: AI Trading Bot Team
 
 This folder contains reference guides for the main subsystems that make up the AI trading platform. Each document focuses on how the runtime works today and includes links to relevant code and operational commands.
 
 ## Table of Contents
+
+### Living Documents (Auto-Updated)
+- [Changelog](changelog.md) - Timeline of all project changes
+- [Project Status](project_status.md) - Current milestones, focus, and session tracking
+- [Architecture](architecture.md) - System design overview and components
 
 ### Getting Started
 - [Development workflow](development.md) - Environment setup, quality checks, and Railway deployment
