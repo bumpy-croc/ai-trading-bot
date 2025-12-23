@@ -630,7 +630,7 @@ class LiveTradingEngine:
             return self.risk_manager.params
 
     def _extract_component_risk_parameters(
-        self, component_risk_manager: Any
+        self, component_risk_manager: object
     ) -> RiskParameters | None:
         """Clone risk parameters from a component adapter, if available."""
 
@@ -1689,7 +1689,7 @@ class LiveTradingEngine:
                 if "low" in df.columns:
                     candle_low = float(row["low"])
 
-            positions_to_close: list[tuple[Any, str, float | None]] = []
+            positions_to_close: list[tuple[Position, str, float | None]] = []
             for position in self.positions.values():
                 should_exit = False
                 exit_reason = ""

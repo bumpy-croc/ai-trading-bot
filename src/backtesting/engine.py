@@ -532,7 +532,7 @@ class Backtester:
     # Risk parameter helpers (parity with live engine) ----------------------------
 
     def _extract_component_risk_parameters(
-        self, component_risk_manager: Any
+        self, component_risk_manager: object
     ) -> RiskParameters | None:
         """Clone risk parameters from a component adapter, if available."""
         if component_risk_manager is None:
@@ -555,8 +555,9 @@ class Backtester:
     ) -> RiskParameters | None:
         """Merges engine-provided and component-provided risk parameters.
 
-        Component parameters take precedence over engine parameters when both
-        are provided. Non-None component values override engine values.
+        Engine parameters take precedence when they differ from defaults.
+        Component parameters are used as the base, but engine non-default
+        values override them to allow explicit engine-level configuration.
         """
         if engine_params is None and component_params is None:
             return None
