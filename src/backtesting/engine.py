@@ -148,9 +148,7 @@ class Backtester:
         self._configure_strategy(strategy)
 
         name_source = strategy if isinstance(strategy, StrategyRuntime) else self.strategy
-        self.initial_strategy_name = getattr(
-            name_source, "name", name_source.__class__.__name__
-        )
+        self.initial_strategy_name = getattr(name_source, "name", name_source.__class__.__name__)
 
         # Providers
         self.data_provider = data_provider
@@ -365,9 +363,7 @@ class Backtester:
             database_url_env = os.getenv("DATABASE_URL", "")
             is_pytest = os.environ.get("PYTEST_CURRENT_TEST") is not None
             log_to_database = not (
-                database_url_env.startswith("sqlite://")
-                or database_url_env == ""
-                or is_pytest
+                database_url_env.startswith("sqlite://") or database_url_env == "" or is_pytest
             )
 
         self.log_to_database = log_to_database
@@ -522,9 +518,7 @@ class Backtester:
                 )
             )
 
-            if activation and (
-                dist_pct is not None or atr_mult is not None or params_has_distance
-            ):
+            if activation and (dist_pct is not None or atr_mult is not None or params_has_distance):
                 return TrailingStopPolicy(
                     activation_threshold=float(activation),
                     trailing_distance_pct=(
@@ -780,9 +774,7 @@ class Backtester:
         finally:
             self._finalize_runtime()
 
-    def _create_trading_session(
-        self, symbol: str, timeframe: str, start: datetime
-    ) -> None:
+    def _create_trading_session(self, symbol: str, timeframe: str, start: datetime) -> None:
         """Create trading session in database if enabled."""
         if not self.log_to_database or not self.db_manager:
             return
@@ -1170,12 +1162,8 @@ class Backtester:
                 current_price=current_price,
                 timeframe=timeframe,
                 action_taken=f"opened_{signal.side}",
-                signal_strength=(
-                    runtime_decision.signal.strength if runtime_decision else 0.0
-                ),
-                confidence_score=(
-                    runtime_decision.signal.confidence if runtime_decision else 0.0
-                ),
+                signal_strength=(runtime_decision.signal.strength if runtime_decision else 0.0),
+                confidence_score=(runtime_decision.signal.confidence if runtime_decision else 0.0),
                 position_size=signal.size_fraction,
                 indicators=indicators,
                 sentiment_data=sentiment_data,
@@ -1188,6 +1176,11 @@ class Backtester:
                 signal.side,
                 current_price,
             )
+
+        # Collect dynamic risk adjustments from handler
+        if self.enable_dynamic_risk:
+            adjustments = self.entry_handler.get_dynamic_risk_adjustments()
+            self.dynamic_risk_adjustments.extend(adjustments)
 
     def _build_empty_results(self) -> dict:
         """Build results for empty data case."""
@@ -1224,9 +1217,7 @@ class Backtester:
 
         # Build balance history DataFrame
         bh_df = (
-            pd.DataFrame(balance_history, columns=["timestamp", "balance"]).set_index(
-                "timestamp"
-            )
+            pd.DataFrame(balance_history, columns=["timestamp", "balance"]).set_index("timestamp")
             if balance_history
             else pd.DataFrame()
         )
@@ -1326,7 +1317,9 @@ class Backtester:
                         "prediction_confidence"
                     ].reindex(pred_series.index).fillna(0.5) + (
                         pred_series.shift(1) >= pred_series
-                    ).astype(float) * (
+                    ).astype(
+                        float
+                    ) * (
                         1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(0.5)
                     )
                     actual_up = (actual_series.diff() > 0).astype(float)
@@ -1379,3 +1372,38 @@ class Backtester:
     def _extract_ml_predictions(self, df: pd.DataFrame, index: int) -> dict:
         """Extract ML predictions from DataFrame row."""
         return util_extract_ml(df, index)
+
+    def _get_dynamic_risk_adjusted_size(
+        self, original_size: float, current_time: datetime
+    ) -> float:
+        """Apply dynamic risk adjustments to position size (backward compatibility).
+
+        This method is deprecated. The functionality has been moved to
+        EntryHandler._apply_dynamic_risk().
+
+        Args:
+            original_size: Original position size fraction.
+            current_time: Current timestamp.
+
+        Returns:
+            Adjusted position size fraction.
+        """
+        if not self.dynamic_risk_manager:
+            return original_size
+
+        return self.entry_handler._apply_dynamic_risk(
+            original_size=original_size,
+            current_time=current_time,
+            balance=self.balance,
+            peak_balance=self.peak_balance,
+            trading_session_id=self.trading_session_id,
+        )
+
+    def _update_peak_balance(self) -> None:
+        """Update peak balance for drawdown tracking (backward compatibility).
+
+        This method is deprecated. Peak balance is now automatically updated
+        in the main backtest loop.
+        """
+        if self.balance > self.peak_balance:
+            self.peak_balance = self.balance
