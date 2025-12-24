@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.data_providers.exchange_interface import ExchangeInterface, Order, OrderStatus
 
@@ -77,7 +77,7 @@ class OrderTracker:
                 order_id=order_id,
                 symbol=symbol,
                 last_filled_qty=0.0,
-                added_at=datetime.now(timezone.utc),
+                added_at=datetime.now(UTC),
             )
         logger.debug(f"Now tracking order {order_id} for {symbol}")
 
@@ -160,6 +160,14 @@ class OrderTracker:
         avg_price = order.average_price or 0.0
 
         if status == OrderStatus.FILLED:
+            # Validate avg_price for fills to prevent corrupt P&L calculations
+            if not isinstance(avg_price, int | float) or avg_price <= 0:
+                logger.error(
+                    f"Invalid average price {avg_price} for filled order {order_id} - "
+                    "skipping fill callback to prevent corrupt P&L"
+                )
+                # Don't stop tracking - keep polling until we get valid price
+                return
             logger.info(
                 f"Order filled: {order_id} {tracked.symbol} "
                 f"qty={filled_qty} @ {avg_price}"
@@ -169,6 +177,13 @@ class OrderTracker:
             self.stop_tracking(order_id)
 
         elif status == OrderStatus.PARTIALLY_FILLED:
+            # Validate avg_price for partial fills to prevent corrupt P&L calculations
+            if not isinstance(avg_price, int | float) or avg_price <= 0:
+                logger.error(
+                    f"Invalid average price {avg_price} for partial fill order {order_id} - "
+                    "skipping partial fill callback to prevent corrupt P&L"
+                )
+                return
             new_filled = filled_qty - tracked.last_filled_qty
             if new_filled > 0:
                 logger.info(

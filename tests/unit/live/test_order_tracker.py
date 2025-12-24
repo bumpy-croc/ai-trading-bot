@@ -304,8 +304,8 @@ def test_thread_safety_concurrent_tracking(order_tracker):
     assert 0 <= count <= 100
 
 
-def test_average_price_none_defaults_to_zero(order_tracker, mock_exchange):
-    """Test that None average_price is handled as 0.0."""
+def test_invalid_average_price_skips_fill_callback(order_tracker, mock_exchange):
+    """Test that invalid average_price skips the fill callback to prevent corrupt P&L."""
     mock_order = MagicMock()
     mock_order.status = OrderStatus.FILLED
     mock_order.filled_quantity = 1.0
@@ -315,5 +315,24 @@ def test_average_price_none_defaults_to_zero(order_tracker, mock_exchange):
     order_tracker.track_order("order123", "BTCUSDT")
     order_tracker._check_orders()
 
-    # Should use 0.0 for None average price
-    order_tracker.on_fill.assert_called_once_with("order123", "BTCUSDT", 1.0, 0.0)
+    # Should NOT call fill callback with invalid price - prevents corrupt P&L
+    order_tracker.on_fill.assert_not_called()
+
+    # Order should still be tracked - keep polling until valid price
+    assert order_tracker.get_tracked_count() == 1
+
+
+def test_zero_average_price_skips_fill_callback(order_tracker, mock_exchange):
+    """Test that zero average_price skips the fill callback."""
+    mock_order = MagicMock()
+    mock_order.status = OrderStatus.FILLED
+    mock_order.filled_quantity = 1.0
+    mock_order.average_price = 0.0  # Invalid price
+    mock_exchange.get_order.return_value = mock_order
+
+    order_tracker.track_order("order123", "BTCUSDT")
+    order_tracker._check_orders()
+
+    # Should NOT call fill callback with zero price
+    order_tracker.on_fill.assert_not_called()
+    assert order_tracker.get_tracked_count() == 1

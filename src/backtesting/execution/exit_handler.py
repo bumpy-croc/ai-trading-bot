@@ -486,6 +486,7 @@ class ExitHandler:
             raise ValueError("No active position to exit")
 
         # Get position notional for fee calculation
+        # Use exit notional (accounting for price change) for accurate fee calculation
         entry_balance = getattr(trade, "entry_balance", None)
         basis_balance = (
             float(entry_balance)
@@ -493,7 +494,9 @@ class ExitHandler:
             else float(balance)
         )
         fraction = float(getattr(trade, "current_size", trade.size))
-        position_notional = basis_balance * fraction
+        entry_notional = basis_balance * fraction
+        # Scale by price change to get exit notional
+        position_notional = entry_notional * (exit_price / trade.entry_price)
 
         # Calculate exit costs
         final_exit_price, exit_fee, slippage_cost = self.execution_engine.calculate_exit_costs(

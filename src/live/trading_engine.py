@@ -2498,15 +2498,32 @@ class LiveTradingEngine:
             # Send alert if configured
             self._send_alert(f"Position Opened: {symbol} {side.value} @ ${entry_price:.2f}")
 
-            # Place server-side stop-loss order for protection
+            # Place server-side stop-loss order for protection with retry logic
             if self.enable_live_trading and stop_loss and self.exchange_interface:
                 sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-                sl_order_id = self.exchange_interface.place_stop_loss_order(
-                    symbol=symbol,
-                    side=sl_side,
-                    quantity=quantity,
-                    stop_price=stop_loss,
-                )
+                sl_order_id = None
+                max_retries = 3
+                retry_delay = 1.0  # Start with 1 second
+
+                for attempt in range(max_retries):
+                    try:
+                        sl_order_id = self.exchange_interface.place_stop_loss_order(
+                            symbol=symbol,
+                            side=sl_side,
+                            quantity=quantity,
+                            stop_price=stop_loss,
+                        )
+                        if sl_order_id:
+                            break
+                    except Exception as sl_err:
+                        logger.warning(
+                            f"Stop-loss placement attempt {attempt + 1}/{max_retries} failed: {sl_err}"
+                        )
+
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+
                 if sl_order_id:
                     logger.info(
                         f"Server-side stop-loss placed: {symbol} @ ${stop_loss:.2f} "
@@ -2518,10 +2535,19 @@ class LiveTradingEngine:
                     if self.order_tracker:
                         self.order_tracker.track_order(sl_order_id, symbol)
                 else:
-                    logger.warning(
-                        f"Failed to place server-side stop-loss for {symbol} - "
-                        "position may not be protected if bot goes offline"
+                    # Critical: SL placement failed after all retries - close position immediately
+                    logger.critical(
+                        f"CRITICAL: Failed to place stop-loss after {max_retries} attempts for {symbol} - "
+                        "closing position to prevent unprotected exposure"
                     )
+                    self._send_alert(
+                        f"⚠️ EMERGENCY: Closing {symbol} position - stop-loss placement failed"
+                    )
+                    # Close the position immediately
+                    self._close_order(position)
+                    if position.order_id in self.positions:
+                        del self.positions[position.order_id]
+                    return
 
             # Update risk manager with the newly opened position so daily risk is tracked
             if self.risk_manager:
@@ -2904,7 +2930,8 @@ class LiveTradingEngine:
             realized_pnl = cash_pnl(pnl_pct, basis_balance)
 
             # Calculate and apply exit fee and slippage cost
-            exit_position_notional = basis_balance * fraction
+            # Use exit notional (accounting for price change) for accurate fee calculation
+            exit_position_notional = basis_balance * fraction * (exit_price / position.entry_price)
             exit_fee = abs(exit_position_notional * self.fee_rate)
             exit_slippage_cost = abs(exit_position_notional * self.slippage_rate)
             realized_pnl -= exit_fee
@@ -3000,10 +3027,32 @@ class LiveTradingEngine:
                             )
                             if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
                                 sl_already_filled = True
+                                actual_sl_price = sl_order.average_price
                                 logger.info(
-                                    f"Stop-loss order confirmed filled at ${sl_order.average_price:.2f} "
+                                    f"Stop-loss order confirmed filled at ${actual_sl_price:.2f} "
                                     "- skipping duplicate close order"
                                 )
+                                # Recalculate P&L with actual SL fill price if different
+                                if actual_sl_price and abs(actual_sl_price - exit_price) > 0.01:
+                                    logger.warning(
+                                        f"Recalculating P&L: original exit ${exit_price:.2f} "
+                                        f"-> actual SL fill ${actual_sl_price:.2f}"
+                                    )
+                                    # Revert previous balance change
+                                    self.current_balance = balance_before
+                                    # Recalculate with actual price
+                                    if position.side == PositionSide.LONG:
+                                        new_exit = actual_sl_price * (1 - self.slippage_rate)
+                                        pnl_pct = pnl_percent(position.entry_price, new_exit, Side.LONG, fraction)
+                                    else:
+                                        new_exit = actual_sl_price * (1 + self.slippage_rate)
+                                        pnl_pct = pnl_percent(position.entry_price, new_exit, Side.SHORT, fraction)
+                                    realized_pnl = cash_pnl(pnl_pct, basis_balance)
+                                    exit_position_notional = basis_balance * fraction * (new_exit / position.entry_price)
+                                    exit_fee = abs(exit_position_notional * self.fee_rate)
+                                    realized_pnl -= exit_fee
+                                    self.current_balance = balance_before + realized_pnl
+                                    exit_price = new_exit
                         except Exception as check_err:
                             logger.warning(f"Could not verify SL status: {check_err}")
                 except Exception as e:
@@ -3831,6 +3880,10 @@ class LiveTradingEngine:
                         f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
                         f"-> ${self.current_balance:,.2f}"
                     )
+
+                # Stop tracking the SL order to prevent memory leak
+                if position.stop_loss_order_id and self.order_tracker:
+                    self.order_tracker.stop_tracking(position.stop_loss_order_id)
 
                 # Remove from local positions
                 if position.order_id in self.positions:
