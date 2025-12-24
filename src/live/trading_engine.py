@@ -72,6 +72,19 @@ from src.strategies.components import Strategy as ComponentStrategy
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
 
+# Modular handlers (optional injection for testability)
+from src.live.data.market_data_handler import MarketDataHandler
+from src.live.execution.entry_handler import LiveEntryHandler
+from src.live.execution.execution_engine import LiveExecutionEngine
+from src.live.execution.exit_handler import LiveExitHandler
+from src.live.execution.position_tracker import (
+    LivePosition,
+    LivePositionTracker,
+    PositionSide as LivePositionSide,
+)
+from src.live.health.health_monitor import HealthMonitor
+from src.live.logging.event_logger import LiveEventLogger
+
 logger = logging.getLogger(__name__)
 
 
@@ -209,6 +222,14 @@ class LiveTradingEngine:
         fee_rate: float = 0.001,  # 0.1% per trade (entry + exit)
         slippage_rate: float = 0.0005,  # 0.05% slippage per trade
         use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
+        # Handler injection (all optional - defaults created if not provided)
+        position_tracker: LivePositionTracker | None = None,
+        execution_engine: LiveExecutionEngine | None = None,
+        entry_handler: LiveEntryHandler | None = None,
+        exit_handler: LiveExitHandler | None = None,
+        market_data_handler: MarketDataHandler | None = None,
+        event_logger: LiveEventLogger | None = None,
+        health_monitor: HealthMonitor | None = None,
     ):
         """
         Initialize the live trading engine.
@@ -531,6 +552,17 @@ class LiveTradingEngine:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
+        # Initialize modular handlers (use injected or create defaults)
+        self._init_modular_handlers(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            entry_handler=entry_handler,
+            exit_handler=exit_handler,
+            market_data_handler=market_data_handler,
+            event_logger=event_logger,
+            health_monitor=health_monitor,
+        )
+
         logger.info(
             f"LiveTradingEngine initialized - Live Trading: {'ENABLED' if enable_live_trading else 'DISABLED'}"
         )
@@ -587,6 +619,86 @@ class LiveTradingEngine:
         except Exception as e:
             logger.warning(f"Failed to merge strategy dynamic risk overrides: {e}")
             return base_config
+
+    def _init_modular_handlers(
+        self,
+        position_tracker: LivePositionTracker | None,
+        execution_engine: LiveExecutionEngine | None,
+        entry_handler: LiveEntryHandler | None,
+        exit_handler: LiveExitHandler | None,
+        market_data_handler: MarketDataHandler | None,
+        event_logger: LiveEventLogger | None,
+        health_monitor: HealthMonitor | None,
+    ) -> None:
+        """Initialize modular handlers with dependency injection or defaults.
+
+        Args:
+            position_tracker: Position tracking handler.
+            execution_engine: Order execution handler.
+            entry_handler: Entry signal processing handler.
+            exit_handler: Exit condition checking handler.
+            market_data_handler: Market data fetching handler.
+            event_logger: Event logging handler.
+            health_monitor: Health monitoring handler.
+        """
+        # Health monitor (no dependencies)
+        self.health_monitor = health_monitor or HealthMonitor(
+            max_consecutive_errors=self.max_consecutive_errors,
+            base_check_interval=self.base_check_interval,
+            min_check_interval=self.min_check_interval,
+            max_check_interval=self.max_check_interval,
+            error_cooldown=self.error_cooldown,
+        )
+
+        # Market data handler
+        self.market_data_handler = market_data_handler or MarketDataHandler(
+            data_provider=self.data_provider,
+            sentiment_provider=self.sentiment_provider,
+            data_freshness_threshold=self.data_freshness_threshold,
+        )
+
+        # Event logger
+        self.event_logger = event_logger or LiveEventLogger(
+            db_manager=self.db_manager,
+            log_to_database=True,
+            log_trades_to_file=self.log_trades,
+            session_id=self.trading_session_id,
+        )
+
+        # Position tracker
+        self.live_position_tracker = position_tracker or LivePositionTracker(
+            db_manager=self.db_manager,
+        )
+
+        # Execution engine
+        self.live_execution_engine = execution_engine or LiveExecutionEngine(
+            fee_rate=self.fee_rate,
+            slippage_rate=self.slippage_rate,
+            enable_live_trading=self.enable_live_trading,
+            exchange_interface=self.exchange_interface,
+        )
+
+        # Entry handler
+        self.live_entry_handler = entry_handler or LiveEntryHandler(
+            execution_engine=self.live_execution_engine,
+            position_tracker=self.live_position_tracker,
+            risk_manager=self.risk_manager,
+            component_strategy=(
+                self.strategy if isinstance(self.strategy, ComponentStrategy) else None
+            ),
+            dynamic_risk_manager=self.dynamic_risk_manager,
+            max_position_size=self.max_position_size,
+        )
+
+        # Exit handler
+        self.live_exit_handler = exit_handler or LiveExitHandler(
+            execution_engine=self.live_execution_engine,
+            position_tracker=self.live_position_tracker,
+            trailing_stop_policy=self.trailing_stop_policy,
+            partial_manager=self.partial_manager,
+            time_exit_policy=self.time_exit_policy,
+            use_high_low_for_stops=self.use_high_low_for_stops,
+        )
 
     def _get_dynamic_risk_adjusted_size(self, original_size: float) -> float:
         """Apply dynamic risk adjustments to position size"""
