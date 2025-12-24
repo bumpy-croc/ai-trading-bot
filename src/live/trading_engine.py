@@ -2514,6 +2514,9 @@ class LiveTradingEngine:
                     )
                     # Store stop-loss order ID for later cancellation if needed
                     position.stop_loss_order_id = sl_order_id
+                    # Track SL order for fill notifications
+                    if self.order_tracker:
+                        self.order_tracker.track_order(sl_order_id, symbol)
                 else:
                     logger.warning(
                         f"Failed to place server-side stop-loss for {symbol} - "
@@ -2779,8 +2782,33 @@ class LiveTradingEngine:
             Otherwise, fetch the current market price.
         """
         try:
+            # Check if server-side stop-loss already triggered (race condition handling)
+            sl_already_filled = False
+            sl_fill_price: float | None = None
+            if (
+                self.enable_live_trading
+                and self.exchange_interface
+                and position.stop_loss_order_id
+            ):
+                try:
+                    sl_order = self.exchange_interface.get_order(
+                        position.stop_loss_order_id, position.symbol
+                    )
+                    if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
+                        sl_already_filled = True
+                        sl_fill_price = sl_order.average_price
+                        logger.info(
+                            f"Stop-loss order {position.stop_loss_order_id} already filled "
+                            f"at ${sl_fill_price:.2f} - using actual fill price for P&L"
+                        )
+                except Exception as e:
+                    logger.warning(f"Error checking stop-loss order status: {e}")
+
             # Determine base exit price
-            if limit_price is not None:
+            if sl_already_filled and sl_fill_price is not None:
+                # Use actual SL fill price for accurate P&L
+                base_exit_price = sl_fill_price
+            elif limit_price is not None:
                 # Use the limit price (SL/TP level) for parity with backtest
                 base_exit_price = float(limit_price)
             else:
@@ -2899,11 +2927,12 @@ class LiveTradingEngine:
                     self.db_manager.close_position(position_id=position_db_id)
                     del self.position_db_ids[position.order_id]
 
-            # Cancel server-side stop-loss order if it exists
+            # Cancel server-side stop-loss order if it exists and hasn't already filled
             if (
                 self.enable_live_trading
                 and self.exchange_interface
                 and position.stop_loss_order_id
+                and not sl_already_filled
             ):
                 try:
                     cancelled = self.exchange_interface.cancel_order(
