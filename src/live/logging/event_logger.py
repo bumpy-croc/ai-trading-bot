@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -55,6 +55,9 @@ class LiveEventLogger:
         self.log_trades_to_file = log_trades_to_file
         self.session_id = session_id
         self.trade_log_dir = trade_log_dir
+        # Daily P&L tracking state
+        self._current_trading_date: date | None = None
+        self._day_start_balance: float | None = None
 
     @property
     def enabled(self) -> bool:
@@ -68,6 +71,78 @@ class LiveEventLogger:
             session_id: New session ID.
         """
         self.session_id = session_id
+
+    def set_day_start_balance(self, balance: float) -> None:
+        """Set the day start balance for daily P&L calculation.
+
+        Called during session recovery to restore day start balance from database.
+
+        Args:
+            balance: The balance at the start of the current trading day.
+        """
+        self._day_start_balance = balance
+        self._current_trading_date = date.today()
+
+    def _check_and_update_trading_date(self, current_balance: float) -> None:
+        """Check if the trading date has changed and update day start balance.
+
+        Tracks daily P&L by detecting date rollovers and resetting the
+        day start balance at the beginning of each new trading day.
+
+        Args:
+            current_balance: The current account balance.
+        """
+        today = date.today()
+        if self._current_trading_date is None:
+            # First call - initialize with current balance
+            self._current_trading_date = today
+            self._day_start_balance = current_balance
+            logger.debug(
+                "Initialized daily P&L tracking: date=%s, day_start_balance=%.2f",
+                today,
+                current_balance,
+            )
+        elif today != self._current_trading_date:
+            # Date rolled over - log previous day and reset
+            if self._day_start_balance is not None:
+                prev_daily_pnl = current_balance - self._day_start_balance
+                logger.info(
+                    "Trading day rollover: %s -> %s, previous day P&L: %.2f",
+                    self._current_trading_date,
+                    today,
+                    prev_daily_pnl,
+                )
+            self._current_trading_date = today
+            self._day_start_balance = current_balance
+
+    def _get_day_start_balance_from_db(self) -> float | None:
+        """Recover day start balance from database on session restart.
+
+        Queries the first account snapshot of the current trading day to
+        determine the starting balance for daily P&L calculation.
+
+        Returns:
+            The day start balance if found, None otherwise.
+        """
+        if self.db_manager is None or self.session_id is None:
+            return None
+
+        try:
+            today = date.today()
+            # Query first snapshot of current day for this session
+            snapshot = self.db_manager.get_first_snapshot_of_day(
+                session_id=self.session_id,
+                target_date=today,
+            )
+            if snapshot is not None:
+                return float(snapshot.balance)
+        except AttributeError:
+            # Method not available on db_manager - graceful fallback
+            logger.debug("get_first_snapshot_of_day not available on db_manager")
+        except Exception as e:
+            logger.debug("Failed to recover day start balance: %s", e)
+
+        return None
 
     def log_account_snapshot(
         self,
@@ -114,8 +189,13 @@ class LiveEventLogger:
             if peak_balance > 0:
                 current_drawdown = (peak_balance - balance) / peak_balance * 100
 
-            # Daily P&L placeholder - would require day_start_balance tracking
+            # Update daily P&L tracking (handles date rollovers)
+            self._check_and_update_trading_date(balance)
+
+            # Calculate daily P&L from day start balance
             daily_pnl = 0.0
+            if self._day_start_balance is not None:
+                daily_pnl = balance - self._day_start_balance
 
             self.db_manager.log_account_snapshot(
                 balance=balance,

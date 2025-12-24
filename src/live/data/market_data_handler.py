@@ -79,7 +79,13 @@ class MarketDataHandler:
             )
             self.last_data_update = datetime.now()
             return df
-        except Exception as e:
+        except (ConnectionError, TimeoutError) as e:
+            logger.error("Network error fetching market data: %s", e)
+            return None
+        except (ValueError, KeyError) as e:
+            logger.error("Data parsing error in market data: %s", e)
+            return None
+        except Exception as e:  # Catch-all for unexpected provider errors
             logger.error("Failed to fetch market data: %s", e, exc_info=True)
             return None
 
@@ -104,7 +110,8 @@ class MarketDataHandler:
             if hasattr(self.sentiment_provider, "get_live_sentiment"):
                 live_sentiment = self.sentiment_provider.get_live_sentiment()
 
-                # Apply to recent candles
+                # Only apply sentiment to recent candles to reflect current market mood,
+                # as older candles should retain their historical sentiment context
                 recent_mask = df.index >= (
                     df.index.max()
                     - pd.Timedelta(hours=self.sentiment_lookback_hours)
@@ -114,7 +121,7 @@ class MarketDataHandler:
                         df[feature] = 0.0
                     df.loc[recent_mask, feature] = value
 
-                # Mark sentiment freshness
+                # Track which rows have fresh sentiment for strategy decision-making
                 df["sentiment_freshness"] = 0
                 df.loc[recent_mask, "sentiment_freshness"] = 1
 
@@ -125,7 +132,11 @@ class MarketDataHandler:
             else:
                 logger.debug("Using historical sentiment data")
 
-        except Exception as e:
+        except (AttributeError, TypeError) as e:
+            logger.error("Sentiment provider interface error: %s", e)
+        except (KeyError, ValueError) as e:
+            logger.error("Invalid sentiment data format: %s", e)
+        except Exception as e:  # Catch-all for unexpected sentiment errors
             logger.error("Failed to add sentiment data: %s", e, exc_info=True)
 
         return df
@@ -176,14 +187,14 @@ class MarketDataHandler:
             # Required rows from ML sequence length
             try:
                 seq_len = int(getattr(strategy, "sequence_length", 0) or 0)
-            except Exception:
+            except (TypeError, ValueError, AttributeError):
                 seq_len = 0
 
             # Indicator window requirement
             try:
                 max_window_attr = getattr(strategy, "max_indicator_window", 0)
                 max_window = int(max_window_attr or 0)
-            except Exception:
+            except (TypeError, ValueError, AttributeError):
                 max_window = 0
 
             min_needed_base = max(seq_len, max_window)
@@ -199,7 +210,7 @@ class MarketDataHandler:
                 try:
                     if pd.isna(df.iloc[idx][col]):
                         return False, f"nan_in_essentials:{col}"
-                except Exception:
+                except (KeyError, IndexError):
                     return False, f"missing_essential:{col}"
 
             # Strategy-specific readiness: prediction availability for ML strategies
@@ -208,7 +219,7 @@ class MarketDataHandler:
                     try:
                         if pd.isna(df["onnx_pred"].iloc[idx]):
                             return False, "prediction_unavailable_at_current_index"
-                    except Exception:
+                    except (KeyError, IndexError):
                         return False, "prediction_column_access_error"
 
             # Data freshness check

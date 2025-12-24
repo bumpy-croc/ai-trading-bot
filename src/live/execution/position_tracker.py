@@ -7,6 +7,7 @@ scale-ins, and performance metric tracking for live trading.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -118,6 +119,8 @@ class LivePositionTracker:
         """
         self._positions: dict[str, LivePosition] = {}
         self._position_db_ids: dict[str, int | None] = {}
+        # Protects concurrent access from OrderTracker callbacks and main trading loop
+        self._positions_lock = threading.Lock()
         self.db_manager = db_manager
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=mfe_mae_precision)
         self._mfe_mae_update_frequency = mfe_mae_update_frequency
@@ -125,34 +128,43 @@ class LivePositionTracker:
 
     @property
     def positions(self) -> dict[str, LivePosition]:
-        """Get all active positions."""
-        return self._positions
+        """Get all active positions.
+
+        Returns a copy to prevent concurrent modification issues.
+        """
+        with self._positions_lock:
+            return dict(self._positions)
 
     @property
     def position_count(self) -> int:
         """Get count of active positions."""
-        return len(self._positions)
+        with self._positions_lock:
+            return len(self._positions)
 
     @property
     def position_db_ids(self) -> dict[str, int | None]:
         """Get mapping of order_id to database position ID."""
-        return self._position_db_ids
+        with self._positions_lock:
+            return dict(self._position_db_ids)
 
     def has_position(self, order_id: str) -> bool:
         """Check if a position exists by order_id."""
-        return order_id in self._positions
+        with self._positions_lock:
+            return order_id in self._positions
 
     def get_position(self, order_id: str) -> LivePosition | None:
         """Get a position by order_id."""
-        return self._positions.get(order_id)
+        with self._positions_lock:
+            return self._positions.get(order_id)
 
     def reset(self) -> None:
         """Reset tracker state for a new trading session."""
-        for order_id in list(self._positions.keys()):
-            self.mfe_mae_tracker.clear(order_id)
-        self._positions.clear()
-        self._position_db_ids.clear()
-        self._last_mfe_mae_persist = None
+        with self._positions_lock:
+            for order_id in list(self._positions.keys()):
+                self.mfe_mae_tracker.clear(order_id)
+            self._positions.clear()
+            self._position_db_ids.clear()
+            self._last_mfe_mae_persist = None
 
     def open_position(
         self,
@@ -175,7 +187,8 @@ class LivePositionTracker:
             return None
 
         order_id = position.order_id
-        self._positions[order_id] = position
+        with self._positions_lock:
+            self._positions[order_id] = position
         self.mfe_mae_tracker.clear(order_id)
 
         logger.debug(
@@ -222,7 +235,8 @@ class LivePositionTracker:
             except Exception as e:
                 logger.warning("Failed to log position to database: %s", e)
 
-        self._position_db_ids[order_id] = db_id
+        with self._positions_lock:
+            self._position_db_ids[order_id] = db_id
         return db_id
 
     def close_position(
@@ -243,10 +257,11 @@ class LivePositionTracker:
         Returns:
             PositionCloseResult with realized P&L and metrics, or None if not found.
         """
-        position = self._positions.get(order_id)
-        if position is None:
-            logger.warning("No position found with order_id: %s", order_id)
-            return None
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                logger.warning("No position found with order_id: %s", order_id)
+                return None
 
         exit_time = datetime.utcnow()
         fraction = float(
@@ -286,8 +301,9 @@ class LivePositionTracker:
 
         # Clear tracker state
         self.mfe_mae_tracker.clear(order_id)
-        del self._positions[order_id]
-        self._position_db_ids.pop(order_id, None)
+        with self._positions_lock:
+            del self._positions[order_id]
+            self._position_db_ids.pop(order_id, None)
 
         return PositionCloseResult(
             realized_pnl=realized_pnl,
@@ -304,7 +320,9 @@ class LivePositionTracker:
             current_price: Current market price.
             fallback_balance: Balance to use if position has no entry_balance.
         """
-        for position in self._positions.values():
+        with self._positions_lock:
+            positions_snapshot = list(self._positions.values())
+        for position in positions_snapshot:
             fraction = float(
                 position.current_size
                 if position.current_size is not None
@@ -342,7 +360,11 @@ class LivePositionTracker:
         """
         now = datetime.utcnow()
 
-        for order_id, position in self._positions.items():
+        with self._positions_lock:
+            positions_snapshot = list(self._positions.items())
+            db_ids_snapshot = dict(self._position_db_ids)
+
+        for order_id, position in positions_snapshot:
             self.mfe_mae_tracker.update_position_metrics(
                 position_key=order_id,
                 entry_price=float(position.entry_price),
@@ -367,8 +389,8 @@ class LivePositionTracker:
             return
 
         self._last_mfe_mae_persist = now
-        for order_id, position in self._positions.items():
-            db_id = self._position_db_ids.get(order_id)
+        for order_id, position in positions_snapshot:
+            db_id = db_ids_snapshot.get(order_id)
             if db_id is None:
                 continue
             try:
@@ -412,10 +434,12 @@ class LivePositionTracker:
         Returns:
             PartialExitResult with realized P&L and new size.
         """
-        position = self._positions.get(order_id)
-        if position is None:
-            logger.warning("No position found for partial exit: %s", order_id)
-            return None
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                logger.warning("No position found for partial exit: %s", order_id)
+                return None
+            db_id = self._position_db_ids.get(order_id)
 
         # Adjust runtime position sizes
         if position.original_size is None:
@@ -447,8 +471,7 @@ class LivePositionTracker:
             realized_pnl,
         )
 
-        # Persist to DB
-        db_id = self._position_db_ids.get(order_id)
+        # Persist to DB (db_id was captured under lock above)
         if self.db_manager is not None and db_id is not None:
             try:
                 self.db_manager.apply_partial_exit_update(
@@ -488,10 +511,12 @@ class LivePositionTracker:
         Returns:
             ScaleInResult with new sizes.
         """
-        position = self._positions.get(order_id)
-        if position is None:
-            logger.warning("No position found for scale-in: %s", order_id)
-            return None
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                logger.warning("No position found for scale-in: %s", order_id)
+                return None
+            db_id = self._position_db_ids.get(order_id)
 
         # Adjust runtime position sizes
         if position.original_size is None:
@@ -511,8 +536,7 @@ class LivePositionTracker:
             position.current_size,
         )
 
-        # Persist to DB
-        db_id = self._position_db_ids.get(order_id)
+        # Persist to DB (db_id was captured under lock above)
         if self.db_manager is not None and db_id is not None:
             try:
                 self.db_manager.apply_scale_in_update(
@@ -548,9 +572,11 @@ class LivePositionTracker:
         Returns:
             True if stop loss was updated.
         """
-        position = self._positions.get(order_id)
-        if position is None:
-            return False
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                return False
+            db_id = self._position_db_ids.get(order_id)
 
         changed = False
 
@@ -575,9 +601,8 @@ class LivePositionTracker:
             position.breakeven_triggered = breakeven_triggered
             changed = True
 
-        # Persist trailing stop state to DB
+        # Persist trailing stop state to DB (db_id was captured under lock above)
         if changed:
-            db_id = self._position_db_ids.get(order_id)
             if self.db_manager is not None and db_id is not None:
                 try:
                     self.db_manager.update_position(
@@ -601,9 +626,10 @@ class LivePositionTracker:
         Returns:
             Dictionary with position details, or None if not found.
         """
-        position = self._positions.get(order_id)
-        if position is None:
-            return None
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                return None
 
         return {
             "order_id": order_id,
@@ -665,8 +691,9 @@ class LivePositionTracker:
                     ),
                     breakeven_triggered=bool(db_pos.breakeven_triggered),
                 )
-                self._positions[position.order_id] = position
-                self._position_db_ids[position.order_id] = db_pos.id
+                with self._positions_lock:
+                    self._positions[position.order_id] = position
+                    self._position_db_ids[position.order_id] = db_pos.id
                 recovered.append(position)
                 logger.info(
                     "Recovered position: %s %s @ %.2f",

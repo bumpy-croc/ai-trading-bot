@@ -136,10 +136,10 @@ class LiveEntryHandler:
                 reasons=reasons,
             )
 
-        # Cap at max position size
+        # Enforce maximum position size to prevent over-concentration risk
         size_fraction = min(size_fraction, self.max_position_size)
 
-        # Apply dynamic risk adjustments
+        # Reduce position size during drawdown or adverse market conditions
         if self.dynamic_risk_manager is not None and size_fraction > 0:
             size_fraction = self._apply_dynamic_risk(
                 original_size=size_fraction,
@@ -156,21 +156,21 @@ class LiveEntryHandler:
                 reasons=reasons,
             )
 
-        # Calculate stop loss and take profit
+        # Compute protective stop loss and profit target for risk management
         sl_price, tp_price = self._calculate_sl_tp(
             current_price=current_price,
             entry_side=entry_side,
             runtime_decision=runtime_decision,
         )
 
-        # Extract signal strength and confidence
+        # Capture signal quality metrics for trade logging and analysis
         signal_strength = 0.0
         signal_confidence = 0.0
         if runtime_decision is not None and hasattr(runtime_decision, "signal"):
             signal_strength = runtime_decision.signal.strength
             signal_confidence = runtime_decision.signal.confidence
 
-        # Build entry reasons
+        # Record entry context for debugging and post-trade analysis
         reasons.append("runtime_entry")
         reasons.append(f"side_{entry_side.value}")
         reasons.append(f"position_size_{size_fraction:.4f}")
