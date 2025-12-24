@@ -594,7 +594,7 @@ class TestReconcilePositionsWithExchange:
     def test_reconcile_updates_balance_for_sl(
         self, engine_with_exchange, mock_exchange, sample_position
     ):
-        """Reconciliation updates balance based on SL exit price."""
+        """Reconciliation updates balance based on SL exit price, including fees."""
         sample_position.entry_balance = Decimal("10000.0")
         sample_position.size = 0.1  # 10%
         sample_position.entry_price = 50000.0
@@ -612,7 +612,10 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange._reconcile_positions_with_exchange()
 
         # PnL = ((48000 - 50000) / 50000) * 0.1 * 10000 = -40
-        expected_balance = 10000.0 - 40.0
+        # Exit notional = 10000 * 0.1 * (48000/50000) = 960
+        # Exit fee = 960 * 0.001 = 0.96
+        # Realized PnL = -40 - 0.96 = -40.96
+        expected_balance = 10000.0 - 40.96
         assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
 
     def test_reconcile_uses_entry_balance_not_current(
@@ -636,7 +639,10 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange._reconcile_positions_with_exchange()
 
         # PnL = ((48000 - 50000) / 50000) * 0.1 * 8000 = -32
-        expected_balance = 12000.0 - 32.0
+        # Exit notional = 8000 * 0.1 * (48000/50000) = 768
+        # Exit fee = 768 * 0.001 = 0.768
+        # Realized PnL = -32 - 0.768 = -32.768
+        expected_balance = 12000.0 - 32.768
         assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
 
     def test_reconcile_handles_short_position_pnl(
@@ -660,7 +666,10 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange._reconcile_positions_with_exchange()
 
         # PnL = ((50000 - 52000) / 50000) * 0.1 * 10000 = -40
-        expected_balance = 10000.0 - 40.0
+        # Exit notional = 10000 * 0.1 * (52000/50000) = 1040
+        # Exit fee = 1040 * 0.001 = 1.04
+        # Realized PnL = -40 - 1.04 = -41.04
+        expected_balance = 10000.0 - 41.04
         assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
 
     def test_reconcile_sl_still_active_no_action(
@@ -716,7 +725,10 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange._reconcile_positions_with_exchange()
 
         # PnL = ((48000 - 50000) / 50000) * 0.1 * 8000 = -32
-        expected_balance = 8000.0 - 32.0
+        # Exit notional = 8000 * 0.1 * (48000/50000) = 768
+        # Exit fee = 768 * 0.001 = 0.768
+        # Realized PnL = -32 - 0.768 = -32.768
+        expected_balance = 8000.0 - 32.768
         assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
 
     def test_reconcile_fallback_when_entry_balance_zero(
@@ -740,7 +752,10 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange._reconcile_positions_with_exchange()
 
         # PnL = ((48000 - 50000) / 50000) * 0.1 * 6000 = -24
-        expected_balance = 6000.0 - 24.0
+        # Exit notional = 6000 * 0.1 * (48000/50000) = 576
+        # Exit fee = 576 * 0.001 = 0.576
+        # Realized PnL = -24 - 0.576 = -24.576
+        expected_balance = 6000.0 - 24.576
         assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
 
     def test_reconcile_fallback_when_entry_balance_negative(
@@ -764,7 +779,10 @@ class TestReconcilePositionsWithExchange:
         engine_with_exchange._reconcile_positions_with_exchange()
 
         # PnL = ((50000 - 52000) / 50000) * 0.1 * 9000 = -36
-        expected_balance = 9000.0 - 36.0
+        # Exit notional = 9000 * 0.1 * (52000/50000) = 936
+        # Exit fee = 936 * 0.001 = 0.936
+        # Realized PnL = -36 - 0.936 = -36.936
+        expected_balance = 9000.0 - 36.936
         assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
 
 
