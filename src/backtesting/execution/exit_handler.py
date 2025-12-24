@@ -333,10 +333,14 @@ class ExitHandler:
             stop_loss_val = float(trade.stop_loss)
             if trade.side == "long":
                 hit_stop_loss = candle_low <= stop_loss_val
+                if hit_stop_loss:
+                    # Use max(stop_loss, candle_low) for realistic worst-case execution
+                    sl_exit_price = max(stop_loss_val, candle_low)
             else:
                 hit_stop_loss = candle_high >= stop_loss_val
-            if hit_stop_loss:
-                sl_exit_price = stop_loss_val
+                if hit_stop_loss:
+                    # Use min(stop_loss, candle_high) for realistic worst-case execution
+                    sl_exit_price = min(stop_loss_val, candle_high)
 
         # Check take profit
         hit_take_profit = False

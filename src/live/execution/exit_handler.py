@@ -169,6 +169,8 @@ class LiveExitHandler:
         current_price: float,
         limit_price: float | None,
         current_balance: float,
+        candle_high: float | None = None,
+        candle_low: float | None = None,
         data_provider: Any = None,
     ) -> LiveExitResult:
         """Execute an exit for a position.
@@ -179,6 +181,8 @@ class LiveExitHandler:
             current_price: Current market price.
             limit_price: Limit price for SL/TP exits.
             current_balance: Current account balance.
+            candle_high: Candle high for realistic execution modeling.
+            candle_low: Candle low for realistic execution modeling.
             data_provider: Data provider for price fallback.
 
         Returns:
@@ -190,9 +194,30 @@ class LiveExitHandler:
                 error="Position has no order_id",
             )
 
-        # Determine base exit price
+        # Determine base exit price with realistic execution modeling
         if limit_price is not None:
-            base_exit_price = limit_price
+            # For SL/TP, use worst-case execution price from candle high/low
+            if self.use_high_low_for_stops and candle_high is not None and candle_low is not None:
+                if "Stop loss" in exit_reason:
+                    # Stop losses execute at worst price
+                    if position.side == PositionSide.LONG:
+                        # Long SL: use max(stop_loss, candle_low) for realistic worst-case
+                        base_exit_price = max(limit_price, candle_low)
+                    else:
+                        # Short SL: use min(stop_loss, candle_high) for realistic worst-case
+                        base_exit_price = min(limit_price, candle_high)
+                elif "Take profit" in exit_reason:
+                    # Take profits execute at best available price
+                    if position.side == PositionSide.LONG:
+                        # Long TP: use candle_high if available, else limit
+                        base_exit_price = candle_high if candle_high >= limit_price else limit_price
+                    else:
+                        # Short TP: use candle_low if available, else limit
+                        base_exit_price = candle_low if candle_low <= limit_price else limit_price
+                else:
+                    base_exit_price = limit_price
+            else:
+                base_exit_price = limit_price
         else:
             base_exit_price = current_price
 
@@ -335,6 +360,10 @@ class LiveExitHandler:
     ) -> bool:
         """Check if stop loss should be triggered.
 
+        Uses candle high/low for realistic worst-case execution detection.
+        For long positions, uses max(stop_loss, candle_low) to model realistic fill prices
+        since stop losses typically execute at or worse than the stop level.
+
         Args:
             position: Position to check.
             current_price: Current (close) price.
@@ -354,8 +383,10 @@ class LiveExitHandler:
             and candle_high is not None
         ):
             if position.side == PositionSide.LONG:
+                # For long SL, check if candle_low breached the stop
                 return candle_low <= position.stop_loss
             else:
+                # For short SL, check if candle_high breached the stop
                 return candle_high >= position.stop_loss
         else:
             # Fallback to close price only
@@ -560,6 +591,8 @@ class LiveExitHandler:
             target_level=target_level,
             fraction_of_original=fraction_of_original,
             basis_balance=current_balance,
+            fee_rate=self.execution_engine.fee_rate,
+            slippage_rate=self.execution_engine.slippage_rate,
         )
 
         if result is not None:

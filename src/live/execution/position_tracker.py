@@ -109,6 +109,8 @@ class LivePositionTracker:
         db_manager: DatabaseManager | None = None,
         mfe_mae_precision: int = DEFAULT_MFE_MAE_PRECISION_DECIMALS,
         mfe_mae_update_frequency: float = DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
+        fee_rate: float = 0.001,
+        slippage_rate: float = 0.0005,
     ) -> None:
         """Initialize position tracker.
 
@@ -116,13 +118,19 @@ class LivePositionTracker:
             db_manager: Database manager for persistence (optional).
             mfe_mae_precision: Decimal precision for MFE/MAE calculations.
             mfe_mae_update_frequency: Seconds between MFE/MAE DB persists.
+            fee_rate: Fee rate for cost-adjusted MFE/MAE.
+            slippage_rate: Slippage rate for cost-adjusted MFE/MAE.
         """
         self._positions: dict[str, LivePosition] = {}
         self._position_db_ids: dict[str, int | None] = {}
         # Protects concurrent access from OrderTracker callbacks and main trading loop
         self._positions_lock = threading.Lock()
         self.db_manager = db_manager
-        self.mfe_mae_tracker = MFEMAETracker(precision_decimals=mfe_mae_precision)
+        self.mfe_mae_tracker = MFEMAETracker(
+            precision_decimals=mfe_mae_precision,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+        )
         self._mfe_mae_update_frequency = mfe_mae_update_frequency
         self._last_mfe_mae_persist: datetime | None = None
 
@@ -420,6 +428,8 @@ class LivePositionTracker:
         target_level: int,
         fraction_of_original: float,
         basis_balance: float,
+        fee_rate: float = 0.001,
+        slippage_rate: float = 0.0005,
     ) -> PartialExitResult | None:
         """Reduce position size via partial exit.
 
@@ -430,6 +440,8 @@ class LivePositionTracker:
             target_level: Which profit target level triggered this exit.
             fraction_of_original: Fraction of original position being exited.
             basis_balance: Fallback balance for P&L calculation.
+            fee_rate: Fee rate for exit calculation.
+            slippage_rate: Slippage rate for exit cost.
 
         Returns:
             PartialExitResult with realized P&L and new size.
@@ -441,15 +453,15 @@ class LivePositionTracker:
                 return None
             db_id = self._position_db_ids.get(order_id)
 
-        # Adjust runtime position sizes
-        if position.original_size is None:
-            position.original_size = position.size
-        if position.current_size is None:
-            position.current_size = position.size
+            # Adjust runtime position sizes (inside lock to prevent race conditions)
+            if position.original_size is None:
+                position.original_size = position.size
+            if position.current_size is None:
+                position.current_size = position.size
 
-        position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
-        position.partial_exits_taken += 1
-        position.last_partial_exit_price = price
+            position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
+            position.partial_exits_taken += 1
+            position.last_partial_exit_price = price
 
         # Calculate realized P&L on the exited fraction
         if position.side == PositionSide.LONG:
@@ -462,7 +474,23 @@ class LivePositionTracker:
             if position.entry_balance is not None and position.entry_balance > 0
             else basis_balance
         )
-        realized_pnl = cash_pnl(pnl_pct, actual_basis)
+
+        # Calculate exit notional accounting for price change (same as full exits)
+        entry_notional = actual_basis * delta_fraction
+        price_adjustment = (
+            price / position.entry_price
+            if position.entry_price > 0
+            else 1.0
+        )
+        exit_notional = entry_notional * price_adjustment
+
+        # Calculate costs on exit notional
+        exit_fee = abs(exit_notional * fee_rate)
+        slippage_cost = abs(exit_notional * slippage_rate)
+
+        # Deduct costs from realized P&L
+        gross_pnl = cash_pnl(pnl_pct, actual_basis)
+        realized_pnl = gross_pnl - exit_fee - slippage_cost
 
         logger.debug(
             "Partial exit: %.4f of position %s, realized PnL=%.2f",
@@ -518,22 +546,27 @@ class LivePositionTracker:
                 return None
             db_id = self._position_db_ids.get(order_id)
 
-        # Adjust runtime position sizes
-        if position.original_size is None:
-            position.original_size = position.size
-        if position.current_size is None:
-            position.current_size = position.size
+            # Adjust runtime position sizes (inside lock to prevent race conditions)
+            if position.original_size is None:
+                position.original_size = position.size
+            if position.current_size is None:
+                position.current_size = position.size
 
-        position.current_size = min(1.0, float(position.current_size) + float(delta_fraction))
-        position.size = min(max_position_size, float(position.size) + float(delta_fraction))
-        position.scale_ins_taken += 1
-        position.last_scale_in_price = price
+            position.current_size = min(1.0, float(position.current_size) + float(delta_fraction))
+            position.size = min(max_position_size, float(position.size) + float(delta_fraction))
+            position.scale_ins_taken += 1
+            position.last_scale_in_price = price
+
+            # Capture new sizes while still under lock
+            new_size = position.size
+            new_current_size = position.current_size
+            scale_ins_taken = position.scale_ins_taken
 
         logger.debug(
             "Scale-in: +%.4f to position %s, new size=%.4f",
             delta_fraction,
             order_id,
-            position.current_size,
+            new_current_size,
         )
 
         # Persist to DB (db_id was captured under lock above)
@@ -549,9 +582,9 @@ class LivePositionTracker:
                 logger.debug("DB scale-in update failed: %s", e)
 
         return ScaleInResult(
-            new_size=position.size,
-            new_current_size=position.current_size,
-            scale_ins_taken=position.scale_ins_taken,
+            new_size=new_size,
+            new_current_size=new_current_size,
+            scale_ins_taken=scale_ins_taken,
         )
 
     def update_trailing_stop(
