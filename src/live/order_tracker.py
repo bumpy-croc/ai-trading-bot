@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.data_providers.exchange_interface import ExchangeInterface, Order, OrderStatus
 
@@ -77,7 +77,7 @@ class OrderTracker:
                 order_id=order_id,
                 symbol=symbol,
                 last_filled_qty=0.0,
-                added_at=datetime.utcnow(),
+                added_at=datetime.now(timezone.utc),
             )
         logger.debug(f"Now tracking order {order_id} for {symbol}")
 
@@ -156,7 +156,7 @@ class OrderTracker:
             order: Order object from exchange
         """
         status = order.status
-        filled_qty = order.filled_quantity
+        filled_qty = order.filled_quantity or 0.0
         avg_price = order.average_price or 0.0
 
         if status == OrderStatus.FILLED:
