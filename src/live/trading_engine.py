@@ -2637,6 +2637,9 @@ class LiveTradingEngine:
         """
         Handle a fully filled order notification from OrderTracker.
 
+        This handles both entry order fills and stop-loss order fills.
+        For stop-loss fills, it closes the associated position.
+
         Args:
             order_id: The filled order ID
             symbol: Trading symbol
@@ -2654,11 +2657,27 @@ class LiveTradingEngine:
             average_price=avg_price,
         )
 
+        # Check if this is a stop-loss order fill - need to close the position
+        # Use list() to avoid modification during iteration (thread safety)
+        for pos_order_id, position in list(self.positions.items()):
+            if position.stop_loss_order_id == order_id:
+                logger.warning(
+                    f"Stop-loss order {order_id} filled for position {pos_order_id} "
+                    f"at ${avg_price:.2f} - closing position"
+                )
+                # Close position using the actual SL fill price
+                self._close_position(position, reason="stop_loss", limit_price=avg_price)
+                return
+
     def _handle_partial_fill(
         self, order_id: str, symbol: str, new_filled_qty: float, avg_price: float
     ) -> None:
         """
         Handle a partial fill notification from OrderTracker.
+
+        For stop-loss partial fills, logs a critical warning since position
+        remains exposed. Full handling of partial SL fills would require
+        placing a new SL order for the remaining quantity.
 
         Args:
             order_id: The partially filled order ID
@@ -2676,6 +2695,25 @@ class LiveTradingEngine:
             new_filled_quantity=new_filled_qty,
             average_price=avg_price,
         )
+
+        # Check if this is a stop-loss order partial fill - log critical warning
+        # Partial SL fills leave the position partially exposed without protection
+        for pos_order_id, position in list(self.positions.items()):
+            if position.stop_loss_order_id == order_id:
+                logger.critical(
+                    f"PARTIAL STOP-LOSS FILL: Position {pos_order_id} SL order {order_id} "
+                    f"partially filled ({new_filled_qty} @ ${avg_price:.2f}). "
+                    "Remaining position may be unprotected - manual intervention recommended."
+                )
+                log_order_event(
+                    "partial_sl_fill_warning",
+                    order_id=order_id,
+                    position_order_id=pos_order_id,
+                    symbol=symbol,
+                    filled_quantity=new_filled_qty,
+                    average_price=avg_price,
+                )
+                return
 
     def _handle_order_cancel(self, order_id: str, symbol: str) -> None:
         """
@@ -2729,9 +2767,15 @@ class LiveTradingEngine:
             position.current_size if position.current_size is not None else position.size
         )
 
-        # Calculate quantity based on remaining size fraction and current balance
+        # Calculate quantity based on remaining size fraction and entry balance
         # remaining_size is a fraction of balance, so: qty = (remaining_size * balance) / price
-        quantity = (remaining_size * self.current_balance) / current_price
+        # Use entry_balance for consistency with position sizing at entry
+        basis_balance = (
+            float(position.entry_balance)
+            if position.entry_balance is not None and position.entry_balance > 0
+            else self.current_balance
+        )
+        quantity = (remaining_size * basis_balance) / current_price
 
         # Round quantity to valid step size
         symbol_info = self.exchange_interface.get_symbol_info(position.symbol)
@@ -2945,15 +2989,32 @@ class LiveTradingEngine:
                             f"for {position.symbol}"
                         )
                     else:
+                        # Cancel failed - re-check if SL filled to prevent double execution
                         logger.warning(
                             f"Failed to cancel stop-loss order {position.stop_loss_order_id} "
-                            f"for {position.symbol} (may have already triggered)"
+                            f"for {position.symbol} - checking if already filled"
                         )
+                        try:
+                            sl_order = self.exchange_interface.get_order(
+                                position.stop_loss_order_id, position.symbol
+                            )
+                            if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
+                                sl_already_filled = True
+                                logger.info(
+                                    f"Stop-loss order confirmed filled at ${sl_order.average_price:.2f} "
+                                    "- skipping duplicate close order"
+                                )
+                        except Exception as check_err:
+                            logger.warning(f"Could not verify SL status: {check_err}")
                 except Exception as e:
                     logger.warning(f"Error cancelling stop-loss order: {e}")
 
-            # Close real order if needed
-            if self.enable_live_trading:
+                # Stop tracking the SL order regardless of cancel result
+                if self.order_tracker:
+                    self.order_tracker.stop_tracking(position.stop_loss_order_id)
+
+            # Close real order if needed (skip if SL already filled to prevent double execution)
+            if self.enable_live_trading and not sl_already_filled:
                 self._close_order(position)
 
             # Remove from active positions and tracker cache
