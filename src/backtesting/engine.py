@@ -1590,7 +1590,10 @@ class Backtester:
                         trade_pnl_cash = cash_pnl(trade_pnl_pct, basis_balance)
 
                         # Calculate exit fees and slippage cost
-                        exit_position_notional = basis_balance * fraction
+                        # Exit notional must account for price change from entry to exit
+                        exit_position_notional = (
+                            basis_balance * fraction * (exit_price / self.current_trade.entry_price)
+                        )
                         exit_fee = abs(exit_position_notional * self.fee_rate)
                         exit_slippage = abs(exit_position_notional * self.slippage_rate)
 
@@ -1615,7 +1618,7 @@ class Backtester:
 
                         # Log trade
                         logger.info(
-                            f"Exited {self.current_trade.side} at {current_price}, Balance: {self.balance:.2f}"
+                            f"Exited {self.current_trade.side} at {exit_price}, Balance: {self.balance:.2f}"
                         )
 
                         # After updating self.balance, update yearly_balance for the exit year
