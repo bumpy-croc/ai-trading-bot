@@ -112,6 +112,9 @@ class LiveExecutionEngine:
     def apply_entry_slippage(self, price: float, side: PositionSide) -> float:
         """Apply slippage to entry price (price moves against us).
 
+        Slippage models the cost of market impact and adverse selection that occurs
+        when entering a position, ensuring realistic backtest and live trading results.
+
         Args:
             price: Base price before slippage.
             side: Position side (LONG or SHORT).
@@ -120,15 +123,18 @@ class LiveExecutionEngine:
             Price after slippage applied.
         """
         if side == PositionSide.LONG:
-            # Buying: slippage increases price
+            # Buying long positions experience slippage as higher entry price
             return price * (1 + self.slippage_rate)
         else:
-            # Shorting: slippage decreases price
+            # Shorting experiences slippage as lower entry price (worse fill)
             return price * (1 - self.slippage_rate)
 
     def apply_exit_slippage(self, price: float, side: PositionSide) -> float:
         """Apply slippage to exit price (price moves against us).
 
+        Exit slippage accounts for market impact costs when closing positions,
+        ensuring P&L calculations reflect realistic execution conditions.
+
         Args:
             price: Base price before slippage.
             side: Position side (LONG or SHORT).
@@ -137,10 +143,10 @@ class LiveExecutionEngine:
             Price after slippage applied.
         """
         if side == PositionSide.LONG:
-            # Selling long: slippage decreases price (worse for us)
+            # Closing long positions receive worse fill (lower exit price)
             return price * (1 - self.slippage_rate)
         else:
-            # Covering short: slippage increases price (worse for us)
+            # Covering short positions receive worse fill (higher exit price)
             return price * (1 + self.slippage_rate)
 
     def calculate_entry_fee(self, position_value: float) -> float:
@@ -234,7 +240,7 @@ class LiveExecutionEngine:
                 slippage_cost=slippage_cost,
             )
 
-        except Exception as e:
+        except (ValueError, ArithmeticError, TypeError) as e:
             logger.error("Failed to execute entry: %s", e, exc_info=True)
             return EntryExecutionResult(
                 success=False,
@@ -291,7 +297,7 @@ class LiveExecutionEngine:
                 slippage_cost=slippage_cost,
             )
 
-        except Exception as e:
+        except (ValueError, ArithmeticError, TypeError) as e:
             logger.error("Failed to execute exit: %s", e, exc_info=True)
             return ExitExecutionResult(
                 success=False,
@@ -325,7 +331,7 @@ class LiveExecutionEngine:
             # This is a placeholder - actual implementation would call exchange API
             logger.warning("Real order execution not fully implemented")
             return f"real_{int(time.time() * 1000)}"
-        except Exception as e:
+        except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order execution failed: %s", e)
             return None
 
@@ -348,7 +354,7 @@ class LiveExecutionEngine:
             # This is a placeholder - actual implementation would call exchange API
             logger.warning("Real order closing not fully implemented")
             return True
-        except Exception as e:
+        except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order close failed: %s", e)
             return False
 

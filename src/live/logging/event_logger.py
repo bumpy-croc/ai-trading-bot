@@ -86,8 +86,8 @@ class LiveEventLogger:
     def _check_and_update_trading_date(self, current_balance: float) -> None:
         """Check if the trading date has changed and update day start balance.
 
-        Tracks daily P&L by detecting date rollovers and resetting the
-        day start balance at the beginning of each new trading day.
+        Enables accurate daily P&L tracking by detecting calendar rollovers,
+        allowing performance monitoring on a per-day basis for live trading.
 
         Args:
             current_balance: The current account balance.
@@ -118,8 +118,8 @@ class LiveEventLogger:
     def _get_day_start_balance_from_db(self) -> float | None:
         """Recover day start balance from database on session restart.
 
-        Queries the first account snapshot of the current trading day to
-        determine the starting balance for daily P&L calculation.
+        Enables continuous daily P&L tracking across restarts by retrieving
+        the starting balance from the first snapshot of the current trading day.
 
         Returns:
             The day start balance if found, None otherwise.
@@ -139,7 +139,7 @@ class LiveEventLogger:
         except AttributeError:
             # Method not available on db_manager - graceful fallback
             logger.debug("get_first_snapshot_of_day not available on db_manager")
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:
             logger.debug("Failed to recover day start balance: %s", e)
 
         return None
@@ -208,7 +208,7 @@ class LiveEventLogger:
                 session_id=self.session_id,
             )
 
-        except Exception as e:
+        except (AttributeError, ValueError, TypeError) as e:
             logger.error("Failed to log account snapshot: %s", e)
 
     def log_status(
@@ -300,7 +300,7 @@ class LiveEventLogger:
             with open(log_file, "a") as f:
                 f.write(json.dumps(trade_data) + "\n")
 
-        except Exception as e:
+        except (OSError, IOError, ValueError) as e:
             logger.error("Failed to log trade to file: %s", e, exc_info=True)
 
     def log_trade_to_database(
@@ -374,7 +374,7 @@ class LiveEventLogger:
                 mfe_time=mfe_time,
                 mae_time=mae_time,
             )
-        except Exception as e:
+        except (AttributeError, ValueError, TypeError) as e:
             logger.debug("Failed to log trade to database: %s", e)
 
     def log_entry_decision(
@@ -430,7 +430,7 @@ class LiveEventLogger:
                 volatility=indicators.get("volatility") if indicators else None,
                 session_id=self.session_id,
             )
-        except Exception as e:
+        except (AttributeError, ValueError, TypeError, KeyError) as e:
             logger.debug("Failed to log entry decision: %s", e)
 
     def log_exit_decision(
@@ -486,7 +486,7 @@ class LiveEventLogger:
                 volatility=indicators.get("volatility") if indicators else None,
                 session_id=self.session_id,
             )
-        except Exception as e:
+        except (AttributeError, ValueError, TypeError, KeyError) as e:
             logger.debug("Failed to log exit decision: %s", e)
 
     def create_trading_session(
@@ -528,7 +528,7 @@ class LiveEventLogger:
             )
             self.session_id = session_id
             return session_id
-        except Exception as e:
+        except (AttributeError, ValueError, TypeError) as e:
             logger.warning("Failed to create trading session: %s", e)
             return None
 
@@ -546,7 +546,7 @@ class LiveEventLogger:
                 session_id=self.session_id,
                 final_balance=final_balance,
             )
-        except Exception as e:
+        except (AttributeError, ValueError, TypeError) as e:
             logger.debug("Failed to end trading session: %s", e)
 
     def print_final_stats(

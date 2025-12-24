@@ -250,7 +250,7 @@ class LiveExitHandler:
         if self.risk_manager is not None:
             try:
                 self.risk_manager.close_position(position.symbol)
-            except Exception as e:
+            except (AttributeError, ValueError, KeyError) as e:
                 logger.warning(
                     "Failed to update risk manager for closed position %s: %s",
                     position.symbol,
@@ -321,7 +321,7 @@ class LiveExitHandler:
                 component_position, market_data, regime
             ):
                 return True, "Strategy signal"
-        except Exception as e:
+        except (AttributeError, ValueError, TypeError) as e:
             logger.debug("Component exit check failed: %s", e)
 
         return False, "Hold"
@@ -418,13 +418,14 @@ class LiveExitHandler:
         if self.trailing_stop_policy is None:
             return
 
-        # Determine ATR if available
+        # Extract ATR for volatility-adjusted trailing stops to prevent premature exits
+        # during normal price fluctuations while protecting against adverse movements
         atr_value = None
         try:
             if "atr" in df.columns and current_index < len(df):
                 val = df["atr"].iloc[current_index]
                 atr_value = float(val) if val is not None and not pd.isna(val) else None
-        except Exception:
+        except (KeyError, IndexError, ValueError, TypeError):
             atr_value = None
 
         for order_id, position in self.position_tracker.positions.items():
@@ -568,7 +569,7 @@ class LiveExitHandler:
                     self.risk_manager.adjust_position_after_partial_exit(
                         position.symbol, delta_fraction
                     )
-                except Exception as e:
+                except (AttributeError, ValueError, KeyError) as e:
                     logger.debug("Risk manager partial-exit accounting failed: %s", e)
 
             # If fully closed by partials, close position
@@ -616,5 +617,5 @@ class LiveExitHandler:
                     self.risk_manager.adjust_position_after_scale_in(
                         position.symbol, delta_fraction
                     )
-                except Exception as e:
+                except (AttributeError, ValueError, KeyError) as e:
                     logger.debug("Risk manager scale-in accounting failed: %s", e)

@@ -265,7 +265,7 @@ class LiveEntryHandler:
                     size=signal.size_fraction,
                     entry_price=exec_result.executed_price,
                 )
-            except Exception as e:
+            except (AttributeError, ValueError, KeyError) as e:
                 logger.warning(
                     "Failed to update risk manager for %s on %s: %s",
                     signal.side.value,
@@ -361,7 +361,7 @@ class LiveEntryHandler:
                 else:
                     sl_pct = (stop_loss_price - current_price) / current_price
                 sl_pct = max(0.01, min(0.20, sl_pct))  # Clamp 1-20%
-            except Exception:
+            except (AttributeError, ValueError, TypeError):
                 pass
 
         # Calculate prices
@@ -383,6 +383,9 @@ class LiveEntryHandler:
         trading_session_id: int | None,
     ) -> float:
         """Apply dynamic risk adjustments to position size.
+
+        Reduces position size during drawdown or adverse market conditions
+        to preserve capital and prevent excessive losses during unfavorable periods.
 
         Args:
             original_size: Original position size fraction.
@@ -406,7 +409,7 @@ class LiveEntryHandler:
 
             adjusted_size = original_size * adjustments.position_size_factor
 
-            # Track significant adjustments
+            # Track significant adjustments for post-trade analysis and debugging
             if abs(adjustments.position_size_factor - 1.0) > 0.1:
                 logger.debug(
                     "Dynamic risk adjustment at %s: size factor=%.2f, reason=%s",
@@ -434,7 +437,7 @@ class LiveEntryHandler:
 
             return adjusted_size
 
-        except Exception as e:
+        except (AttributeError, ValueError, KeyError, TypeError) as e:
             logger.warning("Failed to apply dynamic risk adjustment: %s", e)
             return original_size
 

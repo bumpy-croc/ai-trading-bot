@@ -85,8 +85,8 @@ class MarketDataHandler:
         except (ValueError, KeyError) as e:
             logger.error("Data parsing error in market data: %s", e)
             return None
-        except Exception as e:  # Catch-all for unexpected provider errors
-            logger.error("Failed to fetch market data: %s", e, exc_info=True)
+        except (AttributeError, TypeError) as e:
+            logger.error("Invalid data provider interface: %s", e, exc_info=True)
             return None
 
     def add_sentiment_data(
@@ -110,8 +110,9 @@ class MarketDataHandler:
             if hasattr(self.sentiment_provider, "get_live_sentiment"):
                 live_sentiment = self.sentiment_provider.get_live_sentiment()
 
-                # Only apply sentiment to recent candles to reflect current market mood,
-                # as older candles should retain their historical sentiment context
+                # Limit sentiment application to recent candles because live sentiment
+                # reflects current market mood while historical candles need their
+                # original context preserved for accurate strategy training and validation
                 recent_mask = df.index >= (
                     df.index.max()
                     - pd.Timedelta(hours=self.sentiment_lookback_hours)
@@ -121,7 +122,8 @@ class MarketDataHandler:
                         df[feature] = 0.0
                     df.loc[recent_mask, feature] = value
 
-                # Track which rows have fresh sentiment for strategy decision-making
+                # Strategies use freshness flag to weight live sentiment vs historical context,
+                # ensuring decisions prioritize current market mood when available
                 df["sentiment_freshness"] = 0
                 df.loc[recent_mask, "sentiment_freshness"] = 1
 
@@ -136,8 +138,8 @@ class MarketDataHandler:
             logger.error("Sentiment provider interface error: %s", e)
         except (KeyError, ValueError) as e:
             logger.error("Invalid sentiment data format: %s", e)
-        except Exception as e:  # Catch-all for unexpected sentiment errors
-            logger.error("Failed to add sentiment data: %s", e, exc_info=True)
+        except (IndexError, pd.errors.InvalidIndexError) as e:
+            logger.error("Failed to apply sentiment to dataframe indices: %s", e, exc_info=True)
 
         return df
 
@@ -203,7 +205,8 @@ class MarketDataHandler:
             if rows < min_needed:
                 return False, f"insufficient_rows:{rows}<min_needed:{min_needed}"
 
-            # Current index must have valid essentials
+            # Strategies rely on essential OHLCV data being present to avoid
+            # NaN-induced errors during indicator calculations and signal generation
             idx = rows - 1
             essentials = ["open", "high", "low", "close", "volume"]
             for col in essentials:
@@ -213,7 +216,8 @@ class MarketDataHandler:
                 except (KeyError, IndexError):
                     return False, f"missing_essential:{col}"
 
-            # Strategy-specific readiness: prediction availability for ML strategies
+            # ML strategies require predictions at current index to generate signals,
+            # ensuring we don't attempt to trade without model inference results
             if seq_len > 0:
                 if "onnx_pred" in df.columns:
                     try:
@@ -228,7 +232,7 @@ class MarketDataHandler:
 
             return True, ""
 
-        except Exception as e:
+        except (AttributeError, TypeError, ValueError) as e:
             logger.debug("Context readiness check failed: %s", e)
             return False, "readiness_check_error"
 
