@@ -37,6 +37,13 @@ from src.config.constants import (
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
+from src.data_providers.exchange_interface import (
+    OrderSide,
+    OrderType,
+)
+from src.data_providers.exchange_interface import (
+    OrderStatus as ExchangeOrderStatus,
+)
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
@@ -63,6 +70,7 @@ from src.strategies.components import RuntimeContext, Signal, SignalDirection, S
 from src.strategies.components import Strategy as ComponentStrategy
 
 from .account_sync import AccountSynchronizer
+from .order_tracker import OrderTracker
 
 # Modular handlers (optional injection for testability)
 from src.live.data.market_data_handler import MarketDataHandler
@@ -117,6 +125,8 @@ class Position:
     trailing_stop_activated: bool = False
     trailing_stop_price: float | None = None
     breakeven_triggered: bool = False
+    # Server-side stop-loss order ID (for live trading)
+    stop_loss_order_id: str | None = None
 
 
 @dataclass
@@ -135,22 +145,36 @@ class Trade:
     exit_reason: str | None = None
 
 
-def _create_exchange_provider(provider: str, config: dict):
-    """Factory to create exchange provider and return (provider_instance, provider_name)."""
+def _create_exchange_provider(provider: str, config: dict, testnet: bool = False):
+    """Factory to create exchange provider and return (provider_instance, provider_name).
+
+    Args:
+        provider: Exchange provider name ('binance' or 'coinbase')
+        config: Configuration dict containing API credentials
+        testnet: If True, use testnet credentials and endpoint
+    """
     if provider == "coinbase":
         api_key = config.get("COINBASE_API_KEY")
         api_secret = config.get("COINBASE_API_SECRET")
         if api_key and api_secret:
-            return CoinbaseProvider(api_key, api_secret, testnet=False), "Coinbase"
+            return CoinbaseProvider(api_key, api_secret, testnet=testnet), "Coinbase"
         else:
             return None, "Coinbase (no credentials)"
     else:
-        api_key = config.get("BINANCE_API_KEY")
-        api_secret = config.get("BINANCE_API_SECRET")
-        if api_key and api_secret:
-            return BinanceProvider(api_key, api_secret, testnet=False), "Binance"
+        # Use testnet credentials if testnet mode is enabled, otherwise use production
+        if testnet:
+            api_key = config.get("BINANCE_TESTNET_API_KEY")
+            api_secret = config.get("BINANCE_TESTNET_API_SECRET")
+            provider_name = "Binance Testnet"
         else:
-            return None, "Binance (no credentials)"
+            api_key = config.get("BINANCE_API_KEY")
+            api_secret = config.get("BINANCE_API_SECRET")
+            provider_name = "Binance"
+
+        if api_key and api_secret:
+            return BinanceProvider(api_key, api_secret, testnet=testnet), provider_name
+        else:
+            return None, f"{provider_name} (no credentials)"
 
 
 class LiveTradingEngine:
@@ -186,6 +210,7 @@ class LiveTradingEngine:
         max_consecutive_errors: int = 10,  # Maximum consecutive errors before shutdown
         account_snapshot_interval: int = DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,  # Account snapshot interval in seconds (30 minutes)
         provider: str = "binance",  # 'binance' (default) or 'coinbase'
+        testnet: bool = False,  # Use exchange testnet (separate credentials)
         # Dynamic risk management
         enable_dynamic_risk: bool = DEFAULT_DYNAMIC_RISK_ENABLED,
         dynamic_risk_config: DynamicRiskConfig | None = None,
@@ -302,6 +327,7 @@ class LiveTradingEngine:
         self.enable_hot_swapping = enable_hot_swapping
         self.resume_from_last_balance = resume_from_last_balance
         self.account_snapshot_interval = account_snapshot_interval
+        self.testnet = testnet
         # Partial operations policy (disabled by default for parity)
         self.enable_partial_operations = bool(enable_partial_operations)
         if partial_manager is not None:
@@ -372,16 +398,27 @@ class LiveTradingEngine:
                 logger.warning(f"Failed to initialize dynamic risk manager: {e}")
                 self.dynamic_risk_manager = None
 
-        # Initialize exchange interface and account synchronizer
+        # Initialize exchange interface, account synchronizer, and order tracker
         self.exchange_interface = None
         self.account_synchronizer = None
+        self.order_tracker: OrderTracker | None = None
         if enable_live_trading:
             try:
                 config = get_config()
-                self.exchange_interface, provider_name = _create_exchange_provider(provider, config)
+                self.exchange_interface, provider_name = _create_exchange_provider(
+                    provider, config, testnet
+                )
                 if self.exchange_interface:
                     self.account_synchronizer = AccountSynchronizer(
                         self.exchange_interface, self.db_manager, self.trading_session_id
+                    )
+                    # Initialize order tracker for monitoring order fills
+                    self.order_tracker = OrderTracker(
+                        exchange=self.exchange_interface,
+                        poll_interval=5,
+                        on_fill=self._handle_order_fill,
+                        on_partial_fill=self._handle_partial_fill,
+                        on_cancel=self._handle_order_cancel,
                     )
                     logger.info(
                         f"{provider_name} exchange interface and account synchronizer initialized"
@@ -433,6 +470,9 @@ class LiveTradingEngine:
         # Trading state
         self.is_running = False
         self.positions: dict[str, Position] = {}
+        self._positions_lock = (
+            threading.Lock()
+        )  # Protects concurrent access from OrderTracker callbacks
         self.position_db_ids: dict[str, int] = {}  # Map order_id to database position ID
         self.completed_trades: list[Trade] = []
         self.last_data_update = None
@@ -1327,6 +1367,10 @@ class LiveTradingEngine:
                         self._pending_corrected_balance = corrected_balance
                 else:
                     logger.warning(f"⚠️ Account synchronization failed: {sync_result.message}")
+
+                # Reconcile positions with exchange (detect offline stop-loss triggers)
+                self._reconcile_positions_with_exchange()
+
             except Exception as e:
                 logger.error(f"❌ Account synchronization error: {e}", exc_info=True)
 
@@ -1354,6 +1398,11 @@ class LiveTradingEngine:
         if hasattr(self.strategy, "session_id"):
             self.strategy.session_id = self.trading_session_id
 
+        # Start order tracker for monitoring order fills (live trading only)
+        if self.order_tracker and self.enable_live_trading:
+            self.order_tracker.start()
+            logger.info("📡 Order tracker started")
+
         # Start main trading loop in separate thread
         self.main_thread = threading.Thread(
             target=self._trading_loop, args=(symbol, timeframe, max_steps)
@@ -1379,6 +1428,11 @@ class LiveTradingEngine:
         self.is_running = False
         self.stop_event.set()
 
+        # Stop order tracker first
+        if self.order_tracker:
+            self.order_tracker.stop()
+            logger.info("📡 Order tracker stopped")
+
         # Close all open positions
         if self.positions:
             logger.info(f"Closing {len(self.positions)} open positions...")
@@ -1390,8 +1444,9 @@ class LiveTradingEngine:
                         f"Failed to close position {position.order_id}: {e}", exc_info=True
                     )
                     # Force remove from positions dict if close fails
-                    if position.order_id in self.positions:
-                        del self.positions[position.order_id]
+                    with self._positions_lock:
+                        if position.order_id in self.positions:
+                            del self.positions[position.order_id]
 
         # Wait for main thread to finish (avoid joining current thread)
         if (
@@ -2503,7 +2558,8 @@ class LiveTradingEngine:
                 current_size=size,
             )
 
-            self.positions[order_id] = position
+            with self._positions_lock:
+                self.positions[order_id] = position
 
             # Initialize MFE/MAE cache for this position
             self.mfe_mae_tracker.clear(order_id)  # ensure fresh state
@@ -2559,6 +2615,66 @@ class LiveTradingEngine:
             # Send alert if configured
             self._send_alert(f"Position Opened: {symbol} {side.value} @ ${entry_price:.2f}")
 
+            # Place server-side stop-loss order for protection with retry logic
+            if self.enable_live_trading and stop_loss and self.exchange_interface:
+                sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+                sl_order_id = None
+                max_retries = 3
+                retry_delay = 1.0  # Start with 1 second
+
+                for attempt in range(max_retries):
+                    try:
+                        sl_order_id = self.exchange_interface.place_stop_loss_order(
+                            symbol=symbol,
+                            side=sl_side,
+                            quantity=quantity,
+                            stop_price=stop_loss,
+                        )
+                        if sl_order_id:
+                            break
+                    except Exception as sl_err:
+                        logger.warning(
+                            f"Stop-loss placement attempt {attempt + 1}/{max_retries} failed: {sl_err}"
+                        )
+
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+
+                if sl_order_id:
+                    logger.info(
+                        f"Server-side stop-loss placed: {symbol} @ ${stop_loss:.2f} "
+                        f"order_id={sl_order_id}"
+                    )
+                    # Store stop-loss order ID for later cancellation if needed
+                    position.stop_loss_order_id = sl_order_id
+                    # Track SL order for fill notifications
+                    if self.order_tracker:
+                        self.order_tracker.track_order(sl_order_id, symbol)
+                    # Persist to database for recovery on restart
+                    if order_id in self.position_db_ids:
+                        position_db_id = self.position_db_ids[order_id]
+                        if position_db_id:
+                            self.db_manager.update_position(
+                                position_id=position_db_id,
+                                stop_loss_order_id=sl_order_id,
+                            )
+                else:
+                    # Critical: SL placement failed after all retries - close position immediately
+                    logger.critical(
+                        f"CRITICAL: Failed to place stop-loss after {max_retries} attempts for {symbol} - "
+                        "closing position to prevent unprotected exposure"
+                    )
+                    self._send_alert(
+                        f"⚠️ EMERGENCY: Closing {symbol} position - stop-loss placement failed"
+                    )
+                    # Close the position immediately
+                    self._close_order(position)
+                    with self._positions_lock:
+                        if position.order_id in self.positions:
+                            del self.positions[position.order_id]
+                    return
+
             # Update risk manager with the newly opened position so daily risk is tracked
             if self.risk_manager:
                 try:
@@ -2587,16 +2703,262 @@ class LiveTradingEngine:
     def _execute_order(
         self, symbol: str, side: PositionSide, value: float, price: float
     ) -> str | None:
-        """Execute a real market order (implement based on your exchange)"""
-        # This is a placeholder - implement actual order execution
-        logger.warning("Real order execution not implemented - using paper trading")
-        return f"real_{int(time.time())}"
+        """
+        Execute a real market order via exchange interface.
 
-    def _close_order(self, symbol: str, order_id: str) -> bool:
-        """Close a real market order (implement based on your exchange)"""
-        # This is a placeholder - implement actual order closing
-        logger.warning("Real order closing not implemented - using paper trading")
-        return True
+        Args:
+            symbol: Trading symbol (e.g., BTCUSDT)
+            side: Position side (LONG or SHORT)
+            value: Dollar value of the position
+            price: Current price for quantity calculation
+
+        Returns:
+            Order ID from exchange, or None on failure
+        """
+        if not self.exchange_interface:
+            logger.error("Exchange interface not initialized - cannot execute real order")
+            return None
+
+        if price <= 0:
+            logger.error(f"Invalid price {price} - cannot calculate quantity")
+            return None
+
+        # Convert position side to order side
+        order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
+
+        # Calculate quantity from dollar value and price
+        quantity = value / price
+
+        # Round quantity to valid step size using symbol info
+        symbol_info = self.exchange_interface.get_symbol_info(symbol)
+        if symbol_info:
+            step_size = symbol_info.get("step_size", 0.00001)
+            if step_size > 0:
+                quantity = round(quantity / step_size) * step_size
+
+            # Validate minimum quantity
+            min_qty = symbol_info.get("min_qty", 0)
+            if quantity < min_qty:
+                logger.error(f"Calculated quantity {quantity} below minimum {min_qty} for {symbol}")
+                return None
+
+            # Validate minimum notional value
+            min_notional = symbol_info.get("min_notional", 0)
+            if value < min_notional:
+                logger.error(
+                    f"Order value ${value:.2f} below minimum notional ${min_notional} for {symbol}"
+                )
+                return None
+
+        # Place market order
+        order_id = self.exchange_interface.place_order(
+            symbol=symbol,
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=quantity,
+        )
+
+        if order_id:
+            logger.info(
+                f"Real order placed: {symbol} {side.value} qty={quantity:.8f} "
+                f"value=${value:.2f} order_id={order_id}"
+            )
+            log_order_event(
+                "place_order",
+                order_id=order_id,
+                symbol=symbol,
+                side=side.value,
+                quantity=quantity,
+                value=value,
+            )
+            # Track order for fill notifications
+            if self.order_tracker:
+                self.order_tracker.track_order(order_id, symbol)
+        else:
+            logger.error(f"Failed to place real order: {symbol} {side.value} qty={quantity:.8f}")
+
+        return order_id
+
+    def _handle_order_fill(
+        self, order_id: str, symbol: str, filled_qty: float, avg_price: float
+    ) -> None:
+        """
+        Handle a fully filled order notification from OrderTracker.
+
+        This handles both entry order fills and stop-loss order fills.
+        For stop-loss fills, it closes the associated position.
+
+        Args:
+            order_id: The filled order ID
+            symbol: Trading symbol
+            filled_qty: Total quantity filled
+            avg_price: Average fill price
+        """
+        logger.info(
+            f"Order fill confirmed: {order_id} {symbol} qty={filled_qty} @ ${avg_price:.2f}"
+        )
+        log_order_event(
+            "order_filled",
+            order_id=order_id,
+            symbol=symbol,
+            filled_quantity=filled_qty,
+            average_price=avg_price,
+        )
+
+        # Check if this is a stop-loss order fill - need to close the position
+        # Find matching position under lock, then close outside lock to avoid deadlock
+        position_to_close: Position | None = None
+        with self._positions_lock:
+            for pos_order_id, position in list(self.positions.items()):
+                if position.stop_loss_order_id == order_id:
+                    position_to_close = position
+                    logger.warning(
+                        f"Stop-loss order {order_id} filled for position {pos_order_id} "
+                        f"at ${avg_price:.2f} - closing position"
+                    )
+                    break
+        if position_to_close:
+            # Close position using the actual SL fill price (outside lock)
+            self._close_position(position_to_close, reason="stop_loss", limit_price=avg_price)
+
+    def _handle_partial_fill(
+        self, order_id: str, symbol: str, new_filled_qty: float, avg_price: float
+    ) -> None:
+        """
+        Handle a partial fill notification from OrderTracker.
+
+        For stop-loss partial fills, logs a critical warning since position
+        remains exposed. Full handling of partial SL fills would require
+        placing a new SL order for the remaining quantity.
+
+        Args:
+            order_id: The partially filled order ID
+            symbol: Trading symbol
+            new_filled_qty: Additional quantity filled since last check
+            avg_price: Average fill price
+        """
+        logger.info(f"Partial fill: {order_id} {symbol} +{new_filled_qty} @ ${avg_price:.2f}")
+        log_order_event(
+            "partial_fill",
+            order_id=order_id,
+            symbol=symbol,
+            new_filled_quantity=new_filled_qty,
+            average_price=avg_price,
+        )
+
+        # Check if this is a stop-loss order partial fill - log critical warning
+        # Partial SL fills leave the position partially exposed without protection
+        with self._positions_lock:
+            for pos_order_id, position in list(self.positions.items()):
+                if position.stop_loss_order_id == order_id:
+                    logger.critical(
+                        f"PARTIAL STOP-LOSS FILL: Position {pos_order_id} SL order {order_id} "
+                        f"partially filled ({new_filled_qty} @ ${avg_price:.2f}). "
+                        "Remaining position may be unprotected - manual intervention recommended."
+                    )
+                    log_order_event(
+                        "partial_sl_fill_warning",
+                        order_id=order_id,
+                        position_order_id=pos_order_id,
+                        symbol=symbol,
+                        filled_quantity=new_filled_qty,
+                        average_price=avg_price,
+                    )
+                    return
+
+    def _handle_order_cancel(self, order_id: str, symbol: str) -> None:
+        """
+        Handle an order cancellation/rejection notification from OrderTracker.
+
+        Args:
+            order_id: The cancelled/rejected order ID
+            symbol: Trading symbol
+        """
+        logger.warning(f"Order cancelled/rejected: {order_id} {symbol}")
+        log_order_event(
+            "order_cancelled",
+            order_id=order_id,
+            symbol=symbol,
+        )
+        # Check if this was an entry order for a position we thought we had
+        # Use atomic pop() for thread safety (called from OrderTracker background thread)
+        removed_position = self.positions.pop(order_id, None)
+        if removed_position is not None:
+            logger.error(f"Entry order {order_id} was cancelled - removing phantom position")
+
+    def _close_order(self, position: Position) -> bool:
+        """
+        Close a position via exchange by placing an opposite-side market order.
+
+        Args:
+            position: The position to close
+
+        Returns:
+            True if closing order was placed successfully, False otherwise
+        """
+        if not self.exchange_interface:
+            logger.error("Exchange interface not initialized - cannot close position")
+            return False
+
+        # Get current price for quantity calculation
+        current_price = self.data_provider.get_current_price(position.symbol)
+        if not current_price or current_price <= 0:
+            logger.error(f"Cannot get current price for {position.symbol} - cannot close position")
+            return False
+
+        # Close = opposite side of position
+        order_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+
+        # Get remaining size (use current_size if partially exited, otherwise original size)
+        remaining_size = (
+            position.current_size if position.current_size is not None else position.size
+        )
+
+        # Calculate quantity based on remaining size fraction and entry balance
+        # remaining_size is a fraction of balance, so: qty = (remaining_size * balance) / price
+        # Use entry_balance for consistency with position sizing at entry
+        basis_balance = (
+            float(position.entry_balance)
+            if position.entry_balance is not None and position.entry_balance > 0
+            else self.current_balance
+        )
+        quantity = (remaining_size * basis_balance) / current_price
+
+        # Round quantity to valid step size
+        symbol_info = self.exchange_interface.get_symbol_info(position.symbol)
+        if symbol_info:
+            step_size = symbol_info.get("step_size", 0.00001)
+            if step_size > 0:
+                quantity = round(quantity / step_size) * step_size
+
+        # Place closing market order
+        close_order_id = self.exchange_interface.place_order(
+            symbol=position.symbol,
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=quantity,
+        )
+
+        if close_order_id:
+            logger.info(
+                f"Position close order placed: {position.symbol} {order_side.value} "
+                f"qty={quantity:.8f} order_id={close_order_id}"
+            )
+            log_order_event(
+                "close_order",
+                order_id=close_order_id,
+                original_order_id=position.order_id,
+                symbol=position.symbol,
+                side=order_side.value,
+                quantity=quantity,
+            )
+            return True
+        else:
+            logger.error(
+                f"Failed to close position: {position.symbol} {order_side.value} "
+                f"qty={quantity:.8f}"
+            )
+            return False
 
     def _close_position(self, position: Position, reason: str, limit_price: float | None = None):
         """Close a position and update balance.
@@ -2612,8 +2974,37 @@ class LiveTradingEngine:
             Otherwise, fetch the current market price.
         """
         try:
+            # Guard against invalid entry price
+            if position.entry_price <= 0:
+                logger.error(
+                    f"Invalid entry_price {position.entry_price} for position "
+                    f"{position.symbol} - cannot close position safely"
+                )
+                return
+
+            # Check if server-side stop-loss already triggered (race condition handling)
+            sl_already_filled = False
+            sl_fill_price: float | None = None
+            if self.enable_live_trading and self.exchange_interface and position.stop_loss_order_id:
+                try:
+                    sl_order = self.exchange_interface.get_order(
+                        position.stop_loss_order_id, position.symbol
+                    )
+                    if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
+                        sl_already_filled = True
+                        sl_fill_price = sl_order.average_price
+                        logger.info(
+                            f"Stop-loss order {position.stop_loss_order_id} already filled "
+                            f"at ${sl_fill_price:.2f} - using actual fill price for P&L"
+                        )
+                except Exception as e:
+                    logger.warning(f"Error checking stop-loss order status: {e}")
+
             # Determine base exit price
-            if limit_price is not None:
+            if sl_already_filled and sl_fill_price is not None:
+                # Use actual SL fill price for accurate P&L
+                base_exit_price = sl_fill_price
+            elif limit_price is not None:
                 # Use the limit price (SL/TP level) for parity with backtest
                 base_exit_price = float(limit_price)
             else:
@@ -2664,7 +3055,8 @@ class LiveTradingEngine:
             realized_pnl = cash_pnl(pnl_pct, basis_balance)
 
             # Calculate and apply exit fee and slippage cost
-            exit_position_notional = basis_balance * fraction
+            # Use exit notional (accounting for price change) for accurate fee calculation
+            exit_position_notional = basis_balance * fraction * (exit_price / position.entry_price)
             exit_fee = abs(exit_position_notional * self.fee_rate)
             exit_slippage_cost = abs(exit_position_notional * self.slippage_rate)
             realized_pnl -= exit_fee
@@ -2732,13 +3124,83 @@ class LiveTradingEngine:
                     self.db_manager.close_position(position_id=position_db_id)
                     del self.position_db_ids[position.order_id]
 
-            # Close real order if needed
-            if self.enable_live_trading:
-                self._close_order(position.symbol, position.order_id)
+            # Cancel server-side stop-loss order if it exists and hasn't already filled
+            if (
+                self.enable_live_trading
+                and self.exchange_interface
+                and position.stop_loss_order_id
+                and not sl_already_filled
+            ):
+                try:
+                    cancelled = self.exchange_interface.cancel_order(
+                        position.stop_loss_order_id, position.symbol
+                    )
+                    if cancelled:
+                        logger.info(
+                            f"Cancelled stop-loss order {position.stop_loss_order_id} "
+                            f"for {position.symbol}"
+                        )
+                    else:
+                        # Cancel failed - re-check if SL filled to prevent double execution
+                        logger.warning(
+                            f"Failed to cancel stop-loss order {position.stop_loss_order_id} "
+                            f"for {position.symbol} - checking if already filled"
+                        )
+                        try:
+                            sl_order = self.exchange_interface.get_order(
+                                position.stop_loss_order_id, position.symbol
+                            )
+                            if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
+                                sl_already_filled = True
+                                actual_sl_price = sl_order.average_price
+                                logger.info(
+                                    f"Stop-loss order confirmed filled at ${actual_sl_price:.2f} "
+                                    "- skipping duplicate close order"
+                                )
+                                # Recalculate P&L with actual SL fill price if different
+                                if actual_sl_price and abs(actual_sl_price - exit_price) > 0.01:
+                                    logger.warning(
+                                        f"Recalculating P&L: original exit ${exit_price:.2f} "
+                                        f"-> actual SL fill ${actual_sl_price:.2f}"
+                                    )
+                                    # Revert previous balance change
+                                    self.current_balance = balance_before
+                                    # Recalculate with actual price
+                                    if position.side == PositionSide.LONG:
+                                        new_exit = actual_sl_price * (1 - self.slippage_rate)
+                                        pnl_pct = pnl_percent(
+                                            position.entry_price, new_exit, Side.LONG, fraction
+                                        )
+                                    else:
+                                        new_exit = actual_sl_price * (1 + self.slippage_rate)
+                                        pnl_pct = pnl_percent(
+                                            position.entry_price, new_exit, Side.SHORT, fraction
+                                        )
+                                    realized_pnl = cash_pnl(pnl_pct, basis_balance)
+                                    exit_position_notional = (
+                                        basis_balance * fraction * (new_exit / position.entry_price)
+                                    )
+                                    exit_fee = abs(exit_position_notional * self.fee_rate)
+                                    realized_pnl -= exit_fee
+                                    self.current_balance = balance_before + realized_pnl
+                                    exit_price = new_exit
+                        except Exception as check_err:
+                            logger.warning(f"Could not verify SL status: {check_err}")
+                except Exception as e:
+                    logger.warning(f"Error cancelling stop-loss order: {e}")
+
+                # Stop tracking the SL order regardless of cancel result
+                if self.order_tracker:
+                    self.order_tracker.stop_tracking(position.stop_loss_order_id)
+
+            # Close real order if needed (skip if SL already filled to prevent double execution)
+            if self.enable_live_trading and not sl_already_filled:
+                self._close_order(position)
 
             # Remove from active positions and tracker cache
-            if position.order_id in self.positions:
-                del self.positions[position.order_id]
+            with self._positions_lock:
+                if position.order_id in self.positions:
+                    del self.positions[position.order_id]
             self.mfe_mae_tracker.clear(position.order_id)
 
             logger.info(
@@ -2761,8 +3223,9 @@ class LiveTradingEngine:
             logger.error(f"Failed to close position {position.order_id}: {e}", exc_info=True)
             # Ensure local cleanup so engine/shutdown does not leave dangling positions
             try:
-                if position.order_id in self.positions:
-                    del self.positions[position.order_id]
+                with self._positions_lock:
+                    if position.order_id in self.positions:
+                        del self.positions[position.order_id]
                 self.mfe_mae_tracker.clear(position.order_id)
             except Exception:
                 # Best-effort cleanup; ignore secondary errors
@@ -3444,12 +3907,22 @@ class LiveTradingEngine:
                         pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
                     ),
                     order_id=str(pos_data["id"]),  # Use database ID as order_id
+                    stop_loss_order_id=pos_data.get("stop_loss_order_id"),
                 )
 
                 # Add to active positions
                 if position.order_id:
-                    self.positions[position.order_id] = position
+                    with self._positions_lock:
+                        self.positions[position.order_id] = position
                     self.position_db_ids[position.order_id] = pos_data["id"]
+
+                # Register recovered stop-loss order with OrderTracker for monitoring
+                if position.stop_loss_order_id and self.order_tracker:
+                    self.order_tracker.track_order(position.stop_loss_order_id, position.symbol)
+                    logger.info(
+                        f"📡 Recovered and tracking stop-loss order {position.stop_loss_order_id} "
+                        f"for position {position.symbol}"
+                    )
 
                 # Update risk manager tracking for recovered positions
                 if self.risk_manager:
@@ -3473,6 +3946,126 @@ class LiveTradingEngine:
 
         except Exception as e:
             logger.error(f"❌ Error recovering positions: {e}", exc_info=True)
+
+    def _reconcile_positions_with_exchange(self) -> None:
+        """
+        Reconcile local positions with exchange state on startup.
+
+        This detects positions that were closed while the bot was offline
+        (e.g., by stop-loss orders triggering) and updates local state accordingly.
+        """
+        if not self.exchange_interface or not self.enable_live_trading:
+            return
+
+        if not self.positions:
+            logger.info("📊 No local positions to reconcile")
+            return
+
+        logger.info(f"🔄 Reconciling {len(self.positions)} positions with exchange...")
+
+        try:
+            # Get open orders from exchange
+            exchange_orders = self.exchange_interface.get_open_orders()
+            exchange_order_ids = {order.order_id for order in exchange_orders}
+
+            # Check each local position
+            positions_to_close = []
+            for _order_id, position in self.positions.items():
+                # Check if the position's entry order is still open (shouldn't be for filled orders)
+                # More importantly, check if stop-loss order is still active
+                if position.stop_loss_order_id:
+                    if position.stop_loss_order_id not in exchange_order_ids:
+                        # Stop-loss order is gone - may have triggered
+                        logger.warning(
+                            f"⚠️ Stop-loss order {position.stop_loss_order_id} not found "
+                            f"on exchange for {position.symbol} - position may have closed"
+                        )
+                        # Check if we can verify the order status
+                        try:
+                            sl_order = self.exchange_interface.get_order(
+                                position.stop_loss_order_id, position.symbol
+                            )
+                            if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
+                                logger.info(
+                                    f"✅ Confirmed: Stop-loss triggered for {position.symbol} "
+                                    f"@ ${sl_order.average_price or 'unknown'}"
+                                )
+                                positions_to_close.append((position, sl_order.average_price))
+                        except Exception as e:
+                            logger.warning(f"Could not verify stop-loss order status: {e}")
+
+            # Close positions that were stopped out
+            for position, exit_price in positions_to_close:
+                logger.info(
+                    f"🔄 Marking position {position.symbol} as closed (stop-loss triggered offline)"
+                )
+                # Update balance based on stop-loss exit
+                if exit_price:
+                    fraction = (
+                        position.current_size
+                        if position.current_size is not None
+                        else position.size
+                    )
+                    # Guard against division by zero
+                    if position.entry_price <= 0:
+                        logger.error(
+                            f"Invalid entry_price {position.entry_price} for position "
+                            f"{position.symbol} - skipping reconciliation"
+                        )
+                        continue
+                    if position.side == PositionSide.LONG:
+                        pnl_pct = (exit_price - position.entry_price) / position.entry_price
+                    else:
+                        pnl_pct = (position.entry_price - exit_price) / position.entry_price
+
+                    # Use entry_balance for PnL calculation to maintain backtest-live parity
+                    basis_balance = (
+                        float(position.entry_balance)
+                        if position.entry_balance is not None and position.entry_balance > 0
+                        else self.current_balance
+                    )
+                    # Calculate exit fee and slippage (matching normal exit flow)
+                    exit_position_notional = (
+                        basis_balance * fraction * (exit_price / position.entry_price)
+                    )
+                    exit_fee = abs(exit_position_notional * self.fee_rate)
+                    exit_slippage_cost = abs(exit_position_notional * self.slippage_rate)
+                    realized_pnl = pnl_pct * fraction * basis_balance
+                    realized_pnl -= exit_fee
+                    self.total_fees_paid += exit_fee
+                    self.total_slippage_cost += exit_slippage_cost
+                    self.current_balance += realized_pnl
+                    logger.info(
+                        f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
+                        f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
+                    )
+
+                # Stop tracking the SL order to prevent memory leak
+                if position.stop_loss_order_id and self.order_tracker:
+                    self.order_tracker.stop_tracking(position.stop_loss_order_id)
+
+                # Remove from local positions
+                with self._positions_lock:
+                    if position.order_id in self.positions:
+                        del self.positions[position.order_id]
+
+                # Close in database
+                if position.order_id in self.position_db_ids:
+                    position_db_id = self.position_db_ids[position.order_id]
+                    if position_db_id:
+                        self.db_manager.close_position(position_id=position_db_id)
+                    del self.position_db_ids[position.order_id]
+
+            if positions_to_close:
+                logger.info(
+                    f"🔄 Reconciliation complete: {len(positions_to_close)} positions "
+                    "closed (stopped out while offline)"
+                )
+            else:
+                logger.info("✅ All positions verified - no offline closures detected")
+
+        except Exception as e:
+            logger.error(f"❌ Error reconciling positions with exchange: {e}", exc_info=True)
 
     def _handle_strategy_change(self, swap_data: dict[str, Any]):
         """Handle strategy change callback"""

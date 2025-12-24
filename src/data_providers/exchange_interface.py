@@ -195,6 +195,35 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
+    def place_stop_loss_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity: float,
+        stop_price: float,
+        limit_price: float | None = None,
+    ) -> str | None:
+        """
+        Place a server-side stop-loss order.
+
+        This creates a stop-loss order on the exchange that triggers when
+        price reaches stop_price. Using server-side stop-losses ensures
+        positions are protected even if the bot goes offline.
+
+        Args:
+            symbol: Trading symbol (e.g., BTCUSDT)
+            side: Order side (SELL for long positions, BUY for short positions)
+            quantity: Amount to sell/buy when stop triggers
+            stop_price: Price that triggers the stop order
+            limit_price: Optional limit price for STOP_LOSS_LIMIT orders.
+                         If None, uses stop_price * 0.99 for sells, * 1.01 for buys.
+
+        Returns:
+            Order ID from exchange, or None on failure
+        """
+        pass
+
+    @abstractmethod
     def get_symbol_info(self, symbol: str) -> dict[str, Any] | None:
         """Get trading symbol information (min qty, price precision, etc.)"""
         pass

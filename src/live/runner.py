@@ -94,6 +94,11 @@ def parse_args():
         default="binance",
         help="Data provider to use",
     )
+    parser.add_argument(
+        "--testnet",
+        action="store_true",
+        help="Use exchange testnet (uses BINANCE_TESTNET_API_KEY/SECRET)",
+    )
     parser.add_argument("--mock-data", action="store_true", help="Use mock data for testing")
     parser.add_argument("--no-cache", action="store_true", help="Disable data caching")
 
@@ -238,6 +243,7 @@ def main():
             alert_webhook_url=args.webhook_url,
             account_snapshot_interval=args.snapshot_interval,
             provider=args.provider,
+            testnet=args.testnet,
         )
 
         # Final safety check for live trading

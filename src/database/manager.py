@@ -742,6 +742,7 @@ class DatabaseManager:
         mae_price: float | None = None,
         mfe_time: datetime | None = None,
         mae_time: datetime | None = None,
+        stop_loss_order_id: str | None = None,
     ) -> int:
         """
         Log a new position to the database.
@@ -777,6 +778,8 @@ class DatabaseManager:
                 mae_price=mae_price,
                 mfe_time=mfe_time,
                 mae_time=mae_time,
+                entry_order_id=entry_order_id,
+                stop_loss_order_id=stop_loss_order_id,
             )
             # Trailing fields (optional)
             if trailing_stop_activated is not None:
@@ -860,6 +863,7 @@ class DatabaseManager:
         mae_price: float | None = None,
         mfe_time: datetime | None = None,
         mae_time: datetime | None = None,
+        stop_loss_order_id: str | None = None,
     ):
         """Update an existing position with current market data."""
         with self.get_session() as session:
@@ -920,6 +924,10 @@ class DatabaseManager:
                 position.trailing_stop_price = Decimal(str(trailing_stop_price))
             if breakeven_triggered is not None:
                 position.breakeven_triggered = bool(breakeven_triggered)
+
+            # Update stop-loss order ID for live trading
+            if stop_loss_order_id is not None:
+                position.stop_loss_order_id = stop_loss_order_id
 
             # Update MFE/MAE if provided (stored as decimals without percentage scaling)
             if mfe is not None:
@@ -1339,6 +1347,9 @@ class DatabaseManager:
                         "scale_ins_taken": p.scale_ins_taken,
                         "last_partial_exit_price": p.last_partial_exit_price,
                         "last_scale_in_price": p.last_scale_in_price,
+                        # * Include exchange order IDs for live trading recovery
+                        "entry_order_id": getattr(p, "entry_order_id", None),
+                        "stop_loss_order_id": getattr(p, "stop_loss_order_id", None),
                     }
                 )
 

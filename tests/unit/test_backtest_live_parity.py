@@ -91,9 +91,10 @@ class TestFeeSlippageParity:
         # Close position
         engine._close_position(position, reason="test")
 
-        # Exit fee is based on basis balance * position size (consistent with backtest)
-        # Exit fee: 10000 * 0.1 * 0.001 = 1.0
-        assert engine.total_fees_paid == pytest.approx(1.0)
+        # Exit fee is based on exit notional (basis_balance * position_size * exit_price/entry_price)
+        # Exit notional = 10000 * 0.1 * (110.0/100.0) = 1100
+        # Exit fee: 1100 * 0.001 = 1.1
+        assert engine.total_fees_paid == pytest.approx(1.1)
 
     def test_slippage_applied_adversely_on_entry(self):
         """Slippage should work against the position on entry."""
