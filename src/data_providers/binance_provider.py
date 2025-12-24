@@ -60,6 +60,10 @@ T = TypeVar("T")
 # Rate limit error codes from Binance
 RATE_LIMIT_ERROR_CODES = {-1003, -1015}  # -1003: Too many requests, -1015: Too many orders
 
+# Stop-loss limit price slippage to ensure fills
+# For sells: limit below stop price, for buys: limit above stop price
+STOP_LOSS_LIMIT_SLIPPAGE_FACTOR = 0.005  # 0.5% slippage
+
 
 def with_rate_limit_retry(
     max_retries: int = 3, base_delay: float = 1.0
@@ -806,9 +810,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # For buys: limit slightly above stop to ensure fill
             if limit_price is None:
                 if side == OrderSide.SELL:
-                    limit_price = stop_price * 0.995  # 0.5% below stop
+                    limit_price = stop_price * (1 - STOP_LOSS_LIMIT_SLIPPAGE_FACTOR)
                 else:
-                    limit_price = stop_price * 1.005  # 0.5% above stop
+                    limit_price = stop_price * (1 + STOP_LOSS_LIMIT_SLIPPAGE_FACTOR)
 
             # Round prices to valid tick size
             symbol_info = self.get_symbol_info(symbol)

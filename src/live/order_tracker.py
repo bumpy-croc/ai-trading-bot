@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from src.data_providers.exchange_interface import ExchangeInterface, OrderStatus
+from src.data_providers.exchange_interface import ExchangeInterface, Order, OrderStatus
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ class OrderTracker:
                 logger.warning(f"Failed to check order {order_id}: {e}")
 
     def _process_order_status(
-        self, order_id: str, tracked: TrackedOrder, order: object
+        self, order_id: str, tracked: TrackedOrder, order: Order
     ) -> None:
         """
         Process order status and trigger appropriate callbacks.
