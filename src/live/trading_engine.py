@@ -2692,11 +2692,12 @@ class LiveTradingEngine:
             symbol=symbol,
         )
         # Check if this was an entry order for a position we thought we had
-        if order_id in self.positions:
+        # Use atomic pop() for thread safety (called from OrderTracker background thread)
+        removed_position = self.positions.pop(order_id, None)
+        if removed_position is not None:
             logger.error(
                 f"Entry order {order_id} was cancelled - removing phantom position"
             )
-            del self.positions[order_id]
 
     def _close_order(self, position: Position) -> bool:
         """
@@ -3757,7 +3758,13 @@ class LiveTradingEngine:
                     else:
                         pnl_pct = (position.entry_price - exit_price) / position.entry_price
 
-                    realized_pnl = pnl_pct * fraction * self.current_balance
+                    # Use entry_balance for PnL calculation to maintain backtest-live parity
+                    basis_balance = (
+                        float(position.entry_balance)
+                        if position.entry_balance is not None and position.entry_balance > 0
+                        else self.current_balance
+                    )
+                    realized_pnl = pnl_pct * fraction * basis_balance
                     self.current_balance += realized_pnl
                     logger.info(
                         f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
