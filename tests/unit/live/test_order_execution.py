@@ -327,6 +327,48 @@ class TestCloseOrder:
 
         assert result is False
 
+    def test_close_order_fallback_when_entry_balance_none(
+        self, engine_with_exchange, mock_exchange, sample_position
+    ):
+        """Close order falls back to current_balance when entry_balance is None."""
+        sample_position.entry_balance = None
+        sample_position.size = 0.1  # 10% of balance
+        engine_with_exchange.current_balance = 15000.0
+
+        engine_with_exchange._close_order(sample_position)
+
+        call_kwargs = mock_exchange.place_order.call_args.kwargs
+        # quantity = (0.1 * 15000) / 50000 = 0.03
+        assert abs(call_kwargs["quantity"] - 0.03) < 0.0001
+
+    def test_close_order_fallback_when_entry_balance_zero(
+        self, engine_with_exchange, mock_exchange, sample_position
+    ):
+        """Close order falls back to current_balance when entry_balance is zero."""
+        sample_position.entry_balance = Decimal("0.0")
+        sample_position.size = 0.1  # 10% of balance
+        engine_with_exchange.current_balance = 12000.0
+
+        engine_with_exchange._close_order(sample_position)
+
+        call_kwargs = mock_exchange.place_order.call_args.kwargs
+        # quantity = (0.1 * 12000) / 50000 = 0.024
+        assert abs(call_kwargs["quantity"] - 0.024) < 0.0001
+
+    def test_close_order_fallback_when_entry_balance_negative(
+        self, engine_with_exchange, mock_exchange, sample_position
+    ):
+        """Close order falls back to current_balance when entry_balance is negative."""
+        sample_position.entry_balance = Decimal("-100.0")
+        sample_position.size = 0.1  # 10% of balance
+        engine_with_exchange.current_balance = 18000.0
+
+        engine_with_exchange._close_order(sample_position)
+
+        call_kwargs = mock_exchange.place_order.call_args.kwargs
+        # quantity = (0.1 * 18000) / 50000 = 0.036
+        assert abs(call_kwargs["quantity"] - 0.036) < 0.0001
+
 
 # ============================================================================
 # Tests for _handle_order_fill
@@ -652,6 +694,78 @@ class TestReconcilePositionsWithExchange:
 
         # Position should remain (couldn't verify)
         assert "entry_order_123" in engine_with_exchange.positions
+
+    def test_reconcile_fallback_when_entry_balance_none(
+        self, engine_with_exchange, mock_exchange, sample_position
+    ):
+        """Reconciliation falls back to current_balance when entry_balance is None."""
+        sample_position.entry_balance = None
+        sample_position.size = 0.1
+        sample_position.entry_price = 50000.0
+        sample_position.side = PositionSide.LONG
+        engine_with_exchange.positions["entry_order_123"] = sample_position
+        engine_with_exchange.current_balance = 8000.0  # Current balance used as fallback
+
+        mock_exchange.get_open_orders.return_value = []
+
+        mock_sl_order = Mock()
+        mock_sl_order.status = ExchangeOrderStatus.FILLED
+        mock_sl_order.average_price = 48000.0  # 4% loss
+        mock_exchange.get_order.return_value = mock_sl_order
+
+        engine_with_exchange._reconcile_positions_with_exchange()
+
+        # PnL = ((48000 - 50000) / 50000) * 0.1 * 8000 = -32
+        expected_balance = 8000.0 - 32.0
+        assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
+
+    def test_reconcile_fallback_when_entry_balance_zero(
+        self, engine_with_exchange, mock_exchange, sample_position
+    ):
+        """Reconciliation falls back to current_balance when entry_balance is zero."""
+        sample_position.entry_balance = Decimal("0.0")
+        sample_position.size = 0.1
+        sample_position.entry_price = 50000.0
+        sample_position.side = PositionSide.LONG
+        engine_with_exchange.positions["entry_order_123"] = sample_position
+        engine_with_exchange.current_balance = 6000.0
+
+        mock_exchange.get_open_orders.return_value = []
+
+        mock_sl_order = Mock()
+        mock_sl_order.status = ExchangeOrderStatus.FILLED
+        mock_sl_order.average_price = 48000.0  # 4% loss
+        mock_exchange.get_order.return_value = mock_sl_order
+
+        engine_with_exchange._reconcile_positions_with_exchange()
+
+        # PnL = ((48000 - 50000) / 50000) * 0.1 * 6000 = -24
+        expected_balance = 6000.0 - 24.0
+        assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
+
+    def test_reconcile_fallback_when_entry_balance_negative(
+        self, engine_with_exchange, mock_exchange, sample_position
+    ):
+        """Reconciliation falls back to current_balance when entry_balance is negative."""
+        sample_position.entry_balance = Decimal("-500.0")
+        sample_position.size = 0.1
+        sample_position.entry_price = 50000.0
+        sample_position.side = PositionSide.SHORT
+        engine_with_exchange.positions["entry_order_123"] = sample_position
+        engine_with_exchange.current_balance = 9000.0
+
+        mock_exchange.get_open_orders.return_value = []
+
+        mock_sl_order = Mock()
+        mock_sl_order.status = ExchangeOrderStatus.FILLED
+        mock_sl_order.average_price = 52000.0  # 4% loss for short
+        mock_exchange.get_order.return_value = mock_sl_order
+
+        engine_with_exchange._reconcile_positions_with_exchange()
+
+        # PnL = ((50000 - 52000) / 50000) * 0.1 * 9000 = -36
+        expected_balance = 9000.0 - 36.0
+        assert abs(engine_with_exchange.current_balance - expected_balance) < 0.01
 
 
 # ============================================================================
