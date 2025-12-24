@@ -1,7 +1,10 @@
 # Technical Debt and Code Quality Improvements
 
-**Generated**: 2025-11-21
-**Status**: Active Refactoring in Progress
+**Generated**: 2025-11-21 (snapshot)
+**Status**: Historical snapshot (not automatically updated)
+
+> **Maintenance note (2025-12-22)**: This document captures a point-in-time analysis and may drift from the current codebase.
+> Treat counts, file lists, and “completed” labels as historical context unless re-validated.
 
 This document tracks code quality issues, technical debt, and improvement opportunities identified during comprehensive codebase analysis.
 
@@ -287,11 +290,13 @@ def calculate_position_size(balance: float, risk: float) -> float:
 
 ### Comment Quality
 
-**Found**: 3 TODO/FIXME comments (good!)
-- `position_management/dynamic_risk.py:388`: Implement correlation risk management
-- `live/trading_engine.py:2842`: Calculate daily P&L
+To locate current TODO/FIXME comments in the repository, run:
 
-**Action**: Track these in GitHub issues, add issue numbers to TODOs
+```bash
+rg -n "\\b(TODO|FIXME)\\b" src/ cli/
+```
+
+Track follow-ups as GitHub issues, and prefer including issue IDs in TODOs so audits can map comments back to prioritised work.
 
 ---
 

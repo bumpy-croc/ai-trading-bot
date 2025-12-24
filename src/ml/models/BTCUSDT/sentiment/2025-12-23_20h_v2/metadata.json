@@ -1,0 +1,49 @@
+{
+  "symbol": "BTCUSDT",
+  "model_type": "sentiment",
+  "training_date": "2025-12-23T20:58:13.944439",
+  "feature_names": [
+    "open_scaled",
+    "high_scaled",
+    "low_scaled",
+    "close_scaled",
+    "volume_scaled",
+    "sma_7_scaled",
+    "sma_14_scaled",
+    "sma_30_scaled",
+    "rsi_scaled",
+    "sentiment_momentum_scaled"
+  ],
+  "sequence_length": 30,
+  "has_sentiment": true,
+  "sentiment_assessment": {
+    "total_sentiment_points": 30,
+    "total_price_points": 741,
+    "coverage_ratio": 0.9405405405405406,
+    "data_freshness_days": 0,
+    "missing_periods": [],
+    "quality_score": 1.0,
+    "recommendation": "full_sentiment"
+  },
+  "robustness_results": {},
+  "training_params": {
+    "epochs": 2,
+    "batch_size": 32,
+    "timeframe": "1h",
+    "start_date": "2025-11-23T20:58:04.726203",
+    "end_date": "2025-12-23T20:58:04.726203"
+  },
+  "evaluation_results": {
+    "train_loss": 8120117248.0,
+    "test_loss": 7720321536.0,
+    "train_rmse": 90111.6953125,
+    "test_rmse": 87865.359375,
+    "mape": 99.97791290283203
+  },
+  "diagnostics": {
+    "plots": false,
+    "robustness": false,
+    "onnx": true
+  },
+  "version_id": "2025-12-23_20h_v2"
+}
