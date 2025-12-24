@@ -449,6 +449,9 @@ class LiveTradingEngine:
         # Trading state
         self.is_running = False
         self.positions: dict[str, Position] = {}
+        self._positions_lock = (
+            threading.Lock()
+        )  # Protects concurrent access from OrderTracker callbacks
         self.position_db_ids: dict[str, int] = {}  # Map order_id to database position ID
         self.completed_trades: list[Trade] = []
         self.last_data_update = None
@@ -1329,8 +1332,9 @@ class LiveTradingEngine:
                         f"Failed to close position {position.order_id}: {e}", exc_info=True
                     )
                     # Force remove from positions dict if close fails
-                    if position.order_id in self.positions:
-                        del self.positions[position.order_id]
+                    with self._positions_lock:
+                        if position.order_id in self.positions:
+                            del self.positions[position.order_id]
 
         # Wait for main thread to finish (avoid joining current thread)
         if (
@@ -2442,7 +2446,8 @@ class LiveTradingEngine:
                 current_size=size,
             )
 
-            self.positions[order_id] = position
+            with self._positions_lock:
+                self.positions[order_id] = position
 
             # Initialize MFE/MAE cache for this position
             self.mfe_mae_tracker.clear(order_id)  # ensure fresh state
@@ -2534,6 +2539,14 @@ class LiveTradingEngine:
                     # Track SL order for fill notifications
                     if self.order_tracker:
                         self.order_tracker.track_order(sl_order_id, symbol)
+                    # Persist to database for recovery on restart
+                    if order_id in self.position_db_ids:
+                        position_db_id = self.position_db_ids[order_id]
+                        if position_db_id:
+                            self.db_manager.update_position(
+                                position_id=position_db_id,
+                                stop_loss_order_id=sl_order_id,
+                            )
                 else:
                     # Critical: SL placement failed after all retries - close position immediately
                     logger.critical(
@@ -2545,8 +2558,9 @@ class LiveTradingEngine:
                     )
                     # Close the position immediately
                     self._close_order(position)
-                    if position.order_id in self.positions:
-                        del self.positions[position.order_id]
+                    with self._positions_lock:
+                        if position.order_id in self.positions:
+                            del self.positions[position.order_id]
                     return
 
             # Update risk manager with the newly opened position so daily risk is tracked
@@ -2613,9 +2627,7 @@ class LiveTradingEngine:
             # Validate minimum quantity
             min_qty = symbol_info.get("min_qty", 0)
             if quantity < min_qty:
-                logger.error(
-                    f"Calculated quantity {quantity} below minimum {min_qty} for {symbol}"
-                )
+                logger.error(f"Calculated quantity {quantity} below minimum {min_qty} for {symbol}")
                 return None
 
             # Validate minimum notional value
@@ -2651,9 +2663,7 @@ class LiveTradingEngine:
             if self.order_tracker:
                 self.order_tracker.track_order(order_id, symbol)
         else:
-            logger.error(
-                f"Failed to place real order: {symbol} {side.value} qty={quantity:.8f}"
-            )
+            logger.error(f"Failed to place real order: {symbol} {side.value} qty={quantity:.8f}")
 
         return order_id
 
@@ -2684,16 +2694,20 @@ class LiveTradingEngine:
         )
 
         # Check if this is a stop-loss order fill - need to close the position
-        # Use list() to avoid modification during iteration (thread safety)
-        for pos_order_id, position in list(self.positions.items()):
-            if position.stop_loss_order_id == order_id:
-                logger.warning(
-                    f"Stop-loss order {order_id} filled for position {pos_order_id} "
-                    f"at ${avg_price:.2f} - closing position"
-                )
-                # Close position using the actual SL fill price
-                self._close_position(position, reason="stop_loss", limit_price=avg_price)
-                return
+        # Find matching position under lock, then close outside lock to avoid deadlock
+        position_to_close: Position | None = None
+        with self._positions_lock:
+            for pos_order_id, position in list(self.positions.items()):
+                if position.stop_loss_order_id == order_id:
+                    position_to_close = position
+                    logger.warning(
+                        f"Stop-loss order {order_id} filled for position {pos_order_id} "
+                        f"at ${avg_price:.2f} - closing position"
+                    )
+                    break
+        if position_to_close:
+            # Close position using the actual SL fill price (outside lock)
+            self._close_position(position_to_close, reason="stop_loss", limit_price=avg_price)
 
     def _handle_partial_fill(
         self, order_id: str, symbol: str, new_filled_qty: float, avg_price: float
@@ -2711,9 +2725,7 @@ class LiveTradingEngine:
             new_filled_qty: Additional quantity filled since last check
             avg_price: Average fill price
         """
-        logger.info(
-            f"Partial fill: {order_id} {symbol} +{new_filled_qty} @ ${avg_price:.2f}"
-        )
+        logger.info(f"Partial fill: {order_id} {symbol} +{new_filled_qty} @ ${avg_price:.2f}")
         log_order_event(
             "partial_fill",
             order_id=order_id,
@@ -2724,22 +2736,23 @@ class LiveTradingEngine:
 
         # Check if this is a stop-loss order partial fill - log critical warning
         # Partial SL fills leave the position partially exposed without protection
-        for pos_order_id, position in list(self.positions.items()):
-            if position.stop_loss_order_id == order_id:
-                logger.critical(
-                    f"PARTIAL STOP-LOSS FILL: Position {pos_order_id} SL order {order_id} "
-                    f"partially filled ({new_filled_qty} @ ${avg_price:.2f}). "
-                    "Remaining position may be unprotected - manual intervention recommended."
-                )
-                log_order_event(
-                    "partial_sl_fill_warning",
-                    order_id=order_id,
-                    position_order_id=pos_order_id,
-                    symbol=symbol,
-                    filled_quantity=new_filled_qty,
-                    average_price=avg_price,
-                )
-                return
+        with self._positions_lock:
+            for pos_order_id, position in list(self.positions.items()):
+                if position.stop_loss_order_id == order_id:
+                    logger.critical(
+                        f"PARTIAL STOP-LOSS FILL: Position {pos_order_id} SL order {order_id} "
+                        f"partially filled ({new_filled_qty} @ ${avg_price:.2f}). "
+                        "Remaining position may be unprotected - manual intervention recommended."
+                    )
+                    log_order_event(
+                        "partial_sl_fill_warning",
+                        order_id=order_id,
+                        position_order_id=pos_order_id,
+                        symbol=symbol,
+                        filled_quantity=new_filled_qty,
+                        average_price=avg_price,
+                    )
+                    return
 
     def _handle_order_cancel(self, order_id: str, symbol: str) -> None:
         """
@@ -2759,9 +2772,7 @@ class LiveTradingEngine:
         # Use atomic pop() for thread safety (called from OrderTracker background thread)
         removed_position = self.positions.pop(order_id, None)
         if removed_position is not None:
-            logger.error(
-                f"Entry order {order_id} was cancelled - removing phantom position"
-            )
+            logger.error(f"Entry order {order_id} was cancelled - removing phantom position")
 
     def _close_order(self, position: Position) -> bool:
         """
@@ -2780,9 +2791,7 @@ class LiveTradingEngine:
         # Get current price for quantity calculation
         current_price = self.data_provider.get_current_price(position.symbol)
         if not current_price or current_price <= 0:
-            logger.error(
-                f"Cannot get current price for {position.symbol} - cannot close position"
-            )
+            logger.error(f"Cannot get current price for {position.symbol} - cannot close position")
             return False
 
         # Close = opposite side of position
@@ -2853,14 +2862,18 @@ class LiveTradingEngine:
             Otherwise, fetch the current market price.
         """
         try:
+            # Guard against invalid entry price
+            if position.entry_price <= 0:
+                logger.error(
+                    f"Invalid entry_price {position.entry_price} for position "
+                    f"{position.symbol} - cannot close position safely"
+                )
+                return
+
             # Check if server-side stop-loss already triggered (race condition handling)
             sl_already_filled = False
             sl_fill_price: float | None = None
-            if (
-                self.enable_live_trading
-                and self.exchange_interface
-                and position.stop_loss_order_id
-            ):
+            if self.enable_live_trading and self.exchange_interface and position.stop_loss_order_id:
                 try:
                     sl_order = self.exchange_interface.get_order(
                         position.stop_loss_order_id, position.symbol
@@ -3043,12 +3056,18 @@ class LiveTradingEngine:
                                     # Recalculate with actual price
                                     if position.side == PositionSide.LONG:
                                         new_exit = actual_sl_price * (1 - self.slippage_rate)
-                                        pnl_pct = pnl_percent(position.entry_price, new_exit, Side.LONG, fraction)
+                                        pnl_pct = pnl_percent(
+                                            position.entry_price, new_exit, Side.LONG, fraction
+                                        )
                                     else:
                                         new_exit = actual_sl_price * (1 + self.slippage_rate)
-                                        pnl_pct = pnl_percent(position.entry_price, new_exit, Side.SHORT, fraction)
+                                        pnl_pct = pnl_percent(
+                                            position.entry_price, new_exit, Side.SHORT, fraction
+                                        )
                                     realized_pnl = cash_pnl(pnl_pct, basis_balance)
-                                    exit_position_notional = basis_balance * fraction * (new_exit / position.entry_price)
+                                    exit_position_notional = (
+                                        basis_balance * fraction * (new_exit / position.entry_price)
+                                    )
                                     exit_fee = abs(exit_position_notional * self.fee_rate)
                                     realized_pnl -= exit_fee
                                     self.current_balance = balance_before + realized_pnl
@@ -3067,8 +3086,9 @@ class LiveTradingEngine:
                 self._close_order(position)
 
             # Remove from active positions and tracker cache
-            if position.order_id in self.positions:
-                del self.positions[position.order_id]
+            with self._positions_lock:
+                if position.order_id in self.positions:
+                    del self.positions[position.order_id]
             self.mfe_mae_tracker.clear(position.order_id)
 
             logger.info(
@@ -3091,8 +3111,9 @@ class LiveTradingEngine:
             logger.error(f"Failed to close position {position.order_id}: {e}", exc_info=True)
             # Ensure local cleanup so engine/shutdown does not leave dangling positions
             try:
-                if position.order_id in self.positions:
-                    del self.positions[position.order_id]
+                with self._positions_lock:
+                    if position.order_id in self.positions:
+                        del self.positions[position.order_id]
                 self.mfe_mae_tracker.clear(position.order_id)
             except Exception:
                 # Best-effort cleanup; ignore secondary errors
@@ -3774,12 +3795,22 @@ class LiveTradingEngine:
                         pos_data.get("unrealized_pnl_percent", 0.0) or 0.0
                     ),
                     order_id=str(pos_data["id"]),  # Use database ID as order_id
+                    stop_loss_order_id=pos_data.get("stop_loss_order_id"),
                 )
 
                 # Add to active positions
                 if position.order_id:
-                    self.positions[position.order_id] = position
+                    with self._positions_lock:
+                        self.positions[position.order_id] = position
                     self.position_db_ids[position.order_id] = pos_data["id"]
+
+                # Register recovered stop-loss order with OrderTracker for monitoring
+                if position.stop_loss_order_id and self.order_tracker:
+                    self.order_tracker.track_order(position.stop_loss_order_id, position.symbol)
+                    logger.info(
+                        f"📡 Recovered and tracking stop-loss order {position.stop_loss_order_id} "
+                        f"for position {position.symbol}"
+                    )
 
                 # Update risk manager tracking for recovered positions
                 if self.risk_manager:
@@ -3863,6 +3894,13 @@ class LiveTradingEngine:
                         if position.current_size is not None
                         else position.size
                     )
+                    # Guard against division by zero
+                    if position.entry_price <= 0:
+                        logger.error(
+                            f"Invalid entry_price {position.entry_price} for position "
+                            f"{position.symbol} - skipping reconciliation"
+                        )
+                        continue
                     if position.side == PositionSide.LONG:
                         pnl_pct = (exit_price - position.entry_price) / position.entry_price
                     else:
@@ -3874,11 +3912,20 @@ class LiveTradingEngine:
                         if position.entry_balance is not None and position.entry_balance > 0
                         else self.current_balance
                     )
+                    # Calculate exit fee and slippage (matching normal exit flow)
+                    exit_position_notional = (
+                        basis_balance * fraction * (exit_price / position.entry_price)
+                    )
+                    exit_fee = abs(exit_position_notional * self.fee_rate)
+                    exit_slippage_cost = abs(exit_position_notional * self.slippage_rate)
                     realized_pnl = pnl_pct * fraction * basis_balance
+                    realized_pnl -= exit_fee
+                    self.total_fees_paid += exit_fee
+                    self.total_slippage_cost += exit_slippage_cost
                     self.current_balance += realized_pnl
                     logger.info(
                         f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
-                        f"-> ${self.current_balance:,.2f}"
+                        f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
                     )
 
                 # Stop tracking the SL order to prevent memory leak
@@ -3886,8 +3933,9 @@ class LiveTradingEngine:
                     self.order_tracker.stop_tracking(position.stop_loss_order_id)
 
                 # Remove from local positions
-                if position.order_id in self.positions:
-                    del self.positions[position.order_id]
+                with self._positions_lock:
+                    if position.order_id in self.positions:
+                        del self.positions[position.order_id]
 
                 # Close in database
                 if position.order_id in self.position_db_ids:

@@ -226,17 +226,17 @@ class ExitHandler:
                 state.current_size = max(0.0, state.current_size - exec_frac)
                 state.partial_exits_taken += 1
 
-                partial_exits.append({
-                    "size": exec_frac,
-                    "price": current_price,
-                    "pnl": pnl,
-                })
+                partial_exits.append(
+                    {
+                        "size": exec_frac,
+                        "price": current_price,
+                        "pnl": pnl,
+                    }
+                )
 
                 # Update risk manager
                 try:
-                    self.risk_manager.adjust_position_after_partial_exit(
-                        trade.symbol, exec_frac
-                    )
+                    self.risk_manager.adjust_position_after_partial_exit(trade.symbol, exec_frac)
                 except Exception:
                     pass
 
@@ -250,18 +250,19 @@ class ExitHandler:
                     delta_add = add_of_original * state.original_size
                     remaining_daily = max(
                         0.0,
-                        self.risk_manager.params.max_daily_risk
-                        - self.risk_manager.daily_risk_used,
+                        self.risk_manager.params.max_daily_risk - self.risk_manager.daily_risk_used,
                     )
                     add_effective = min(delta_add, remaining_daily)
 
                     if add_effective > 0:
                         self.position_tracker.apply_scale_in(add_effective)
 
-                        scale_ins.append({
-                            "size": add_effective,
-                            "price": current_price,
-                        })
+                        scale_ins.append(
+                            {
+                                "size": add_effective,
+                                "price": current_price,
+                            }
+                        )
 
                         try:
                             self.risk_manager.adjust_position_after_scale_in(
@@ -484,6 +485,10 @@ class ExitHandler:
         trade = self.position_tracker.current_trade
         if trade is None:
             raise ValueError("No active position to exit")
+        if trade.entry_price <= 0:
+            raise ValueError(
+                f"Invalid entry_price {trade.entry_price} - cannot calculate exit fees"
+            )
 
         # Get position notional for fee calculation
         # Use exit notional (accounting for price change) for accurate fee calculation

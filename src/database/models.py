@@ -230,6 +230,10 @@ class Position(Base):
     # Exchange information
     exchange = Column(String(50), default="binance")
 
+    # Order tracking for live trading
+    entry_order_id = Column(String(100))  # Exchange order ID for entry
+    stop_loss_order_id = Column(String(100))  # Exchange order ID for server-side stop-loss
+
     # Relationships
     trades = relationship("Trade", backref="position")
     partial_trades = relationship("PartialTrade", backref="position")
