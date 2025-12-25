@@ -224,8 +224,12 @@ class LiveExitHandler:
         else:
             base_exit_price = current_price
 
-        # Use exit notional (accounting for price change) for accurate fee calculation.
-        # Entry notional would undercharge fees on winning trades and overcharge on losing trades.
+        # IMPORTANT: Use exit notional (accounting for price change) for accurate fee calculation.
+        # This correctly models real exchange behavior where fees are charged on the actual
+        # value at trade time:
+        # - Winning positions: selling more valuable assets → higher fee
+        # - Losing positions: selling less valuable assets → lower fee
+        # This differs from entry fees which use the original notional value.
         fraction = float(
             position.current_size
             if position.current_size is not None
@@ -237,7 +241,7 @@ class LiveExitHandler:
             else current_balance
         )
         entry_notional = basis_balance * fraction
-        # Adjust for price change to get true exit notional value
+        # Adjust for price change to get true exit notional value (this is intentional and correct)
         price_adjustment = (
             base_exit_price / position.entry_price
             if position.entry_price > 0

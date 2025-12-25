@@ -488,7 +488,12 @@ class ExitHandler:
             )
 
         # Get position notional for fee calculation
-        # Use exit notional (accounting for price change) for accurate fee calculation
+        # IMPORTANT: Use exit notional (accounting for price change) for accurate fee calculation.
+        # This correctly models real exchange behavior where fees are charged on the actual
+        # value at trade time:
+        # - Winning positions: selling more valuable assets → higher fee
+        # - Losing positions: selling less valuable assets → lower fee
+        # This differs from entry fees which use the original notional value.
         entry_balance = getattr(trade, "entry_balance", None)
         basis_balance = (
             float(entry_balance)
@@ -497,7 +502,7 @@ class ExitHandler:
         )
         fraction = float(getattr(trade, "current_size", trade.size))
         entry_notional = basis_balance * fraction
-        # Scale by price change to get exit notional
+        # Scale by price change to get exit notional (this is intentional and correct)
         position_notional = entry_notional * (exit_price / trade.entry_price)
 
         # Calculate exit costs
