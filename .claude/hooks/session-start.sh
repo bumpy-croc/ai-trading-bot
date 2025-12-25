@@ -39,3 +39,36 @@ sudo apt-get install -y --no-install-recommends gh
 rm -f /tmp/githubcli-archive-keyring.gpg
 
 echo "GitHub CLI (gh) installed successfully (version: $(gh --version | head -n1))"
+
+# Set up Python virtual environment
+VENV_PATH=".venv"
+REQUIREMENTS_FILE="requirements-server.txt"
+
+echo "Setting up Python virtual environment..."
+
+# Create venv if it doesn't exist
+if [ ! -d "$VENV_PATH" ]; then
+  echo "Creating virtual environment at $VENV_PATH..."
+  python3 -m venv "$VENV_PATH"
+else
+  echo "Virtual environment already exists at $VENV_PATH"
+fi
+
+# Activate venv
+source "$VENV_PATH/bin/activate"
+
+# Upgrade pip to avoid timeout issues
+echo "Upgrading pip..."
+pip install --quiet --upgrade pip
+
+# Install dependencies from requirements-server.txt
+if [ -f "$REQUIREMENTS_FILE" ]; then
+  echo "Installing dependencies from $REQUIREMENTS_FILE..."
+  # Use longer timeout for large packages (e.g., TensorFlow ~500MB)
+  pip install --timeout 1000 -r "$REQUIREMENTS_FILE"
+  echo "Dependencies installed successfully"
+else
+  echo "Warning: $REQUIREMENTS_FILE not found, skipping dependency installation"
+fi
+
+echo "Virtual environment setup complete"
