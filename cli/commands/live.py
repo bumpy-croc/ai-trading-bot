@@ -48,7 +48,7 @@ MODEL_REGISTRY = get_project_root() / "src" / "ml" / "models"
 
 def _handle(ns: argparse.Namespace) -> int:
     tail = ns.args or []
-    return forward_to_module_main("src.live.runner", tail)
+    return forward_to_module_main("src.engines.live.runner", tail)
 
 
 def _date_range(days: int) -> tuple[str, str]:
