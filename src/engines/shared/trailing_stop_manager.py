@@ -91,24 +91,32 @@ class TrailingStopManager:
             position, "trailing_stop_price", None
         )
 
-        # Calculate current PnL percentage
+        # Get position fraction/size for sized PnL calculation
+        # This matches the original TrailingStopPolicy behavior
+        position_fraction = getattr(position, "size", 1.0)
+        if position_fraction is None or position_fraction <= 0:
+            position_fraction = 1.0
+
+        # Calculate sized PnL (raw PnL * position_fraction)
+        # This is how the original TrailingStopPolicy calculates it
         if side == "long":
-            pnl_pct = (current_price - entry_price) / entry_price
+            raw_pnl = (current_price - entry_price) / entry_price
         else:
-            pnl_pct = (entry_price - current_price) / entry_price
+            raw_pnl = (entry_price - current_price) / entry_price
+        pnl_frac = raw_pnl * position_fraction
 
         # Check breakeven first
         breakeven_triggered = False
         if not getattr(position, "breakeven_triggered", False):
             breakeven_result = self._check_breakeven(
-                position, current_price, pnl_pct, side, entry_price
+                position, current_price, pnl_frac, side, entry_price
             )
             if breakeven_result.updated:
                 return breakeven_result
 
         # Check trailing stop activation
         trailing_result = self._check_trailing_activation(
-            position, current_price, pnl_pct, side, entry_price, current_stop, df, index
+            position, current_price, pnl_frac, side, entry_price, current_stop, df, index
         )
 
         return trailing_result
