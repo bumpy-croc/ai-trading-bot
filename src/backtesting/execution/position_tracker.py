@@ -45,14 +45,22 @@ class PositionTracker:
     def __init__(
         self,
         mfe_mae_precision: int = DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+        fee_rate: float = 0.001,
+        slippage_rate: float = 0.0005,
     ) -> None:
         """Initialize position tracker.
 
         Args:
             mfe_mae_precision: Decimal precision for MFE/MAE calculations.
+            fee_rate: Fee rate for cost-adjusted MFE/MAE.
+            slippage_rate: Slippage rate for cost-adjusted MFE/MAE.
         """
         self.current_trade: ActiveTrade | None = None
-        self.mfe_mae_tracker = MFEMAETracker(precision_decimals=mfe_mae_precision)
+        self.mfe_mae_tracker = MFEMAETracker(
+            precision_decimals=mfe_mae_precision,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+        )
 
     @property
     def has_position(self) -> bool:

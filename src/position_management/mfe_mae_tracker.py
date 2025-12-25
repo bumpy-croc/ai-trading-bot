@@ -22,10 +22,18 @@ class MFEMAETracker:
 
     Values are stored as decimal fractions relative to entry (e.g., +0.05 = +5%).
     The position fraction can be applied for sized returns via `position_fraction`.
+    MFE/MAE metrics account for exit fees and slippage to reflect achievable profit/loss.
     """
 
-    def __init__(self, precision_decimals: int = 8):
+    def __init__(
+        self,
+        precision_decimals: int = 8,
+        fee_rate: float = 0.001,
+        slippage_rate: float = 0.0005,
+    ):
         self.precision_decimals = precision_decimals
+        self.fee_rate = fee_rate
+        self.slippage_rate = slippage_rate
         # In-memory cache keyed by position_id or order_id
         self._cache: dict[str | int, MFEMetrics] = {}
 
@@ -36,18 +44,33 @@ class MFEMAETracker:
         side: str | Side,
         position_fraction: float = 1.0,
         as_sized: bool = True,
+        fee_rate: float = 0.001,
+        slippage_rate: float = 0.0005,
     ) -> tuple[float, float]:
         """Return current excursion (mfe_candidate, mae_candidate) as decimal fractions.
 
         If `as_sized` is True, returns sized PnL fractions using `position_fraction`.
+        Net MFE/MAE accounts for exit fees and slippage to reflect achievable profit/loss.
         """
         side_enum = side if isinstance(side, Side) else Side(side)
+
+        # Calculate gross price movement
         move = pnl_percent(
             entry_price, current_price, side_enum, position_fraction if as_sized else 1.0
         )
+
+        # Calculate exit costs as percentage of position value
+        # For MFE: subtract costs since they reduce achievable profit
+        # For MAE: add costs since they worsen losses
+        exit_cost_rate = fee_rate + slippage_rate
+
+        # Adjust for costs to get net achievable excursion
+        net_move = move - exit_cost_rate if as_sized else move
+
         # Positive move contributes to MFE candidate; negative to MAE candidate
-        mfe_cand = max(0.0, move)
-        mae_cand = min(0.0, move)
+        mfe_cand = max(0.0, net_move) if move > 0 else 0.0
+        mae_cand = min(0.0, net_move) if move < 0 else 0.0
+
         return mfe_cand, mae_cand
 
     def update_position_metrics(
@@ -66,6 +89,8 @@ class MFEMAETracker:
             current_price=current_price,
             side=side,
             position_fraction=position_fraction,
+            fee_rate=self.fee_rate,
+            slippage_rate=self.slippage_rate,
         )
 
         # Update MFE

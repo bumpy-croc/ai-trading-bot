@@ -1,23 +1,29 @@
-"""Live trading module.
+"""Execution handlers for live trading.
 
-This module provides the live trading engine and its modular handlers.
+This module provides modular components for trade execution:
+- LivePositionTracker: Multi-position state and MFE/MAE tracking
+- LiveExecutionEngine: Order execution with fees and slippage
+- LiveEntryHandler: Entry signal processing
+- LiveExitHandler: Exit condition checking
 """
 
-# Data handlers
-from src.live.data import MarketDataHandler
-
-# Execution handlers
-from src.live.execution import (
-    EntryExecutionResult,
-    ExitExecutionResult,
+from src.live.execution.entry_handler import (
     LiveEntryHandler,
     LiveEntryResult,
     LiveEntrySignal,
+)
+from src.live.execution.execution_engine import (
+    EntryExecutionResult,
+    ExitExecutionResult,
     LiveExecutionEngine,
     LiveExecutionResult,
+)
+from src.live.execution.exit_handler import (
     LiveExitCheck,
     LiveExitHandler,
     LiveExitResult,
+)
+from src.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
     PartialExitResult,
@@ -26,16 +32,7 @@ from src.live.execution import (
     ScaleInResult,
 )
 
-# Health monitoring
-from src.live.health import HealthMonitor
-
-# Logging handlers
-from src.live.logging import LiveEventLogger
-from src.live.trading_engine import LiveTradingEngine
-
 __all__ = [
-    # Main engine
-    "LiveTradingEngine",
     # Position tracker
     "LivePosition",
     "LivePositionTracker",
@@ -56,10 +53,4 @@ __all__ = [
     "LiveExitHandler",
     "LiveExitCheck",
     "LiveExitResult",
-    # Event logger
-    "LiveEventLogger",
-    # Data handler
-    "MarketDataHandler",
-    # Health monitor
-    "HealthMonitor",
 ]
