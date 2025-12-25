@@ -12,7 +12,7 @@ class TrailingStopPolicy:
     are set, atr-based distance takes precedence when ATR is available.
     """
 
-    activation_threshold: float = 0.015  # 1.5% sized PnL to start trailing
+    activation_threshold: float = 0.015  # 1.5% position gain to start trailing
     trailing_distance_pct: float | None = 0.005  # 0.5% trail distance
     atr_multiplier: float | None = None  # e.g., 1.5 * ATR
     breakeven_threshold: float | None = None  # if None, breakeven is disabled
@@ -33,14 +33,20 @@ class TrailingStopPolicy:
     def _pnl_fraction(
         self, entry_price: float, current_price: float, side: str, position_fraction: float
     ) -> float:
-        if entry_price <= 0 or position_fraction <= 0:
+        """Calculate position-level PnL percentage.
+
+        Note: position_fraction parameter is kept for API compatibility but not used.
+        We now use position-level PnL instead of portfolio-level (sized) PnL for
+        consistent risk management regardless of position size.
+        """
+        if entry_price <= 0:
             return 0.0
         raw = (
             (current_price - entry_price) / entry_price
             if side == "long"
             else (entry_price - current_price) / entry_price
         )
-        return raw * position_fraction
+        return raw
 
     def update_trailing_stop(
         self,
