@@ -30,6 +30,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Maximum partial exits to process per cycle (defense-in-depth against malformed policies)
+MAX_PARTIAL_EXITS_PER_CYCLE = 10
+
 
 @dataclass
 class LiveExitCheck:
@@ -513,17 +516,24 @@ class LiveExitHandler:
             return
 
         for order_id, position in list(self.position_tracker.positions.items()):
-            # Check for partial exits
-            exit_result = self.partial_manager.check_partial_exit(
-                position=position,
-                current_price=current_price,
-            )
+            # Check for partial exits (loop to handle multiple exits in same cycle)
+            iteration_count = 0
+            while iteration_count < MAX_PARTIAL_EXITS_PER_CYCLE:
+                exit_result = self.partial_manager.check_partial_exit(
+                    position=position,
+                    current_price=current_price,
+                )
 
-            if exit_result.should_exit:
+                if not exit_result.should_exit:
+                    break
+
                 # Convert from fraction of original to fraction of current
                 exit_size_of_original = exit_result.exit_fraction
                 current_size_fraction = position.current_size / position.original_size
                 exit_size_of_current = exit_size_of_original / current_size_fraction
+
+                if exit_size_of_current <= 0 or exit_size_of_current > 1.0:
+                    break
 
                 self._execute_partial_exit(
                     order_id=order_id,
@@ -534,6 +544,8 @@ class LiveExitHandler:
                     fraction_of_original=exit_size_of_original,
                     current_balance=current_balance,
                 )
+
+                iteration_count += 1
 
             # Check for scale-ins
             scale_result = self.partial_manager.check_scale_in(

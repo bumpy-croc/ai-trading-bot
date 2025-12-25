@@ -26,6 +26,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Maximum partial exits to process per candle (defense-in-depth against malformed policies)
+MAX_PARTIAL_EXITS_PER_CYCLE = 10
+
 
 @dataclass
 class ExitCheckResult:
@@ -182,7 +185,8 @@ class ExitHandler:
 
         try:
             # Check partial exits (loop until no more triggers)
-            while True:
+            iteration_count = 0
+            while iteration_count < MAX_PARTIAL_EXITS_PER_CYCLE:
                 result = self.partial_manager.check_partial_exit(
                     position=trade,
                     current_price=current_price,
@@ -193,10 +197,14 @@ class ExitHandler:
 
                 # Calculate exit size from fraction of original
                 exit_size_of_original = result.exit_fraction
-                exit_size_of_current = exit_size_of_original * trade.original_size / trade.current_size
+                # Convert from fraction-of-original to fraction-of-current
+                current_size_fraction = trade.current_size / trade.original_size
+                exit_size_of_current = exit_size_of_original / current_size_fraction
 
                 if exit_size_of_current <= 0 or exit_size_of_current > 1.0:
                     break
+
+                iteration_count += 1
 
                 # Get basis balance for PnL calculation
                 entry_balance = getattr(trade, "entry_balance", None)
@@ -266,8 +274,10 @@ class ExitHandler:
                         except Exception:
                             pass
 
+        except (AttributeError, ValueError, KeyError, ZeroDivisionError) as e:
+            logger.warning("Partial ops evaluation failed: %s", e)
         except Exception as e:
-            logger.debug("Partial ops evaluation failed: %s", e)
+            logger.warning("Unexpected error in partial ops: %s", e)
 
         return PartialOpsResult(
             realized_pnl=realized_pnl,
