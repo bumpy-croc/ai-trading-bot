@@ -92,6 +92,12 @@ class PolicyHydrator:
         self.dynamic_risk_opt_in = dynamic_risk_opt_in
         self.log_skipped = log_skipped
 
+        # Failure tracking for monitoring
+        self._partial_exit_failures = 0
+        self._trailing_stop_failures = 0
+        self._dynamic_risk_failures = 0
+        self._failure_threshold = 10  # Alert after this many consecutive failures
+
     def hydrate_policies(
         self,
         decision: Any,
@@ -160,13 +166,21 @@ class PolicyHydrator:
             descriptor = getattr(bundle, "partial_exit", None)
             if descriptor is not None:
                 if self.partial_operations_opt_in or current_policy is not None:
-                    return descriptor.to_policy(), True
+                    policy = descriptor.to_policy()
+                    self._partial_exit_failures = 0  # Reset on success
+                    return policy, True
                 elif self.log_skipped:
                     logger.debug(
                         "Skipping partial-exit policy: partial operations disabled"
                     )
         except Exception as e:
+            self._partial_exit_failures += 1
             logger.debug("Failed to hydrate partial-exit policy: %s", e)
+            if self._partial_exit_failures >= self._failure_threshold:
+                logger.warning(
+                    "Partial-exit policy hydration has failed %d times consecutively",
+                    self._partial_exit_failures,
+                )
 
         return None, False
 
@@ -188,13 +202,21 @@ class PolicyHydrator:
             descriptor = getattr(bundle, "trailing_stop", None)
             if descriptor is not None:
                 if self.trailing_stop_opt_in or current_policy is not None:
-                    return descriptor.to_policy(), True
+                    policy = descriptor.to_policy()
+                    self._trailing_stop_failures = 0  # Reset on success
+                    return policy, True
                 elif self.log_skipped:
                     logger.debug(
                         "Skipping trailing-stop policy: trailing stops disabled"
                     )
         except Exception as e:
+            self._trailing_stop_failures += 1
             logger.debug("Failed to hydrate trailing-stop policy: %s", e)
+            if self._trailing_stop_failures >= self._failure_threshold:
+                logger.warning(
+                    "Trailing-stop policy hydration has failed %d times consecutively",
+                    self._trailing_stop_failures,
+                )
 
         return None, False
 
@@ -216,12 +238,19 @@ class PolicyHydrator:
             descriptor = getattr(bundle, "dynamic_risk", None)
             if descriptor is not None:
                 config = descriptor.to_config()
+                self._dynamic_risk_failures = 0  # Reset on success
                 # Always return the config, let caller decide if manager needs update
                 if current_config is None or current_config != config:
                     return config, True
                 return config, False
         except Exception as e:
+            self._dynamic_risk_failures += 1
             logger.debug("Failed to hydrate dynamic risk config: %s", e)
+            if self._dynamic_risk_failures >= self._failure_threshold:
+                logger.warning(
+                    "Dynamic risk config hydration has failed %d times consecutively",
+                    self._dynamic_risk_failures,
+                )
 
         return None, False
 
