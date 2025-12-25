@@ -19,6 +19,7 @@ from src.engines.live.execution.position_tracker import (
     LivePositionTracker,
     PositionSide,
 )
+from src.engines.shared.trailing_stop_manager import TrailingStopManager
 
 if TYPE_CHECKING:
     from src.position_management.partial_manager import PartialExitPolicy
@@ -95,6 +96,8 @@ class LiveExitHandler:
         self.partial_manager = partial_manager
         self.use_high_low_for_stops = use_high_low_for_stops
         self.max_position_size = max_position_size
+        # Use shared trailing stop manager for consistent logic across engines
+        self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
 
     def check_exit_conditions(
         self,
@@ -441,52 +444,45 @@ class LiveExitHandler:
     ) -> None:
         """Update trailing stops for all positions.
 
+        Uses shared TrailingStopManager for consistent logic across engines.
+
         Args:
             df: DataFrame with market data.
             current_index: Current candle index.
             current_price: Current market price.
         """
-        if self.trailing_stop_policy is None:
+        if self._trailing_stop_manager.policy is None:
             return
 
-        # Extract ATR for volatility-adjusted trailing stops to prevent premature exits
-        # during normal price fluctuations while protecting against adverse movements
-        atr_value = None
-        try:
-            if "atr" in df.columns and current_index < len(df):
-                val = df["atr"].iloc[current_index]
-                atr_value = float(val) if val is not None and not pd.isna(val) else None
-        except (KeyError, IndexError, ValueError, TypeError):
-            atr_value = None
-
         for order_id, position in self.position_tracker.positions.items():
-            side_str = position.side.value
-            existing_sl = position.stop_loss
-
-            new_stop, activated, breakeven = self.trailing_stop_policy.update_trailing_stop(
-                side=side_str,
-                entry_price=float(position.entry_price),
-                current_price=float(current_price),
-                existing_stop=float(existing_sl) if existing_sl is not None else None,
-                position_fraction=float(position.size),
-                atr=atr_value,
-                trailing_activated=bool(position.trailing_stop_activated),
-                breakeven_triggered=bool(position.breakeven_triggered),
+            # Use shared trailing stop manager for calculation
+            result = self._trailing_stop_manager.update(
+                position=position,
+                current_price=current_price,
+                df=df,
+                index=current_index,
             )
+
+            if not result.updated:
+                continue
+
+            # Determine new activation states
+            new_activated = result.trailing_activated or position.trailing_stop_activated
+            new_breakeven = result.breakeven_triggered or position.breakeven_triggered
 
             # Update position via tracker
             changed = self.position_tracker.update_trailing_stop(
                 order_id=order_id,
-                new_stop_loss=new_stop,
-                activated=activated,
-                breakeven_triggered=breakeven,
+                new_stop_loss=result.new_stop_price,
+                activated=new_activated,
+                breakeven_triggered=new_breakeven,
             )
 
             if changed:
                 logger.info(
                     "Trailing stop updated for %s %s: SL=%.4f (activated=%s, BE=%s)",
                     position.symbol,
-                    side_str,
+                    position.side.value,
                     position.stop_loss or 0.0,
                     position.trailing_stop_activated,
                     position.breakeven_triggered,

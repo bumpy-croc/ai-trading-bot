@@ -140,7 +140,7 @@ class TrailingStopManager:
             entry_price: Position entry price.
 
         Returns:
-            TrailingStopUpdate with result.
+            TrailingStopUpdate with result (does NOT modify position).
         """
         breakeven_threshold = getattr(self.policy, "breakeven_threshold", None)
         breakeven_buffer = getattr(self.policy, "breakeven_buffer", 0.001)
@@ -155,12 +155,8 @@ class TrailingStopManager:
             else:
                 new_stop = entry_price * (1 - breakeven_buffer)
 
-            # Update position state
-            position.breakeven_triggered = True
-            position.stop_loss = new_stop
-            if hasattr(position, "trailing_stop_price"):
-                position.trailing_stop_price = new_stop
-
+            # Return result without modifying position - caller is responsible
+            # for applying the update via position_tracker
             return TrailingStopUpdate(
                 updated=True,
                 new_stop_price=new_stop,
@@ -194,7 +190,7 @@ class TrailingStopManager:
             index: Current candle index (for ATR calculation).
 
         Returns:
-            TrailingStopUpdate with result.
+            TrailingStopUpdate with result (does NOT modify position).
         """
         activation_threshold = getattr(self.policy, "activation_threshold", None)
         trailing_distance_pct = getattr(self.policy, "trailing_distance_pct", None)
@@ -208,7 +204,7 @@ class TrailingStopManager:
         just_activated = False
 
         if not is_activated and pnl_pct >= activation_threshold:
-            position.trailing_stop_activated = True
+            # Don't modify position directly - just track that we need to activate
             is_activated = True
             just_activated = True
 
@@ -235,11 +231,8 @@ class TrailingStopManager:
             should_update = current_stop is None or new_stop < current_stop
 
         if should_update:
-            # Update position state
-            position.stop_loss = new_stop
-            if hasattr(position, "trailing_stop_price"):
-                position.trailing_stop_price = new_stop
-
+            # Return result without modifying position - caller is responsible
+            # for applying the update via position_tracker
             return TrailingStopUpdate(
                 updated=True,
                 new_stop_price=new_stop,

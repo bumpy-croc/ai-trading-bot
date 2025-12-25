@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from src.engines.backtest.models import Trade
+from src.engines.shared.trailing_stop_manager import TrailingStopManager
 from src.position_management.partial_manager import PositionState
 
 if TYPE_CHECKING:
@@ -90,6 +91,8 @@ class ExitHandler:
         self.partial_manager = partial_manager
         self.enable_engine_risk_exits = enable_engine_risk_exits
         self.use_high_low_for_stops = use_high_low_for_stops
+        # Use shared trailing stop manager for consistent logic across engines
+        self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
 
     def update_trailing_stop(
         self,
@@ -99,6 +102,8 @@ class ExitHandler:
     ) -> tuple[bool, str | None]:
         """Update trailing stop for active position.
 
+        Uses shared TrailingStopManager for consistent logic across engines.
+
         Args:
             current_price: Current market price.
             df: DataFrame with market data.
@@ -107,43 +112,31 @@ class ExitHandler:
         Returns:
             Tuple of (was_updated, log_message).
         """
-        if self.trailing_stop_policy is None:
-            return False, None
-
         trade = self.position_tracker.current_trade
         if trade is None:
             return False, None
 
-        # Get ATR if available
-        atr_val = None
-        try:
-            if "atr" in df.columns:
-                v = df["atr"].iloc[index]
-                if v is not None and not pd.isna(v):
-                    atr_val = float(v)
-        except Exception:
-            pass
-
-        # Calculate new trailing stop
-        new_sl, activated, breakeven = self.trailing_stop_policy.update_trailing_stop(
-            side=trade.side,
-            entry_price=float(trade.entry_price),
-            current_price=float(current_price),
-            existing_stop=float(trade.stop_loss) if trade.stop_loss is not None else None,
-            position_fraction=float(trade.size),
-            atr=atr_val,
-            trailing_activated=bool(trade.trailing_stop_activated),
-            breakeven_triggered=bool(trade.breakeven_triggered),
+        # Use shared trailing stop manager for calculation
+        result = self._trailing_stop_manager.update(
+            position=trade,
+            current_price=current_price,
+            df=df,
+            index=index,
         )
 
-        if new_sl is None:
+        if not result.updated:
             return False, None
 
-        # Update position tracker
+        # Determine new activation states
+        # If breakeven just triggered, set both flags
+        new_activated = result.trailing_activated or trade.trailing_stop_activated
+        new_breakeven = result.breakeven_triggered or trade.breakeven_triggered
+
+        # Apply update via position tracker
         changed = self.position_tracker.update_trailing_stop(
-            new_stop_loss=new_sl,
-            activated=activated,
-            breakeven_triggered=breakeven,
+            new_stop_loss=result.new_stop_price,
+            activated=new_activated,
+            breakeven_triggered=new_breakeven,
         )
 
         if changed:
