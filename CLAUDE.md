@@ -11,6 +11,14 @@ This is a modular cryptocurrency trading system focused on long-term, risk-balan
 ## Essential Commands
 
 ### Environment Setup
+
+**Remote Environments (Claude Code Web)**:
+- The virtual environment is automatically created and configured by the sessionStart hook
+- Dependencies from `requirements-server.txt` are installed automatically at session start
+- Use the existing `.venv` for all operations - it's already activated
+- Only install packages manually as a fallback if venv is unavailable or broken
+
+**Local Development**:
 ```bash
 # Create virtual environment and install
 python -m venv .venv && source .venv/bin/activate
