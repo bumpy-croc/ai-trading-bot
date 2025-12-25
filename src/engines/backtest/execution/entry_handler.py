@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from src.engines.backtest.models import ActiveTrade
+from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.strategies.components import SignalDirection
 
 if TYPE_CHECKING:
@@ -90,7 +91,8 @@ class EntryHandler:
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
         self.default_take_profit_pct = default_take_profit_pct
-        self.dynamic_risk_adjustments: list[dict] = []
+        # Use shared DynamicRiskHandler for consistent risk adjustment logic
+        self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
 
     def set_component_strategy(self, strategy: ComponentStrategy | None) -> None:
         """Update the component strategy (for regime switching).
@@ -466,6 +468,9 @@ class EntryHandler:
     ) -> float:
         """Apply dynamic risk adjustments to position size.
 
+        Delegates to shared DynamicRiskHandler for consistent logic
+        between backtest and live engines.
+
         Args:
             original_size: Original position size fraction.
             current_time: Current timestamp.
@@ -476,47 +481,15 @@ class EntryHandler:
         Returns:
             Adjusted position size fraction.
         """
-        if self.dynamic_risk_manager is None:
-            return original_size
-
-        try:
-            adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
-                current_balance=balance,
-                peak_balance=peak_balance,
-                session_id=trading_session_id,
-            )
-
-            adjusted_size = original_size * adjustments.position_size_factor
-
-            # Track significant adjustments
-            if abs(adjustments.position_size_factor - 1.0) > 0.1:
-                logger.debug(
-                    "Dynamic risk adjustment at %s: size factor=%.2f, reason=%s",
-                    current_time,
-                    adjustments.position_size_factor,
-                    adjustments.primary_reason,
-                )
-
-                self.dynamic_risk_adjustments.append(
-                    {
-                        "timestamp": current_time,
-                        "position_size_factor": adjustments.position_size_factor,
-                        "stop_loss_tightening": adjustments.stop_loss_tightening,
-                        "daily_risk_factor": adjustments.daily_risk_factor,
-                        "primary_reason": adjustments.primary_reason,
-                        "current_drawdown": adjustments.adjustment_details.get("current_drawdown"),
-                        "balance": balance,
-                        "peak_balance": peak_balance,
-                        "original_size": original_size,
-                        "adjusted_size": adjusted_size,
-                    }
-                )
-
-            return adjusted_size
-
-        except Exception as e:
-            logger.warning("Failed to apply dynamic risk adjustment: %s", e)
-            return original_size
+        # Update handler's manager in case it changed
+        self._dynamic_risk_handler.set_manager(self.dynamic_risk_manager)
+        return self._dynamic_risk_handler.apply_dynamic_risk(
+            original_size=original_size,
+            current_time=current_time,
+            balance=balance,
+            peak_balance=peak_balance,
+            trading_session_id=trading_session_id,
+        )
 
     def get_dynamic_risk_adjustments(self) -> list[dict]:
         """Get and clear dynamic risk adjustments tracked by this handler.
@@ -524,6 +497,4 @@ class EntryHandler:
         Returns:
             List of dynamic risk adjustment records.
         """
-        adjustments = self.dynamic_risk_adjustments.copy()
-        self.dynamic_risk_adjustments.clear()
-        return adjustments
+        return self._dynamic_risk_handler.get_adjustments(clear=True)

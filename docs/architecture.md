@@ -1,6 +1,6 @@
 # System Architecture
 
-> **Last Updated**: 2025-12-22
+> **Last Updated**: 2025-12-25
 > **Maintainer Note**: This is a living document. Update after major architectural changes or new component additions. Use the `/update-docs` command to keep this in sync.
 
 ---
@@ -63,10 +63,6 @@ ai-trading-bot/
 │   └── commands/                 # Subcommands (backtest, live, train, etc.)
 │
 ├── src/                          # Core application code
-│   ├── backtesting/              # Vectorized simulation engine
-│   │   ├── engine.py             # Main backtest orchestration
-│   │   └── portfolio.py          # Simulated portfolio management
-│   │
 │   ├── config/                   # Configuration system
 │   │   ├── loader.py             # Environment variable loading
 │   │   ├── constants.py          # Project-wide constants
@@ -82,13 +78,30 @@ ai-trading-bot/
 │   │   ├── manager.py            # DatabaseManager class
 │   │   └── admin.py              # Flask-Admin UI
 │   │
+│   ├── engines/                  # Trading engines (backtest + live)
+│   │   ├── backtest/             # Vectorized simulation engine
+│   │   │   ├── engine.py         # Main backtest orchestration
+│   │   │   ├── portfolio.py      # Simulated portfolio management
+│   │   │   └── execution/        # Entry/exit handling
+│   │   │
+│   │   ├── live/                 # Live trading engine
+│   │   │   ├── trading_engine.py # Real-time execution
+│   │   │   ├── strategy_manager.py # Hot-swap strategy management
+│   │   │   └── execution/        # Entry/exit handling
+│   │   │
+│   │   └── shared/               # Shared engine logic
+│   │       ├── models.py         # Unified Position, Trade types
+│   │       ├── cost_calculator.py # Fee/slippage calculation
+│   │       ├── dynamic_risk_handler.py # Dynamic risk adjustments
+│   │       ├── performance_tracker.py  # Unified metrics tracking
+│   │       ├── partial_operations_manager.py # Partial exit/scale-in
+│   │       ├── policy_hydration.py # Runtime policy extraction
+│   │       ├── risk_configuration.py # Risk config merging
+│   │       └── trailing_stop_manager.py # Trailing stop updates
+│   │
 │   ├── infrastructure/           # Cross-cutting concerns
 │   │   ├── logging/              # Centralized logging
 │   │   └── runtime/              # Path resolution, secrets
-│   │
-│   ├── live/                     # Live trading engine
-│   │   ├── trading_engine.py     # Real-time execution
-│   │   └── strategy_manager.py   # Hot-swap strategy management
 │   │
 │   ├── ml/                       # ML models directory
 │   │   ├── models/               # Trained model registry
@@ -222,13 +235,15 @@ Global risk controls applied across the entire system.
 
 See [Component Risk Integration](architecture/component_risk_integration.md) for detailed adapter guidance.
 
-### 5. Live Trading Engine (`src/live/`)
+### 5. Live Trading Engine (`src/engines/live/`)
 
 Real-time execution with safety controls.
 
 **Key Files:**
 - `trading_engine.py` - Main execution loop
 - `strategy_manager.py` - Hot-swap orchestration
+- `execution/entry_handler.py` - Entry signal processing
+- `execution/exit_handler.py` - Exit signal processing
 
 **Safety Features:**
 - Paper trading mode (no real orders)
@@ -236,19 +251,44 @@ Real-time execution with safety controls.
 - Graceful shutdown handling
 - Position reconciliation
 
-### 6. Backtesting Engine (`src/backtesting/`)
+### 6. Backtesting Engine (`src/engines/backtest/`)
 
 Vectorized historical simulation for strategy testing.
 
 **Key Files:**
 - `engine.py` - Backtest orchestration
 - `portfolio.py` - Simulated portfolio
+- `execution/entry_handler.py` - Entry signal processing
+- `execution/exit_handler.py` - Exit signal processing
 
 **Features:**
 - Vectorized operations for speed
 - Realistic slippage/commission modeling
 - Multi-symbol support
 - Performance metrics calculation
+
+### 7. Shared Engine Modules (`src/engines/shared/`)
+
+Unified logic extracted from both backtest and live engines to ensure consistency.
+
+**Key Modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `models.py` | Unified `Position`, `Trade`, `PositionSide` types |
+| `cost_calculator.py` | Fee and slippage calculation |
+| `dynamic_risk_handler.py` | Dynamic risk adjustments during drawdowns |
+| `performance_tracker.py` | Unified metrics tracking (win rate, P&L, etc.) |
+| `partial_operations_manager.py` | Partial exit and scale-in logic |
+| `policy_hydration.py` | Extract policies from runtime decisions |
+| `risk_configuration.py` | Merge strategy risk overrides with base config |
+| `trailing_stop_manager.py` | Trailing stop update calculations |
+
+**Benefits:**
+- Single source of truth for trading logic
+- Consistent behavior between backtest and live
+- Easier testing and maintenance
+- Reduced code duplication (eliminated ~500 lines)
 
 ---
 
@@ -290,6 +330,9 @@ LOG_LEVEL=INFO
 ## Recent Architectural Changes
 
 ### December 2025
+- **Engine Consolidation** (#454): Moved `src/backtesting/` and `src/live/` under `src/engines/` with shared modules
+- Created `src/engines/shared/` with unified logic for both engines
+- Extracted 8 shared modules eliminating ~500 lines of duplicate code
 - Optimized ML training pipeline with batch processing improvements (#439)
 - Refactored trading bot for better code quality (#437)
 - Refactored prediction model registry and usage (#421)
