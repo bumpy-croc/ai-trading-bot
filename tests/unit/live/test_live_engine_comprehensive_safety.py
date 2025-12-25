@@ -29,7 +29,7 @@ import pytest
 
 from src.data_providers.data_provider import DataProvider
 from src.database.manager import DatabaseManager
-from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 from src.risk.risk_manager import RiskParameters
 from src.strategies.ml_basic import create_ml_basic_strategy
 
@@ -169,7 +169,7 @@ class TestInitializationSafety:
     ):
         """Live trading mode requires database connection"""
         # Mock failed database connection
-        with patch("src.live.trading_engine.DatabaseManager") as mock_db_class:
+        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
             mock_db_class.side_effect = RuntimeError("Database connection required")
 
             with pytest.raises(RuntimeError, match="Database connection required"):
@@ -181,7 +181,7 @@ class TestInitializationSafety:
 
     def test_paper_trading_mode_default(self, mock_data_provider, minimal_strategy):
         """Paper trading should be default (enable_live_trading=False)"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -191,7 +191,7 @@ class TestInitializationSafety:
 
     def test_initial_state_is_safe(self, mock_data_provider, minimal_strategy):
         """Initial engine state should be safe and consistent"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -217,7 +217,7 @@ class TestSafetyGuardrails:
 
     def test_max_position_size_enforcement(self, mock_data_provider, minimal_strategy):
         """Position size should never exceed max_position_size"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -232,7 +232,7 @@ class TestSafetyGuardrails:
 
     def test_balance_cannot_go_negative(self, mock_data_provider, minimal_strategy):
         """Balance should never become negative"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -253,7 +253,7 @@ class TestSafetyGuardrails:
         """Should not exceed maximum number of concurrent positions"""
         risk_params = RiskParameters(max_position_size=0.10)
 
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -270,7 +270,7 @@ class TestSafetyGuardrails:
         """Exceeding max drawdown should trigger protective stop"""
         risk_params = RiskParameters(max_drawdown=0.20)  # 20% max
 
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -290,7 +290,7 @@ class TestSafetyGuardrails:
 
     def test_stop_loss_always_set(self, mock_data_provider, minimal_strategy):
         """All positions must have stop loss defined"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -324,7 +324,7 @@ class TestErrorHandlingRecovery:
         """Data provider exceptions should be caught and logged"""
         mock_data_provider.get_historical_data.side_effect = Exception("API Error")
 
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -338,7 +338,7 @@ class TestErrorHandlingRecovery:
         self, mock_data_provider, minimal_strategy
     ):
         """Exceeding max consecutive errors should trigger shutdown"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -360,7 +360,7 @@ class TestErrorHandlingRecovery:
             create_mock_candle_data(),
         ]
 
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -372,7 +372,7 @@ class TestErrorHandlingRecovery:
 
     def test_database_write_failure_handled(self, mock_data_provider, minimal_strategy):
         """Database write failures should not crash the engine"""
-        with patch("src.live.trading_engine.DatabaseManager") as mock_db_class:
+        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
             mock_db = Mock()
             mock_db.log_trade.side_effect = Exception("DB write failed")
             mock_db.create_trading_session.return_value = 1
@@ -396,7 +396,7 @@ class TestErrorHandlingRecovery:
 
         faulty_strategy.process_candle = MethodType(raise_error, faulty_strategy)
 
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=faulty_strategy,
                 data_provider=mock_data_provider,
@@ -408,7 +408,7 @@ class TestErrorHandlingRecovery:
 
     def test_error_cooldown_applied(self, mock_data_provider, minimal_strategy):
         """Error cooldown should be applied after errors"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -429,7 +429,7 @@ class TestPositionManagement:
 
     def test_position_creation_validation(self, mock_data_provider, minimal_strategy):
         """Position creation should validate all required fields"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -517,7 +517,7 @@ class TestPositionManagement:
 
     def test_multiple_positions_tracking(self, mock_data_provider, minimal_strategy):
         """Engine should track multiple positions correctly"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -539,7 +539,7 @@ class TestAccountSynchronization:
 
     def test_balance_resume_from_database(self, mock_data_provider, minimal_strategy):
         """Should resume balance from last database snapshot"""
-        with patch("src.live.trading_engine.DatabaseManager") as mock_db_class:
+        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
             mock_db = Mock()
             mock_db.get_active_session_id.return_value = 1
             mock_db.get_current_balance.return_value = 15000.0  # Different from initial
@@ -559,7 +559,7 @@ class TestAccountSynchronization:
 
     def test_no_balance_resume_when_disabled(self, mock_data_provider, minimal_strategy):
         """Should use initial balance when resume is disabled"""
-        with patch("src.live.trading_engine.DatabaseManager") as mock_db_class:
+        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
             mock_db = Mock()
             mock_db.get_active_session_id.return_value = 1
             mock_db.get_current_balance.return_value = 15000.0
@@ -579,7 +579,7 @@ class TestAccountSynchronization:
 
     def test_peak_balance_tracking(self, mock_data_provider, minimal_strategy):
         """Peak balance should track highest balance achieved"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -598,7 +598,7 @@ class TestAccountSynchronization:
 
     def test_account_snapshot_interval_configuration(self, mock_data_provider, minimal_strategy):
         """Account snapshot interval should be configurable"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -626,7 +626,7 @@ class TestRiskManagementIntegration:
             max_drawdown=0.15,
         )
 
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -639,7 +639,7 @@ class TestRiskManagementIntegration:
 
     def test_dynamic_risk_manager_initialization(self, mock_data_provider, minimal_strategy):
         """Dynamic risk manager should be initialized when enabled"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -653,7 +653,7 @@ class TestRiskManagementIntegration:
 
     def test_trailing_stop_policy_configuration(self, mock_data_provider, minimal_strategy):
         """Trailing stop policy should be configurable"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -665,7 +665,7 @@ class TestRiskManagementIntegration:
 
     def test_correlation_engine_initialization(self, mock_data_provider, minimal_strategy):
         """Correlation engine should be initialized for position correlation control"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -686,7 +686,7 @@ class TestHealthMonitoring:
 
     def test_consecutive_error_tracking(self, mock_data_provider, minimal_strategy):
         """Consecutive errors should be tracked"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -698,7 +698,7 @@ class TestHealthMonitoring:
 
     def test_data_freshness_monitoring(self, mock_data_provider, minimal_strategy):
         """Data freshness should be monitored"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -711,7 +711,7 @@ class TestHealthMonitoring:
 
     def test_mfe_mae_tracking(self, mock_data_provider, minimal_strategy):
         """MFE/MAE tracker should be initialized"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -731,7 +731,7 @@ class TestGracefulShutdown:
 
     def test_stop_event_initialization(self, mock_data_provider, minimal_strategy):
         """Stop event should be initialized for graceful shutdown"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -744,7 +744,7 @@ class TestGracefulShutdown:
 
     def test_signal_handler_registered(self, mock_data_provider, minimal_strategy):
         """Signal handlers should be registered for SIGINT/SIGTERM"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -756,7 +756,7 @@ class TestGracefulShutdown:
 
     def test_is_running_flag_initial_state(self, mock_data_provider, minimal_strategy):
         """is_running flag should be False initially"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -776,7 +776,7 @@ class TestDatabaseIntegration:
 
     def test_trading_session_creation(self, mock_data_provider, minimal_strategy):
         """Trading session should be created on start"""
-        with patch("src.live.trading_engine.DatabaseManager") as mock_db_class:
+        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
             mock_db = Mock()
             mock_db.create_trading_session.return_value = 42
             mock_db_class.return_value = mock_db
@@ -792,7 +792,7 @@ class TestDatabaseIntegration:
 
     def test_trade_logging_enabled_by_default(self, mock_data_provider, minimal_strategy):
         """Trade logging should be enabled by default"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -803,7 +803,7 @@ class TestDatabaseIntegration:
 
     def test_trade_logging_can_be_disabled(self, mock_data_provider, minimal_strategy):
         """Trade logging should be disable-able"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -824,7 +824,7 @@ class TestEdgeCasesAndStress:
 
     def test_very_small_position_size(self, mock_data_provider, minimal_strategy):
         """Very small position sizes should be handled"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -836,7 +836,7 @@ class TestEdgeCasesAndStress:
 
     def test_very_fast_check_interval(self, mock_data_provider, minimal_strategy):
         """Very fast check intervals (1 second) should be allowed"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -848,7 +848,7 @@ class TestEdgeCasesAndStress:
 
     def test_very_slow_check_interval(self, mock_data_provider, minimal_strategy):
         """Very slow check intervals (1 hour) should be allowed"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -860,7 +860,7 @@ class TestEdgeCasesAndStress:
 
     def test_strategy_manager_initialization(self, mock_data_provider, minimal_strategy):
         """Strategy manager should initialize for hot-swapping"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -873,7 +873,7 @@ class TestEdgeCasesAndStress:
 
     def test_hot_swapping_disabled(self, mock_data_provider, minimal_strategy):
         """Hot swapping can be disabled"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -885,7 +885,7 @@ class TestEdgeCasesAndStress:
 
     def test_partial_operations_configuration(self, mock_data_provider, minimal_strategy):
         """Partial operations should be configurable"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
@@ -899,7 +899,7 @@ class TestEdgeCasesAndStress:
 
     def test_regime_detector_optional(self, mock_data_provider, minimal_strategy):
         """Regime detector should be optional feature"""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,

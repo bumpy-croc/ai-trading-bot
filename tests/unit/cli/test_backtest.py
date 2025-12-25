@@ -170,7 +170,7 @@ class TestHandleBacktest:
         """Test successful backtest execution with default parameters."""
         # Arrange
         with (
-            patch("src.backtesting.engine.Backtester", return_value=mock_backtester),
+            patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
             patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
@@ -210,7 +210,7 @@ class TestHandleBacktest:
         default_args.use_sentiment = True
 
         with (
-            patch("src.backtesting.engine.Backtester", return_value=mock_backtester),
+            patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
             patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
@@ -257,7 +257,7 @@ class TestHandleBacktest:
         default_args.no_cache = True
 
         with (
-            patch("src.backtesting.engine.Backtester", return_value=mock_backtester),
+            patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
             patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
@@ -290,7 +290,7 @@ class TestHandleBacktest:
         default_args.provider = "coinbase"
 
         with (
-            patch("src.backtesting.engine.Backtester", return_value=mock_backtester),
+            patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
             patch(
@@ -345,7 +345,7 @@ class TestHandleBacktest:
         """Test that error is returned when backtest execution fails."""
         # Arrange
         with (
-            patch("src.backtesting.engine.Backtester") as mock_backtester_class,
+            patch("src.engines.backtest.engine.Backtester") as mock_backtester_class,
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
             patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,
@@ -381,7 +381,7 @@ class TestHandleBacktest:
         """Test that backtest completes successfully and attempts to save results."""
         # Arrange
         with (
-            patch("src.backtesting.engine.Backtester", return_value=mock_backtester),
+            patch("src.engines.backtest.engine.Backtester", return_value=mock_backtester),
             patch("cli.commands.backtest._load_strategy") as mock_load_strategy,
             patch("cli.commands.backtest.configure_logging"),
             patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider_class,

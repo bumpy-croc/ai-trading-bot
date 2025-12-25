@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.data_providers.data_provider import DataProvider
 from src.risk.risk_manager import RiskParameters
 from src.strategies.ml_basic import create_ml_basic_strategy

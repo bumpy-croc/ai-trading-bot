@@ -6,8 +6,8 @@ import pytest
 pytestmark = pytest.mark.integration
 
 try:
-    from src.live.strategy_manager import StrategyManager
-    from src.live.trading_engine import LiveTradingEngine
+    from src.engines.live.strategy_manager import StrategyManager
+    from src.engines.live.trading_engine import LiveTradingEngine
 
     LIVE_TRADING_AVAILABLE = True
     STRATEGY_MANAGER_AVAILABLE = True

@@ -15,13 +15,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.live.execution.exit_handler import LiveExitHandler
-from src.live.execution.position_tracker import (
+from src.engines.live.execution.exit_handler import LiveExitHandler
+from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
     PositionSide,
 )
-from src.live.logging.event_logger import LiveEventLogger
+from src.engines.live.logging.event_logger import LiveEventLogger
 
 
 class TestExitFeeCalculation:
@@ -290,7 +290,7 @@ class TestDailyPnLTracking:
 
         # Simulate date change
         tomorrow = date.today()
-        with patch("src.live.logging.event_logger.date") as mock_date:
+        with patch("src.engines.live.logging.event_logger.date") as mock_date:
             mock_date.today.return_value = tomorrow
             mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
 

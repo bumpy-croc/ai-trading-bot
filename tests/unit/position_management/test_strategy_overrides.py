@@ -6,8 +6,8 @@ from unittest.mock import Mock
 
 import pandas as pd
 
-from src.backtesting.engine import Backtester
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.backtest.engine import Backtester
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig
 from src.strategies.components import (
     Strategy,

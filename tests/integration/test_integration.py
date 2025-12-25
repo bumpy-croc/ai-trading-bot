@@ -11,9 +11,9 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
-from src.live.strategy_manager import StrategyManager
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.backtest.engine import Backtester
+from src.engines.live.strategy_manager import StrategyManager
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskManager, RiskParameters
 from src.strategies.components import SignalDirection
 from src.strategies.ml_basic import create_ml_basic_strategy
@@ -303,7 +303,7 @@ class TestComponentInteractions:
         assert data is not None
 
         # 2. Position opening (if strategy allows)
-        from src.live.trading_engine import PositionSide
+        from src.engines.live.trading_engine import PositionSide
 
         initial_position_count = len(engine.positions)
         engine._open_position("BTCUSDT", PositionSide.LONG, 0.1, 50000)
@@ -472,7 +472,7 @@ class TestProductionReadiness:
         )
 
         # Add some mock positions
-        from src.live.trading_engine import Position, PositionSide
+        from src.engines.live.trading_engine import Position, PositionSide
 
         position = Position(
             symbol="BTCUSDT",

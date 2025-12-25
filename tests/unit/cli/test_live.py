@@ -197,7 +197,7 @@ class TestHandleLive:
 
             # Assert
             assert result == 0
-            mock_forward.assert_called_once_with("src.live.runner", ["ml_basic", "--paper-trading"])
+            mock_forward.assert_called_once_with("src.engines.live.runner", ["ml_basic", "--paper-trading"])
 
     def test_handles_empty_args(self):
         """Test that live command handles empty args."""
@@ -212,7 +212,7 @@ class TestHandleLive:
 
             # Assert
             assert result == 0
-            mock_forward.assert_called_once_with("src.live.runner", [])
+            mock_forward.assert_called_once_with("src.engines.live.runner", [])
 
 
 class TestControlTrain:

@@ -5,7 +5,7 @@ import pytest
 
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.database.models import TradeSource
-from src.live.trading_engine import LiveTradingEngine, PositionSide
+from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 from src.strategies.components import FixedFractionSizer, FixedRiskManager, Strategy
 from src.strategies.components.regime_context import RegimeContext, TrendLabel, VolLabel
 from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator

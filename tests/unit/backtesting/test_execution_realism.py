@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from unittest.mock import Mock
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.strategies.components import Signal, SignalDirection
 
 

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
 from src.strategies.ml_basic import create_ml_basic_strategy
 

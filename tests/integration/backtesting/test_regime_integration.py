@@ -4,8 +4,8 @@ from types import ModuleType, SimpleNamespace
 
 import pandas as pd
 
-from src.backtesting import engine as backtesting_engine
-from src.backtesting.engine import Backtester
+from src.engines.backtest import engine as backtesting_engine
+from src.engines.backtest.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.regime.detector import RegimeConfig, RegimeDetector
 from src.strategies.components.strategy import Strategy
@@ -124,8 +124,8 @@ def test_backtester_regime_annotation(monkeypatch):
     backtester.enable_regime_switching = True
 
     # Manually initialize regime handler with stub switcher
-    from src.backtesting.regime.regime_handler import RegimeHandler
-    from src.live.strategy_manager import StrategyManager
+    from src.engines.backtest.regime.regime_handler import RegimeHandler
+    from src.engines.live.strategy_manager import StrategyManager
 
     strategy_manager = StrategyManager()
     regime_switcher = StubRegimeSwitcher()
@@ -219,13 +219,13 @@ def test_regime_switcher_respects_lookback(monkeypatch):
                 "agreement": regime_analysis["consensus_regime"]["agreement_score"],
             }
 
-    strategy_manager_module = ModuleType("src.live.strategy_manager")
+    strategy_manager_module = ModuleType("src.engines.live.strategy_manager")
     strategy_manager_module.StrategyManager = DummyStrategyManager
-    monkeypatch.setitem(sys.modules, "src.live.strategy_manager", strategy_manager_module)
+    monkeypatch.setitem(sys.modules, "src.engines.live.strategy_manager", strategy_manager_module)
 
-    switcher_module = ModuleType("src.live.regime_strategy_switcher")
+    switcher_module = ModuleType("src.engines.live.regime_strategy_switcher")
     switcher_module.RegimeStrategySwitcher = DummySwitcher
-    monkeypatch.setitem(sys.modules, "src.live.regime_strategy_switcher", switcher_module)
+    monkeypatch.setitem(sys.modules, "src.engines.live.regime_strategy_switcher", switcher_module)
 
     strategy = create_dummy_strategy()
     provider = MockDataProvider(interval_seconds=3600, num_candles=500, seed=123)

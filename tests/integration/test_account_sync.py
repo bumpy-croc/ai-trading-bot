@@ -21,7 +21,7 @@ from src.data_providers.exchange_interface import (
     Trade,
 )
 from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
-from src.live.account_sync import AccountSynchronizer
+from src.engines.live.account_sync import AccountSynchronizer
 
 pytestmark = pytest.mark.integration
 

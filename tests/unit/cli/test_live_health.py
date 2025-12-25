@@ -286,7 +286,7 @@ class TestHandleLiveHealth:
             # Assert
             assert result == 0
             mock_forward.assert_called_once_with(
-                "src.live.runner", ["ml_basic", "--paper-trading", "--symbol", "ETHUSDT"]
+                "src.engines.live.runner", ["ml_basic", "--paper-trading", "--symbol", "ETHUSDT"]
             )
 
     def test_filters_out_port_argument(self):
@@ -308,7 +308,7 @@ class TestHandleLiveHealth:
             # Assert
             assert result == 0
             # --port and its value should be filtered out
-            mock_forward.assert_called_once_with("src.live.runner", ["ml_basic", "--paper-trading"])
+            mock_forward.assert_called_once_with("src.engines.live.runner", ["ml_basic", "--paper-trading"])
 
     def test_filters_out_help_argument(self):
         """Test that --help argument is filtered out before forwarding."""
@@ -329,7 +329,7 @@ class TestHandleLiveHealth:
             # Assert
             assert result == 0
             # --help should be filtered out
-            mock_forward.assert_called_once_with("src.live.runner", ["ml_basic", "--paper-trading"])
+            mock_forward.assert_called_once_with("src.engines.live.runner", ["ml_basic", "--paper-trading"])
 
     def test_handles_empty_args(self):
         """Test that empty args are handled correctly."""
@@ -349,7 +349,7 @@ class TestHandleLiveHealth:
 
             # Assert
             assert result == 0
-            mock_forward.assert_called_once_with("src.live.runner", [])
+            mock_forward.assert_called_once_with("src.engines.live.runner", [])
 
     def test_returns_forward_result_code(self):
         """Test that return code from forward is passed through."""

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components.position_sizer import PositionSizer
 from src.strategies.components.risk_manager import RiskManager

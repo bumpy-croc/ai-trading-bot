@@ -3,7 +3,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.trading_engine import LiveTradingEngine
 
 
 class TestDataValidation:

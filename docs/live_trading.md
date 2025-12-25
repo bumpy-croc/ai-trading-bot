@@ -3,7 +3,7 @@
 > **Last Updated**: 2025-11-10  
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
-`src/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
+`src/engines/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
 continuous polling, account synchronisation, and resilience features required for production trading.
 
 ## Engine highlights
@@ -16,7 +16,7 @@ continuous polling, account synchronisation, and resilience features required fo
   available just like in the backtester. Position updates emit structured events through `log_engine_event`, `log_order_event`,
   and `log_risk_event`.
 - **Account synchronisation** – `AccountSynchronizer` periodically reconciles balances, open positions, and open orders using the
-  exchange API (`src/live/account_sync.py`). It stores the results through `DatabaseManager` so restarts can resume from the last
+  exchange API (`src/engines/live/account_sync.py`). It stores the results through `DatabaseManager` so restarts can resume from the last
   known state.
 - **Sentiment and regime inputs** – pass a `SentimentDataProvider` (Fear & Greed) or enable the `RegimeStrategySwitcher` to swap
   strategies when market conditions change.
@@ -32,7 +32,7 @@ continuous polling, account synchronisation, and resilience features required fo
     ```python
     from src.data_providers.binance_provider import BinanceProvider
     from src.database.manager import DatabaseManager
-    from src.live.account_sync import AccountSynchronizer
+    from src.engines.live.account_sync import AccountSynchronizer
 
     sync = AccountSynchronizer(BinanceProvider(), DatabaseManager(), session_id=<current_session_id>)
     sync.emergency_sync()
@@ -54,7 +54,7 @@ continuous polling, account synchronisation, and resilience features required fo
 
 ## CLI usage
 
-`atb live` forwards arguments to `src/live/runner.py`:
+`atb live` forwards arguments to `src/engines/live/runner.py`:
 
 ```bash
 # Paper trading session (Binance, 60 second polling)
@@ -84,7 +84,7 @@ The control surface lives under `atb live-control`:
 ```python
 import os
 
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.strategies.ml_basic import create_ml_basic_strategy

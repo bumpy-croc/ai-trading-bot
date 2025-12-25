@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig
 from src.position_management.partial_manager import PartialExitPolicy
 from src.position_management.trailing_stops import TrailingStopPolicy
@@ -31,7 +31,7 @@ def _build_engine(
 ) -> LiveTradingEngine:
     """Create a LiveTradingEngine instance with a mocked database manager."""
 
-    monkeypatch.setattr("src.live.trading_engine.DatabaseManager", MockDatabaseManager)
+    monkeypatch.setattr("src.engines.live.trading_engine.DatabaseManager", MockDatabaseManager)
 
     strategy = Mock()
     strategy.name = "MockStrategy"
@@ -151,7 +151,7 @@ def test_dynamic_risk_policy_reuses_existing_manager(monkeypatch: pytest.MonkeyP
             created_configs.append(config)
 
     monkeypatch.setattr(
-        "src.live.trading_engine.DynamicRiskManager",
+        "src.engines.live.trading_engine.DynamicRiskManager",
         StubDynamicRiskManager,
     )
 
@@ -191,7 +191,7 @@ def test_dynamic_risk_policy_recreates_when_config_changes(
             created_configs.append(config)
 
     monkeypatch.setattr(
-        "src.live.trading_engine.DynamicRiskManager",
+        "src.engines.live.trading_engine.DynamicRiskManager",
         StubDynamicRiskManager,
     )
 

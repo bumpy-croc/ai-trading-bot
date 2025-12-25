@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.data_providers.data_provider import DataProvider
 from src.strategies.components.position_sizer import PositionSizer
 from src.strategies.components.regime_context import RegimeContext

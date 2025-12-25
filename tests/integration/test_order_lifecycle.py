@@ -15,7 +15,7 @@ from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderSt
 from src.data_providers.exchange_interface import OrderType as ExchangeOrderType
 from src.database.manager import DatabaseManager
 from src.database.models import OrderStatus, OrderType, PositionSide, PositionStatus
-from src.live.account_sync import AccountSynchronizer
+from src.engines.live.account_sync import AccountSynchronizer
 
 
 @pytest.mark.integration

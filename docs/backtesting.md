@@ -3,7 +3,7 @@
 > **Last Updated**: 2025-12-23
 > **Related Documentation**: [Live trading](live_trading.md), [Data pipeline](data_pipeline.md)
 
-The vectorised backtesting engine in `src/backtesting/` replays historical candles, applies the strategy lifecycle, and
+The vectorised backtesting engine in `src/engines/backtest/` replays historical candles, applies the strategy lifecycle, and
 records trades, risk metrics, and optional database logs. It mirrors the live engine behaviour: partial exits, trailing stops,
 regime-aware strategy switching, and dynamic risk controls all share the same helpers.
 
@@ -40,7 +40,7 @@ The backtesting engine uses a modular, handler-based architecture that separates
 
 ## Module Reference
 
-### Core Modules (`src/backtesting/`)
+### Core Modules (`src/engines/backtest/`)
 
 | Module | Purpose |
 | ------ | ------- |
@@ -48,7 +48,7 @@ The backtesting engine uses a modular, handler-based architecture that separates
 | `models.py` | Data classes: `Trade`, `ActiveTrade` |
 | `utils.py` | Performance metric calculations, data extraction helpers |
 
-### Execution Handlers (`src/backtesting/execution/`)
+### Execution Handlers (`src/engines/backtest/execution/`)
 
 | Module | Purpose |
 | ------ | ------- |
@@ -57,19 +57,19 @@ The backtesting engine uses a modular, handler-based architecture that separates
 | `entry_handler.py` | Entry signal processing, position sizing, correlation control |
 | `exit_handler.py` | Exit conditions (SL/TP/trailing/time), exit execution |
 
-### Risk Handlers (`src/backtesting/risk/`)
+### Risk Handlers (`src/engines/backtest/risk/`)
 
 | Module | Purpose |
 | ------ | ------- |
 | `correlation_handler.py` | Correlation-based position size adjustment |
 
-### Regime Handlers (`src/backtesting/regime/`)
+### Regime Handlers (`src/engines/backtest/regime/`)
 
 | Module | Purpose |
 | ------ | ------- |
 | `regime_handler.py` | Regime analysis, strategy switching |
 
-### Logging (`src/backtesting/logging/`)
+### Logging (`src/engines/backtest/logging/`)
 
 | Module | Purpose |
 | ------ | ------- |
@@ -78,7 +78,7 @@ The backtesting engine uses a modular, handler-based architecture that separates
 ## Key Components
 
 - `Backtester` orchestrates the run, handles warm-up periods, and computes summary metrics using
-  `src/backtesting/utils.compute_performance_metrics`.
+  `src/engines/backtest/utils.compute_performance_metrics`.
 - `ExecutionEngine` handles realistic execution modeling: fees, slippage, and optional next-bar execution
   for lookahead bias prevention.
 - `PositionTracker` manages active trade lifecycle including partial exits, scale-ins, and MFE/MAE tracking.
@@ -151,7 +151,7 @@ Backtests can also run from Python modules or notebooks:
 ```python
 from datetime import datetime, timedelta
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.strategies.ml_basic import create_ml_basic_strategy

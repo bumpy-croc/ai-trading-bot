@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.strategies.components import (
     FixedFractionSizer,

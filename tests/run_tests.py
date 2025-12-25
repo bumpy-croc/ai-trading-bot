@@ -417,9 +417,9 @@ def run_quick_smoke_test():
         # Validate live/backtest trade export units align (cash PnL)
         from datetime import datetime, timedelta
 
-        from src.backtesting.models import Trade as BacktestTrade
-        from src.live.trading_engine import PositionSide
-        from src.live.trading_engine import Trade as LiveTrade
+        from src.engines.backtest.models import Trade as BacktestTrade
+        from src.engines.live.trading_engine import PositionSide
+        from src.engines.live.trading_engine import Trade as LiveTrade
         from src.performance.metrics import Side, cash_pnl, pnl_percent
 
         entry_price = 100.0

@@ -9,7 +9,7 @@ pytestmark = pytest.mark.integration
 from unittest.mock import Mock
 
 try:
-    from live.trading_engine import LiveTradingEngine, Position, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
     from src.performance.metrics import cash_pnl
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.strategies.components import (
