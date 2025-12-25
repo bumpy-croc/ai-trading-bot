@@ -31,6 +31,7 @@ from src.engines.backtest.utils import compute_performance_metrics
 from src.engines.backtest.utils import extract_indicators as util_extract_indicators
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
+from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
     build_time_exit_policy,
@@ -309,13 +310,18 @@ class Backtester:
             default_take_profit_pct=default_take_profit_pct,
         )
 
+        # Wrap PartialExitPolicy in unified PartialOperationsManager
+        partial_ops_manager = (
+            PartialOperationsManager(policy=partial_manager) if partial_manager is not None else None
+        )
+
         self.exit_handler = ExitHandler(
             execution_engine=self.execution_engine,
             position_tracker=self.position_tracker,
             risk_manager=self.risk_manager,
             trailing_stop_policy=self.trailing_stop_policy,
             time_exit_policy=self.time_exit_policy,
-            partial_manager=partial_manager,
+            partial_manager=partial_ops_manager,
             enable_engine_risk_exits=enable_engine_risk_exits,
             use_high_low_for_stops=use_high_low_for_stops,
         )

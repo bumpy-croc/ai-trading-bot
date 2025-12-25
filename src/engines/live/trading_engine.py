@@ -59,6 +59,7 @@ from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
+from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.position_management.partial_manager import PartialExitPolicy, PositionState
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
@@ -652,12 +653,19 @@ class LiveTradingEngine:
             max_position_size=self.max_position_size,
         )
 
+        # Wrap PartialExitPolicy in unified PartialOperationsManager
+        partial_ops_manager = (
+            PartialOperationsManager(policy=self.partial_manager)
+            if self.partial_manager is not None
+            else None
+        )
+
         # Exit handler
         self.live_exit_handler = exit_handler or LiveExitHandler(
             execution_engine=self.live_execution_engine,
             position_tracker=self.live_position_tracker,
             trailing_stop_policy=self.trailing_stop_policy,
-            partial_manager=self.partial_manager,
+            partial_manager=partial_ops_manager,
             time_exit_policy=self.time_exit_policy,
             use_high_low_for_stops=self.use_high_low_for_stops,
         )
