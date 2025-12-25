@@ -293,7 +293,8 @@ def apply_policies_to_engine(
             manager = getattr(engine, "dynamic_risk_manager", None)
             should_create = manager is None or getattr(manager, "config", None) != config
 
-            if should_create and db_manager is not None:
+            if should_create:
+                # Create manager even if db_manager is None - some operations work without it
                 engine.dynamic_risk_manager = DynamicRiskManager(
                     config=config, db_manager=db_manager
                 )
