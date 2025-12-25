@@ -32,6 +32,11 @@ from src.engines.backtest.utils import extract_indicators as util_extract_indica
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
 from src.engines.shared.policy_hydration import apply_policies_to_engine
+from src.engines.shared.risk_configuration import (
+    build_time_exit_policy,
+    build_trailing_stop_policy,
+    merge_dynamic_risk_config,
+)
 from src.config.config_manager import get_config
 from src.config.constants import (
     DEFAULT_DYNAMIC_RISK_ENABLED,
@@ -502,114 +507,18 @@ class Backtester:
     def _merge_dynamic_risk_config(
         self, base_config: DynamicRiskConfig, strategy: Any
     ) -> DynamicRiskConfig:
-        """Merge strategy risk overrides with base dynamic risk configuration."""
-        try:
-            strategy_overrides = (
-                strategy.get_risk_overrides()
-                if strategy and hasattr(strategy, "get_risk_overrides")
-                else None
-            )
-            if not strategy_overrides or "dynamic_risk" not in strategy_overrides:
-                return base_config
+        """Merge strategy risk overrides with base dynamic risk configuration.
 
-            dynamic_overrides = strategy_overrides["dynamic_risk"]
-
-            return DynamicRiskConfig(
-                enabled=dynamic_overrides.get("enabled", base_config.enabled),
-                performance_window_days=dynamic_overrides.get(
-                    "performance_window_days", base_config.performance_window_days
-                ),
-                drawdown_thresholds=dynamic_overrides.get(
-                    "drawdown_thresholds", base_config.drawdown_thresholds
-                ),
-                risk_reduction_factors=dynamic_overrides.get(
-                    "risk_reduction_factors", base_config.risk_reduction_factors
-                ),
-                recovery_thresholds=dynamic_overrides.get(
-                    "recovery_thresholds", base_config.recovery_thresholds
-                ),
-                volatility_adjustment_enabled=dynamic_overrides.get(
-                    "volatility_adjustment_enabled",
-                    base_config.volatility_adjustment_enabled,
-                ),
-                volatility_window_days=dynamic_overrides.get(
-                    "volatility_window_days", base_config.volatility_window_days
-                ),
-                high_volatility_threshold=dynamic_overrides.get(
-                    "high_volatility_threshold", base_config.high_volatility_threshold
-                ),
-                low_volatility_threshold=dynamic_overrides.get(
-                    "low_volatility_threshold", base_config.low_volatility_threshold
-                ),
-                volatility_risk_multipliers=dynamic_overrides.get(
-                    "volatility_risk_multipliers", base_config.volatility_risk_multipliers
-                ),
-            )
-        except Exception as e:
-            logger.debug("Failed to merge strategy dynamic risk overrides: %s", e)
-            return base_config
+        Uses shared risk configuration logic for consistency.
+        """
+        return merge_dynamic_risk_config(base_config, strategy)
 
     def _build_trailing_policy(self) -> TrailingStopPolicy | None:
-        """Build trailing stop policy from strategy/risk overrides."""
-        try:
-            overrides = (
-                self.strategy.get_risk_overrides()
-                if hasattr(self.strategy, "get_risk_overrides")
-                else None
-            )
-        except Exception:
-            overrides = None
+        """Build trailing stop policy from strategy/risk overrides.
 
-        cfg = None
-        if overrides and isinstance(overrides, dict):
-            cfg = overrides.get("trailing_stop")
-
-        params = getattr(self.risk_manager, "params", None)
-        if cfg or params:
-            activation = (cfg.get("activation_threshold") if cfg else None) or (
-                params.trailing_activation_threshold if params else None
-            )
-            dist_pct = cfg.get("trailing_distance_pct") if cfg else None
-            atr_mult = cfg.get("trailing_distance_atr_mult") if cfg else None
-            if atr_mult is None and params is not None:
-                atr_mult = params.trailing_atr_multiplier
-            breakeven_threshold = (cfg.get("breakeven_threshold") if cfg else None) or (
-                params.breakeven_threshold if params else None
-            )
-            breakeven_buffer = (cfg.get("breakeven_buffer") if cfg else None) or (
-                params.breakeven_buffer if params else None
-            )
-
-            params_has_distance = bool(
-                params
-                and (
-                    params.trailing_distance_pct is not None
-                    or params.trailing_atr_multiplier is not None
-                )
-            )
-
-            if activation and (dist_pct is not None or atr_mult is not None or params_has_distance):
-                return TrailingStopPolicy(
-                    activation_threshold=float(activation),
-                    trailing_distance_pct=(
-                        float(dist_pct)
-                        if dist_pct is not None
-                        else (
-                            float(params.trailing_distance_pct)
-                            if params and params.trailing_distance_pct is not None
-                            else None
-                        )
-                    ),
-                    atr_multiplier=float(atr_mult) if atr_mult is not None else None,
-                    breakeven_threshold=(
-                        float(breakeven_threshold) if breakeven_threshold is not None else 0.02
-                    ),
-                    breakeven_buffer=(
-                        float(breakeven_buffer) if breakeven_buffer is not None else 0.001
-                    ),
-                )
-
-        return None
+        Uses shared risk configuration logic for consistency.
+        """
+        return build_trailing_stop_policy(self.strategy, self.risk_manager)
 
     def _build_time_exit_policy(self) -> TimeExitPolicy | None:
         """Build time exit policy from strategy/risk overrides."""
