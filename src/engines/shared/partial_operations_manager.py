@@ -84,10 +84,34 @@ class PartialOperationsManager:
 
         Args:
             policy: Partial exit policy to apply, or None to disable.
+
+        Raises:
+            ValueError: If policy configuration lists have mismatched lengths.
         """
         self.policy = policy
         self.total_partial_exits: int = 0
         self.total_scale_ins: int = 0
+
+        # Validate policy configuration if provided
+        if policy is not None:
+            exit_targets = getattr(policy, "exit_targets", [])
+            exit_sizes = getattr(policy, "exit_sizes", [])
+            scale_in_thresholds = getattr(policy, "scale_in_thresholds", [])
+            scale_in_sizes = getattr(policy, "scale_in_sizes", [])
+
+            # Validate partial exit configuration
+            if exit_targets and len(exit_targets) != len(exit_sizes):
+                raise ValueError(
+                    f"Partial exit configuration error: exit_targets has {len(exit_targets)} "
+                    f"elements but exit_sizes has {len(exit_sizes)} elements (must match)"
+                )
+
+            # Validate scale-in configuration
+            if scale_in_thresholds and len(scale_in_thresholds) != len(scale_in_sizes):
+                raise ValueError(
+                    f"Scale-in configuration error: scale_in_thresholds has {len(scale_in_thresholds)} "
+                    f"elements but scale_in_sizes has {len(scale_in_sizes)} elements (must match)"
+                )
 
     def set_policy(self, policy: PartialExitPolicy | None) -> None:
         """Update the partial operations policy.
@@ -120,13 +144,17 @@ class PartialOperationsManager:
         if self.policy is None:
             return PartialExitResult()
 
-        # Get position attributes
-        entry_price = getattr(position, "entry_price", None)
-        side = self._get_side_str(position)
-        partial_exits_taken = getattr(position, "partial_exits_taken", 0)
+        # Get and validate position attributes immediately
+        try:
+            entry_price = getattr(position, "entry_price", None)
+        except Exception:
+            return PartialExitResult()
 
         if entry_price is None or entry_price <= 0:
             return PartialExitResult()
+
+        side = self._get_side_str(position)
+        partial_exits_taken = getattr(position, "partial_exits_taken", 0)
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
@@ -181,13 +209,17 @@ class PartialOperationsManager:
         if self.policy is None:
             return ScaleInResult()
 
-        # Get position attributes
-        entry_price = getattr(position, "entry_price", None)
-        side = self._get_side_str(position)
-        scale_ins_taken = getattr(position, "scale_ins_taken", 0)
+        # Get and validate position attributes immediately
+        try:
+            entry_price = getattr(position, "entry_price", None)
+        except Exception:
+            return ScaleInResult()
 
         if entry_price is None or entry_price <= 0:
             return ScaleInResult()
+
+        side = self._get_side_str(position)
+        scale_ins_taken = getattr(position, "scale_ins_taken", 0)
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:

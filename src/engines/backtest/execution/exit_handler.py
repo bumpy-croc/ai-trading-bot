@@ -7,6 +7,7 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -14,7 +15,10 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from src.engines.backtest.models import Trade
-from src.engines.shared.partial_operations_manager import PartialOperationsManager
+from src.engines.shared.partial_operations_manager import (
+    EPSILON,
+    PartialOperationsManager,
+)
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 
 if TYPE_CHECKING:
@@ -199,9 +203,20 @@ class ExitHandler:
                 exit_size_of_original = result.exit_fraction
                 # Convert from fraction-of-original to fraction-of-current
                 current_size_fraction = trade.current_size / trade.original_size
+
+                # Protect against division by zero (position fully closed)
+                if abs(current_size_fraction) < EPSILON:
+                    logger.debug("Position fully closed, skipping further partial exits")
+                    break
+
                 exit_size_of_current = exit_size_of_original / current_size_fraction
 
-                if exit_size_of_current <= 0 or exit_size_of_current > 1.0:
+                # Validate bounds and check for NaN/Infinity
+                if (
+                    exit_size_of_current <= 0
+                    or exit_size_of_current > 1.0
+                    or not math.isfinite(exit_size_of_current)
+                ):
                     break
 
                 iteration_count += 1
