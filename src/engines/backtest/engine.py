@@ -31,6 +31,7 @@ from src.engines.backtest.utils import compute_performance_metrics
 from src.engines.backtest.utils import extract_indicators as util_extract_indicators
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
+from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.config.config_manager import get_config
 from src.config.constants import (
     DEFAULT_DYNAMIC_RISK_ENABLED,
@@ -712,53 +713,11 @@ class Backtester:
             return None
 
     def _apply_policies_from_decision(self, decision: Any) -> None:
-        """Hydrate engine-level policies from runtime decisions."""
-        if decision is None:
-            return
+        """Hydrate engine-level policies from runtime decisions.
 
-        bundle = getattr(decision, "policies", None)
-        if not bundle:
-            return
-
-        # Partial exit policy
-        try:
-            partial_descriptor = getattr(bundle, "partial_exit", None)
-            if partial_descriptor is not None:
-                if self._partial_operations_opt_in or self.partial_manager is not None:
-                    self.partial_manager = partial_descriptor.to_policy()
-                    self._partial_operations_opt_in = True
-                    self.exit_handler.partial_manager = self.partial_manager
-        except Exception as e:
-            logger.debug("Failed to hydrate partial-exit policy: %s", e)
-
-        # Trailing stop policy
-        try:
-            trailing_descriptor = getattr(bundle, "trailing_stop", None)
-            if trailing_descriptor is not None:
-                if self._trailing_stop_opt_in or self.trailing_stop_policy is not None:
-                    self.trailing_stop_policy = trailing_descriptor.to_policy()
-                    self._trailing_stop_opt_in = True
-                    self.exit_handler.trailing_stop_policy = self.trailing_stop_policy
-        except Exception as e:
-            logger.debug("Failed to hydrate trailing-stop policy: %s", e)
-
-        # Dynamic risk config
-        try:
-            dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
-            if dynamic_descriptor is not None:
-                config = dynamic_descriptor.to_config()
-                if not self.enable_dynamic_risk:
-                    self.enable_dynamic_risk = True
-
-                if self.dynamic_risk_manager is None or (
-                    getattr(self.dynamic_risk_manager, "config", None) != config
-                ):
-                    self.dynamic_risk_manager = DynamicRiskManager(
-                        config=config, db_manager=self.db_manager
-                    )
-                    self.entry_handler.dynamic_risk_manager = self.dynamic_risk_manager
-        except Exception as e:
-            logger.debug("Failed to hydrate dynamic risk manager: %s", e)
+        Uses shared policy hydration logic for consistency with live engine.
+        """
+        apply_policies_to_engine(decision, self, self.db_manager)
 
     def _finalize_runtime(self) -> None:
         """Clean up runtime state after backtest."""

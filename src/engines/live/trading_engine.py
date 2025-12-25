@@ -84,6 +84,7 @@ from src.engines.live.execution.position_tracker import (
 )
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.shared.policy_hydration import apply_policies_to_engine
 
 logger = logging.getLogger(__name__)
 
@@ -1002,64 +1003,23 @@ class LiveTradingEngine:
         return context
 
     def _apply_policies_from_decision(self, decision) -> None:
-        """Hydrate engine-level policies from component strategy output."""
+        """Hydrate engine-level policies from component strategy output.
 
-        if decision is None:
-            return
+        Uses shared policy hydration logic for consistency with backtest engine.
+        """
+        # Use shared policy hydration logic
+        apply_policies_to_engine(decision, self, self.db_manager)
 
-        bundle = getattr(decision, "policies", None)
-        if not bundle:
-            return
-
-        try:
-            partial_descriptor = getattr(bundle, "partial_exit", None)
-            if partial_descriptor is not None:
-                if self._partial_operations_opt_in or self.partial_manager is not None:
-                    self.partial_manager = partial_descriptor.to_policy()
-                    self._partial_operations_opt_in = True
-                else:
-                    logger.debug(
-                        "Skipping partial-exit policy from component decision: partial operations disabled"
-                    )
-        except Exception as exc:
-            logger.debug("Failed to hydrate partial-exit policy from component decision: %s", exc)
-
-        try:
-            trailing_descriptor = getattr(bundle, "trailing_stop", None)
-            if trailing_descriptor is not None:
-                if self._trailing_stop_opt_in or self.trailing_stop_policy is not None:
-                    self.trailing_stop_policy = trailing_descriptor.to_policy()
-                    self._trailing_stop_opt_in = True
-                else:
-                    logger.debug(
-                        "Skipping trailing-stop policy from component decision: trailing stops disabled"
-                    )
-        except Exception as exc:
-            logger.debug("Failed to hydrate trailing-stop policy from component decision: %s", exc)
-
-        try:
-            dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
-            if dynamic_descriptor is not None:
-                config = dynamic_descriptor.to_config()
-                self._component_dynamic_risk_config = config
-                if not getattr(self, "enable_dynamic_risk", False):
-                    self.enable_dynamic_risk = True
-                if self.db_manager is not None:
-                    manager = getattr(self, "dynamic_risk_manager", None)
-                    should_create = manager is None or getattr(manager, "config", None) != config
-                    if should_create:
-                        self.dynamic_risk_manager = DynamicRiskManager(
-                            config=config,
-                            db_manager=self.db_manager,
-                        )
-                    else:
-                        try:
-                            self.dynamic_risk_manager.config = config
-                        except AttributeError:
-                            pass
-                        self.dynamic_risk_manager.db_manager = self.db_manager
-        except Exception as exc:
-            logger.debug("Failed to hydrate dynamic risk manager from component decision: %s", exc)
+        # Cache dynamic risk config for live engine state tracking
+        if decision is not None:
+            bundle = getattr(decision, "policies", None)
+            if bundle:
+                try:
+                    dynamic_descriptor = getattr(bundle, "dynamic_risk", None)
+                    if dynamic_descriptor is not None:
+                        self._component_dynamic_risk_config = dynamic_descriptor.to_config()
+                except Exception:
+                    pass  # Ignore - shared function handles the main logic
 
     # Runtime integration helpers -------------------------------------------------
 
