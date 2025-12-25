@@ -7,7 +7,7 @@ from src.strategies.ml_basic import create_ml_basic_strategy
 pytestmark = pytest.mark.integration
 
 try:
-    from src.live.trading_engine import LiveTradingEngine, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     LIVE_TRADING_AVAILABLE = True
 except ImportError:

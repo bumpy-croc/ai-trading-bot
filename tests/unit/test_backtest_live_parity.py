@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 
 
 class TestFeeSlippageParity:
@@ -459,7 +459,7 @@ class TestBacktesterPositionSizeParity:
 
     def test_backtester_max_position_size_default(self):
         """Backtester should have same default max_position_size as live engine (10%)."""
-        from src.backtesting.engine import Backtester
+        from src.engines.backtest.engine import Backtester
 
         # Both engines should default to 10%
         assert hasattr(Backtester.__init__, "__defaults__") or True
@@ -481,7 +481,7 @@ class TestBacktesterPositionSizeParity:
 
     def test_backtester_max_position_size_configurable(self):
         """Backtester max_position_size should be configurable."""
-        from src.backtesting.engine import Backtester
+        from src.engines.backtest.engine import Backtester
 
         strategy = Mock()
         strategy.name = "test"
@@ -500,7 +500,7 @@ class TestBacktesterPositionSizeParity:
 
     def test_backtester_rejects_invalid_max_position_size(self):
         """Backtester should reject invalid max_position_size values."""
-        from src.backtesting.engine import Backtester
+        from src.engines.backtest.engine import Backtester
 
         strategy = Mock()
         strategy.name = "test"

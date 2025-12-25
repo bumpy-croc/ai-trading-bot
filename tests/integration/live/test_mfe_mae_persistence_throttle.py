@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 def test_mfe_mae_throttle_prevents_rapid_db_updates(
     mock_strategy, mock_data_provider, tmp_path, monkeypatch
 ):
-    from src.live.trading_engine import LiveTradingEngine, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     # Minimal data feed
     now = datetime.utcnow()

@@ -3,7 +3,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.data_providers.data_provider import DataProvider
 from src.position_management.trailing_stops import TrailingStopPolicy
 from src.strategies.ml_adaptive import create_ml_adaptive_strategy

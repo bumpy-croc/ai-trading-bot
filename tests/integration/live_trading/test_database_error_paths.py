@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 def test_engine_survives_update_position_failure(
     mock_strategy, mock_data_provider, tmp_path, caplog
 ):
-    from src.live.trading_engine import LiveTradingEngine, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     idx = pd.date_range(datetime.utcnow(), periods=2, freq="1min")
     prices = pd.Series([100.0, 101.0], index=idx)
@@ -50,7 +50,7 @@ def test_engine_survives_log_trade_and_close_position_failure(
 ):
     from unittest.mock import MagicMock
 
-    from src.live.trading_engine import LiveTradingEngine, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     idx = pd.date_range(datetime.utcnow(), periods=2, freq="1min")
     prices = pd.Series([100.0, 101.0], index=idx)

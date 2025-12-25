@@ -70,7 +70,7 @@ def _get_date_range(args):
 
 def _handle(ns: argparse.Namespace) -> int:
     try:
-        from src.backtesting.engine import Backtester
+        from src.engines.backtest.engine import Backtester
         from src.data_providers.feargreed_provider import FearGreedProvider
         from src.risk.risk_manager import RiskParameters
 

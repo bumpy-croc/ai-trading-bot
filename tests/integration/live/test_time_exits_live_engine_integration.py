@@ -1,7 +1,7 @@
 from datetime import time
 
 from src.data_providers.binance_provider import BinanceProvider
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.position_management.time_exits import MarketSessionDef, TimeExitPolicy
 from src.strategies.ml_basic import create_ml_basic_strategy
 

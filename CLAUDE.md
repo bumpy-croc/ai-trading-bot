@@ -129,14 +129,16 @@ Data Providers → Indicators → Strategy → Risk Manager → Execution
 ### Directory Structure
 
 **Core Application** (`src/`):
-- `backtesting/` - Vectorized simulation engine for strategy testing
 - `config/` - Typed configuration loader, constants, feature flags
 - `data_providers/` - Market & sentiment providers (Binance, Coinbase) with caching
 - `database/` - SQLAlchemy models, DatabaseManager, Flask-Admin UI
+- `engines/` - Trading engines (backtest + live):
+  - `backtest/` - Vectorized simulation engine for strategy testing
+  - `live/` - Live trading engine with real-time execution
+  - `shared/` - Unified logic for both engines (models, cost calculator, risk handlers)
 - `infrastructure/` - Cross-cutting concerns:
   - `logging/` - Centralized logging config, context, structured events
   - `runtime/` - Path resolution, geo detection, cache TTL, secrets
-- `live/` - Live trading engine with real-time execution
 - `ml/` - Trained models and metadata
   - **Registry**: `models/{SYMBOL}/{TYPE}/{VERSION}/` (versioned structure with latest symlinks)
   - All strategies now exclusively use registry-based model loading

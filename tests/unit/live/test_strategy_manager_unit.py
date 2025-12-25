@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.live.strategy_manager import StrategyManager, StrategyVersion
+from src.engines.live.strategy_manager import StrategyManager, StrategyVersion
 
 pytestmark = pytest.mark.unit
 

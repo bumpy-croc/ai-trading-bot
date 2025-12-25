@@ -5,7 +5,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import Strategy
 from src.strategies.components.position_sizer import PositionSizer

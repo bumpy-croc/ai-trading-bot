@@ -1,7 +1,7 @@
 import pandas as pd
 
 from src.data_providers.mock_data_provider import MockDataProvider
-from src.live.trading_engine import LiveTradingEngine
+from src.engines.live.trading_engine import LiveTradingEngine
 from src.strategies.ml_basic import create_ml_basic_strategy
 
 

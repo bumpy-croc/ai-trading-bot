@@ -20,7 +20,7 @@ from src.data_providers.exchange_interface import (
     OrderType,
     OrderStatus as ExchangeOrderStatus,
 )
-from src.live.trading_engine import LiveTradingEngine, Position, PositionSide
+from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 
 
 # ============================================================================
@@ -60,7 +60,7 @@ def mock_order_tracker():
 @pytest.fixture
 def engine_with_exchange(mock_data_provider, mock_exchange, mock_order_tracker):
     """Create a LiveTradingEngine with mocked exchange and order tracker."""
-    with patch("src.live.trading_engine.DatabaseManager"):
+    with patch("src.engines.live.trading_engine.DatabaseManager"):
         engine = LiveTradingEngine(
             strategy=Mock(),
             data_provider=mock_data_provider,
@@ -100,7 +100,7 @@ class TestExecuteOrder:
 
     def test_execute_order_no_exchange_interface(self, mock_data_provider):
         """Order fails when exchange interface is not initialized."""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=Mock(),
                 data_provider=mock_data_provider,
@@ -242,7 +242,7 @@ class TestCloseOrder:
 
     def test_close_order_no_exchange_interface(self, mock_data_provider, sample_position):
         """Close fails when exchange interface is not initialized."""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=Mock(),
                 data_provider=mock_data_provider,
@@ -380,7 +380,7 @@ class TestHandleOrderFill:
 
     def test_handle_fill_logs_event(self, engine_with_exchange):
         """Fill callback logs the event."""
-        with patch("src.live.trading_engine.log_order_event") as mock_log:
+        with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
             engine_with_exchange._handle_order_fill(
                 "order123", "BTCUSDT", 1.5, 50000.0
             )
@@ -441,7 +441,7 @@ class TestHandlePartialFill:
 
     def test_handle_partial_fill_logs_event(self, engine_with_exchange):
         """Partial fill callback logs the event."""
-        with patch("src.live.trading_engine.log_order_event") as mock_log:
+        with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
             engine_with_exchange._handle_partial_fill(
                 "order123", "BTCUSDT", 0.5, 50000.0
             )
@@ -472,7 +472,7 @@ class TestHandlePartialFill:
         sample_position.stop_loss_order_id = "sl_order_456"
         engine_with_exchange.positions["entry_order_123"] = sample_position
 
-        with patch("src.live.trading_engine.log_order_event") as mock_log:
+        with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
             engine_with_exchange._handle_partial_fill(
                 "sl_order_456", "BTCUSDT", 0.5, 48000.0
             )
@@ -500,7 +500,7 @@ class TestHandleOrderCancel:
 
     def test_handle_cancel_logs_event(self, engine_with_exchange):
         """Cancel callback logs the event."""
-        with patch("src.live.trading_engine.log_order_event") as mock_log:
+        with patch("src.engines.live.trading_engine.log_order_event") as mock_log:
             engine_with_exchange._handle_order_cancel("order123", "BTCUSDT")
 
             mock_log.assert_called_once()
@@ -544,7 +544,7 @@ class TestReconcilePositionsWithExchange:
 
     def test_reconcile_no_exchange_skipped(self, mock_data_provider):
         """Reconciliation skipped when no exchange interface."""
-        with patch("src.live.trading_engine.DatabaseManager"):
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
             engine = LiveTradingEngine(
                 strategy=Mock(),
                 data_provider=mock_data_provider,

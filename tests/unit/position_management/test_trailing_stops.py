@@ -544,13 +544,13 @@ class TestTrailingStopPolicyEdgeCases:
         pnl = policy._pnl_fraction(100.0, 110.0, "long", -1.0)
         assert pnl == 0.0
 
-        # Long side calculation
+        # Long side calculation (position-level PnL, not sized)
         pnl = policy._pnl_fraction(100.0, 110.0, "long", 0.5)
-        assert pnl == pytest.approx(0.05)  # 10% move * 0.5 position
+        assert pnl == pytest.approx(0.1)  # 10% move (position-level, not multiplied by fraction)
 
-        # Short side calculation
+        # Short side calculation (position-level PnL, not sized)
         pnl = policy._pnl_fraction(100.0, 90.0, "short", 0.5)
-        assert pnl == pytest.approx(0.05)  # 10% favorable move * 0.5 position
+        assert pnl == pytest.approx(0.1)  # 10% favorable move (position-level)
 
     def test_invalid_side_parameter(self):
         """Test behavior with invalid side parameter."""

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.mock_only
 def test_concurrent_open_close_with_database(tmp_path, mock_strategy, mock_data_provider):
-    from src.live.trading_engine import LiveTradingEngine, PositionSide
+    from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     # Basic deterministic data
     idx = pd.date_range(datetime.utcnow(), periods=5, freq="1min")

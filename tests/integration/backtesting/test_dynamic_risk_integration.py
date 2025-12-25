@@ -5,7 +5,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.position_management.dynamic_risk import DynamicRiskConfig
 from src.strategies.components.strategy import Strategy
 from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection

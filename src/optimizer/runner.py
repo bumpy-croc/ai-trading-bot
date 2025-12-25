@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider

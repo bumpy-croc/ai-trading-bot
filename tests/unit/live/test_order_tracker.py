@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from src.data_providers.exchange_interface import OrderStatus
-from src.live.order_tracker import OrderTracker
+from src.engines.live.order_tracker import OrderTracker
 
 
 @pytest.fixture

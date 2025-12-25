@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.backtesting.engine import Backtester
+from src.engines.backtest.engine import Backtester
 from src.data_providers.data_provider import DataProvider
 from src.strategies.components.strategy import Strategy
 from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
@@ -349,9 +349,9 @@ def test_regime_backtester_regression(monkeypatch):
     strategy_manager.current_strategy = primary_strategy
 
     monkeypatch.setenv("FEATURE_ENABLE_REGIME_DETECTION", "true")
-    monkeypatch.setattr("src.live.strategy_manager.StrategyManager", lambda: strategy_manager)
+    monkeypatch.setattr("src.engines.live.strategy_manager.StrategyManager", lambda: strategy_manager)
     monkeypatch.setattr(
-        "src.live.regime_strategy_switcher.RegimeStrategySwitcher",
+        "src.engines.live.regime_strategy_switcher.RegimeStrategySwitcher",
         lambda strategy_manager, regime_config=None, strategy_mapping=None, switching_config=None: StubRegimeStrategySwitcher(
             strategy_manager, regime_config, strategy_mapping, switching_config
         ),
