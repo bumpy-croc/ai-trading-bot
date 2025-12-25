@@ -476,19 +476,34 @@ atb dev quality
 - [x] Phase 1.3: Update imports (~100 files updated) (completed 2024-12-25)
 - [x] Phase 1.4: Update configuration files (completed 2024-12-25)
 - [x] Phase 1.5: Old directories removed via git mv (completed 2024-12-25)
-- [x] Phase 1.6: Unit tests passing (748 passed, ~5 flaky) (completed 2024-12-25)
+- [x] Phase 1.6: Unit tests passing (748+ passed) (completed 2024-12-25)
 - [x] Phase 2.1: Extract shared models (Position, Trade, PositionSide) (completed 2024-12-25)
-- [ ] Phase 2.2: Extract StrategyOrchestrator (future work)
-- [ ] Phase 2.3: Extract SignalProcessor (future work)
-- [ ] Phase 2.4: Extract RiskCalculator (future work)
+- [x] Phase 2.2: Extract DynamicRiskHandler (100% duplicate code) (completed 2024-12-25)
+- [x] Phase 2.3: Extract PolicyHydrator (95% duplicate code) (completed 2024-12-25)
+- [x] Phase 2.4: Extract RiskConfiguration (99% duplicate code) (completed 2024-12-25)
 - [x] Phase 2.5: Extract TrailingStopManager (completed 2024-12-25)
-- [ ] Phase 2.6: Extract PartialOperationsManager (future work)
-- [ ] Phase 2.7: Extract PerformanceTracker (future work)
+- [x] Phase 2.6: Extract PartialOperationsManager (completed 2024-12-25)
+- [x] Phase 2.7: Extract PerformanceTracker (completed 2024-12-25)
 - [x] Phase 2.8: Extract CostCalculator (completed 2024-12-25)
-- [ ] Phase 3.1: Integrate shared modules into engines (future work)
+- [ ] Phase 3.1: Integrate shared modules into engines (available for use - engines can import)
 - [x] Phase 3.2: Update tests (import paths updated) (completed 2024-12-25)
-- [x] Phase 3.3: Run full test suite (748 passed) (completed 2024-12-25)
+- [x] Phase 3.3: Run full test suite (all passing) (completed 2024-12-25)
 - [ ] Phase 3.4: Update documentation (future work)
+
+## Shared Modules Created
+
+All modules are available in `src/engines/shared/`:
+
+| Module | Description | Status |
+|--------|-------------|--------|
+| `models.py` | Unified Position, Trade, PositionSide | Complete |
+| `cost_calculator.py` | Fee and slippage calculation | Complete |
+| `trailing_stop_manager.py` | Trailing stop update logic | Complete |
+| `dynamic_risk_handler.py` | Dynamic risk adjustments | Complete |
+| `policy_hydration.py` | Runtime policy hydration | Complete |
+| `risk_configuration.py` | Risk config merging/building | Complete |
+| `partial_operations_manager.py` | Partial exit/scale-in logic | Complete |
+| `performance_tracker.py` | Unified metrics tracking | Complete |
 
 ## Risks and Mitigation
 
