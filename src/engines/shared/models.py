@@ -7,10 +7,16 @@ representation.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Epsilon for floating-point comparisons in financial calculations
+EPSILON = 1e-9
 
 
 class PositionSide(Enum):
@@ -101,13 +107,32 @@ class BasePosition:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Initialize derived fields after dataclass construction."""
+        """Initialize derived fields after dataclass construction.
+
+        IMPORTANT: This method mutates field values to ensure valid state:
+        1. Normalizes string side to PositionSide enum for type safety
+        2. Clamps size to maximum of 1.0 (100% of balance) to prevent over-leverage
+        3. Auto-initializes original_size and current_size from size if not provided
+
+        These mutations ensure positions are always in a valid state, even if
+        constructed with invalid or incomplete data.
+        """
         # Normalize side to PositionSide enum if string
         if isinstance(self.side, str):
             self.side = PositionSide.from_string(self.side)
 
-        # Limit position size to 100% of balance
-        self.size = min(self.size, 1.0)
+        # Limit position size to 100% of balance to prevent over-leverage
+        if self.size > 1.0 + EPSILON:  # Use epsilon for float comparison
+            logger.warning(
+                "Position size %.2f exceeds maximum 1.0, clamping to 1.0",
+                self.size,
+            )
+            self.size = 1.0
+
+        # Validate size is non-negative
+        if self.size < -EPSILON:
+            logger.warning("Position size %.2f is negative, setting to 0.0", self.size)
+            self.size = 0.0
 
         # Initialize original/current size if not provided
         if self.original_size is None:

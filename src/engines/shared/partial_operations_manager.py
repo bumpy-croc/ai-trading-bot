@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Epsilon for floating-point comparisons in financial calculations
+EPSILON = 1e-9
+
 
 @dataclass
 class PartialExitResult:
@@ -205,6 +208,10 @@ class PartialOperationsManager:
     ) -> float:
         """Execute a partial exit and calculate realized PnL.
 
+        IMPORTANT: This method directly mutates the position object's current_size
+        and partial_exits_taken attributes. Ensure position tracker is synchronized
+        after calling this method.
+
         Args:
             position: Position to partially exit.
             exit_fraction: Fraction to exit (0-1).
@@ -228,8 +235,16 @@ class PartialOperationsManager:
         else:
             pnl = exit_notional * (entry_price - current_price) / entry_price
 
-        # Update position tracking
-        new_size = current_size - exit_size
+        # Update position tracking with validation
+        new_size = max(0.0, current_size - exit_size)  # Ensure size never goes negative
+        if new_size < 0:
+            logger.warning(
+                "Partial exit would result in negative position size: %.4f - %.4f",
+                current_size,
+                exit_size,
+            )
+            new_size = 0.0
+
         if hasattr(position, "current_size"):
             position.current_size = new_size
         if hasattr(position, "partial_exits_taken"):
@@ -254,6 +269,10 @@ class PartialOperationsManager:
     ) -> None:
         """Execute a scale-in operation.
 
+        IMPORTANT: This method directly mutates the position object's current_size
+        and scale_ins_taken attributes. Ensure position tracker is synchronized
+        after calling this method.
+
         Args:
             position: Position to scale into.
             scale_fraction: Fraction to add.
@@ -262,9 +281,18 @@ class PartialOperationsManager:
         original_size = getattr(position, "original_size", getattr(position, "size", 0))
         current_size = getattr(position, "current_size", getattr(position, "size", 0))
 
-        # Calculate new size
+        # Calculate new size with validation
         add_size = original_size * scale_fraction
         new_size = current_size + add_size
+
+        # Validate new size doesn't exceed reasonable limits (e.g., 200% of original)
+        if new_size > original_size * 2.0:
+            logger.warning(
+                "Scale-in would exceed 200%% of original position: %.4f → %.4f",
+                current_size,
+                new_size,
+            )
+            new_size = min(new_size, original_size * 2.0)
 
         # Update position tracking
         if hasattr(position, "current_size"):
