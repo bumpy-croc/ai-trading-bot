@@ -7,6 +7,7 @@ backtesting and live trading engines.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -119,6 +120,9 @@ class PerformanceTracker:
             (datetime.now(), initial_balance)
         ]
 
+        # Thread safety lock for mutable state
+        self._lock = threading.Lock()
+
     def record_trade(
         self,
         trade: BaseTrade | Any,
@@ -136,34 +140,35 @@ class PerformanceTracker:
         entry_time = getattr(trade, "entry_time", None)
         exit_time = getattr(trade, "exit_time", None)
 
-        # Update trade counts
-        if pnl > 0:
-            self._winning_trades += 1
-            self._gross_profit += pnl
-        elif pnl < 0:
-            self._losing_trades += 1
-            self._gross_loss += abs(pnl)
+        with self._lock:
+            # Update trade counts
+            if pnl > 0:
+                self._winning_trades += 1
+                self._gross_profit += pnl
+            elif pnl < 0:
+                self._losing_trades += 1
+                self._gross_loss += abs(pnl)
 
-        # Update totals
-        self._total_pnl += pnl
-        self._total_fees_paid += fee
-        self._total_slippage_cost += slippage
+            # Update totals
+            self._total_pnl += pnl
+            self._total_fees_paid += fee
+            self._total_slippage_cost += slippage
 
-        # Calculate duration
-        if entry_time and exit_time:
-            duration = (exit_time - entry_time).total_seconds()
-            self._total_duration_seconds += duration
+            # Calculate duration
+            if entry_time and exit_time:
+                duration = (exit_time - entry_time).total_seconds()
+                self._total_duration_seconds += duration
 
-        # Store trade record
-        self._trades.append({
-            "pnl": pnl,
-            "fee": fee,
-            "slippage": slippage,
-            "entry_time": entry_time,
-            "exit_time": exit_time,
-            "symbol": getattr(trade, "symbol", None),
-            "side": str(getattr(trade, "side", None)),
-        })
+            # Store trade record
+            self._trades.append({
+                "pnl": pnl,
+                "fee": fee,
+                "slippage": slippage,
+                "entry_time": entry_time,
+                "exit_time": exit_time,
+                "symbol": getattr(trade, "symbol", None),
+                "side": str(getattr(trade, "side", None)),
+            })
 
     def update_balance(
         self,
@@ -176,21 +181,22 @@ class PerformanceTracker:
             balance: New account balance.
             timestamp: Optional timestamp for the update.
         """
-        self.current_balance = balance
+        with self._lock:
+            self.current_balance = balance
 
-        # Update peak balance
-        if balance > self.peak_balance:
-            self.peak_balance = balance
+            # Update peak balance
+            if balance > self.peak_balance:
+                self.peak_balance = balance
 
-        # Calculate current drawdown
-        if self.peak_balance > 0:
-            current_drawdown = (self.peak_balance - balance) / self.peak_balance
-            if current_drawdown > self.max_drawdown:
-                self.max_drawdown = current_drawdown
+            # Calculate current drawdown
+            if self.peak_balance > 0:
+                current_drawdown = (self.peak_balance - balance) / self.peak_balance
+                if current_drawdown > self.max_drawdown:
+                    self.max_drawdown = current_drawdown
 
-        # Record in history
-        ts = timestamp or datetime.now()
-        self._balance_history.append((ts, balance))
+            # Record in history
+            ts = timestamp or datetime.now()
+            self._balance_history.append((ts, balance))
 
     def get_metrics(self) -> PerformanceMetrics:
         """Get current performance metrics.
@@ -198,60 +204,61 @@ class PerformanceTracker:
         Returns:
             PerformanceMetrics with calculated values.
         """
-        total_trades = self._winning_trades + self._losing_trades
+        with self._lock:
+            total_trades = self._winning_trades + self._losing_trades
 
-        # Calculate win rate
-        win_rate = 0.0
-        if total_trades > 0:
-            win_rate = self._winning_trades / total_trades
+            # Calculate win rate
+            win_rate = 0.0
+            if total_trades > 0:
+                win_rate = self._winning_trades / total_trades
 
-        # Calculate profit factor
-        profit_factor = 0.0
-        if self._gross_loss > 0:
-            profit_factor = self._gross_profit / self._gross_loss
+            # Calculate profit factor
+            profit_factor = 0.0
+            if self._gross_loss > 0:
+                profit_factor = self._gross_profit / self._gross_loss
 
-        # Calculate averages
-        avg_win = 0.0
-        if self._winning_trades > 0:
-            avg_win = self._gross_profit / self._winning_trades
+            # Calculate averages
+            avg_win = 0.0
+            if self._winning_trades > 0:
+                avg_win = self._gross_profit / self._winning_trades
 
-        avg_loss = 0.0
-        if self._losing_trades > 0:
-            avg_loss = -self._gross_loss / self._losing_trades
+            avg_loss = 0.0
+            if self._losing_trades > 0:
+                avg_loss = -self._gross_loss / self._losing_trades
 
-        # Calculate largest win/loss
-        largest_win = 0.0
-        largest_loss = 0.0
-        for trade in self._trades:
-            pnl = trade.get("pnl", 0)
-            if pnl > largest_win:
-                largest_win = pnl
-            if pnl < largest_loss:
-                largest_loss = pnl
+            # Calculate largest win/loss
+            largest_win = 0.0
+            largest_loss = 0.0
+            for trade in self._trades:
+                pnl = trade.get("pnl", 0)
+                if pnl > largest_win:
+                    largest_win = pnl
+                if pnl < largest_loss:
+                    largest_loss = pnl
 
-        # Calculate average duration
-        avg_duration_hours = 0.0
-        if total_trades > 0:
-            avg_duration_hours = (self._total_duration_seconds / total_trades) / 3600
+            # Calculate average duration
+            avg_duration_hours = 0.0
+            if total_trades > 0:
+                avg_duration_hours = (self._total_duration_seconds / total_trades) / 3600
 
-        return PerformanceMetrics(
-            total_trades=total_trades,
-            winning_trades=self._winning_trades,
-            losing_trades=self._losing_trades,
-            total_pnl=self._total_pnl,
-            total_fees_paid=self._total_fees_paid,
-            total_slippage_cost=self._total_slippage_cost,
-            max_drawdown=self.max_drawdown,
-            peak_balance=self.peak_balance,
-            current_balance=self.current_balance,
-            win_rate=win_rate,
-            profit_factor=profit_factor,
-            avg_win=avg_win,
-            avg_loss=avg_loss,
-            largest_win=largest_win,
-            largest_loss=largest_loss,
-            avg_trade_duration_hours=avg_duration_hours,
-        )
+            return PerformanceMetrics(
+                total_trades=total_trades,
+                winning_trades=self._winning_trades,
+                losing_trades=self._losing_trades,
+                total_pnl=self._total_pnl,
+                total_fees_paid=self._total_fees_paid,
+                total_slippage_cost=self._total_slippage_cost,
+                max_drawdown=self.max_drawdown,
+                peak_balance=self.peak_balance,
+                current_balance=self.current_balance,
+                win_rate=win_rate,
+                profit_factor=profit_factor,
+                avg_win=avg_win,
+                avg_loss=avg_loss,
+                largest_win=largest_win,
+                largest_loss=largest_loss,
+                avg_trade_duration_hours=avg_duration_hours,
+            )
 
     def get_trade_history(self) -> list[dict]:
         """Get list of recorded trades.
@@ -259,7 +266,8 @@ class PerformanceTracker:
         Returns:
             List of trade dictionaries.
         """
-        return self._trades.copy()
+        with self._lock:
+            return self._trades.copy()
 
     def get_balance_history(self) -> list[tuple[datetime, float]]:
         """Get balance history.
@@ -267,7 +275,8 @@ class PerformanceTracker:
         Returns:
             List of (timestamp, balance) tuples.
         """
-        return self._balance_history.copy()
+        with self._lock:
+            return self._balance_history.copy()
 
     def get_total_return(self) -> float:
         """Get total return as a decimal.
@@ -275,9 +284,10 @@ class PerformanceTracker:
         Returns:
             Total return (e.g., 0.15 for 15% return).
         """
-        if self.initial_balance <= 0:
-            return 0.0
-        return (self.current_balance - self.initial_balance) / self.initial_balance
+        with self._lock:
+            if self.initial_balance <= 0:
+                return 0.0
+            return (self.current_balance - self.initial_balance) / self.initial_balance
 
     def get_total_return_pct(self) -> float:
         """Get total return as a percentage.
@@ -293,21 +303,22 @@ class PerformanceTracker:
         Args:
             initial_balance: New initial balance, or use existing.
         """
-        if initial_balance is not None:
-            self.initial_balance = initial_balance
-        self.current_balance = self.initial_balance
-        self.peak_balance = self.initial_balance
-        self.max_drawdown = 0.0
-        self._trades.clear()
-        self._total_fees_paid = 0.0
-        self._total_slippage_cost = 0.0
-        self._total_pnl = 0.0
-        self._gross_profit = 0.0
-        self._gross_loss = 0.0
-        self._winning_trades = 0
-        self._losing_trades = 0
-        self._total_duration_seconds = 0.0
-        self._balance_history = [(datetime.now(), self.initial_balance)]
+        with self._lock:
+            if initial_balance is not None:
+                self.initial_balance = initial_balance
+            self.current_balance = self.initial_balance
+            self.peak_balance = self.initial_balance
+            self.max_drawdown = 0.0
+            self._trades.clear()
+            self._total_fees_paid = 0.0
+            self._total_slippage_cost = 0.0
+            self._total_pnl = 0.0
+            self._gross_profit = 0.0
+            self._gross_loss = 0.0
+            self._winning_trades = 0
+            self._losing_trades = 0
+            self._total_duration_seconds = 0.0
+            self._balance_history = [(datetime.now(), self.initial_balance)]
 
 
 __all__ = [

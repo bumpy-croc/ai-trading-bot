@@ -7,6 +7,7 @@ both backtesting and live trading engines to ensure parity in risk management.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -87,6 +88,7 @@ class DynamicRiskHandler:
         self.dynamic_risk_manager = dynamic_risk_manager
         self.significance_threshold = significance_threshold
         self._adjustments: list[DynamicRiskAdjustment] = []
+        self._lock = threading.Lock()  # Protect mutable state for thread safety
 
     def set_manager(self, manager: DynamicRiskManager | None) -> None:
         """Update the dynamic risk manager.
@@ -154,7 +156,8 @@ class DynamicRiskHandler:
                     original_size=original_size,
                     adjusted_size=adjusted_size,
                 )
-                self._adjustments.append(adjustment)
+                with self._lock:
+                    self._adjustments.append(adjustment)
 
             return adjusted_size
 
@@ -171,9 +174,10 @@ class DynamicRiskHandler:
         Returns:
             List of adjustment records as dictionaries.
         """
-        adjustments = [adj.to_dict() for adj in self._adjustments]
-        if clear:
-            self._adjustments.clear()
+        with self._lock:
+            adjustments = [adj.to_dict() for adj in self._adjustments]
+            if clear:
+                self._adjustments.clear()
         return adjustments
 
     def get_adjustment_objects(self, clear: bool = True) -> list[DynamicRiskAdjustment]:
@@ -185,24 +189,28 @@ class DynamicRiskHandler:
         Returns:
             List of DynamicRiskAdjustment objects.
         """
-        adjustments = self._adjustments.copy()
-        if clear:
-            self._adjustments.clear()
+        with self._lock:
+            adjustments = self._adjustments.copy()
+            if clear:
+                self._adjustments.clear()
         return adjustments
 
     def clear_adjustments(self) -> None:
         """Clear all tracked adjustments."""
-        self._adjustments.clear()
+        with self._lock:
+            self._adjustments.clear()
 
     @property
     def has_adjustments(self) -> bool:
         """Check if there are any tracked adjustments."""
-        return len(self._adjustments) > 0
+        with self._lock:
+            return len(self._adjustments) > 0
 
     @property
     def adjustment_count(self) -> int:
         """Get the number of tracked adjustments."""
-        return len(self._adjustments)
+        with self._lock:
+            return len(self._adjustments)
 
 
 __all__ = [
