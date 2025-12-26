@@ -496,6 +496,11 @@ class LiveTradingEngine:
         self.total_fees_paid = 0.0
         self.total_slippage_cost = 0.0
 
+        # Performance tracker (unified with backtest engine)
+        from src.performance.tracker import PerformanceTracker
+
+        self.performance_tracker = PerformanceTracker(initial_balance)
+
         # MFE/MAE tracker
         self.mfe_mae_tracker = MFEMAETracker(precision_decimals=DEFAULT_MFE_MAE_PRECISION_DECIMALS)
         self._last_mfe_mae_persist: datetime | None = None
@@ -3020,6 +3025,19 @@ class LiveTradingEngine:
             if realized_pnl > 0:
                 self.winning_trades += 1
 
+            # Update performance tracker
+            self.performance_tracker.record_trade(
+                trade=trade, fee=exit_fee, slippage=exit_slippage_cost
+            )
+            self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now())
+
+            # Sync manual tracking with tracker for backward compatibility
+            perf_metrics = self.performance_tracker.get_metrics()
+            self.total_fees_paid = perf_metrics.total_fees_paid
+            self.total_slippage_cost = perf_metrics.total_slippage_cost
+            self.peak_balance = perf_metrics.peak_balance
+            self.max_drawdown = perf_metrics.max_drawdown
+
             # Log trade
             self.completed_trades.append(trade)
             if self.log_trades:
@@ -3404,11 +3422,13 @@ class LiveTradingEngine:
 
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
-        if self.current_balance > self.peak_balance:
-            self.peak_balance = self.current_balance
+        # Update performance tracker
+        self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now())
 
-        current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
-        self.max_drawdown = max(self.max_drawdown, current_drawdown)
+        # Sync manual tracking with tracker for backward compatibility
+        perf_metrics = self.performance_tracker.get_metrics()
+        self.peak_balance = perf_metrics.peak_balance
+        self.max_drawdown = perf_metrics.max_drawdown
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
@@ -3696,26 +3716,44 @@ class LiveTradingEngine:
 
     def get_performance_summary(self) -> dict[str, Any]:
         """Get current performance summary"""
-        total_return = ((self.current_balance - self.initial_balance) / self.initial_balance) * 100
-        win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
-        current_drawdown = (
-            (self.peak_balance - self.current_balance) / self.peak_balance * 100
-            if self.peak_balance > 0
-            else 0
-        )
+        # Get comprehensive metrics from performance tracker
+        perf_metrics = self.performance_tracker.get_metrics()
+
+        # Convert to percentages for backward compatibility
+        win_rate = perf_metrics.win_rate * 100
+        current_drawdown = perf_metrics.current_drawdown * 100
+        max_drawdown_pct = perf_metrics.max_drawdown * 100
 
         return {
+            # Core metrics from tracker
             "initial_balance": self.initial_balance,
             "current_balance": self.current_balance,
-            "total_return": total_return,  # Keep both for backward compatibility
-            "total_return_pct": total_return,
-            "total_pnl": self.total_pnl,
-            "current_drawdown": current_drawdown,  # Add current drawdown
-            "max_drawdown_pct": self.max_drawdown * 100,
-            "total_trades": self.total_trades,
-            "winning_trades": self.winning_trades,
-            "win_rate": win_rate,  # Keep both for backward compatibility
+            "total_return": perf_metrics.total_return_pct,
+            "total_return_pct": perf_metrics.total_return_pct,
+            "total_pnl": perf_metrics.total_pnl,
+            "current_drawdown": current_drawdown,
+            "max_drawdown_pct": max_drawdown_pct,
+            "total_trades": perf_metrics.total_trades,
+            "winning_trades": perf_metrics.winning_trades,
+            "win_rate": win_rate,
             "win_rate_pct": win_rate,
+            # New metrics from tracker
+            "sharpe_ratio": perf_metrics.sharpe_ratio,
+            "sortino_ratio": perf_metrics.sortino_ratio,
+            "calmar_ratio": perf_metrics.calmar_ratio,
+            "var_95": perf_metrics.var_95,
+            "expectancy": perf_metrics.expectancy,
+            "profit_factor": perf_metrics.profit_factor,
+            "avg_win": perf_metrics.avg_win,
+            "avg_loss": perf_metrics.avg_loss,
+            "largest_win": perf_metrics.largest_win,
+            "largest_loss": perf_metrics.largest_loss,
+            "avg_trade_duration_hours": perf_metrics.avg_trade_duration_hours,
+            "consecutive_wins": perf_metrics.consecutive_wins,
+            "consecutive_losses": perf_metrics.consecutive_losses,
+            "total_fees_paid": perf_metrics.total_fees_paid,
+            "total_slippage_cost": perf_metrics.total_slippage_cost,
+            # Live-specific metrics
             "active_positions": len(self.positions),
             "last_update": self.last_data_update.isoformat() if self.last_data_update else None,
             "is_running": self.is_running,
