@@ -7,6 +7,7 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -19,16 +20,22 @@ from src.engines.live.execution.position_tracker import (
     LivePositionTracker,
     PositionSide,
 )
+from src.engines.shared.partial_operations_manager import (
+    EPSILON,
+    PartialOperationsManager,
+)
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 
 if TYPE_CHECKING:
-    from src.position_management.partial_manager import PartialExitPolicy
     from src.position_management.time_exits import TimeExitPolicy
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
 
 logger = logging.getLogger(__name__)
+
+# Maximum partial exits to process per cycle (defense-in-depth against malformed policies)
+MAX_PARTIAL_EXITS_PER_CYCLE = 10
 
 
 @dataclass
@@ -72,7 +79,7 @@ class LiveExitHandler:
         risk_manager: RiskManager | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
-        partial_manager: PartialExitPolicy | None = None,
+        partial_manager: PartialOperationsManager | None = None,
         use_high_low_for_stops: bool = True,
         max_position_size: float = 0.1,
     ) -> None:
@@ -84,7 +91,7 @@ class LiveExitHandler:
             risk_manager: Risk manager for position updates.
             trailing_stop_policy: Policy for trailing stops.
             time_exit_policy: Policy for time-based exits.
-            partial_manager: Manager for partial exits/scale-ins.
+            partial_manager: Unified partial operations manager.
             use_high_low_for_stops: Use candle high/low for SL/TP detection.
             max_position_size: Maximum position size for scale-ins.
         """
@@ -96,7 +103,7 @@ class LiveExitHandler:
         self.partial_manager = partial_manager
         self.use_high_low_for_stops = use_high_low_for_stops
         self.max_position_size = max_position_size
-        # Use shared trailing stop manager for consistent logic across engines
+        # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
 
     def check_exit_conditions(
@@ -501,6 +508,15 @@ class LiveExitHandler:
     ) -> None:
         """Check and execute partial exits and scale-ins.
 
+        Uses unified PartialOperationsManager for consistent logic.
+
+        Threading Safety:
+        - Uses list() to create defensive snapshot of positions for iteration
+        - This prevents modification-during-iteration errors from concurrent callbacks
+        - Individual position_tracker methods should be atomic at Python level (GIL)
+        - Note: position_tracker does not have internal locking; assumes main-loop-only access
+        - If OrderTracker callbacks modify positions concurrently, consider adding lock
+
         Args:
             df: DataFrame with market data.
             current_index: Current candle index.
@@ -510,58 +526,77 @@ class LiveExitHandler:
         if self.partial_manager is None:
             return
 
+        # Defensive iteration: list() creates snapshot to prevent concurrent modification errors
         for order_id, position in list(self.position_tracker.positions.items()):
-            # Build position state
-            state = self._build_position_state(position)
+            try:
+                # Check for partial exits (loop to handle multiple exits in same cycle)
+                iteration_count = 0
+                while iteration_count < MAX_PARTIAL_EXITS_PER_CYCLE:
+                    exit_result = self.partial_manager.check_partial_exit(
+                        position=position,
+                        current_price=current_price,
+                    )
 
-            # Calculate P&L percentage
-            if position.side == PositionSide.LONG:
-                pnl_pct = (current_price - position.entry_price) / position.entry_price
-            else:
-                pnl_pct = (position.entry_price - current_price) / position.entry_price
+                    if not exit_result.should_exit:
+                        break
 
-            # Check for partial exits
-            exit_action = self.partial_manager.check_partial_exit(pnl_pct, state)
-            if exit_action is not None:
-                self._execute_partial_exit(
-                    order_id=order_id,
+                    # Convert from fraction of original to fraction of current
+                    exit_size_of_original = exit_result.exit_fraction
+                    current_size_fraction = position.current_size / position.original_size
+
+                    # Protect against division by zero (position fully closed)
+                    if abs(current_size_fraction) < EPSILON:
+                        logger.debug(
+                            "Position %s fully closed, skipping further partial exits",
+                            position.symbol,
+                        )
+                        break
+
+                    exit_size_of_current = exit_size_of_original / current_size_fraction
+
+                    # Validate bounds and check for NaN/Infinity
+                    if (
+                        exit_size_of_current <= 0
+                        or exit_size_of_current > 1.0
+                        or not math.isfinite(exit_size_of_current)
+                    ):
+                        break
+
+                    self._execute_partial_exit(
+                        order_id=order_id,
+                        position=position,
+                        delta_fraction=exit_size_of_current,
+                        price=current_price,
+                        target_level=exit_result.target_index,
+                        fraction_of_original=exit_size_of_original,
+                        current_balance=current_balance,
+                    )
+
+                    iteration_count += 1
+
+                # Check for scale-ins
+                scale_result = self.partial_manager.check_scale_in(
                     position=position,
-                    delta_fraction=exit_action.exit_fraction_of_current,
-                    price=current_price,
-                    target_level=exit_action.target_level,
-                    fraction_of_original=exit_action.exit_fraction_of_original,
-                    current_balance=current_balance,
+                    current_price=current_price,
+                    balance=current_balance,
                 )
 
-            # Check for scale-ins
-            scale_action = self.partial_manager.check_scale_in(pnl_pct, state)
-            if scale_action is not None:
-                self._execute_scale_in(
-                    order_id=order_id,
-                    position=position,
-                    delta_fraction=scale_action.add_fraction_of_original,
-                    price=current_price,
-                    threshold_level=scale_action.threshold_level,
-                    fraction_of_original=scale_action.add_fraction_of_original,
-                )
+                if scale_result.should_scale:
+                    add_size_of_original = scale_result.scale_fraction
 
-    def _build_position_state(self, position: LivePosition) -> Any:
-        """Build PositionState for partial operations.
+                    self._execute_scale_in(
+                        order_id=order_id,
+                        position=position,
+                        delta_fraction=add_size_of_original,
+                        price=current_price,
+                        threshold_level=scale_result.target_index,
+                        fraction_of_original=add_size_of_original,
+                    )
 
-        Args:
-            position: Position to build state for.
-
-        Returns:
-            PositionState for partial manager.
-        """
-        from src.position_management.partial_manager import PositionState
-
-        return PositionState(
-            original_size=float(position.original_size or position.size),
-            current_size=float(position.current_size or position.size),
-            partial_exits_taken=int(position.partial_exits_taken),
-            scale_ins_taken=int(position.scale_ins_taken),
-        )
+            except (AttributeError, ValueError, KeyError, ZeroDivisionError) as e:
+                logger.warning("Partial ops evaluation failed for %s: %s", position.symbol, e)
+            except Exception as e:
+                logger.warning("Unexpected error in partial ops for %s: %s", position.symbol, e)
 
     def _execute_partial_exit(
         self,

@@ -2,6 +2,11 @@
 
 This module provides consistent partial operations logic for both
 backtesting and live trading engines.
+
+ARCHITECTURE:
+- PartialExitPolicy: Configuration dataclass (exit_targets, exit_sizes, etc.)
+- PartialOperationsManager: Stateful manager that applies policy logic
+- Returns single next action (not lists) for clean control flow
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ class PartialExitResult:
 
     Attributes:
         should_exit: Whether a partial exit should be executed.
-        exit_fraction: Fraction of position to exit (0-1).
+        exit_fraction: Fraction of ORIGINAL position to exit (0-1).
         target_index: Which target triggered the exit.
         reason: Description of why exit triggered.
     """
@@ -42,8 +47,8 @@ class ScaleInResult:
 
     Attributes:
         should_scale: Whether a scale-in should be executed.
-        scale_fraction: Fraction to add to position.
-        target_index: Which target triggered the scale-in.
+        scale_fraction: Fraction of ORIGINAL position to add.
+        target_index: Which threshold triggered the scale-in.
         reason: Description of why scale-in triggered.
     """
 
@@ -59,6 +64,15 @@ class PartialOperationsManager:
     This class provides consistent logic for partial position operations
     that is used by both backtesting and live trading engines.
 
+    The manager works with PartialExitPolicy which has:
+    - exit_targets: list[float] - PnL thresholds (e.g., [0.05, 0.10])
+    - exit_sizes: list[float] - Fractions to exit (e.g., [0.5, 0.5])
+    - scale_in_thresholds: list[float] - PnL thresholds for scale-in
+    - scale_in_sizes: list[float] - Fractions to add
+    - max_scale_ins: int - Maximum scale-in operations
+
+    Returns single next action (not lists) for clean control flow.
+
     Attributes:
         policy: The partial exit policy to apply.
         total_partial_exits: Count of partial exits executed.
@@ -70,10 +84,34 @@ class PartialOperationsManager:
 
         Args:
             policy: Partial exit policy to apply, or None to disable.
+
+        Raises:
+            ValueError: If policy configuration lists have mismatched lengths.
         """
         self.policy = policy
         self.total_partial_exits: int = 0
         self.total_scale_ins: int = 0
+
+        # Validate policy configuration if provided
+        if policy is not None:
+            exit_targets = getattr(policy, "exit_targets", [])
+            exit_sizes = getattr(policy, "exit_sizes", [])
+            scale_in_thresholds = getattr(policy, "scale_in_thresholds", [])
+            scale_in_sizes = getattr(policy, "scale_in_sizes", [])
+
+            # Validate partial exit configuration
+            if exit_targets and len(exit_targets) != len(exit_sizes):
+                raise ValueError(
+                    f"Partial exit configuration error: exit_targets has {len(exit_targets)} "
+                    f"elements but exit_sizes has {len(exit_sizes)} elements (must match)"
+                )
+
+            # Validate scale-in configuration
+            if scale_in_thresholds and len(scale_in_thresholds) != len(scale_in_sizes):
+                raise ValueError(
+                    f"Scale-in configuration error: scale_in_thresholds has {len(scale_in_thresholds)} "
+                    f"elements but scale_in_sizes has {len(scale_in_sizes)} elements (must match)"
+                )
 
     def set_policy(self, policy: PartialExitPolicy | None) -> None:
         """Update the partial operations policy.
@@ -89,26 +127,34 @@ class PartialOperationsManager:
         current_price: float,
         current_pnl_pct: float | None = None,
     ) -> PartialExitResult:
-        """Check if a partial exit should be triggered.
+        """Check if the next partial exit should be triggered.
+
+        Returns single next action to execute. Caller should loop if
+        multiple exits can trigger simultaneously.
 
         Args:
             position: Current position with partial exit tracking.
+                     Must have: entry_price, side, partial_exits_taken.
             current_price: Current market price.
             current_pnl_pct: Current PnL percentage (calculated if not provided).
 
         Returns:
-            PartialExitResult indicating whether to exit.
+            PartialExitResult with next action or should_exit=False.
         """
         if self.policy is None:
             return PartialExitResult()
 
-        # Get position attributes
-        entry_price = getattr(position, "entry_price", None)
+        # Get and validate position attributes immediately
+        try:
+            entry_price = getattr(position, "entry_price", None)
+        except Exception:
+            return PartialExitResult()
+
+        if entry_price is None or entry_price <= 0:
+            return PartialExitResult()
+
         side = self._get_side_str(position)
         partial_exits_taken = getattr(position, "partial_exits_taken", 0)
-
-        if entry_price is None:
-            return PartialExitResult()
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
@@ -117,25 +163,24 @@ class PartialOperationsManager:
             else:
                 current_pnl_pct = (entry_price - current_price) / entry_price
 
-        # Get policy targets
-        targets = getattr(self.policy, "profit_targets", [])
-        if not targets:
+        # Get policy exit configuration
+        exit_targets = getattr(self.policy, "exit_targets", [])
+        exit_sizes = getattr(self.policy, "exit_sizes", [])
+
+        if not exit_targets or not exit_sizes:
             return PartialExitResult()
 
-        # Check each target
-        for i, target in enumerate(targets):
-            if i < partial_exits_taken:
-                continue  # Already took this target
-
-            target_pct = target.get("profit_pct", 0)
-            exit_fraction = target.get("exit_fraction", 0)
+        # Find next target to execute
+        if partial_exits_taken < len(exit_targets):
+            target_pct = exit_targets[partial_exits_taken]
+            exit_fraction = exit_sizes[partial_exits_taken]
 
             if current_pnl_pct >= target_pct and exit_fraction > 0:
                 return PartialExitResult(
                     should_exit=True,
                     exit_fraction=exit_fraction,
-                    target_index=i,
-                    reason=f"Partial exit target {i+1}: profit {current_pnl_pct:.2%} >= {target_pct:.2%}",
+                    target_index=partial_exits_taken,
+                    reason=f"Partial exit target {partial_exits_taken + 1}: profit {current_pnl_pct:.2%} >= {target_pct:.2%}",
                 )
 
         return PartialExitResult()
@@ -147,27 +192,34 @@ class PartialOperationsManager:
         balance: float,
         current_pnl_pct: float | None = None,
     ) -> ScaleInResult:
-        """Check if a scale-in should be triggered.
+        """Check if the next scale-in should be triggered.
+
+        Returns single next action to execute.
 
         Args:
             position: Current position with scale-in tracking.
+                     Must have: entry_price, side, scale_ins_taken.
             current_price: Current market price.
-            balance: Current account balance.
+            balance: Current account balance (unused but kept for compatibility).
             current_pnl_pct: Current PnL percentage (calculated if not provided).
 
         Returns:
-            ScaleInResult indicating whether to scale in.
+            ScaleInResult with next action or should_scale=False.
         """
         if self.policy is None:
             return ScaleInResult()
 
-        # Get position attributes
-        entry_price = getattr(position, "entry_price", None)
+        # Get and validate position attributes immediately
+        try:
+            entry_price = getattr(position, "entry_price", None)
+        except Exception:
+            return ScaleInResult()
+
+        if entry_price is None or entry_price <= 0:
+            return ScaleInResult()
+
         side = self._get_side_str(position)
         scale_ins_taken = getattr(position, "scale_ins_taken", 0)
-
-        if entry_price is None:
-            return ScaleInResult()
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
@@ -176,152 +228,48 @@ class PartialOperationsManager:
             else:
                 current_pnl_pct = (entry_price - current_price) / entry_price
 
-        # Get scale-in targets
-        scale_targets = getattr(self.policy, "scale_in_targets", [])
-        if not scale_targets:
+        # Get policy scale-in configuration
+        scale_in_thresholds = getattr(self.policy, "scale_in_thresholds", [])
+        scale_in_sizes = getattr(self.policy, "scale_in_sizes", [])
+        max_scale_ins = getattr(self.policy, "max_scale_ins", 0)
+
+        if not scale_in_thresholds or not scale_in_sizes:
             return ScaleInResult()
 
-        # Check each target
-        for i, target in enumerate(scale_targets):
-            if i < scale_ins_taken:
-                continue  # Already took this target
+        # Check if max scale-ins reached
+        if scale_ins_taken >= max_scale_ins:
+            return ScaleInResult()
 
-            target_pct = target.get("profit_pct", 0)
-            scale_fraction = target.get("scale_fraction", 0)
+        # Find next threshold to execute
+        if scale_ins_taken < len(scale_in_thresholds):
+            threshold_pct = scale_in_thresholds[scale_ins_taken]
+            scale_fraction = scale_in_sizes[scale_ins_taken]
 
-            if current_pnl_pct >= target_pct and scale_fraction > 0:
+            if current_pnl_pct >= threshold_pct and scale_fraction > 0:
                 return ScaleInResult(
                     should_scale=True,
                     scale_fraction=scale_fraction,
-                    target_index=i,
-                    reason=f"Scale-in target {i+1}: profit {current_pnl_pct:.2%} >= {target_pct:.2%}",
+                    target_index=scale_ins_taken,
+                    reason=f"Scale-in threshold {scale_ins_taken + 1}: profit {current_pnl_pct:.2%} >= {threshold_pct:.2%}",
                 )
 
         return ScaleInResult()
 
-    def apply_partial_exit(
-        self,
-        position: Any,
-        exit_fraction: float,
-        current_price: float,
-        entry_balance: float,
-    ) -> float:
-        """Execute a partial exit and calculate realized PnL.
-
-        IMPORTANT: This method directly mutates the position object's current_size
-        and partial_exits_taken attributes. Ensure position tracker is synchronized
-        after calling this method.
+    def _get_side_str(self, position: Any) -> str:
+        """Get the side as a lowercase string.
 
         Args:
-            position: Position to partially exit.
-            exit_fraction: Fraction to exit (0-1).
-            current_price: Current market price.
-            entry_balance: Balance at position entry.
+            position: Position object with a 'side' attribute.
 
         Returns:
-            Realized PnL from the partial exit.
+            Side as lowercase string ('long' or 'short').
         """
-        entry_price = getattr(position, "entry_price", 0)
-        side = self._get_side_str(position)
-        current_size = getattr(position, "current_size", getattr(position, "size", 0))
-
-        # Calculate exit size
-        exit_size = current_size * exit_fraction
-        exit_notional = exit_size * entry_balance
-
-        # Calculate PnL
-        if side == "long":
-            pnl = exit_notional * (current_price - entry_price) / entry_price
-        else:
-            pnl = exit_notional * (entry_price - current_price) / entry_price
-
-        # Update position tracking with validation
-        new_size = max(0.0, current_size - exit_size)  # Ensure size never goes negative
-        if new_size < 0:
-            logger.warning(
-                "Partial exit would result in negative position size: %.4f - %.4f",
-                current_size,
-                exit_size,
-            )
-            new_size = 0.0
-
-        if hasattr(position, "current_size"):
-            position.current_size = new_size
-        if hasattr(position, "partial_exits_taken"):
-            position.partial_exits_taken += 1
-
-        self.total_partial_exits += 1
-
-        logger.debug(
-            "Partial exit: %.2f%% of position at %.2f, PnL=%.2f",
-            exit_fraction * 100,
-            current_price,
-            pnl,
-        )
-
-        return pnl
-
-    def apply_scale_in(
-        self,
-        position: Any,
-        scale_fraction: float,
-        current_price: float,
-    ) -> None:
-        """Execute a scale-in operation.
-
-        IMPORTANT: This method directly mutates the position object's current_size
-        and scale_ins_taken attributes. Ensure position tracker is synchronized
-        after calling this method.
-
-        Args:
-            position: Position to scale into.
-            scale_fraction: Fraction to add.
-            current_price: Current market price.
-        """
-        original_size = getattr(position, "original_size", getattr(position, "size", 0))
-        current_size = getattr(position, "current_size", getattr(position, "size", 0))
-
-        # Calculate new size with validation
-        add_size = original_size * scale_fraction
-        new_size = current_size + add_size
-
-        # Validate new size doesn't exceed reasonable limits (e.g., 200% of original)
-        if new_size > original_size * 2.0:
-            logger.warning(
-                "Scale-in would exceed 200%% of original position: %.4f → %.4f",
-                current_size,
-                new_size,
-            )
-            new_size = min(new_size, original_size * 2.0)
-
-        # Update position tracking
-        if hasattr(position, "current_size"):
-            position.current_size = new_size
-        if hasattr(position, "scale_ins_taken"):
-            position.scale_ins_taken += 1
-
-        self.total_scale_ins += 1
-
-        logger.debug(
-            "Scale-in: +%.2f%% at %.2f, new size=%.2f",
-            scale_fraction * 100,
-            current_price,
-            new_size,
-        )
-
-    def _get_side_str(self, position: Any) -> str:
-        """Get the side as a lowercase string."""
         side = getattr(position, "side", None)
         if side is None:
             return "long"
         if hasattr(side, "value"):
             return side.value.lower()
         return str(side).lower()
-
-    def reset_stats(self) -> None:
-        """Reset operation counters."""
-        self.total_partial_exits = 0
-        self.total_scale_ins = 0
 
 
 __all__ = [

@@ -7,6 +7,7 @@ trailing stops, time-based exits, and partial operations.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -14,8 +15,11 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from src.engines.backtest.models import Trade
+from src.engines.shared.partial_operations_manager import (
+    EPSILON,
+    PartialOperationsManager,
+)
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
-from src.position_management.partial_manager import PositionState
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -25,6 +29,9 @@ if TYPE_CHECKING:
     from src.risk.risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
+
+# Maximum partial exits to process per candle (defense-in-depth against malformed policies)
+MAX_PARTIAL_EXITS_PER_CYCLE = 10
 
 
 @dataclass
@@ -67,7 +74,7 @@ class ExitHandler:
         risk_manager: RiskManager,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
-        partial_manager: Any | None = None,
+        partial_manager: PartialOperationsManager | None = None,
         enable_engine_risk_exits: bool = True,
         use_high_low_for_stops: bool = True,
     ) -> None:
@@ -79,7 +86,7 @@ class ExitHandler:
             risk_manager: Risk manager for position updates.
             trailing_stop_policy: Policy for trailing stops.
             time_exit_policy: Policy for time-based exits.
-            partial_manager: Manager for partial exits/scale-ins.
+            partial_manager: Unified partial operations manager.
             enable_engine_risk_exits: Enable SL/TP checks.
             use_high_low_for_stops: Use high/low for SL/TP detection.
         """
@@ -91,7 +98,7 @@ class ExitHandler:
         self.partial_manager = partial_manager
         self.enable_engine_risk_exits = enable_engine_risk_exits
         self.use_high_low_for_stops = use_high_low_for_stops
-        # Use shared trailing stop manager for consistent logic across engines
+        # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
 
     def update_trailing_stop(
@@ -158,11 +165,13 @@ class ExitHandler:
     ) -> PartialOpsResult:
         """Check and execute partial exits and scale-ins.
 
+        Uses unified PartialOperationsManager for consistent logic.
+
         Args:
             current_price: Current market price.
             df: DataFrame with market data.
             index: Current candle index.
-            indicators: Extracted indicators for scale-in decisions.
+            indicators: Extracted indicators (unused, kept for compatibility).
 
         Returns:
             PartialOpsResult with realized PnL and actions taken.
@@ -179,25 +188,38 @@ class ExitHandler:
         scale_ins = []
 
         try:
-            # Build position state
-            state = PositionState(
-                entry_price=trade.entry_price,
-                side=trade.side,
-                original_size=trade.original_size,
-                current_size=trade.current_size,
-                partial_exits_taken=trade.partial_exits_taken,
-                scale_ins_taken=trade.scale_ins_taken,
-            )
+            # Check partial exits (loop until no more triggers)
+            iteration_count = 0
+            while iteration_count < MAX_PARTIAL_EXITS_PER_CYCLE:
+                result = self.partial_manager.check_partial_exit(
+                    position=trade,
+                    current_price=current_price,
+                )
 
-            # Check partial exits
-            actions = self.partial_manager.check_partial_exits(state, current_price)
-            for act in actions:
-                exec_of_original = float(act["size"])
-                delta = exec_of_original * state.original_size
-                exec_frac = min(delta, state.current_size)
+                if not result.should_exit:
+                    break
 
-                if exec_frac <= 0:
-                    continue
+                # Calculate exit size from fraction of original
+                exit_size_of_original = result.exit_fraction
+                # Convert from fraction-of-original to fraction-of-current
+                current_size_fraction = trade.current_size / trade.original_size
+
+                # Protect against division by zero (position fully closed)
+                if abs(current_size_fraction) < EPSILON:
+                    logger.debug("Position fully closed, skipping further partial exits")
+                    break
+
+                exit_size_of_current = exit_size_of_original / current_size_fraction
+
+                # Validate bounds and check for NaN/Infinity
+                if (
+                    exit_size_of_current <= 0
+                    or exit_size_of_current > 1.0
+                    or not math.isfinite(exit_size_of_current)
+                ):
+                    break
+
+                iteration_count += 1
 
                 # Get basis balance for PnL calculation
                 entry_balance = getattr(trade, "entry_balance", None)
@@ -207,21 +229,17 @@ class ExitHandler:
                     else 10000.0  # Fallback
                 )
 
-                # Execute partial exit
+                # Execute partial exit via position tracker
                 pnl = self.position_tracker.apply_partial_exit(
-                    exit_fraction=exec_frac,
+                    exit_fraction=exit_size_of_current,
                     current_price=current_price,
                     basis_balance=basis_balance,
                 )
                 realized_pnl += pnl
 
-                # Update state for next iteration
-                state.current_size = max(0.0, state.current_size - exec_frac)
-                state.partial_exits_taken += 1
-
                 partial_exits.append(
                     {
-                        "size": exec_frac,
+                        "size": exit_size_of_current,
                         "price": current_price,
                         "pnl": pnl,
                     }
@@ -229,18 +247,25 @@ class ExitHandler:
 
                 # Update risk manager
                 try:
-                    self.risk_manager.adjust_position_after_partial_exit(trade.symbol, exec_frac)
+                    self.risk_manager.adjust_position_after_partial_exit(
+                        trade.symbol, exit_size_of_current
+                    )
                 except Exception:
                     pass
 
             # Check scale-in opportunity
-            scale = self.partial_manager.check_scale_in_opportunity(
-                state, current_price, indicators or {}
+            scale_result = self.partial_manager.check_scale_in(
+                position=trade,
+                current_price=current_price,
+                balance=0.0,  # Unused by manager but required
             )
-            if scale is not None:
-                add_of_original = float(scale["size"])
-                if add_of_original > 0:
-                    delta_add = add_of_original * state.original_size
+
+            if scale_result.should_scale:
+                add_size_of_original = scale_result.scale_fraction
+
+                if add_size_of_original > 0:
+                    # Calculate effective size respecting risk limits
+                    delta_add = add_size_of_original * trade.original_size
                     remaining_daily = max(
                         0.0,
                         self.risk_manager.params.max_daily_risk - self.risk_manager.daily_risk_used,
@@ -264,8 +289,10 @@ class ExitHandler:
                         except Exception:
                             pass
 
+        except (AttributeError, ValueError, KeyError, ZeroDivisionError) as e:
+            logger.warning("Partial ops evaluation failed: %s", e)
         except Exception as e:
-            logger.debug("Partial ops evaluation failed: %s", e)
+            logger.warning("Unexpected error in partial ops: %s", e)
 
         return PartialOpsResult(
             realized_pnl=realized_pnl,
