@@ -3420,7 +3420,9 @@ class LiveTradingEngine:
 
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
-        # Update performance tracker
+        # Update performance tracker on every metric update cycle
+        # Note: Less frequent than backtest (every candle vs every update cycle)
+        # This trade-off reduces overhead while maintaining statistical validity for risk metrics
         self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now())
 
         # Sync manual tracking with tracker for backward compatibility

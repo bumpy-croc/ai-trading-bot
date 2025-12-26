@@ -853,7 +853,9 @@ class Backtester:
             # Track balance
             balance_history.append((current_time, self.balance))
 
-            # Update performance tracker (no trade, just balance update)
+            # Update performance tracker every candle for accurate intraday tracking
+            # Note: This differs from live engine which updates less frequently (on metric update cycles)
+            # This higher sampling rate provides more granular volatility metrics in backtests
             self.performance_tracker.update_balance(self.balance, timestamp=current_time)
 
             # Track yearly balance
@@ -1228,6 +1230,11 @@ class Backtester:
             "sortino_ratio": perf_metrics.sortino_ratio,
             "calmar_ratio": perf_metrics.calmar_ratio,
             "var_95": perf_metrics.var_95,
+            "var_95_note": (
+                "Requires 30+ days of data for statistical validity"
+                if perf_metrics.var_95 == 0.0
+                else None
+            ),
             "expectancy": perf_metrics.expectancy,
             "profit_factor": perf_metrics.profit_factor,
             "avg_win": perf_metrics.avg_win,
