@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from src.engines.live.execution.position_tracker import PositionSide
+from src.engines.shared.cost_calculator import CostCalculator
 
 if TYPE_CHECKING:
     pass
@@ -90,30 +91,46 @@ class LiveExecutionEngine:
         self.enable_live_trading = enable_live_trading
         self.exchange_interface = exchange_interface
 
-        # Tracking
-        self._total_fees_paid: float = 0.0
-        self._total_slippage_cost: float = 0.0
+        # Use shared cost calculator for all fee and slippage calculations
+        self._cost_calculator = CostCalculator(
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+        )
+
+    @staticmethod
+    def _position_side_to_str(side: PositionSide) -> str:
+        """Convert PositionSide enum to string for cost calculations.
+
+        Args:
+            side: Position side enum.
+
+        Returns:
+            'long' or 'short'.
+        """
+        return "long" if side == PositionSide.LONG else "short"
 
     @property
     def total_fees_paid(self) -> float:
         """Get total fees paid across all trades."""
-        return self._total_fees_paid
+        return self._cost_calculator.total_fees_paid
 
     @property
     def total_slippage_cost(self) -> float:
         """Get total slippage cost across all trades."""
-        return self._total_slippage_cost
+        return self._cost_calculator.total_slippage_cost
 
     def reset_tracking(self) -> None:
         """Reset fee and slippage tracking."""
-        self._total_fees_paid = 0.0
-        self._total_slippage_cost = 0.0
+        self._cost_calculator.reset_totals()
 
     def apply_entry_slippage(self, price: float, side: PositionSide) -> float:
         """Apply slippage to entry price (price moves against us).
 
         Slippage models the cost of market impact and adverse selection that occurs
         when entering a position, ensuring realistic backtest and live trading results.
+
+        This method is kept for backward compatibility. New code should use
+        the shared CostCalculator via calculate_entry_costs.
 
         Args:
             price: Base price before slippage.
@@ -122,11 +139,10 @@ class LiveExecutionEngine:
         Returns:
             Price after slippage applied.
         """
+        # Use simple calculation to preserve backward compatibility
         if side == PositionSide.LONG:
-            # Buying long positions experience slippage as higher entry price
             return price * (1 + self.slippage_rate)
         else:
-            # Shorting experiences slippage as lower entry price (worse fill)
             return price * (1 - self.slippage_rate)
 
     def apply_exit_slippage(self, price: float, side: PositionSide) -> float:
@@ -135,6 +151,9 @@ class LiveExecutionEngine:
         Exit slippage accounts for market impact costs when closing positions,
         ensuring P&L calculations reflect realistic execution conditions.
 
+        This method is kept for backward compatibility. New code should use
+        the shared CostCalculator via calculate_exit_costs.
+
         Args:
             price: Base price before slippage.
             side: Position side (LONG or SHORT).
@@ -142,11 +161,10 @@ class LiveExecutionEngine:
         Returns:
             Price after slippage applied.
         """
+        # Use simple calculation to preserve backward compatibility
         if side == PositionSide.LONG:
-            # Closing long positions receive worse fill (lower exit price)
             return price * (1 - self.slippage_rate)
         else:
-            # Covering short positions receive worse fill (higher exit price)
             return price * (1 + self.slippage_rate)
 
     def calculate_entry_fee(self, position_value: float) -> float:
@@ -158,7 +176,7 @@ class LiveExecutionEngine:
         Returns:
             Fee amount.
         """
-        return abs(position_value * self.fee_rate)
+        return self._cost_calculator.calculate_fee(position_value)
 
     def calculate_exit_fee(self, position_notional: float) -> float:
         """Calculate exit fee for a position.
@@ -169,7 +187,7 @@ class LiveExecutionEngine:
         Returns:
             Fee amount.
         """
-        return abs(position_notional * self.fee_rate)
+        return self._cost_calculator.calculate_fee(position_notional)
 
     def calculate_slippage_cost(self, position_value: float) -> float:
         """Calculate slippage cost for a trade.
@@ -203,20 +221,20 @@ class LiveExecutionEngine:
             EntryExecutionResult with execution details.
         """
         try:
-            # Apply slippage to entry price
-            executed_price = self.apply_entry_slippage(base_price, side)
-
-            # Calculate position value and quantity
+            # Calculate position value and costs using shared cost calculator
             position_value = size_fraction * balance
+            side_str = self._position_side_to_str(side)
+
+            cost_result = self._cost_calculator.calculate_entry_costs(
+                price=base_price,
+                notional=position_value,
+                side=side_str,
+            )
+
+            executed_price = cost_result.executed_price
+            entry_fee = cost_result.fee
+            slippage_cost = cost_result.slippage_cost
             quantity = position_value / executed_price if executed_price > 0 else 0.0
-
-            # Calculate fees and slippage cost
-            entry_fee = self.calculate_entry_fee(position_value)
-            slippage_cost = self.calculate_slippage_cost(position_value)
-
-            # Track totals
-            self._total_fees_paid += entry_fee
-            self._total_slippage_cost += slippage_cost
 
             # Execute real order if enabled
             if self.enable_live_trading:
@@ -268,16 +286,18 @@ class LiveExecutionEngine:
             ExitExecutionResult with execution details.
         """
         try:
-            # Apply slippage to exit price
-            executed_price = self.apply_exit_slippage(base_price, side)
+            # Calculate costs using shared cost calculator
+            side_str = self._position_side_to_str(side)
 
-            # Calculate fees and slippage cost
-            exit_fee = self.calculate_exit_fee(position_notional)
-            slippage_cost = self.calculate_slippage_cost(position_notional)
+            cost_result = self._cost_calculator.calculate_exit_costs(
+                price=base_price,
+                notional=position_notional,
+                side=side_str,
+            )
 
-            # Track totals
-            self._total_fees_paid += exit_fee
-            self._total_slippage_cost += slippage_cost
+            executed_price = cost_result.executed_price
+            exit_fee = cost_result.fee
+            slippage_cost = cost_result.slippage_cost
 
             # Execute real order if enabled
             if self.enable_live_trading:
@@ -365,8 +385,8 @@ class LiveExecutionEngine:
             Dictionary with fee and slippage totals.
         """
         return {
-            "total_fees_paid": self._total_fees_paid,
-            "total_slippage_cost": self._total_slippage_cost,
+            "total_fees_paid": self.total_fees_paid,
+            "total_slippage_cost": self.total_slippage_cost,
             "fee_rate": self.fee_rate,
             "slippage_rate": self.slippage_rate,
             "enable_live_trading": self.enable_live_trading,

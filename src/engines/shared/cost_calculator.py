@@ -78,8 +78,19 @@ class CostCalculator:
 
         Returns:
             CostResult with executed price, fee, and slippage cost.
+
+        Raises:
+            ValueError: If price <= 0, notional < 0, or side is invalid.
         """
+        # Input validation
+        if price <= 0:
+            raise ValueError(f"Price must be positive, got {price}")
+        if notional < 0:
+            raise ValueError(f"Notional must be non-negative, got {notional}")
+
         side_lower = side.lower() if isinstance(side, str) else str(side).lower()
+        if side_lower not in ("long", "short"):
+            raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
 
         # Apply slippage adversely for entry
         if side_lower == "long":
@@ -120,8 +131,19 @@ class CostCalculator:
 
         Returns:
             CostResult with executed price, fee, and slippage cost.
+
+        Raises:
+            ValueError: If price <= 0, notional < 0, or side is invalid.
         """
+        # Input validation
+        if price <= 0:
+            raise ValueError(f"Price must be positive, got {price}")
+        if notional < 0:
+            raise ValueError(f"Notional must be non-negative, got {notional}")
+
         side_lower = side.lower() if isinstance(side, str) else str(side).lower()
+        if side_lower not in ("long", "short"):
+            raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
 
         # Apply slippage adversely for exit (opposite of entry)
         if side_lower == "long":
