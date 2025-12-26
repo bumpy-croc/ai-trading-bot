@@ -30,7 +30,7 @@ class PositionSide(Enum):
         return self.value
 
     @classmethod
-    def from_string(cls, value: str) -> "PositionSide":
+    def from_string(cls, value: str) -> PositionSide:
         """Create a PositionSide from a string value.
 
         Args:
@@ -90,7 +90,9 @@ class BasePosition:
     """
 
     symbol: str
-    side: PositionSide | str  # Support both enum and string for backward compatibility
+    # DEPRECATED: String side support will be removed in a future version.
+    # Use PositionSide enum instead. String support maintained for backward compatibility.
+    side: PositionSide | str
     entry_price: float
     entry_time: datetime
     size: float
@@ -111,38 +113,40 @@ class BasePosition:
     unrealized_pnl_percent: float = 0.0
     # Order tracking (live: exchange order ID, backtest: None or synthetic)
     order_id: str | None = None
-    # Extended metadata for engine-specific data
+    # Extended metadata for engine-specific data (currently unused, reserved for future extensions)
+    # Example use cases: custom risk parameters, strategy-specific tags, A/B test groups
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Initialize derived fields after dataclass construction.
 
-        IMPORTANT: This method mutates field values to ensure valid state:
-        1. Normalizes string side to PositionSide enum for type safety
-        2. Clamps size to maximum of 1.0 (100% of balance) to prevent over-leverage
-        3. Auto-initializes original_size and current_size from size if not provided
+        Validates position constraints and auto-initializes derived fields.
+        Raises ValueError for invalid position parameters instead of silently
+        mutating them, ensuring callers are aware of validation failures.
 
-        These mutations ensure positions are always in a valid state, even if
-        constructed with invalid or incomplete data.
+        Raises:
+            ValueError: If size exceeds 1.0 or is negative.
         """
         # Normalize side to PositionSide enum if string
         if isinstance(self.side, str):
             self.side = PositionSide.from_string(self.side)
 
-        # Limit position size to 100% of balance to prevent over-leverage
+        # Validate position size does not exceed 100% of balance
         if self.size > 1.0 + EPSILON:  # Use epsilon for float comparison
-            logger.warning(
-                "Position size %.2f exceeds maximum 1.0, clamping to 1.0",
-                self.size,
+            raise ValueError(
+                f"Position size {self.size} exceeds maximum 1.0 (100% of balance). "
+                "Reduce position size to comply with risk limits."
             )
-            self.size = 1.0
 
         # Validate size is non-negative
         if self.size < -EPSILON:
-            logger.warning("Position size %.2f is negative, setting to 0.0", self.size)
-            self.size = 0.0
+            raise ValueError(
+                f"Position size {self.size} is negative. "
+                "Position size must be a positive value between 0 and 1."
+            )
 
-        # Initialize original/current size if not provided
+        # Auto-initialize original/current size from size if not provided.
+        # These fields track partial operations and default to the initial size.
         if self.original_size is None:
             self.original_size = self.size
         if self.current_size is None:

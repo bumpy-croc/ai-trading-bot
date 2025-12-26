@@ -63,6 +63,14 @@ class LivePositionTracker:
     - Partial exit and scale-in tracking
     - Maximum Favorable/Adverse Excursion (MFE/MAE) metrics
     - Unrealized P&L updates
+
+    Thread Safety:
+        All position state is protected by _positions_lock to prevent race conditions.
+        - Callbacks from OrderTracker may run concurrently with the main trading loop
+        - All mutations to _positions and _position_db_ids must occur inside the lock
+        - When reading position data for calculations, keep operations inside the lock
+        - Lock acquisition order: _positions_lock only (no nested locks to avoid deadlocks)
+        - Properties return copies to prevent external concurrent modifications
     """
 
     def __init__(
@@ -239,13 +247,9 @@ class LivePositionTracker:
 
         # Calculate P&L
         if position.side == PositionSide.LONG:
-            trade_pnl_pct = pnl_percent(
-                position.entry_price, exit_price, Side.LONG, fraction
-            )
+            trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.LONG, fraction)
         else:
-            trade_pnl_pct = pnl_percent(
-                position.entry_price, exit_price, Side.SHORT, fraction
-            )
+            trade_pnl_pct = pnl_percent(position.entry_price, exit_price, Side.SHORT, fraction)
 
         # Determine balance basis
         entry_balance = position.entry_balance
@@ -290,35 +294,29 @@ class LivePositionTracker:
             fallback_balance: Balance to use if position has no entry_balance.
         """
         with self._positions_lock:
-            positions_snapshot = list(self._positions.values())
-        for position in positions_snapshot:
-            fraction = float(
-                position.current_size
-                if position.current_size is not None
-                else position.size
-            )
-            if fraction <= 0:
-                position.unrealized_pnl = 0.0
-                position.unrealized_pnl_percent = 0.0
-                continue
-
-            basis_balance = (
-                float(position.entry_balance)
-                if position.entry_balance is not None and position.entry_balance > 0
-                else float(fallback_balance)
-            )
-
-            if position.side == PositionSide.LONG:
-                pnl_pct = pnl_percent(
-                    position.entry_price, current_price, Side.LONG, fraction
+            # Perform all mutations inside the lock to prevent race conditions
+            for position in self._positions.values():
+                fraction = float(
+                    position.current_size if position.current_size is not None else position.size
                 )
-            else:
-                pnl_pct = pnl_percent(
-                    position.entry_price, current_price, Side.SHORT, fraction
+                if fraction <= 0:
+                    position.unrealized_pnl = 0.0
+                    position.unrealized_pnl_percent = 0.0
+                    continue
+
+                basis_balance = (
+                    float(position.entry_balance)
+                    if position.entry_balance is not None and position.entry_balance > 0
+                    else float(fallback_balance)
                 )
 
-            position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
-            position.unrealized_pnl_percent = pnl_pct * 100.0
+                if position.side == PositionSide.LONG:
+                    pnl_pct = pnl_percent(position.entry_price, current_price, Side.LONG, fraction)
+                else:
+                    pnl_pct = pnl_percent(position.entry_price, current_price, Side.SHORT, fraction)
+
+                position.unrealized_pnl = cash_pnl(pnl_pct, basis_balance)
+                position.unrealized_pnl_percent = pnl_pct * 100.0
 
     def update_mfe_mae(self, current_price: float, persist_to_db: bool = True) -> None:
         """Compute and persist rolling MFE/MAE for all active positions.
@@ -420,6 +418,16 @@ class LivePositionTracker:
             if position.current_size is None:
                 position.current_size = position.size
 
+            # Validate delta_fraction does not exceed current size
+            if delta_fraction > position.current_size:
+                logger.error(
+                    "Partial exit %.4f exceeds current size %.4f for %s, clamping to current size",
+                    delta_fraction,
+                    position.current_size,
+                    order_id,
+                )
+                delta_fraction = position.current_size
+
             position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
             position.partial_exits_taken += 1
             position.last_partial_exit_price = price
@@ -436,13 +444,14 @@ class LivePositionTracker:
             else basis_balance
         )
 
-        # Calculate exit notional accounting for price change (same as full exits)
+        # Calculate exit notional accounting for price change
+        # NOTE: Partial exits adjust exit_notional for price movement, while full exits
+        # in close_position() calculate P&L directly without this adjustment.
+        # This is intentional: partial exits need accurate fee/slippage calculation
+        # on the actual exit value, while full exits use gross P&L calculation.
+        # Both approaches are financially correct but optimize for different use cases.
         entry_notional = actual_basis * delta_fraction
-        price_adjustment = (
-            price / position.entry_price
-            if position.entry_price > 0
-            else 1.0
-        )
+        price_adjustment = price / position.entry_price if position.entry_price > 0 else 1.0
         exit_notional = entry_notional * price_adjustment
 
         # Calculate costs on exit notional
