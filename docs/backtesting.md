@@ -1,6 +1,6 @@
 # Backtesting
 
-> **Last Updated**: 2025-12-23
+> **Last Updated**: 2025-12-26
 > **Related Documentation**: [Live trading](live_trading.md), [Data pipeline](data_pipeline.md)
 
 The vectorised backtesting engine in `src/engines/backtest/` replays historical candles, applies the strategy lifecycle, and
@@ -91,6 +91,45 @@ The backtesting engine uses a modular, handler-based architecture that separates
   classes used by the live engine.
 - When `log_to_database=True`, the engine persists trades, strategy executions, and session records through
   `DatabaseManager` so dashboards can visualise results next to live data.
+
+## Performance Metrics
+
+The backtest engine uses the unified `PerformanceTracker` from `src/performance/tracker.py` to calculate 30+ comprehensive metrics. All metrics use pure calculation functions from `src/performance/metrics.py`, ensuring consistency with live trading results.
+
+### Available Metrics
+
+| Category | Metrics | Description |
+| -------- | ------- | ----------- |
+| **Returns** | `total_return_pct`, `annualized_return`, `cagr` | Overall profitability measures |
+| **Risk-Adjusted** | `sharpe_ratio`, `sortino_ratio`, `calmar_ratio` | Returns adjusted for volatility and drawdown risk |
+| **Risk** | `max_drawdown`, `current_drawdown`, `var_95` | Maximum and current risk exposure |
+| **Trade Quality** | `win_rate`, `profit_factor`, `expectancy` | Trade effectiveness measures |
+| **Trade Stats** | `avg_win`, `avg_loss`, `largest_win`, `largest_loss` | Win/loss distribution |
+| **Efficiency** | `avg_trade_duration_hours`, `consecutive_wins`, `consecutive_losses` | Trading frequency and streak tracking |
+| **Costs** | `total_fees_paid`, `total_slippage_cost` | Transaction cost tracking |
+
+### Accessing Metrics
+
+All metrics are included in the results dictionary returned by `backtester.run()`:
+
+```python
+results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start)
+
+# Access new risk-adjusted metrics
+print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
+print(f"Sortino Ratio: {results['sortino_ratio']:.2f}")
+print(f"Calmar Ratio: {results['calmar_ratio']:.2f}")
+print(f"VaR (95%): {results['var_95']:.4f}")
+
+# Check trade quality
+print(f"Expectancy: {results['expectancy']:.2f}")
+print(f"Profit Factor: {results['profit_factor']:.2f}")
+print(f"Consecutive Wins: {results['consecutive_wins']}")
+```
+
+### Metric Parity with Live Trading
+
+All core metrics calculated in backtesting use identical calculation logic as the live trading engine, ensuring accurate validation of backtest results against live performance. The shared `PerformanceTracker` guarantees metric consistency across both engines.
 
 ## CLI usage
 
