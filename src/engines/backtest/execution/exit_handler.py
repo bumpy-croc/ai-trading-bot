@@ -458,10 +458,14 @@ class ExitHandler:
                 from src.strategies.components import MarketData as ComponentMarketData
                 from src.strategies.components import Position as ComponentPosition
 
+                # Compute notional value from current position size and entry balance
+                # (component_notional field was removed - compute on-demand)
+                notional = float(trade.current_size) * float(trade.entry_balance or 0.0)
+
                 position = ComponentPosition(
                     symbol=trade.symbol,
                     side=trade.side,
-                    size=float(getattr(trade, "component_notional", 0.0) or 0.0),
+                    size=notional,
                     entry_price=float(trade.entry_price),
                     current_price=float(current_price),
                     entry_time=trade.entry_time,
