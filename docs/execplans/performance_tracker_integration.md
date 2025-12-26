@@ -212,7 +212,13 @@ def expectancy(win_rate: float, avg_win: float, avg_loss: float) -> float:
 
 **Why:** These are pure calculations, fully testable, reusable across engines and dashboards.
 
-#### Layer 2: Enhanced Shared Performance Tracker (`src/engines/shared/performance_tracker.py`)
+#### Layer 2: Enhanced Shared Performance Tracker (`src/performance/tracker.py`)
+
+**Location Rationale:**
+- Lives in `src/performance/` (NOT `src/engines/shared/`)
+- Performance measurement is **domain logic**, not engine infrastructure
+- Reusable across engines, strategies, dashboards, and analysis tools
+- Follows existing pattern: `src/performance/metrics.py`, `src/strategies/components/performance_tracker.py`
 
 **Responsibilities:**
 - Record trades with full metadata
@@ -424,31 +430,42 @@ class LiveTradingEngine:
 ### Phase 1: Enhance Shared Tracker (Foundation)
 
 **Files to modify:**
-- `src/engines/shared/performance_tracker.py`
+- `src/performance/tracker.py` (renamed from `src/engines/shared/performance_tracker.py`)
 - `src/performance/metrics.py`
+- `src/performance/__init__.py` (export tracker)
+
+**Note:** Move `PerformanceTracker` from `src/engines/shared/` to `src/performance/tracker.py`
+- Better module cohesion (all performance code in one place)
+- More discoverable for developers
+- Reusable outside engine context (dashboards, strategy components, analysis tools)
 
 **Tasks:**
-1. ✅ Add missing pure metric functions to `src/performance/metrics.py`:
+1. ✅ Move `PerformanceTracker` from `src/engines/shared/performance_tracker.py` to `src/performance/tracker.py`:
+   - Rename file: `performance_tracker.py` → `tracker.py`
+   - Update import path: `from src.engines.shared.performance_tracker` → `from src.performance.tracker`
+   - Export from `src/performance/__init__.py`
+
+2. ✅ Add missing pure metric functions to `src/performance/metrics.py`:
    - `sortino_ratio()`
    - `calmar_ratio()`
    - `value_at_risk()`
    - `expectancy()`
 
-2. ✅ Enhance `PerformanceMetrics` dataclass with:
+3. ✅ Enhance `PerformanceMetrics` dataclass with:
    - `sortino_ratio`, `calmar_ratio`, `var_95`, `expectancy`
    - `consecutive_wins`, `consecutive_losses`
 
-3. ✅ Update `PerformanceTracker.get_metrics()` to calculate new fields:
+4. ✅ Update `PerformanceTracker.get_metrics()` to calculate new fields:
    - Calculate Sortino/Calmar/VaR using balance history
    - Track consecutive streaks during `record_trade()`
 
-4. ✅ Add balance history export as DataFrame:
+5. ✅ Add balance history export as DataFrame:
    ```python
    def get_balance_series(self) -> pd.Series:
        """Return balance history as pandas Series for metric calculations."""
    ```
 
-5. ✅ Write comprehensive unit tests for new metrics
+6. ✅ Write comprehensive unit tests for new metrics
 
 **Acceptance Criteria:**
 - All new metrics have >95% test coverage
@@ -468,19 +485,19 @@ class LiveTradingEngine:
    self.performance_tracker = PerformanceTracker(initial_balance)
    ```
 
-2. ✅ Replace manual metric tracking in `_run_main_loop()`:
+3. ✅ Replace manual metric tracking in `_run_main_loop()`:
    - Remove: `self.peak_balance`, `max_drawdown_running` updates
    - Add: `self.performance_tracker.record_trade()` on trade completion
    - Add: `self.performance_tracker.update_balance()` each candle
 
-3. ✅ Update early stop logic to use tracker metrics:
+4. ✅ Update early stop logic to use tracker metrics:
    ```python
    metrics = self.performance_tracker.get_metrics()
    if metrics.current_drawdown > self._early_stop_max_drawdown:
        # Early stop
    ```
 
-4. ✅ Replace `compute_performance_metrics()` in `_build_final_results()`:
+5. ✅ Replace `compute_performance_metrics()` in `_build_final_results()`:
    ```python
    metrics = self.performance_tracker.get_metrics()
    results = {
@@ -491,12 +508,12 @@ class LiveTradingEngine:
    }
    ```
 
-5. ✅ Preserve backward compatibility:
+6. ✅ Preserve backward compatibility:
    - Keep all existing result keys
    - Ensure CLI output unchanged
    - Database schema unchanged
 
-6. ✅ Add integration tests:
+7. ✅ Add integration tests:
    - Run backtest, verify metrics match expected values
    - Compare with previous implementation (regression test)
 
@@ -512,16 +529,21 @@ class LiveTradingEngine:
 - `src/engines/live/trading_engine.py`
 
 **Tasks:**
-1. ✅ Initialize `PerformanceTracker` in `__init__()`:
+1. ✅ Update imports to use new location:
+   ```python
+   from src.performance.tracker import PerformanceTracker
+   ```
+
+2. ✅ Initialize `PerformanceTracker` in `__init__()`:
    ```python
    self.performance_tracker = PerformanceTracker(initial_balance)
    ```
 
-2. ✅ Replace manual metric tracking:
+3. ✅ Replace manual metric tracking:
    - Remove: `self.total_trades`, `self.winning_trades`, `self.total_pnl`, `self.peak_balance`, `self.max_drawdown`
    - Keep: Database persistence logic (separate concern)
 
-3. ✅ Update `_close_position()` to use tracker:
+4. ✅ Update `_close_position()` to use tracker:
    ```python
    self.performance_tracker.record_trade(trade, fee, slippage)
    self.performance_tracker.update_balance(self.current_balance, datetime.now())
@@ -531,7 +553,7 @@ class LiveTradingEngine:
    self._save_performance_to_db(metrics)
    ```
 
-4. ✅ Update `_update_performance_metrics()`:
+5. ✅ Update `_update_performance_metrics()`:
    ```python
    def _update_performance_metrics(self):
        """Update performance tracking and persist to database."""
@@ -543,7 +565,7 @@ class LiveTradingEngine:
            self._save_account_history(metrics)
    ```
 
-5. ✅ Update `get_performance_summary()`:
+6. ✅ Update `get_performance_summary()`:
    ```python
    def get_performance_summary(self) -> dict:
        metrics = self.performance_tracker.get_metrics()
@@ -554,11 +576,11 @@ class LiveTradingEngine:
        }
    ```
 
-6. ✅ Ensure database writes include new metrics:
+7. ✅ Ensure database writes include new metrics:
    - Update `AccountHistory` writes to include Sortino, Calmar, VaR
    - Update `PerformanceMetrics` table writes
 
-7. ✅ Add integration tests:
+8. ✅ Add integration tests:
    - Mock live trading session
    - Verify metrics calculated correctly
    - Verify database persistence
@@ -616,7 +638,7 @@ class LiveTradingEngine:
 ### Phase 5: Testing & Validation
 
 **Files to create:**
-- `tests/unit/engines/shared/test_performance_tracker.py`
+- `tests/unit/performance/test_tracker.py` (renamed from `test_performance_tracker.py`)
 - `tests/integration/test_performance_parity.py`
 
 **Tasks:**
@@ -777,6 +799,8 @@ class LiveTradingEngine:
 ## Progress
 
 ### Phase 1: Enhance Shared Tracker
+- [ ] Move tracker from `src/engines/shared/performance_tracker.py` to `src/performance/tracker.py`
+- [ ] Update `src/performance/__init__.py` to export tracker
 - [ ] Add pure metric functions to `src/performance/metrics.py`
 - [ ] Enhance `PerformanceMetrics` dataclass
 - [ ] Update `PerformanceTracker.get_metrics()`
@@ -845,6 +869,17 @@ _To be filled as implementation progresses_
 **Decision:** Provide `get_balance_series()` method returning pandas Series
 **Rationale:** Sharpe/Sortino/VaR calculations need balance series, pandas is standard for time series
 **Alternatives Considered:** Store balance as numpy array (rejected - less flexible), Calculate inline (rejected - duplicates logic)
+
+### Decision 5: Move Tracker to `src/performance/` Module
+**Date:** 2025-12-26
+**Decision:** Move `PerformanceTracker` from `src/engines/shared/` to `src/performance/tracker.py`
+**Rationale:**
+- Performance measurement is domain logic, not engine infrastructure
+- All performance-related code should live in `src/performance/`
+- Reusable across engines, strategies, dashboards, and analysis tools
+- Follows existing pattern: `src/performance/metrics.py`
+- Better module cohesion and discoverability
+**Alternatives Considered:** Keep in `src/engines/shared/` (rejected - wrong module boundary, limits reusability)
 
 ## Outcomes & Retrospective
 
