@@ -212,8 +212,8 @@ class PerformanceTracker:
             (datetime.now(), initial_balance)
         ]
 
-        # Thread safety lock for mutable state
-        self._lock = threading.Lock()
+        # Thread safety lock for mutable state (reentrant to allow nested calls)
+        self._lock = threading.RLock()
 
     def record_trade(
         self,
