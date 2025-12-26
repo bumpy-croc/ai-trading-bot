@@ -191,8 +191,9 @@ def sortino_ratio(daily_balance: pd.Series, risk_free_rate: float = 0.0) -> floa
     downside_returns = daily_returns[daily_returns < daily_rf]
 
     if downside_returns.empty or len(downside_returns) < 2:
-        # No downside volatility - infinite Sortino if returns > risk-free
-        return float("inf") if mean_return > daily_rf else 0.0
+        # No downside volatility - cap at large finite value
+        # Using 999.0 instead of infinity to avoid database/JSON issues
+        return 999.0 if mean_return > daily_rf else 0.0
 
     downside_std = downside_returns.std()
     if downside_std == 0 or np.isnan(downside_std):
@@ -217,10 +218,13 @@ def calmar_ratio(annualized_return: float, max_drawdown_pct: float) -> float:
     Returns
     -------
     float
-        Calmar ratio.
+        Calmar ratio. Returns large finite value (999.0) for zero drawdown
+        with positive returns to avoid infinity/database issues.
     """
     if max_drawdown_pct <= 0:
-        return 0.0
+        # No drawdown case - return large value if positive returns
+        # Using 999.0 instead of infinity to avoid database/JSON issues
+        return 999.0 if annualized_return > 0 else 0.0
     return annualized_return / max_drawdown_pct
 
 
@@ -261,13 +265,23 @@ def expectancy(win_rate: float, avg_win: float, avg_loss: float) -> float:
     win_rate : float
         Win rate as decimal (e.g., 0.6 for 60%).
     avg_win : float
-        Average winning trade PnL.
+        Average winning trade PnL (must be non-negative).
     avg_loss : float
-        Average losing trade PnL (should be negative).
+        Average losing trade PnL (must be negative or zero).
 
     Returns
     -------
     float
         Expected value per trade.
+
+    Raises
+    ------
+    ValueError
+        If avg_loss is positive or avg_win is negative.
     """
+    if avg_loss > 0:
+        raise ValueError(f"avg_loss must be negative or zero, got {avg_loss}")
+    if avg_win < 0:
+        raise ValueError(f"avg_win must be non-negative, got {avg_win}")
+
     return (win_rate * avg_win) + ((1.0 - win_rate) * avg_loss)

@@ -502,3 +502,184 @@ class TestPerformanceMetricsFunctions:
         metrics = tracker.get_metrics()
         # Should have Calmar ratio > 0 if annualized return > 0
         assert isinstance(metrics.calmar_ratio, float)
+
+
+@pytest.mark.fast
+class TestPerformanceTrackerEdgeCases:
+    """Tests for edge cases identified in code review."""
+
+    def test_zero_pnl_trade_handling(self):
+        """Test that zero-PnL trades are handled consistently."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        # Record trades with different PnL values
+        for pnl in [100, 0, -50, 0, 150]:
+            trade = Mock()
+            trade.pnl = pnl
+            trade.entry_time = datetime.now()
+            trade.exit_time = datetime.now()
+            trade.symbol = "BTCUSDT"
+            trade.side = "long"
+            tracker.record_trade(trade)
+
+        metrics = tracker.get_metrics()
+        # Should have 5 total trades: 2 wins, 1 loss, 2 zero
+        assert metrics.total_trades == 3  # Only winning + losing
+        assert metrics.winning_trades == 2
+        assert metrics.losing_trades == 1
+        # Zero PnL trades should be tracked separately
+        assert tracker._zero_pnl_trades == 2
+
+    def test_trade_with_missing_timestamps(self):
+        """Test recording trade without entry/exit times."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        trade = Mock()
+        trade.pnl = 100.0
+        trade.entry_time = None
+        trade.exit_time = None
+        trade.symbol = "BTCUSDT"
+        trade.side = "long"
+
+        # Should not raise error
+        tracker.record_trade(trade)
+
+        metrics = tracker.get_metrics()
+        assert metrics.total_trades == 1
+        assert metrics.avg_trade_duration_hours == 0.0
+
+    def test_trade_with_none_pnl(self):
+        """Test recording trade with None PnL value."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        trade = Mock()
+        trade.pnl = None
+        trade.entry_time = datetime.now()
+        trade.exit_time = datetime.now()
+        trade.symbol = "BTCUSDT"
+        trade.side = "long"
+
+        # Should not raise error, should log warning
+        tracker.record_trade(trade)
+
+        metrics = tracker.get_metrics()
+        assert metrics.total_trades == 0  # None PnL treated as zero
+        assert metrics.total_pnl == 0.0
+
+    def test_var_with_insufficient_data(self):
+        """Test VaR returns 0 with insufficient samples."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        # Add only 10 balance updates (less than 30 required)
+        now = datetime.now()
+        for i in range(10):
+            tracker.update_balance(10000 + i * 10, timestamp=now + timedelta(days=i))
+
+        metrics = tracker.get_metrics()
+        # VaR should be 0 with insufficient data
+        assert metrics.var_95 == 0.0
+
+    def test_var_with_sufficient_data(self):
+        """Test VaR is calculated with sufficient samples."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        # Add 40 balance updates (more than 30 required)
+        now = datetime.now()
+        for i in range(40):
+            # Add some volatility
+            balance = 10000 + i * 10 + (i % 3 - 1) * 50
+            tracker.update_balance(balance, timestamp=now + timedelta(days=i))
+
+        metrics = tracker.get_metrics()
+        # VaR should be calculated (negative value representing loss)
+        assert isinstance(metrics.var_95, float)
+
+    def test_sortino_with_no_downside_returns_capped(self):
+        """Test Sortino ratio caps at 999 instead of infinity."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        # Simulate only upward growth (no downside)
+        now = datetime.now()
+        for i in range(30):
+            tracker.update_balance(10000 + i * 100, timestamp=now + timedelta(days=i))
+
+        metrics = tracker.get_metrics()
+        # Sortino should be capped at 999.0, not infinity
+        assert metrics.sortino_ratio == 999.0
+
+    def test_calmar_ratio_with_zero_drawdown(self):
+        """Test Calmar ratio with zero drawdown returns finite value."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        # Simulate growth with no drawdown
+        now = datetime.now()
+        for i in range(30):
+            tracker.update_balance(10000 + i * 50, timestamp=now + timedelta(days=i))
+
+        metrics = tracker.get_metrics()
+        # Calmar should be capped at 999.0, not infinity
+        assert metrics.calmar_ratio == 999.0
+
+    def test_memory_limit_on_trade_history(self):
+        """Test trade history memory limiting."""
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        # Record more trades than the memory limit
+        for i in range(tracker._max_trade_history + 100):
+            trade = Mock()
+            trade.pnl = float(i)
+            trade.entry_time = datetime.now()
+            trade.exit_time = datetime.now()
+            trade.symbol = f"BTC{i}"
+            trade.side = "long"
+            tracker.record_trade(trade)
+
+        # Trade history should be limited
+        history = tracker.get_trade_history()
+        assert len(history) == tracker._max_trade_history
+
+        # Should contain most recent trades
+        assert history[-1]["pnl"] == float(tracker._max_trade_history + 99)
+
+    def test_expectancy_validation(self):
+        """Test expectancy validates avg_loss is negative."""
+        from src.performance.metrics import expectancy
+
+        # Valid case
+        result = expectancy(0.6, 100.0, -50.0)
+        assert result == pytest.approx(40.0, abs=1.0)
+
+        # Invalid case: positive avg_loss should raise
+        with pytest.raises(ValueError, match="avg_loss must be negative"):
+            expectancy(0.6, 100.0, 50.0)
+
+        # Invalid case: negative avg_win should raise
+        with pytest.raises(ValueError, match="avg_win must be non-negative"):
+            expectancy(0.6, -100.0, -50.0)
+
+    def test_concurrent_trade_recording(self):
+        """Test thread-safety of concurrent trade recording."""
+        import threading
+
+        tracker = PerformanceTracker(initial_balance=10000)
+
+        def record_trades():
+            for i in range(50):
+                trade = Mock()
+                trade.pnl = float(i)
+                trade.entry_time = datetime.now()
+                trade.exit_time = datetime.now()
+                trade.symbol = "BTCUSDT"
+                trade.side = "long"
+                tracker.record_trade(trade)
+
+        # Run concurrent trade recording
+        threads = [threading.Thread(target=record_trades) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Should have recorded all trades without errors
+        metrics = tracker.get_metrics()
+        assert metrics.total_trades == 250  # 50 trades * 5 threads

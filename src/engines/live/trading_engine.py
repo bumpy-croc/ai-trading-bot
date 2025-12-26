@@ -3025,18 +3025,16 @@ class LiveTradingEngine:
             if realized_pnl > 0:
                 self.winning_trades += 1
 
-            # Update performance tracker
+            # Update performance tracker (balance is updated in _update_performance_metrics)
             self.performance_tracker.record_trade(
                 trade=trade, fee=exit_fee, slippage=exit_slippage_cost
             )
-            self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now())
 
             # Sync manual tracking with tracker for backward compatibility
             perf_metrics = self.performance_tracker.get_metrics()
             self.total_fees_paid = perf_metrics.total_fees_paid
             self.total_slippage_cost = perf_metrics.total_slippage_cost
-            self.peak_balance = perf_metrics.peak_balance
-            self.max_drawdown = perf_metrics.max_drawdown
+            # peak_balance and max_drawdown will be synced in _update_performance_metrics()
 
             # Log trade
             self.completed_trades.append(trade)

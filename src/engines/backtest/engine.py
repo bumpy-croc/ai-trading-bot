@@ -863,9 +863,8 @@ class Backtester:
             else:
                 yearly_balance[yr]["end"] = self.balance
 
-            # Update peak balance and drawdown
-            if self.balance > self.peak_balance:
-                self.peak_balance = self.balance
+            # Sync peak_balance from tracker (single source of truth)
+            self.peak_balance = self.performance_tracker.peak_balance
             current_drawdown = (
                 (self.peak_balance - self.balance) / self.peak_balance
                 if self.peak_balance > 0
@@ -1030,9 +1029,8 @@ class Backtester:
             )
             self.performance_tracker.update_balance(self.balance, timestamp=current_time)
 
-            # Keep peak_balance in sync with tracker for backward compatibility
-            if self.balance > self.peak_balance:
-                self.peak_balance = self.balance
+            # Sync peak_balance from tracker (single source of truth)
+            self.peak_balance = self.performance_tracker.peak_balance
 
             logger.info(
                 "Exited %s at %.2f, Balance: %.2f",

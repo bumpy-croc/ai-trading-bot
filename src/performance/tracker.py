@@ -10,7 +10,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import pandas as pd
 
@@ -18,6 +18,19 @@ from src.performance import metrics as perf_metrics
 
 if TYPE_CHECKING:
     from src.engines.shared.models import BaseTrade
+
+
+class TradeProtocol(Protocol):
+    """Protocol for trade objects that can be recorded.
+
+    This protocol defines the minimum interface required for trade tracking.
+    """
+
+    pnl: float | None
+    entry_time: datetime | None
+    exit_time: datetime | None
+    symbol: str | None
+    side: str | None
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +196,9 @@ class PerformanceTracker:
         self._gross_loss = 0.0
         self._winning_trades = 0
         self._losing_trades = 0
+        self._zero_pnl_trades = 0
         self._total_duration_seconds = 0.0
+        self._max_trade_history = 10000  # Limit memory usage
 
         # Streak tracking
         self._current_streak_type: str | None = None  # 'win' or 'loss'
@@ -202,7 +217,7 @@ class PerformanceTracker:
 
     def record_trade(
         self,
-        trade: BaseTrade | Any,
+        trade: TradeProtocol,
         fee: float = 0.0,
         slippage: float = 0.0,
     ) -> None:
@@ -213,22 +228,22 @@ class PerformanceTracker:
             fee: Total fee for the trade.
             slippage: Total slippage cost for the trade.
         """
-        pnl = getattr(trade, "pnl", 0.0) or 0.0
+        # Extract trade attributes with explicit None handling
+        pnl_attr = getattr(trade, "pnl", None)
+        pnl = float(pnl_attr) if pnl_attr is not None else 0.0
+
+        if pnl == 0.0 and pnl_attr is None:
+            logger.warning(f"Trade {getattr(trade, 'symbol', 'unknown')} has None PnL")
+
         entry_time = getattr(trade, "entry_time", None)
         exit_time = getattr(trade, "exit_time", None)
 
         with self._lock:
-            # Update trade counts
-            is_win = pnl > 0
-            if is_win:
+            # Update trade counts (explicitly handle zero-PnL case)
+            if pnl > 0:
                 self._winning_trades += 1
                 self._gross_profit += pnl
-            elif pnl < 0:
-                self._losing_trades += 1
-                self._gross_loss += abs(pnl)
-
-            # Update streaks
-            if is_win:
+                # Update win streak
                 if self._current_streak_type == "win":
                     self._current_win_streak += 1
                 else:
@@ -236,7 +251,10 @@ class PerformanceTracker:
                     self._current_win_streak = 1
                     self._current_loss_streak = 0
                 self._max_win_streak = max(self._max_win_streak, self._current_win_streak)
-            else:
+            elif pnl < 0:
+                self._losing_trades += 1
+                self._gross_loss += abs(pnl)
+                # Update loss streak
                 if self._current_streak_type == "loss":
                     self._current_loss_streak += 1
                 else:
@@ -244,6 +262,10 @@ class PerformanceTracker:
                     self._current_loss_streak = 1
                     self._current_win_streak = 0
                 self._max_loss_streak = max(self._max_loss_streak, self._current_loss_streak)
+            else:
+                # Zero PnL trade (breakeven) - count but don't update P&L or streaks
+                self._zero_pnl_trades += 1
+                logger.debug(f"Recorded zero-PnL trade for {getattr(trade, 'symbol', 'unknown')}")
 
             # Update totals
             self._total_pnl += pnl
@@ -267,6 +289,10 @@ class PerformanceTracker:
                     "side": str(getattr(trade, "side", None)),
                 }
             )
+
+            # Limit memory usage by keeping only most recent trades
+            if len(self._trades) > self._max_trade_history:
+                self._trades = self._trades[-self._max_trade_history:]
 
     def update_balance(
         self,
@@ -386,11 +412,11 @@ class PerformanceTracker:
             if max_dd_pct > 0:
                 calmar_ratio = perf_metrics.calmar_ratio(annualized_return, max_dd_pct)
 
-            # Calculate VaR (95%)
+            # Calculate VaR (95%) - requires minimum sample size for statistical validity
             var_95 = 0.0
-            if len(balance_series) >= 2:
+            if len(balance_series) >= 30:
                 returns = balance_series.pct_change().dropna()
-                if len(returns) > 0:
+                if len(returns) >= 20:
                     var_95 = perf_metrics.value_at_risk(returns, confidence=0.95)
 
             return PerformanceMetrics(
@@ -453,6 +479,13 @@ class PerformanceTracker:
 
         Returns:
             pandas Series with datetime index and balance values.
+
+        Note:
+            Balance history is resampled to daily frequency for Sharpe/Sortino
+            calculations. This uses end-of-day values only (.last()) with forward
+            fill for missing days. Intraday volatility is not captured in the
+            risk-adjusted metrics, which is acceptable for most trading strategies
+            that hold positions for days or longer.
         """
         with self._lock:
             if not self._balance_history:
@@ -464,6 +497,7 @@ class PerformanceTracker:
             series = pd.Series(balances, index=pd.DatetimeIndex(timestamps))
 
             # Resample to daily frequency for Sharpe/Sortino calculations
+            # Note: Uses end-of-day values only. Intraday volatility is not captured.
             if len(series) > 1:
                 series = series.resample("1D").last().ffill()
 
@@ -508,6 +542,7 @@ class PerformanceTracker:
             self._gross_loss = 0.0
             self._winning_trades = 0
             self._losing_trades = 0
+            self._zero_pnl_trades = 0
             self._total_duration_seconds = 0.0
             self._current_streak_type = None
             self._current_win_streak = 0
