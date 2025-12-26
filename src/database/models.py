@@ -351,6 +351,12 @@ class AccountHistory(Base):
     daily_pnl = Column(Numeric(18, 8), default=0.0)
     drawdown = Column(Numeric(18, 8), default=0.0)
 
+    # Enhanced risk metrics
+    sharpe_ratio = Column(Numeric(18, 8))
+    sortino_ratio = Column(Numeric(18, 8))
+    calmar_ratio = Column(Numeric(18, 8))
+    var_95 = Column(Numeric(18, 8))
+
     # Position summary
     open_positions = Column(Integer, default=0)
     total_exposure = Column(Numeric(18, 8), default=0.0)
@@ -386,22 +392,31 @@ class PerformanceMetrics(Base):
 
     # Risk metrics
     max_drawdown = Column(Numeric(18, 8), default=0.0)
+    current_drawdown = Column(Numeric(18, 8), default=0.0)
     max_drawdown_duration = Column(Integer)  # In hours
     sharpe_ratio = Column(Numeric(18, 8))
     sortino_ratio = Column(Numeric(18, 8))
     calmar_ratio = Column(Numeric(18, 8))
+    var_95 = Column(Numeric(18, 8))  # Value at Risk (95% confidence)
 
     # Trade analysis
     avg_win = Column(Numeric(18, 8), default=0.0)
     avg_loss = Column(Numeric(18, 8), default=0.0)
     profit_factor = Column(Numeric(18, 8), default=0.0)
     expectancy = Column(Numeric(18, 8), default=0.0)
+    avg_trade_duration_hours = Column(Numeric(18, 8), default=0.0)
 
     # Best/worst trades
     best_trade_pnl = Column(Numeric(18, 8))
     worst_trade_pnl = Column(Numeric(18, 8))
     largest_win_streak = Column(Integer, default=0)
     largest_loss_streak = Column(Integer, default=0)
+    consecutive_wins_current = Column(Integer, default=0)
+    consecutive_losses_current = Column(Integer, default=0)
+
+    # Costs
+    total_fees_paid = Column(Numeric(18, 8), default=0.0)
+    total_slippage_cost = Column(Numeric(18, 8), default=0.0)
 
     # By strategy breakdown
     strategy_breakdown = Column(JSONType)  # Dict of strategy_name: metrics
