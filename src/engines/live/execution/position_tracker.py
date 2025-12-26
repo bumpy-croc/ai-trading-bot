@@ -17,6 +17,7 @@ from src.config.constants import (
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
 )
 from src.engines.shared.models import (
+    BasePosition,
     PartialExitResult,
     PositionSide,
     ScaleInResult,
@@ -31,35 +32,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class LivePosition:
+class LivePosition(BasePosition):
     """Represents an active trading position in live trading.
 
-    Mirrors the structure needed for live trading with all fields
-    for tracking position state, P&L, and partial operations.
+    Extends BasePosition with live-specific price tracking for partial operations.
+    All core position fields are inherited from BasePosition.
     """
 
-    symbol: str
-    side: PositionSide
-    size: float
-    entry_price: float
-    entry_time: datetime
-    entry_balance: float | None = None
-    stop_loss: float | None = None
-    take_profit: float | None = None
-    unrealized_pnl: float = 0.0
-    unrealized_pnl_percent: float = 0.0
-    order_id: str | None = None
-    # Partial operations runtime state
-    original_size: float | None = None
-    current_size: float | None = None
-    partial_exits_taken: int = 0
-    scale_ins_taken: int = 0
+    # Live-specific: track execution prices for partial operations
     last_partial_exit_price: float | None = None
     last_scale_in_price: float | None = None
-    # Trailing stop state
-    trailing_stop_activated: bool = False
-    trailing_stop_price: float | None = None
-    breakeven_triggered: bool = False
 
 
 @dataclass

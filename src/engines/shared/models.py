@@ -84,6 +84,9 @@ class BasePosition:
         trailing_stop_activated: Whether trailing stop is active.
         trailing_stop_price: Current trailing stop price level.
         breakeven_triggered: Whether breakeven has been triggered.
+        unrealized_pnl: Current unrealized profit/loss in account currency.
+        unrealized_pnl_percent: Current unrealized P&L as percentage.
+        order_id: Exchange order ID (live) or None (backtest).
     """
 
     symbol: str
@@ -103,6 +106,11 @@ class BasePosition:
     trailing_stop_activated: bool = False
     trailing_stop_price: float | None = None
     breakeven_triggered: bool = False
+    # Real-time P&L tracking (both engines should store)
+    unrealized_pnl: float = 0.0
+    unrealized_pnl_percent: float = 0.0
+    # Order tracking (live: exchange order ID, backtest: None or synthetic)
+    order_id: str | None = None
     # Extended metadata for engine-specific data
     metadata: dict[str, Any] = field(default_factory=dict)
 
