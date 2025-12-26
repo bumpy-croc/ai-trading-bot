@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from src.engines.backtest.models import ActiveTrade
+from src.engines.shared.cost_calculator import CostCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,12 @@ class ExecutionEngine:
         self.slippage_rate = slippage_rate
         self.use_next_bar_execution = use_next_bar_execution
         self._pending_entry: dict[str, Any] | None = None
-        self.total_fees_paid = 0.0
-        self.total_slippage_cost = 0.0
+
+        # Use shared cost calculator for all fee and slippage calculations
+        self._cost_calculator = CostCalculator(
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+        )
 
     @property
     def has_pending_entry(self) -> bool:
@@ -65,11 +70,20 @@ class ExecutionEngine:
         """Get the current pending entry details."""
         return self._pending_entry
 
+    @property
+    def total_fees_paid(self) -> float:
+        """Get total fees paid across all trades."""
+        return self._cost_calculator.total_fees_paid
+
+    @property
+    def total_slippage_cost(self) -> float:
+        """Get total slippage cost across all trades."""
+        return self._cost_calculator.total_slippage_cost
+
     def reset(self) -> None:
         """Reset execution state for a new backtest run."""
         self._pending_entry = None
-        self.total_fees_paid = 0.0
-        self.total_slippage_cost = 0.0
+        self._cost_calculator.reset_totals()
 
     def queue_entry(
         self,
@@ -131,22 +145,17 @@ class ExecutionEngine:
         pending = self._pending_entry
         self._pending_entry = None
 
-        # Calculate entry price with slippage
-        if pending["side"] == "long":
-            # Buying: slippage works against us (higher price)
-            entry_price = open_price * (1 + self.slippage_rate)
-        else:
-            # Shorting: slippage works against us (lower price)
-            entry_price = open_price * (1 - self.slippage_rate)
-
-        # Calculate costs
+        # Calculate costs using shared cost calculator
         position_notional = balance * pending["size_fraction"]
-        entry_fee = abs(position_notional * self.fee_rate)
-        slippage_cost = abs(position_notional * self.slippage_rate)
+        cost_result = self._cost_calculator.calculate_entry_costs(
+            price=open_price,
+            notional=position_notional,
+            side=pending["side"],
+        )
 
-        # Track costs
-        self.total_fees_paid += entry_fee
-        self.total_slippage_cost += slippage_cost
+        entry_price = cost_result.executed_price
+        entry_fee = cost_result.fee
+        slippage_cost = cost_result.slippage_cost
 
         # Calculate SL/TP based on actual entry price
         if pending["side"] == "long":
@@ -213,20 +222,17 @@ class ExecutionEngine:
         Returns:
             ExecutionResult with trade details and costs.
         """
-        # Calculate entry price with slippage
-        if side == "long":
-            entry_price = current_price * (1 + self.slippage_rate)
-        else:
-            entry_price = current_price * (1 - self.slippage_rate)
-
-        # Calculate costs
+        # Calculate costs using shared cost calculator
         position_notional = balance * size_fraction
-        entry_fee = abs(position_notional * self.fee_rate)
-        slippage_cost = abs(position_notional * self.slippage_rate)
+        cost_result = self._cost_calculator.calculate_entry_costs(
+            price=current_price,
+            notional=position_notional,
+            side=side,
+        )
 
-        # Track costs
-        self.total_fees_paid += entry_fee
-        self.total_slippage_cost += slippage_cost
+        entry_price = cost_result.executed_price
+        entry_fee = cost_result.fee
+        slippage_cost = cost_result.slippage_cost
 
         # Create trade
         trade = ActiveTrade(
@@ -272,22 +278,14 @@ class ExecutionEngine:
         Returns:
             Tuple of (exit_price, exit_fee, slippage_cost).
         """
-        # Apply slippage adversely
-        if side == "long":
-            # Selling long: slippage works against us (lower price)
-            exit_price = base_price * (1 - self.slippage_rate)
-        else:
-            # Covering short: slippage works against us (higher price)
-            exit_price = base_price * (1 + self.slippage_rate)
+        # Calculate costs using shared cost calculator
+        cost_result = self._cost_calculator.calculate_exit_costs(
+            price=base_price,
+            notional=position_notional,
+            side=side,
+        )
 
-        exit_fee = abs(position_notional * self.fee_rate)
-        slippage_cost = abs(position_notional * self.slippage_rate)
-
-        # Track costs
-        self.total_fees_paid += exit_fee
-        self.total_slippage_cost += slippage_cost
-
-        return exit_price, exit_fee, slippage_cost
+        return cost_result.executed_price, cost_result.fee, cost_result.slippage_cost
 
     def clear_pending_entry(self) -> dict[str, Any] | None:
         """Clear and return any pending entry (for backtest end warning).
