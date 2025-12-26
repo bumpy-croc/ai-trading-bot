@@ -7,6 +7,7 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
 fi
 
 # Install gh CLI if not present (non-fatal - continues with venv setup on failure)
+# Downloads directly from GitHub releases to avoid DNS issues with apt repositories
 install_gh_cli() {
   if command -v gh &> /dev/null; then
     echo "GitHub CLI (gh) is already installed (version: $(gh --version | head -n1))"
@@ -15,31 +16,21 @@ install_gh_cli() {
 
   echo "GitHub CLI (gh) not found. Attempting installation..."
 
-  # Try to download keyring
-  if ! curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /tmp/githubcli-archive-keyring.gpg 2>/dev/null; then
-    echo "Warning: Unable to download GitHub CLI keyring. Trying apt fallback..."
-    if sudo apt-get update -qq 2>/dev/null && apt-cache show gh >/dev/null 2>&1; then
-      if sudo apt-get install -y --no-install-recommends gh 2>/dev/null; then
-        echo "GitHub CLI (gh) installed successfully (version: $(gh --version | head -n1))"
-        return 0
-      fi
+  # Download directly from GitHub releases (more reliable than apt in restricted networks)
+  local GH_VERSION="2.63.2"
+  local GH_ARCHIVE="gh_${GH_VERSION}_linux_amd64.tar.gz"
+  local GH_URL="https://github.com/cli/cli/releases/download/v${GH_VERSION}/${GH_ARCHIVE}"
+
+  if curl -fsSL "$GH_URL" -o "/tmp/${GH_ARCHIVE}" 2>/dev/null; then
+    if tar -xzf "/tmp/${GH_ARCHIVE}" -C /tmp 2>/dev/null && \
+       sudo mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/ 2>/dev/null; then
+      rm -rf "/tmp/${GH_ARCHIVE}" "/tmp/gh_${GH_VERSION}_linux_amd64"
+      echo "GitHub CLI (gh) installed successfully (version: $(gh --version | head -n1))"
+      return 0
     fi
-    echo "Warning: Could not install GitHub CLI. Continuing without it."
-    return 1
+    rm -rf "/tmp/${GH_ARCHIVE}" "/tmp/gh_${GH_VERSION}_linux_amd64"
   fi
 
-  # Keyring downloaded, proceed with installation
-  if sudo dd if=/tmp/githubcli-archive-keyring.gpg of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null && \
-     sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
-     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
-     sudo apt-get update -qq 2>/dev/null && \
-     sudo apt-get install -y --no-install-recommends gh 2>/dev/null; then
-    rm -f /tmp/githubcli-archive-keyring.gpg
-    echo "GitHub CLI (gh) installed successfully (version: $(gh --version | head -n1))"
-    return 0
-  fi
-
-  rm -f /tmp/githubcli-archive-keyring.gpg
   echo "Warning: Could not install GitHub CLI. Continuing without it."
   return 1
 }
