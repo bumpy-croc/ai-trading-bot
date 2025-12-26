@@ -664,7 +664,7 @@ class TestPerformanceTrackerEdgeCases:
         tracker = PerformanceTracker(initial_balance=10000)
 
         def record_trades():
-            for i in range(50):
+            for i in range(1, 51):  # Start from 1 to avoid zero-PnL trades
                 trade = Mock()
                 trade.pnl = float(i)
                 trade.entry_time = datetime.now()

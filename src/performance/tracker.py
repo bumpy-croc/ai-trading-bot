@@ -407,10 +407,8 @@ class PerformanceTracker:
                 sortino_ratio = perf_metrics.sortino_ratio(balance_series)
 
             # Calculate Calmar ratio
-            calmar_ratio = 0.0
             max_dd_pct = self.max_drawdown * 100.0
-            if max_dd_pct > 0:
-                calmar_ratio = perf_metrics.calmar_ratio(annualized_return, max_dd_pct)
+            calmar_ratio = perf_metrics.calmar_ratio(annualized_return, max_dd_pct)
 
             # Calculate VaR (95%) - requires minimum sample size for statistical validity
             var_95 = 0.0
