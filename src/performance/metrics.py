@@ -155,3 +155,133 @@ def brier_score_direction(prob_up: pd.Series, actual_up: pd.Series) -> float:
     p = prob_up.loc[common].clip(0.0, 1.0)
     y = actual_up.loc[common].clip(0.0, 1.0)
     return float(((p - y) ** 2).mean())
+
+
+# ───────────────────── Risk-adjusted metrics ─────────────────────
+
+
+def sortino_ratio(daily_balance: pd.Series, risk_free_rate: float = 0.0) -> float:
+    """Annualized Sortino ratio using downside deviation.
+
+    Measures risk-adjusted return using only downside volatility.
+
+    Parameters
+    ----------
+    daily_balance : pd.Series
+        Equity curve resampled at daily frequency (index monotonic).
+    risk_free_rate : float
+        Annual risk-free rate as decimal (e.g., 0.02 for 2%).
+
+    Returns
+    -------
+    float
+        Annualized Sortino ratio.
+    """
+    if daily_balance.empty or len(daily_balance) < 2:
+        return 0.0
+
+    daily_returns = daily_balance.pct_change().dropna()
+    if daily_returns.empty:
+        return 0.0
+
+    mean_return = daily_returns.mean()
+    daily_rf = risk_free_rate / 365.0
+
+    # Calculate downside returns (only negative returns)
+    downside_returns = daily_returns[daily_returns < daily_rf]
+
+    if downside_returns.empty or len(downside_returns) < 2:
+        # No downside volatility - cap at large finite value
+        # Using 999.0 instead of infinity to avoid database/JSON issues
+        return 999.0 if mean_return > daily_rf else 0.0
+
+    downside_std = downside_returns.std()
+    if downside_std == 0 or np.isnan(downside_std):
+        return 0.0
+
+    # Annualize
+    return (mean_return - daily_rf) / downside_std * np.sqrt(365.0)
+
+
+def calmar_ratio(annualized_return: float, max_drawdown_pct: float) -> float:
+    """Calmar ratio: annualized return divided by maximum drawdown.
+
+    Measures return per unit of drawdown risk.
+
+    Parameters
+    ----------
+    annualized_return : float
+        Annualized return as percentage (e.g., 15.0 for 15%).
+    max_drawdown_pct : float
+        Maximum drawdown as percentage (e.g., 20.0 for 20%).
+
+    Returns
+    -------
+    float
+        Calmar ratio. Returns large finite value (999.0) for zero drawdown
+        with positive returns to avoid infinity/database issues.
+    """
+    if max_drawdown_pct <= 0:
+        # No drawdown case - return large value if positive returns
+        # Using 999.0 instead of infinity to avoid database/JSON issues
+        return 999.0 if annualized_return > 0 else 0.0
+    return annualized_return / max_drawdown_pct
+
+
+def value_at_risk(returns: pd.Series, confidence: float = 0.95) -> float:
+    """Value at Risk (VaR) at given confidence level.
+
+    Calculates the maximum expected loss at the specified confidence level.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Series of returns (as decimals).
+    confidence : float
+        Confidence level (e.g., 0.95 for 95% VaR).
+
+    Returns
+    -------
+    float
+        VaR as decimal (negative value indicates loss).
+    """
+    if returns.empty:
+        return 0.0
+
+    # VaR is the percentile at (1 - confidence)
+    # E.g., 95% VaR is the 5th percentile
+    percentile = (1.0 - confidence) * 100.0
+    var = float(np.percentile(returns, percentile))
+    return var
+
+
+def expectancy(win_rate: float, avg_win: float, avg_loss: float) -> float:
+    """Expected value per trade.
+
+    Calculates the average expected profit/loss per trade.
+
+    Parameters
+    ----------
+    win_rate : float
+        Win rate as decimal (e.g., 0.6 for 60%).
+    avg_win : float
+        Average winning trade PnL (must be non-negative).
+    avg_loss : float
+        Average losing trade PnL (must be negative or zero).
+
+    Returns
+    -------
+    float
+        Expected value per trade.
+
+    Raises
+    ------
+    ValueError
+        If avg_loss is positive or avg_win is negative.
+    """
+    if avg_loss > 0:
+        raise ValueError(f"avg_loss must be negative or zero, got {avg_loss}")
+    if avg_win < 0:
+        raise ValueError(f"avg_win must be non-negative, got {avg_win}")
+
+    return (win_rate * avg_win) + ((1.0 - win_rate) * avg_loss)

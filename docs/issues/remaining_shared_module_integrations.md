@@ -12,47 +12,7 @@ During Issue #454 (Extract Shared Logic Between Engines), several shared modules
 
 ## Modules Requiring Integration
 
-### 1. CostCalculator (`src/engines/shared/cost_calculator.py`)
-
-**Status:** Available but not integrated
-
-**Challenge:**
-- Cost calculations are embedded within larger execution methods
-- Return types differ: shared uses `CostResult` dataclass, engines use tuples
-- Changes would touch critical fee/slippage calculations
-
-**Files to Modify:**
-- `src/engines/backtest/execution/execution_engine.py` (lines 137-145, 218-225, 259-284)
-- `src/engines/live/execution/execution_engine.py` (lines 127-183)
-
-**Suggested Approach:**
-1. Use CostCalculator internally within execution engines
-2. Keep existing method signatures for backward compatibility
-3. Wrap CostResult into tuples where needed
-
-**Risk Level:** Medium-High (affects all trade cost calculations)
-
----
-
-### 2. PerformanceTracker (`src/engines/shared/performance_tracker.py`)
-
-**Status:** Available but not used by engines
-
-**Challenge:**
-- Neither engine currently uses this class
-- Would need new integration points in engine main loops
-- Both engines have different metrics tracking approaches
-
-**Suggested Approach:**
-1. Identify common metrics tracked by both engines
-2. Add PerformanceTracker as optional component
-3. Gradually migrate metrics tracking
-
-**Risk Level:** Low (additive change, no breaking changes)
-
----
-
-### 3. Shared Models (`src/engines/shared/models.py`)
+### 1. Shared Models (`src/engines/shared/models.py`)
 
 **Status:** Available but not integrated
 
@@ -86,12 +46,14 @@ During Issue #454 (Extract Shared Logic Between Engines), several shared modules
 
 These modules were successfully integrated:
 
-| Module | Integration Commit |
-|--------|-------------------|
-| `TrailingStopManager` | Integrated into both exit handlers |
-| `PolicyHydrator` | Replaces `_apply_policies_from_decision` |
-| `RiskConfiguration` | Replaces `_merge_dynamic_risk_config`, `_build_trailing_policy` |
-| `DynamicRiskHandler` | Integrated into both entry handlers |
+| Module | Integration Commit | Reference |
+|--------|-------------------|-----------|
+| `TrailingStopManager` | Integrated into both exit handlers | Issue #454 |
+| `PolicyHydrator` | Replaces `_apply_policies_from_decision` | Issue #454 |
+| `RiskConfiguration` | Replaces `_merge_dynamic_risk_config`, `_build_trailing_policy` | Issue #454 |
+| `DynamicRiskHandler` | Integrated into both entry handlers | Issue #454 |
+| `CostCalculator` | Unified fee/slippage calculation in both engines | PR #466 (2025-12-26) |
+| `PerformanceTracker` | Moved to `src/performance/`, integrated into both engines with 30+ metrics | `docs/execplans/performance_tracker_integration.md` (2025-12-26) |
 
 ## Testing Requirements
 

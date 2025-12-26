@@ -1,6 +1,6 @@
 # System Architecture
 
-> **Last Updated**: 2025-12-25
+> **Last Updated**: 2025-12-26
 > **Maintainer Note**: This is a living document. Update after major architectural changes or new component additions. Use the `/update-docs` command to keep this in sync.
 
 ---
@@ -111,6 +111,10 @@ ai-trading-bot/
 │   ├── prediction/               # Model inference
 │   │   ├── registry.py           # Model loading and versioning
 │   │   └── predictor.py          # ONNX runtime inference
+│   │
+│   ├── performance/              # Performance measurement
+│   │   ├── metrics.py            # Pure metric calculations
+│   │   └── tracker.py            # Performance tracking
 │   │
 │   ├── position_management/      # Position sizing
 │   │   ├── position_tracker.py   # Active position tracking
@@ -278,7 +282,6 @@ Unified logic extracted from both backtest and live engines to ensure consistenc
 | `models.py` | Unified `Position`, `Trade`, `PositionSide` types |
 | `cost_calculator.py` | Fee and slippage calculation |
 | `dynamic_risk_handler.py` | Dynamic risk adjustments during drawdowns |
-| `performance_tracker.py` | Unified metrics tracking (win rate, P&L, etc.) |
 | `partial_operations_manager.py` | Partial exit and scale-in logic |
 | `policy_hydration.py` | Extract policies from runtime decisions |
 | `risk_configuration.py` | Merge strategy risk overrides with base config |
@@ -289,6 +292,76 @@ Unified logic extracted from both backtest and live engines to ensure consistenc
 - Consistent behavior between backtest and live
 - Easier testing and maintenance
 - Reduced code duplication (eliminated ~500 lines)
+
+### 8. Performance Tracking (`src/performance/`)
+
+Unified performance measurement system shared across backtesting, live trading, and analytics.
+
+**Architecture Overview:**
+
+The performance tracking system follows a clean three-layer architecture:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Engine Layer (Backtest/Live)                       │
+│  - Orchestration logic                              │
+│  - Engine-specific workflows                        │
+│  - Persistence decisions                            │
+└─────────────────────────────────────────────────────┘
+                      ↓ uses
+┌─────────────────────────────────────────────────────┐
+│  Performance Tracker (src/performance/tracker.py)   │
+│  - State management (trades, balance history)       │
+│  - Metric aggregation                               │
+│  - Thread-safe updates                              │
+└─────────────────────────────────────────────────────┘
+                      ↓ uses
+┌─────────────────────────────────────────────────────┐
+│  Metrics (src/performance/metrics.py)               │
+│  - Pure calculation functions                       │
+│  - Sharpe, Sortino, Calmar, VaR, etc.              │
+│  - No side effects, fully testable                  │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key Files:**
+- `metrics.py` - Pure metric calculation functions (Sharpe, Sortino, Calmar, VaR, expectancy)
+- `tracker.py` - Stateful performance tracking with thread safety
+
+**Tracked Metrics (30+ total):**
+
+| Category | Metrics |
+|----------|---------|
+| **Returns** | Total return, annualized return, CAGR |
+| **Risk-Adjusted** | Sharpe ratio, Sortino ratio, Calmar ratio |
+| **Risk** | Max drawdown, current drawdown, VaR (95%) |
+| **Trade Quality** | Win rate, profit factor, expectancy, avg win/loss |
+| **Efficiency** | Trade duration, consecutive streaks, trades per day |
+| **Costs** | Total fees, total slippage |
+
+**Design Principles:**
+- **Metric Parity**: Both backtest and live engines calculate identical metrics using the same code
+- **Separation of Concerns**: Calculation (metrics.py) separate from state management (tracker.py) separate from persistence (engines)
+- **Reusability**: Used by engines, strategies, dashboards, and analysis tools
+- **Thread Safety**: Lock-protected state updates for concurrent access in live trading
+
+**Usage Example:**
+```python
+from src.performance.tracker import PerformanceTracker
+
+# Initialize
+tracker = PerformanceTracker(initial_balance=10000)
+
+# Record trades
+tracker.record_trade(trade, fee=2.5, slippage=0.5)
+tracker.update_balance(balance=10050, timestamp=datetime.now())
+
+# Get comprehensive metrics
+metrics = tracker.get_metrics()
+print(f"Sharpe: {metrics.sharpe_ratio:.2f}")
+print(f"Sortino: {metrics.sortino_ratio:.2f}")
+print(f"Win Rate: {metrics.win_rate * 100:.1f}%")
+```
 
 ---
 
@@ -330,6 +403,11 @@ LOG_LEVEL=INFO
 ## Recent Architectural Changes
 
 ### December 2025
+- **Performance Tracker Integration**: Unified performance tracking in `src/performance/` module
+  - Enhanced tracker with 30+ metrics (Sharpe, Sortino, Calmar, VaR, expectancy, streaks)
+  - Integrated into both backtest and live engines for metric parity
+  - Added database schema migration for new performance columns
+  - Comprehensive testing and validation framework
 - **Engine Consolidation** (#454): Moved `src/backtesting/` and `src/live/` under `src/engines/` with shared modules
 - Created `src/engines/shared/` with unified logic for both engines
 - Extracted 8 shared modules eliminating ~500 lines of duplicate code

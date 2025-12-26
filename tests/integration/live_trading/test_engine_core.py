@@ -236,11 +236,36 @@ class TestLiveTradingEngine:
             initial_balance=10000,
             resume_from_last_balance=False,
         )
-        engine.total_trades = 10
-        engine.winning_trades = 6
-        engine.total_pnl = 500
+
+        # Update performance tracker with test data
+        # Simulate 10 trades: 6 winning, 4 losing
+        from unittest.mock import Mock
+        for i in range(6):
+            trade = Mock()
+            trade.pnl = 100.0  # winning trade
+            trade.entry_time = datetime.now()
+            trade.exit_time = datetime.now()
+            trade.symbol = "BTCUSDT"
+            trade.side = "long"
+            engine.performance_tracker.record_trade(trade)
+
+        for i in range(4):
+            trade = Mock()
+            trade.pnl = -50.0  # losing trade
+            trade.entry_time = datetime.now()
+            trade.exit_time = datetime.now()
+            trade.symbol = "BTCUSDT"
+            trade.side = "long"
+            engine.performance_tracker.record_trade(trade)
+
+        # Update balance to reflect trades (600 - 200 = 400 net, but we want 500 total PnL)
+        # So use 10500 final balance with 10000 initial = 500 gain
         engine.current_balance = 10500
         engine.peak_balance = 10800
+        engine.performance_tracker.update_balance(10500, datetime.now())
+        engine.performance_tracker.peak_balance = 10800
+        engine.performance_tracker.max_drawdown = (10800 - 10500) / 10800  # ~2.78%
+
         if hasattr(engine, "_update_performance_metrics") and hasattr(
             engine, "get_performance_summary"
         ):
@@ -248,7 +273,7 @@ class TestLiveTradingEngine:
             performance = engine.get_performance_summary()
             assert performance["total_trades"] == 10
             assert performance["win_rate"] == 60.0
-            assert performance["total_return"] == 5.0
+            assert performance["total_return"] == pytest.approx(5.0, rel=1e-6)
             assert performance["current_drawdown"] == pytest.approx(2.78, rel=1e-2)
             assert performance["max_drawdown_pct"] == pytest.approx(2.78, rel=1e-2)
 

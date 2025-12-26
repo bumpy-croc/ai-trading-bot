@@ -1,6 +1,6 @@
 # Live trading
 
-> **Last Updated**: 2025-11-10  
+> **Last Updated**: 2025-12-26
 > **Related Documentation**: [Backtesting](backtesting.md), [Monitoring](monitoring.md), [Database](database.md)
 
 `src/engines/live/trading_engine.py` powers the real-time execution stack. It shares core building blocks with the backtester while adding
@@ -51,6 +51,53 @@ continuous polling, account synchronisation, and resilience features required fo
 - Trailing stops (`TrailingStopPolicy`) and breakeven rules lock in gains once price moves in favour of the position.
 - MFE/MAE tooling (`MfeMaeAnalyzer`) feeds analytics back into strategy tuning so component strategies can adjust thresholds over
   time.
+
+## Performance Tracking
+
+The live trading engine uses the unified `PerformanceTracker` from `src/performance/tracker.py` to calculate real-time performance metrics. All metrics use the same calculation logic as the backtest engine, ensuring consistent validation.
+
+### Available Metrics
+
+The live engine tracks 30+ comprehensive metrics in real-time:
+
+| Category | Metrics | Description |
+| -------- | ------- | ----------- |
+| **Returns** | `total_return_pct`, `annualized_return` | Overall profitability |
+| **Risk-Adjusted** | `sharpe_ratio`, `sortino_ratio`, `calmar_ratio` | Returns adjusted for volatility and drawdown risk |
+| **Risk** | `max_drawdown`, `current_drawdown`, `var_95` | Real-time risk exposure |
+| **Trade Quality** | `win_rate`, `profit_factor`, `expectancy` | Trade effectiveness |
+| **Efficiency** | `avg_trade_duration_hours`, `consecutive_wins`, `consecutive_losses` | Streak tracking and frequency |
+| **Costs** | `total_fees_paid`, `total_slippage_cost` | Transaction cost tracking |
+
+### Accessing Performance Metrics
+
+Retrieve current performance via the `get_performance_summary()` method:
+
+```python
+from src.engines.live.trading_engine import LiveTradingEngine
+
+engine = LiveTradingEngine(...)
+summary = engine.get_performance_summary()
+
+# Access risk-adjusted metrics
+print(f"Sharpe Ratio: {summary['sharpe_ratio']:.2f}")
+print(f"Sortino Ratio: {summary['sortino_ratio']:.2f}")
+print(f"Calmar Ratio: {summary['calmar_ratio']:.2f}")
+print(f"VaR (95%): {summary['var_95']:.4f}")
+
+# Check trade quality
+print(f"Expectancy: {summary['expectancy']:.2f}")
+print(f"Win Rate: {summary['win_rate'] * 100:.1f}%")
+print(f"Consecutive Wins: {summary['consecutive_wins']}")
+```
+
+### Database Persistence
+
+All performance metrics are persisted to PostgreSQL tables:
+- **account_history** - Balance snapshots with Sharpe, Sortino, Calmar, VaR
+- **performance_metrics** - Aggregated metrics including consecutive streaks, fees, slippage
+
+The database schema supports historical analysis and comparison with backtest results.
 
 ## CLI usage
 
