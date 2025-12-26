@@ -97,6 +97,18 @@ class LiveExecutionEngine:
             slippage_rate=slippage_rate,
         )
 
+    @staticmethod
+    def _position_side_to_str(side: PositionSide) -> str:
+        """Convert PositionSide enum to string for cost calculations.
+
+        Args:
+            side: Position side enum.
+
+        Returns:
+            'long' or 'short'.
+        """
+        return "long" if side == PositionSide.LONG else "short"
+
     @property
     def total_fees_paid(self) -> float:
         """Get total fees paid across all trades."""
@@ -117,6 +129,9 @@ class LiveExecutionEngine:
         Slippage models the cost of market impact and adverse selection that occurs
         when entering a position, ensuring realistic backtest and live trading results.
 
+        This method is kept for backward compatibility. New code should use
+        the shared CostCalculator via calculate_entry_costs.
+
         Args:
             price: Base price before slippage.
             side: Position side (LONG or SHORT).
@@ -124,11 +139,7 @@ class LiveExecutionEngine:
         Returns:
             Price after slippage applied.
         """
-        # Convert PositionSide enum to string for cost calculator
-        side_str = "long" if side == PositionSide.LONG else "short"
-
-        # Use temporary calculation with minimal notional to get slippage direction
-        # This preserves backward compatibility with callers expecting just price
+        # Use simple calculation to preserve backward compatibility
         if side == PositionSide.LONG:
             return price * (1 + self.slippage_rate)
         else:
@@ -139,6 +150,9 @@ class LiveExecutionEngine:
 
         Exit slippage accounts for market impact costs when closing positions,
         ensuring P&L calculations reflect realistic execution conditions.
+
+        This method is kept for backward compatibility. New code should use
+        the shared CostCalculator via calculate_exit_costs.
 
         Args:
             price: Base price before slippage.
@@ -209,7 +223,7 @@ class LiveExecutionEngine:
         try:
             # Calculate position value and costs using shared cost calculator
             position_value = size_fraction * balance
-            side_str = "long" if side == PositionSide.LONG else "short"
+            side_str = self._position_side_to_str(side)
 
             cost_result = self._cost_calculator.calculate_entry_costs(
                 price=base_price,
@@ -273,7 +287,7 @@ class LiveExecutionEngine:
         """
         try:
             # Calculate costs using shared cost calculator
-            side_str = "long" if side == PositionSide.LONG else "short"
+            side_str = self._position_side_to_str(side)
 
             cost_result = self._cost_calculator.calculate_exit_costs(
                 price=base_price,
@@ -371,8 +385,8 @@ class LiveExecutionEngine:
             Dictionary with fee and slippage totals.
         """
         return {
-            "total_fees_paid": self._total_fees_paid,
-            "total_slippage_cost": self._total_slippage_cost,
+            "total_fees_paid": self.total_fees_paid,
+            "total_slippage_cost": self.total_slippage_cost,
             "fee_rate": self.fee_rate,
             "slippage_rate": self.slippage_rate,
             "enable_live_trading": self.enable_live_trading,
