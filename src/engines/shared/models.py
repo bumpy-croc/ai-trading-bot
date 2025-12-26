@@ -240,6 +240,36 @@ class BaseTrade:
         return self.duration_seconds() / 3600
 
 
+@dataclass
+class PartialExitResult:
+    """Result of a partial exit execution.
+
+    Attributes:
+        realized_pnl: Cash profit/loss realized from the partial exit.
+        new_current_size: Updated current position size after exit.
+        partial_exits_taken: Total count of partial exits taken.
+    """
+
+    realized_pnl: float
+    new_current_size: float
+    partial_exits_taken: int
+
+
+@dataclass
+class ScaleInResult:
+    """Result of a scale-in execution.
+
+    Attributes:
+        new_size: Updated total position size after scale-in.
+        new_current_size: Updated current position size after scale-in.
+        scale_ins_taken: Total count of scale-ins taken.
+    """
+
+    new_size: float
+    new_current_size: float
+    scale_ins_taken: int
+
+
 # Type aliases for backward compatibility
 Position = BasePosition
 Trade = BaseTrade
@@ -251,4 +281,6 @@ __all__ = [
     "BaseTrade",
     "Position",
     "Trade",
+    "PartialExitResult",
+    "ScaleInResult",
 ]

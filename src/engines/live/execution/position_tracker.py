@@ -10,12 +10,16 @@ import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
 from typing import TYPE_CHECKING
 
 from src.config.constants import (
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
+)
+from src.engines.shared.models import (
+    PartialExitResult,
+    PositionSide,
+    ScaleInResult,
 )
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
@@ -24,13 +28,6 @@ if TYPE_CHECKING:
     from src.database.manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
-
-
-class PositionSide(Enum):
-    """Position direction."""
-
-    LONG = "long"
-    SHORT = "short"
 
 
 @dataclass
@@ -74,24 +71,6 @@ class PositionCloseResult:
     exit_price: float
     exit_time: datetime
     mfe_mae_metrics: MFEMetrics | None = None
-
-
-@dataclass
-class PartialExitResult:
-    """Result of a partial exit operation."""
-
-    realized_pnl: float
-    new_current_size: float
-    partial_exits_taken: int
-
-
-@dataclass
-class ScaleInResult:
-    """Result of a scale-in operation."""
-
-    new_size: float
-    new_current_size: float
-    scale_ins_taken: int
 
 
 class LivePositionTracker:

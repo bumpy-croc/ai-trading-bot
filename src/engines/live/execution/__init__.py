@@ -26,8 +26,10 @@ from src.engines.live.execution.exit_handler import (
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
-    PartialExitResult,
     PositionCloseResult,
+)
+from src.engines.shared.models import (
+    PartialExitResult,
     PositionSide,
     ScaleInResult,
 )

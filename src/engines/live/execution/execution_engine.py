@@ -14,8 +14,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.engines.live.execution.position_tracker import PositionSide
 from src.engines.shared.cost_calculator import CostCalculator
+from src.engines.shared.models import PositionSide
 
 if TYPE_CHECKING:
     pass

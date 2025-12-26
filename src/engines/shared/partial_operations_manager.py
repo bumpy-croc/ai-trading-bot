@@ -25,8 +25,11 @@ EPSILON = 1e-9
 
 
 @dataclass
-class PartialExitResult:
-    """Result of a partial exit check.
+class PartialExitDecision:
+    """Result of a partial exit decision check.
+
+    Represents the decision of whether to perform a partial exit,
+    distinct from the execution result (PartialExitDecision in models.py).
 
     Attributes:
         should_exit: Whether a partial exit should be executed.
@@ -42,8 +45,11 @@ class PartialExitResult:
 
 
 @dataclass
-class ScaleInResult:
-    """Result of a scale-in check.
+class ScaleInDecision:
+    """Result of a scale-in decision check.
+
+    Represents the decision of whether to perform a scale-in,
+    distinct from the execution result (ScaleInDecision in models.py).
 
     Attributes:
         should_scale: Whether a scale-in should be executed.
@@ -126,7 +132,7 @@ class PartialOperationsManager:
         position: Any,
         current_price: float,
         current_pnl_pct: float | None = None,
-    ) -> PartialExitResult:
+    ) -> PartialExitDecision:
         """Check if the next partial exit should be triggered.
 
         Returns single next action to execute. Caller should loop if
@@ -139,19 +145,19 @@ class PartialOperationsManager:
             current_pnl_pct: Current PnL percentage (calculated if not provided).
 
         Returns:
-            PartialExitResult with next action or should_exit=False.
+            PartialExitDecision with next action or should_exit=False.
         """
         if self.policy is None:
-            return PartialExitResult()
+            return PartialExitDecision()
 
         # Get and validate position attributes immediately
         try:
             entry_price = getattr(position, "entry_price", None)
         except Exception:
-            return PartialExitResult()
+            return PartialExitDecision()
 
         if entry_price is None or entry_price <= 0:
-            return PartialExitResult()
+            return PartialExitDecision()
 
         side = self._get_side_str(position)
         partial_exits_taken = getattr(position, "partial_exits_taken", 0)
@@ -168,7 +174,7 @@ class PartialOperationsManager:
         exit_sizes = getattr(self.policy, "exit_sizes", [])
 
         if not exit_targets or not exit_sizes:
-            return PartialExitResult()
+            return PartialExitDecision()
 
         # Find next target to execute
         if partial_exits_taken < len(exit_targets):
@@ -176,14 +182,14 @@ class PartialOperationsManager:
             exit_fraction = exit_sizes[partial_exits_taken]
 
             if current_pnl_pct >= target_pct and exit_fraction > 0:
-                return PartialExitResult(
+                return PartialExitDecision(
                     should_exit=True,
                     exit_fraction=exit_fraction,
                     target_index=partial_exits_taken,
                     reason=f"Partial exit target {partial_exits_taken + 1}: profit {current_pnl_pct:.2%} >= {target_pct:.2%}",
                 )
 
-        return PartialExitResult()
+        return PartialExitDecision()
 
     def check_scale_in(
         self,
@@ -191,7 +197,7 @@ class PartialOperationsManager:
         current_price: float,
         balance: float,
         current_pnl_pct: float | None = None,
-    ) -> ScaleInResult:
+    ) -> ScaleInDecision:
         """Check if the next scale-in should be triggered.
 
         Returns single next action to execute.
@@ -204,19 +210,19 @@ class PartialOperationsManager:
             current_pnl_pct: Current PnL percentage (calculated if not provided).
 
         Returns:
-            ScaleInResult with next action or should_scale=False.
+            ScaleInDecision with next action or should_scale=False.
         """
         if self.policy is None:
-            return ScaleInResult()
+            return ScaleInDecision()
 
         # Get and validate position attributes immediately
         try:
             entry_price = getattr(position, "entry_price", None)
         except Exception:
-            return ScaleInResult()
+            return ScaleInDecision()
 
         if entry_price is None or entry_price <= 0:
-            return ScaleInResult()
+            return ScaleInDecision()
 
         side = self._get_side_str(position)
         scale_ins_taken = getattr(position, "scale_ins_taken", 0)
@@ -234,11 +240,11 @@ class PartialOperationsManager:
         max_scale_ins = getattr(self.policy, "max_scale_ins", 0)
 
         if not scale_in_thresholds or not scale_in_sizes:
-            return ScaleInResult()
+            return ScaleInDecision()
 
         # Check if max scale-ins reached
         if scale_ins_taken >= max_scale_ins:
-            return ScaleInResult()
+            return ScaleInDecision()
 
         # Find next threshold to execute
         if scale_ins_taken < len(scale_in_thresholds):
@@ -246,14 +252,14 @@ class PartialOperationsManager:
             scale_fraction = scale_in_sizes[scale_ins_taken]
 
             if current_pnl_pct >= threshold_pct and scale_fraction > 0:
-                return ScaleInResult(
+                return ScaleInDecision(
                     should_scale=True,
                     scale_fraction=scale_fraction,
                     target_index=scale_ins_taken,
                     reason=f"Scale-in threshold {scale_ins_taken + 1}: profit {current_pnl_pct:.2%} >= {threshold_pct:.2%}",
                 )
 
-        return ScaleInResult()
+        return ScaleInDecision()
 
     def _get_side_str(self, position: Any) -> str:
         """Get the side as a lowercase string.
@@ -274,6 +280,6 @@ class PartialOperationsManager:
 
 __all__ = [
     "PartialOperationsManager",
-    "PartialExitResult",
-    "ScaleInResult",
+    "PartialExitDecision",
+    "ScaleInDecision",
 ]
