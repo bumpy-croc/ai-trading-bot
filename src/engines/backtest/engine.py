@@ -195,6 +195,11 @@ class Backtester:
         self.trades: list[Trade] = []
         self.dynamic_risk_adjustments: list[dict] = []
 
+        # Performance tracking
+        from src.performance.tracker import PerformanceTracker
+
+        self.performance_tracker = PerformanceTracker(initial_balance)
+
         # Configure strategy
         self._runtime_dataset = None
         self._runtime_warmup = 0
@@ -848,6 +853,9 @@ class Backtester:
             # Track balance
             balance_history.append((current_time, self.balance))
 
+            # Update performance tracker (no trade, just balance update)
+            self.performance_tracker.update_balance(self.balance, timestamp=current_time)
+
             # Track yearly balance
             yr = current_time.year
             if yr not in yearly_balance:
@@ -1016,6 +1024,13 @@ class Backtester:
             self.balance += net_pnl
             self.trades.append(completed_trade)
 
+            # Update performance tracking
+            self.performance_tracker.record_trade(
+                trade=completed_trade, fee=exit_fee, slippage=slippage
+            )
+            self.performance_tracker.update_balance(self.balance, timestamp=current_time)
+
+            # Keep peak_balance in sync with tracker for backward compatibility
             if self.balance > self.peak_balance:
                 self.peak_balance = self.balance
 
@@ -1181,25 +1196,8 @@ class Backtester:
         # Calculate prediction metrics
         pred_metrics = self._calculate_prediction_metrics(df)
 
-        # Build balance history DataFrame
-        bh_df = (
-            pd.DataFrame(balance_history, columns=["timestamp", "balance"]).set_index("timestamp")
-            if balance_history
-            else pd.DataFrame()
-        )
-
-        (
-            total_return,
-            max_drawdown_pct,
-            sharpe_ratio,
-            annualized_return,
-        ) = compute_performance_metrics(
-            self.initial_balance,
-            self.balance,
-            pd.Timestamp(start),
-            pd.Timestamp(end) if end else None,
-            bh_df,
-        )
+        # Get performance metrics from tracker
+        perf_metrics = self.performance_tracker.get_metrics()
 
         # Calculate yearly returns
         yearly_returns = {}
@@ -1218,18 +1216,33 @@ class Backtester:
                 pending.get("side", "unknown"),
             )
 
-        # Build results
+        # Build results using performance tracker metrics
         results = {
-            "total_trades": total_trades,
-            "win_rate": win_rate,
-            "total_return": total_return,
-            "max_drawdown": max_drawdown_pct,
-            "sharpe_ratio": sharpe_ratio,
+            # Core metrics from tracker
+            "total_trades": perf_metrics.total_trades,
+            "win_rate": perf_metrics.win_rate * 100,  # Convert to percentage for backward compat
+            "total_return": perf_metrics.total_return_pct,
+            "max_drawdown": perf_metrics.max_drawdown * 100,  # Convert to percentage
+            "sharpe_ratio": perf_metrics.sharpe_ratio,
             "final_balance": self.balance,
-            "annualized_return": annualized_return,
+            "annualized_return": perf_metrics.annualized_return,
+            # New metrics from tracker
+            "sortino_ratio": perf_metrics.sortino_ratio,
+            "calmar_ratio": perf_metrics.calmar_ratio,
+            "var_95": perf_metrics.var_95,
+            "expectancy": perf_metrics.expectancy,
+            "profit_factor": perf_metrics.profit_factor,
+            "avg_win": perf_metrics.avg_win,
+            "avg_loss": perf_metrics.avg_loss,
+            "largest_win": perf_metrics.largest_win,
+            "largest_loss": perf_metrics.largest_loss,
+            "avg_trade_duration_hours": perf_metrics.avg_trade_duration_hours,
+            "consecutive_wins": perf_metrics.consecutive_wins,
+            "consecutive_losses": perf_metrics.consecutive_losses,
+            # Backtest-specific metrics
             "yearly_returns": yearly_returns,
             "hold_return": hold_return,
-            "trading_vs_hold_difference": total_return - hold_return,
+            "trading_vs_hold_difference": perf_metrics.total_return_pct - hold_return,
             "session_id": self.trading_session_id if self.log_to_database else None,
             "early_stop_reason": self.early_stop_reason,
             "early_stop_date": self.early_stop_date,
@@ -1241,8 +1254,8 @@ class Backtester:
             "dynamic_risk_summary": (
                 self._summarize_dynamic_risk_adjustments() if self.enable_dynamic_risk else None
             ),
-            "total_fees": self.execution_engine.total_fees_paid,
-            "total_slippage_cost": self.execution_engine.total_slippage_cost,
+            "total_fees": perf_metrics.total_fees_paid,
+            "total_slippage_cost": perf_metrics.total_slippage_cost,
             "execution_settings": self.execution_engine.get_execution_settings(),
         }
 
