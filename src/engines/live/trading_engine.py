@@ -74,7 +74,7 @@ from .order_tracker import OrderTracker
 
 # Modular handlers (optional injection for testability)
 from src.engines.live.data.market_data_handler import MarketDataHandler
-from src.engines.live.execution.entry_handler import LiveEntryHandler
+from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
 from src.engines.live.execution.position_tracker import (
@@ -512,8 +512,11 @@ class LiveTradingEngine:
             self.regime_detector = None
 
         # Setup graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+        else:
+            logger.debug("Skipping signal handlers outside main thread")
 
         # Initialize modular handlers (use injected or create defaults)
         self._init_modular_handlers(
@@ -1580,13 +1583,18 @@ class LiveTradingEngine:
                                     short_take_profit = current_price * (
                                         1 - getattr(self.strategy, "take_profit_pct", 0.04)
                                     )
-                                self._open_position(
-                                    symbol,
-                                    PositionSide.SHORT,
-                                    short_position_size,
-                                    current_price,
-                                    short_stop_loss,
-                                    short_take_profit,
+                                short_entry_signal = LiveEntrySignal(
+                                    should_enter=True,
+                                    side=PositionSide.SHORT,
+                                    size_fraction=short_position_size,
+                                    stop_loss=short_stop_loss,
+                                    take_profit=short_take_profit,
+                                    reasons=["legacy_short_entry"],
+                                )
+                                self._execute_entry_signal(
+                                    short_entry_signal,
+                                    symbol=symbol,
+                                    current_price=current_price,
                                 )
                 # Update performance metrics
                 self._update_performance_metrics()
@@ -2157,23 +2165,34 @@ class LiveTradingEngine:
         runtime_strength = 0.0
         runtime_confidence = 0.0
         overrides = None
+        entry_signal_data: LiveEntrySignal | None = None
+        log_reasons: list[str] = []
 
         indicators = self._extract_indicators(df, current_index)
         sentiment_data = self._extract_sentiment_data(df, current_index)
         ml_predictions = self._extract_ml_predictions(df, current_index)
 
         if use_runtime:
-            side_label, runtime_fraction = self._runtime_entry_plan(
-                runtime_decision,
-                self.current_balance,
+            try:
+                current_time = df.index[current_index]
+                if isinstance(current_time, pd.Timestamp):
+                    current_time = current_time.to_pydatetime()
+            except Exception:
+                current_time = datetime.utcnow()
+
+            entry_signal_data = self.live_entry_handler.process_runtime_decision(
+                runtime_decision=runtime_decision,
+                balance=self.current_balance,
+                current_price=current_price,
+                current_time=current_time,
+                peak_balance=self.peak_balance,
+                trading_session_id=self.trading_session_id,
             )
-            if side_label is not None and runtime_fraction > 0:
-                entry_signal = True
-                entry_side = PositionSide.LONG if side_label == "long" else PositionSide.SHORT
-                position_size = min(runtime_fraction, self.max_position_size)
-                if runtime_decision is not None:
-                    runtime_strength = runtime_decision.signal.strength
-                    runtime_confidence = runtime_decision.signal.confidence
+            entry_signal = entry_signal_data.should_enter
+            entry_side = entry_signal_data.side or entry_side
+            position_size = entry_signal_data.size_fraction
+            runtime_strength = entry_signal_data.signal_strength
+            runtime_confidence = entry_signal_data.signal_confidence
         elif isinstance(self.strategy, ComponentStrategy):
             # Component-based strategy: use process_candle() for decision
             # Note: runtime_decision should already be populated if this is a component strategy
@@ -2214,25 +2233,34 @@ class LiveTradingEngine:
             # for downstream consumers that expect it to be populated as part of the entry check.
             self._get_correlation_context(symbol, df, None, index=current_index)
 
-        if position_size > 0:
+        if position_size > 0 and not use_runtime:
             position_size = self._get_dynamic_risk_adjusted_size(position_size)
 
         if self.db_manager:
             # Prepare logging data - include TradingDecision data if available
-            log_reasons = [
-                (
-                    "runtime_entry"
-                    if use_runtime
-                    else "entry_conditions_met" if entry_signal else "entry_conditions_not_met"
-                ),
-                (f"position_size_{position_size:.4f}" if position_size > 0 else "no_position_size"),
-                f"max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}",
-                (
-                    f"enter_short_{bool(getattr(runtime_decision, 'metadata', {}).get('enter_short'))}"
-                    if use_runtime and runtime_decision is not None
-                    else "enter_short_n/a"
-                ),
-            ]
+            if use_runtime and entry_signal_data and entry_signal_data.reasons:
+                log_reasons = list(entry_signal_data.reasons)
+            else:
+                log_reasons = [
+                    (
+                        "runtime_entry"
+                        if use_runtime
+                        else "entry_conditions_met" if entry_signal else "entry_conditions_not_met"
+                    ),
+                    (
+                        f"position_size_{position_size:.4f}"
+                        if position_size > 0
+                        else "no_position_size"
+                    ),
+                    (
+                        f"enter_short_{bool(getattr(runtime_decision, 'metadata', {}).get('enter_short'))}"
+                        if use_runtime and runtime_decision is not None
+                        else "enter_short_n/a"
+                    ),
+                ]
+            log_reasons.append(
+                f"max_positions_check_{len(self.positions)}_of_{self.risk_manager.get_max_concurrent_positions() if self.risk_manager else 1}"
+            )
 
             # Add regime context if available from TradingDecision
             if runtime_decision and hasattr(runtime_decision, "regime") and runtime_decision.regime:
@@ -2289,28 +2317,7 @@ class LiveTradingEngine:
         if not entry_signal or position_size <= 0:
             return
 
-        if use_runtime and self._component_strategy is not None:
-            try:
-                stop_loss = self._component_strategy.get_stop_loss_price(
-                    float(current_price),
-                    runtime_decision.signal if runtime_decision else None,
-                    runtime_decision.regime if runtime_decision else None,
-                )
-            except Exception:
-                stop_loss = float(current_price) * (
-                    0.95 if entry_side == PositionSide.LONG else 1.05
-                )
-            tp_pct = (
-                self.default_take_profit_pct
-                if self.default_take_profit_pct is not None
-                else getattr(self.strategy, "take_profit_pct", 0.04)
-            )
-            take_profit = (
-                float(current_price) * (1 + tp_pct)
-                if entry_side == PositionSide.LONG
-                else float(current_price) * (1 - tp_pct)
-            )
-        elif isinstance(self.strategy, ComponentStrategy):
+        if not use_runtime and isinstance(self.strategy, ComponentStrategy):
             # Component-based strategy: use get_stop_loss_price()
             try:
                 # Create a signal from the decision
@@ -2371,299 +2378,201 @@ class LiveTradingEngine:
                 take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
             entry_side = PositionSide.LONG
 
-        self._open_position(
-            symbol,
-            entry_side,
-            position_size,
-            current_price,
-            stop_loss,
-            take_profit,
+        if use_runtime:
+            if entry_signal_data is None:
+                return
+            self._execute_entry_signal(
+                entry_signal_data,
+                symbol=symbol,
+                current_price=current_price,
+            )
+            return
+
+        entry_signal_data = LiveEntrySignal(
+            should_enter=True,
+            side=entry_side,
+            size_fraction=position_size,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            reasons=log_reasons if self.db_manager else None,
+            signal_strength=runtime_strength,
+            signal_confidence=runtime_confidence,
         )
-
-    def _open_position(
-        self,
-        symbol: str,
-        side: PositionSide,
-        size: float,
-        price: float,
-        stop_loss: float | None = None,
-        take_profit: float | None = None,
-    ):
-        """Open a new trading position"""
-        try:
-            # Enforce maximum position size limit
-            if size > self.max_position_size:
-                logger.warning(
-                    f"Position size {size:.2%} exceeds maximum {self.max_position_size:.2%}. Capping at maximum."
-                )
-                size = self.max_position_size
-
-            entry_balance = float(self.current_balance)
-            base_price = float(price)
-
-            # Apply slippage to entry price (price moves against us)
-            if side == PositionSide.LONG:
-                # Buying: slippage increases price
-                entry_price = base_price * (1 + self.slippage_rate)
-            else:
-                # Shorting: slippage decreases price
-                entry_price = base_price * (1 - self.slippage_rate)
-
-            position_value = size * entry_balance
-            quantity = position_value / entry_price if entry_price else 0.0
-
-            # Calculate and deduct entry fee
-            entry_fee = abs(position_value * self.fee_rate)
-            entry_slippage_cost = abs(position_value * self.slippage_rate)
-            self.current_balance -= entry_fee
-            self.total_fees_paid += entry_fee
-            self.total_slippage_cost += entry_slippage_cost
-
-            if self.enable_live_trading:
-                # Execute real order
-                order_id = self._execute_order(symbol, side, position_value, entry_price)
-                if not order_id:
-                    logger.error("Failed to execute order")
-                    return
-            else:
-                order_id = f"paper_{int(time.time())}"
-                logger.info(f"📄 PAPER TRADE - Would open {side.value} position")
-
-            # Create position
-            position = Position(
-                symbol=symbol,
-                side=side,
-                size=size,
-                entry_price=entry_price,
-                entry_time=datetime.utcnow(),
-                entry_balance=entry_balance,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-                order_id=order_id,
-                original_size=size,
-                current_size=size,
-            )
-
-            with self._positions_lock:
-                self.positions[order_id] = position
-
-            # Initialize MFE/MAE cache for this position
-            self.mfe_mae_tracker.clear(order_id)  # ensure fresh state
-
-            # Log position to database
-            if self.trading_session_id is not None:
-                position_db_id = self.db_manager.log_position(
-                    symbol=symbol,
-                    side=side.value,
-                    entry_price=entry_price,
-                    size=size,
-                    entry_balance=entry_balance,
-                    strategy_name=self._strategy_name(),
-                    entry_order_id=order_id,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                    quantity=quantity,
-                    session_id=self.trading_session_id,
-                    trailing_stop_activated=False,
-                    trailing_stop_price=None,
-                    breakeven_triggered=False,
-                )
-                self.position_db_ids[order_id] = position_db_id
-                # Initialize DB partial fields
-                try:
-                    self.db_manager.update_position(
-                        position_id=position_db_id,
-                        original_size=size,
-                        current_size=size,
-                        partial_exits_taken=0,
-                        scale_ins_taken=0,
-                    )
-                except Exception as e:
-                    logger.debug(f"Partial fields init failed: {e}")
-            else:
-                logger.warning(
-                    "⚠️ Cannot log position to database - no trading session ID available"
-                )
-                self.position_db_ids[order_id] = None
-
-            logger.info(
-                f"🚀 Opened {side.value} position: {symbol} @ ${entry_price:.2f} (Size: ${position_value:.2f})"
-            )
-            log_order_event(
-                "open_position",
-                order_id=order_id,
-                symbol=symbol,
-                side=side.value,
-                entry_price=entry_price,
-                size=size,
-            )
-
-            # Send alert if configured
-            self._send_alert(f"Position Opened: {symbol} {side.value} @ ${entry_price:.2f}")
-
-            # Place server-side stop-loss order for protection with retry logic
-            if self.enable_live_trading and stop_loss and self.exchange_interface:
-                sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-                sl_order_id = None
-                max_retries = 3
-                retry_delay = 1.0  # Start with 1 second
-
-                for attempt in range(max_retries):
-                    try:
-                        sl_order_id = self.exchange_interface.place_stop_loss_order(
-                            symbol=symbol,
-                            side=sl_side,
-                            quantity=quantity,
-                            stop_price=stop_loss,
-                        )
-                        if sl_order_id:
-                            break
-                    except Exception as sl_err:
-                        logger.warning(
-                            f"Stop-loss placement attempt {attempt + 1}/{max_retries} failed: {sl_err}"
-                        )
-
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-
-                if sl_order_id:
-                    logger.info(
-                        f"Server-side stop-loss placed: {symbol} @ ${stop_loss:.2f} "
-                        f"order_id={sl_order_id}"
-                    )
-                    # Store stop-loss order ID for later cancellation if needed
-                    position.stop_loss_order_id = sl_order_id
-                    # Track SL order for fill notifications
-                    if self.order_tracker:
-                        self.order_tracker.track_order(sl_order_id, symbol)
-                    # Persist to database for recovery on restart
-                    if order_id in self.position_db_ids:
-                        position_db_id = self.position_db_ids[order_id]
-                        if position_db_id:
-                            self.db_manager.update_position(
-                                position_id=position_db_id,
-                                stop_loss_order_id=sl_order_id,
-                            )
-                else:
-                    # Critical: SL placement failed after all retries - close position immediately
-                    logger.critical(
-                        f"CRITICAL: Failed to place stop-loss after {max_retries} attempts for {symbol} - "
-                        "closing position to prevent unprotected exposure"
-                    )
-                    self._send_alert(
-                        f"⚠️ EMERGENCY: Closing {symbol} position - stop-loss placement failed"
-                    )
-                    # Close the position immediately
-                    self._close_order(position)
-                    with self._positions_lock:
-                        if position.order_id in self.positions:
-                            del self.positions[position.order_id]
-                    return
-
-            # Update risk manager with the newly opened position so daily risk is tracked
-            if self.risk_manager:
-                try:
-                    self.risk_manager.update_position(
-                        symbol=symbol, side=side.value, size=size, entry_price=entry_price
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to update risk manager for opened position {symbol}: {e}"
-                    )
-
-        except Exception as e:
-            logger.error(f"Failed to open position: {e}", exc_info=True)
-            if self.trading_session_id is not None:
-                self.db_manager.log_event(
-                    event_type="ERROR",
-                    message=f"Failed to open position: {str(e)}",
-                    severity="error",
-                    component="LiveTradingEngine",
-                    details={"stack_trace": str(e)},
-                    session_id=self.trading_session_id,
-                )
-            else:
-                logger.warning("⚠️ Cannot log error to database - no trading session ID available")
-
-    def _execute_order(
-        self, symbol: str, side: PositionSide, value: float, price: float
-    ) -> str | None:
-        """
-        Execute a real market order via exchange interface.
-
-        Args:
-            symbol: Trading symbol (e.g., BTCUSDT)
-            side: Position side (LONG or SHORT)
-            value: Dollar value of the position
-            price: Current price for quantity calculation
-
-        Returns:
-            Order ID from exchange, or None on failure
-        """
-        if not self.exchange_interface:
-            logger.error("Exchange interface not initialized - cannot execute real order")
-            return None
-
-        if price <= 0:
-            logger.error(f"Invalid price {price} - cannot calculate quantity")
-            return None
-
-        # Convert position side to order side
-        order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
-
-        # Calculate quantity from dollar value and price
-        quantity = value / price
-
-        # Round quantity to valid step size using symbol info
-        symbol_info = self.exchange_interface.get_symbol_info(symbol)
-        if symbol_info:
-            step_size = symbol_info.get("step_size", 0.00001)
-            if step_size > 0:
-                quantity = round(quantity / step_size) * step_size
-
-            # Validate minimum quantity
-            min_qty = symbol_info.get("min_qty", 0)
-            if quantity < min_qty:
-                logger.error(f"Calculated quantity {quantity} below minimum {min_qty} for {symbol}")
-                return None
-
-            # Validate minimum notional value
-            min_notional = symbol_info.get("min_notional", 0)
-            if value < min_notional:
-                logger.error(
-                    f"Order value ${value:.2f} below minimum notional ${min_notional} for {symbol}"
-                )
-                return None
-
-        # Place market order
-        order_id = self.exchange_interface.place_order(
+        self._execute_entry_signal(
+            entry_signal_data,
             symbol=symbol,
-            side=order_side,
-            order_type=OrderType.MARKET,
-            quantity=quantity,
+            current_price=current_price,
         )
 
-        if order_id:
-            logger.info(
-                f"Real order placed: {symbol} {side.value} qty={quantity:.8f} "
-                f"value=${value:.2f} order_id={order_id}"
+    def _execute_entry_signal(
+        self,
+        signal: LiveEntrySignal,
+        symbol: str,
+        current_price: float,
+    ) -> None:
+        """Execute an entry signal through the live entry handler."""
+        normalized_signal = signal
+        if signal.size_fraction > self.max_position_size:
+            logger.warning(
+                "Position size %.2f exceeds maximum %.2f. Capping at maximum.",
+                signal.size_fraction,
+                self.max_position_size,
             )
-            log_order_event(
-                "place_order",
-                order_id=order_id,
+            normalized_signal = LiveEntrySignal(
+                should_enter=signal.should_enter,
+                side=signal.side,
+                size_fraction=self.max_position_size,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                reasons=signal.reasons,
+                signal_strength=signal.signal_strength,
+                signal_confidence=signal.signal_confidence,
+            )
+        try:
+            entry_result = self.live_entry_handler.execute_entry(
+                signal=normalized_signal,
                 symbol=symbol,
-                side=side.value,
-                quantity=quantity,
-                value=value,
+                current_price=current_price,
+                balance=self.current_balance,
+                session_id=self.trading_session_id,
+                strategy_name=self._strategy_name(),
             )
-            # Track order for fill notifications
-            if self.order_tracker:
-                self.order_tracker.track_order(order_id, symbol)
-        else:
-            logger.error(f"Failed to place real order: {symbol} {side.value} qty={quantity:.8f}")
+        except Exception as exc:
+            logger.error("Entry execution failed for %s: %s", symbol, exc, exc_info=True)
+            return
 
-        return order_id
+        if not entry_result.executed or entry_result.position is None:
+            if entry_result.error:
+                logger.error("Entry execution failed for %s: %s", symbol, entry_result.error)
+            return
+
+        position = entry_result.position
+        if position.order_id is None:
+            logger.error("Entry execution returned position without order ID for %s", symbol)
+            return
+
+        self.current_balance -= entry_result.entry_fee
+        self.total_fees_paid += entry_result.entry_fee
+        self.total_slippage_cost += entry_result.slippage_cost
+
+        with self._positions_lock:
+            self.positions[position.order_id] = position
+
+        position_db_id = self.live_position_tracker.position_db_ids.get(position.order_id)
+        self.position_db_ids[position.order_id] = position_db_id
+
+        self.mfe_mae_tracker.clear(position.order_id)
+
+        position_value = float(position.size) * float(position.entry_balance or 0.0)
+        logger.info(
+            "🚀 Opened %s position: %s @ $%.2f (Size: $%.2f)",
+            position.side.value,
+            symbol,
+            float(position.entry_price),
+            position_value,
+        )
+        log_order_event(
+            "open_position",
+            order_id=position.order_id,
+            symbol=symbol,
+            side=position.side.value,
+            entry_price=float(position.entry_price),
+            size=float(position.size),
+        )
+        if self.order_tracker and self.enable_live_trading:
+            self.order_tracker.track_order(position.order_id, symbol)
+
+        self._send_alert(
+            f"Position Opened: {symbol} {position.side.value} @ ${position.entry_price:.2f}"
+        )
+
+        if not self._place_stop_loss_order(position, symbol):
+            return
+
+    def _place_stop_loss_order(self, position: Position, symbol: str) -> bool:
+        """Place a server-side stop-loss order for the given position."""
+        if not (self.enable_live_trading and position.stop_loss and self.exchange_interface):
+            return True
+
+        basis_balance = (
+            float(position.entry_balance)
+            if position.entry_balance is not None and position.entry_balance > 0
+            else float(self.current_balance)
+        )
+        if position.entry_price <= 0:
+            logger.error("Invalid entry price for stop-loss placement on %s", symbol)
+            return False
+
+        quantity = (float(position.size) * basis_balance) / float(position.entry_price)
+        sl_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+        sl_order_id = None
+        max_retries = 3
+        retry_delay = 1.0  # Start with 1 second
+
+        for attempt in range(max_retries):
+            try:
+                sl_order_id = self.exchange_interface.place_stop_loss_order(
+                    symbol=symbol,
+                    side=sl_side,
+                    quantity=quantity,
+                    stop_price=float(position.stop_loss),
+                )
+                if sl_order_id:
+                    break
+            except Exception as sl_err:
+                logger.warning(
+                    "Stop-loss placement attempt %s/%s failed: %s",
+                    attempt + 1,
+                    max_retries,
+                    sl_err,
+                )
+
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+
+        if sl_order_id:
+            logger.info(
+                "Server-side stop-loss placed: %s @ $%.2f order_id=%s",
+                symbol,
+                float(position.stop_loss),
+                sl_order_id,
+            )
+            position.stop_loss_order_id = sl_order_id
+            if self.order_tracker:
+                self.order_tracker.track_order(sl_order_id, symbol)
+            position_db_id = self.position_db_ids.get(position.order_id)
+            if position_db_id and self.db_manager:
+                self.db_manager.update_position(
+                    position_id=position_db_id,
+                    stop_loss_order_id=sl_order_id,
+                )
+            return True
+
+        logger.critical(
+            "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
+            "closing position to prevent unprotected exposure",
+            max_retries,
+            symbol,
+        )
+        self._send_alert(
+            f"⚠️ EMERGENCY: Closing {symbol} position - stop-loss placement failed"
+        )
+        self._close_order(position)
+        with self._positions_lock:
+            self.positions.pop(position.order_id, None)
+        self.position_db_ids.pop(position.order_id, None)
+        self.mfe_mae_tracker.clear(position.order_id)
+        try:
+            self.live_position_tracker.close_position(
+                order_id=position.order_id,
+                exit_price=float(position.entry_price),
+                exit_reason="stop_loss_failed",
+                basis_balance=basis_balance,
+            )
+        except Exception as exc:
+            logger.warning("Failed to sync position tracker after SL failure: %s", exc)
+        return False
 
     def _handle_order_fill(
         self, order_id: str, symbol: str, filled_qty: float, avg_price: float

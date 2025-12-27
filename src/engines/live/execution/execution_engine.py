@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 
@@ -343,14 +344,67 @@ class LiveExecutionEngine:
             Order ID if successful, None otherwise.
         """
         if self.exchange_interface is None:
-            logger.warning("No exchange interface configured - using paper order ID")
-            return f"real_{int(time.time() * 1000)}"
+            logger.error("Exchange interface not initialized - cannot execute live order")
+            return None
 
         try:
-            # Implementation depends on exchange interface
-            # This is a placeholder - actual implementation would call exchange API
-            logger.warning("Real order execution not fully implemented")
-            return f"real_{int(time.time() * 1000)}"
+            if price <= 0:
+                logger.error("Invalid price %s - cannot calculate quantity", price)
+                return None
+
+            order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
+            quantity = value / price
+
+            symbol_info = self.exchange_interface.get_symbol_info(symbol)
+            if symbol_info:
+                step_size = symbol_info.get("step_size", 0.00001)
+                if step_size > 0:
+                    quantity = round(quantity / step_size) * step_size
+
+                min_qty = symbol_info.get("min_qty", 0)
+                if quantity < min_qty:
+                    logger.error(
+                        "Calculated quantity %s below minimum %s for %s",
+                        quantity,
+                        min_qty,
+                        symbol,
+                    )
+                    return None
+
+                min_notional = symbol_info.get("min_notional", 0)
+                if value < min_notional:
+                    logger.error(
+                        "Order value $%.2f below minimum notional $%.2f for %s",
+                        value,
+                        min_notional,
+                        symbol,
+                    )
+                    return None
+
+            order_id = self.exchange_interface.place_order(
+                symbol=symbol,
+                side=order_side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+            )
+            if order_id:
+                logger.info(
+                    "Real order placed: %s %s qty=%.8f value=$%.2f order_id=%s",
+                    symbol,
+                    side.value,
+                    quantity,
+                    value,
+                    order_id,
+                )
+                return order_id
+
+            logger.error(
+                "Failed to place live order: %s %s qty=%.8f",
+                symbol,
+                side.value,
+                quantity,
+            )
+            return None
         except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order execution failed: %s", e)
             return None

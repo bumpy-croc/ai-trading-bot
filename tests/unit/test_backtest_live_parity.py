@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from src.engines.live.execution.entry_handler import LiveEntrySignal
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 
 
@@ -42,13 +43,17 @@ class TestFeeSlippageParity:
         expected_fee = position_value * fee_rate  # $10 fee on $1000 position
 
         # Open position through engine
-        engine._open_position(
-            symbol="TEST",
+        entry_signal = LiveEntrySignal(
+            should_enter=True,
             side=PositionSide.LONG,
-            size=position_size,
-            price=100.0,
+            size_fraction=position_size,
             stop_loss=95.0,
             take_profit=110.0,
+        )
+        engine._execute_entry_signal(
+            entry_signal,
+            symbol="TEST",
+            current_price=100.0,
         )
 
         assert engine.total_fees_paid == pytest.approx(expected_fee)
@@ -116,13 +121,17 @@ class TestFeeSlippageParity:
         )
 
         # Open long position
-        engine._open_position(
-            symbol="TEST",
+        entry_signal = LiveEntrySignal(
+            should_enter=True,
             side=PositionSide.LONG,
-            size=0.1,
-            price=100.0,
+            size_fraction=0.1,
             stop_loss=95.0,
             take_profit=110.0,
+        )
+        engine._execute_entry_signal(
+            entry_signal,
+            symbol="TEST",
+            current_price=100.0,
         )
 
         # For long, slippage should increase entry price (worse for buyer)
@@ -441,13 +450,17 @@ class TestPositionSizeParity:
         )
 
         # Try to open position larger than max
-        engine._open_position(
-            symbol="TEST",
+        entry_signal = LiveEntrySignal(
+            should_enter=True,
             side=PositionSide.LONG,
-            size=0.5,  # 50% - should be capped to 10%
-            price=100.0,
+            size_fraction=0.5,  # 50% - should be capped to 10%
             stop_loss=95.0,
             take_profit=110.0,
+        )
+        engine._execute_entry_signal(
+            entry_signal,
+            symbol="TEST",
+            current_price=100.0,
         )
 
         position = list(engine.positions.values())[0]
@@ -546,25 +559,33 @@ class TestCostTrackingParity:
         )
 
         # Open first position
-        engine._open_position(
-            symbol="TEST1",
+        first_entry_signal = LiveEntrySignal(
+            should_enter=True,
             side=PositionSide.LONG,
-            size=0.1,
-            price=100.0,
+            size_fraction=0.1,
             stop_loss=95.0,
             take_profit=110.0,
+        )
+        engine._execute_entry_signal(
+            first_entry_signal,
+            symbol="TEST1",
+            current_price=100.0,
         )
 
         first_fee = engine.total_fees_paid
 
         # Open second position
-        engine._open_position(
-            symbol="TEST2",
+        second_entry_signal = LiveEntrySignal(
+            should_enter=True,
             side=PositionSide.SHORT,
-            size=0.1,
-            price=100.0,
+            size_fraction=0.1,
             stop_loss=105.0,
             take_profit=90.0,
+        )
+        engine._execute_entry_signal(
+            second_entry_signal,
+            symbol="TEST2",
+            current_price=100.0,
         )
 
         # Fees should have accumulated
@@ -587,13 +608,17 @@ class TestCostTrackingParity:
             slippage_rate=0.0005,
         )
 
-        engine._open_position(
-            symbol="TEST",
+        entry_signal = LiveEntrySignal(
+            should_enter=True,
             side=PositionSide.LONG,
-            size=0.1,
-            price=100.0,
+            size_fraction=0.1,
             stop_loss=95.0,
             take_profit=110.0,
+        )
+        engine._execute_entry_signal(
+            entry_signal,
+            symbol="TEST",
+            current_price=100.0,
         )
 
         # Both should be tracked

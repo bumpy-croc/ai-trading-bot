@@ -2,7 +2,7 @@
 Tests for Live Trading Engine order execution methods.
 
 This module tests the following methods:
-- _execute_order: Executes market orders via exchange interface
+- LiveExecutionEngine._execute_live_order: Executes market orders via exchange interface
 - _close_order: Closes positions via opposite-side market orders
 - _handle_order_fill: Handles order fill callbacks (including stop-loss detection)
 - _handle_partial_fill: Handles partial fill callbacks (with SL warning)
@@ -20,6 +20,7 @@ from src.data_providers.exchange_interface import (
     OrderType,
     OrderStatus as ExchangeOrderStatus,
 )
+from src.engines.live.execution.entry_handler import LiveEntrySignal
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 
 
@@ -70,6 +71,8 @@ def engine_with_exchange(mock_data_provider, mock_exchange, mock_order_tracker):
         engine.exchange_interface = mock_exchange
         engine.order_tracker = mock_order_tracker
         engine.enable_live_trading = True
+        engine.live_execution_engine.exchange_interface = mock_exchange
+        engine.live_execution_engine.enable_live_trading = True
         return engine
 
 
@@ -91,12 +94,12 @@ def sample_position():
 
 
 # ============================================================================
-# Tests for _execute_order
+# Tests for LiveExecutionEngine order execution
 # ============================================================================
 
 
 class TestExecuteOrder:
-    """Tests for the _execute_order method."""
+    """Tests for the LiveExecutionEngine _execute_live_order method."""
 
     def test_execute_order_no_exchange_interface(self, mock_data_provider):
         """Order fails when exchange interface is not initialized."""
@@ -108,13 +111,15 @@ class TestExecuteOrder:
             )
             engine.exchange_interface = None
 
-            result = engine._execute_order("BTCUSDT", PositionSide.LONG, 1000.0, 50000.0)
+            result = engine.live_execution_engine._execute_live_order(
+                "BTCUSDT", PositionSide.LONG, 1000.0, 50000.0
+            )
 
             assert result is None
 
     def test_execute_order_invalid_price_zero(self, engine_with_exchange):
         """Order fails with zero price."""
-        result = engine_with_exchange._execute_order(
+        result = engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.LONG, 1000.0, 0.0
         )
 
@@ -122,7 +127,7 @@ class TestExecuteOrder:
 
     def test_execute_order_invalid_price_negative(self, engine_with_exchange):
         """Order fails with negative price."""
-        result = engine_with_exchange._execute_order(
+        result = engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.LONG, 1000.0, -100.0
         )
 
@@ -130,7 +135,7 @@ class TestExecuteOrder:
 
     def test_execute_order_long_success(self, engine_with_exchange, mock_exchange):
         """Long order is placed correctly."""
-        result = engine_with_exchange._execute_order(
+        result = engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.LONG, 1000.0, 50000.0
         )
 
@@ -145,7 +150,7 @@ class TestExecuteOrder:
 
     def test_execute_order_short_success(self, engine_with_exchange, mock_exchange):
         """Short order is placed correctly."""
-        result = engine_with_exchange._execute_order(
+        result = engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.SHORT, 1000.0, 50000.0
         )
 
@@ -163,7 +168,7 @@ class TestExecuteOrder:
             "min_notional": 10.0,
         }
 
-        engine_with_exchange._execute_order(
+        engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.LONG, 1234.56, 50000.0
         )
 
@@ -179,7 +184,7 @@ class TestExecuteOrder:
             "min_notional": 10.0,
         }
 
-        result = engine_with_exchange._execute_order(
+        result = engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.LONG, 100.0, 50000.0  # Only 0.002 BTC
         )
 
@@ -194,7 +199,7 @@ class TestExecuteOrder:
             "min_notional": 100.0,  # High minimum notional
         }
 
-        result = engine_with_exchange._execute_order(
+        result = engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.LONG, 50.0, 50000.0  # Only $50 value
         )
 
@@ -205,8 +210,17 @@ class TestExecuteOrder:
         self, engine_with_exchange, mock_order_tracker
     ):
         """Placed order is tracked via order tracker."""
-        engine_with_exchange._execute_order(
-            "BTCUSDT", PositionSide.LONG, 1000.0, 50000.0
+        entry_signal = LiveEntrySignal(
+            should_enter=True,
+            side=PositionSide.LONG,
+            size_fraction=0.1,
+            stop_loss=None,
+            take_profit=None,
+        )
+        engine_with_exchange._execute_entry_signal(
+            entry_signal,
+            symbol="BTCUSDT",
+            current_price=50000.0,
         )
 
         mock_order_tracker.track_order.assert_called_once_with("order123", "BTCUSDT")
@@ -215,7 +229,7 @@ class TestExecuteOrder:
         """Order returns None when exchange place_order fails."""
         mock_exchange.place_order.return_value = None
 
-        result = engine_with_exchange._execute_order(
+        result = engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.LONG, 1000.0, 50000.0
         )
 
@@ -225,7 +239,7 @@ class TestExecuteOrder:
         """Order succeeds without symbol info (uses defaults)."""
         mock_exchange.get_symbol_info.return_value = None
 
-        result = engine_with_exchange._execute_order(
+        result = engine_with_exchange.live_execution_engine._execute_live_order(
             "BTCUSDT", PositionSide.LONG, 1000.0, 50000.0
         )
 
@@ -799,26 +813,25 @@ class TestOrderExecutionIntegration:
     ):
         """Test complete order lifecycle from entry to stop-loss fill."""
         # 1. Execute entry order
-        entry_order_id = engine_with_exchange._execute_order(
-            "BTCUSDT", PositionSide.LONG, 1000.0, 50000.0
+        entry_signal = LiveEntrySignal(
+            should_enter=True,
+            side=PositionSide.LONG,
+            size_fraction=0.1,
+            stop_loss=None,
+            take_profit=None,
         )
+        engine_with_exchange._execute_entry_signal(
+            entry_signal,
+            symbol="BTCUSDT",
+            current_price=50000.0,
+        )
+        entry_order_id = next(iter(engine_with_exchange.positions))
         assert entry_order_id == "order123"
         mock_order_tracker.track_order.assert_called_with("order123", "BTCUSDT")
 
-        # 2. Create position with SL
-        position = Position(
-            symbol="BTCUSDT",
-            side=PositionSide.LONG,
-            size=0.1,
-            entry_price=50000.0,
-            stop_loss=48000.0,
-            take_profit=55000.0,
-            entry_time=None,
-            order_id=entry_order_id,
-            entry_balance=Decimal("10000.0"),
-            stop_loss_order_id="sl_order_789",
-        )
-        engine_with_exchange.positions[entry_order_id] = position
+        # 2. Attach SL order ID to existing position
+        position = engine_with_exchange.positions[entry_order_id]
+        position.stop_loss_order_id = "sl_order_789"
 
         # 3. Simulate SL fill callback
         with patch.object(engine_with_exchange, "_close_position") as mock_close:
