@@ -22,6 +22,7 @@ from src.engines.shared.models import (
     PositionSide,
     ScaleInResult,
 )
+from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
 
@@ -87,8 +88,8 @@ class LivePositionTracker:
             db_manager: Database manager for persistence (optional).
             mfe_mae_precision: Decimal precision for MFE/MAE calculations.
             mfe_mae_update_frequency: Seconds between MFE/MAE DB persists.
-            fee_rate: Fee rate for cost-adjusted MFE/MAE.
-            slippage_rate: Slippage rate for cost-adjusted MFE/MAE.
+            fee_rate: Fee rate for cost-adjusted MFE/MAE and partial exits.
+            slippage_rate: Slippage rate for cost-adjusted MFE/MAE and partial exits.
         """
         self._positions: dict[str, LivePosition] = {}
         self._position_db_ids: dict[str, int | None] = {}
@@ -102,6 +103,11 @@ class LivePositionTracker:
         )
         self._mfe_mae_update_frequency = mfe_mae_update_frequency
         self._last_mfe_mae_persist: datetime | None = None
+        # Shared executor for consistent partial exit calculations
+        self._partial_exit_executor = PartialExitExecutor(
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+        )
 
     @property
     def positions(self) -> dict[str, LivePosition]:
@@ -392,6 +398,9 @@ class LivePositionTracker:
     ) -> PartialExitResult | None:
         """Reduce position size via partial exit.
 
+        Uses shared PartialExitExecutor to ensure consistent P&L calculation
+        with fees and slippage, matching the backtest engine behavior.
+
         Args:
             order_id: Order ID of position.
             delta_fraction: Fraction of current position to exit.
@@ -399,8 +408,8 @@ class LivePositionTracker:
             target_level: Which profit target level triggered this exit.
             fraction_of_original: Fraction of original position being exited.
             basis_balance: Fallback balance for P&L calculation.
-            fee_rate: Fee rate for exit calculation.
-            slippage_rate: Slippage rate for exit cost.
+            fee_rate: Fee rate for exit calculation (overrides executor default).
+            slippage_rate: Slippage rate for exit cost (overrides executor default).
 
         Returns:
             PartialExitResult with realized P&L and new size.
@@ -428,45 +437,43 @@ class LivePositionTracker:
                 )
                 delta_fraction = position.current_size
 
+            # Capture values needed for calculation while under lock
+            entry_price = float(position.entry_price)
+            position_side = position.side
+            actual_basis = (
+                float(position.entry_balance)
+                if position.entry_balance is not None and position.entry_balance > 0
+                else basis_balance
+            )
+
+            # Update position state
             position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
             position.partial_exits_taken += 1
             position.last_partial_exit_price = price
 
-        # Calculate realized P&L on the exited fraction
-        if position.side == PositionSide.LONG:
-            pnl_pct = pnl_percent(position.entry_price, price, Side.LONG, delta_fraction)
-        else:
-            pnl_pct = pnl_percent(position.entry_price, price, Side.SHORT, delta_fraction)
+            # Capture updated state for return value
+            new_current_size = position.current_size
+            partial_exits_taken = position.partial_exits_taken
 
-        actual_basis = (
-            float(position.entry_balance)
-            if position.entry_balance is not None and position.entry_balance > 0
-            else basis_balance
+        # Use shared executor for consistent financial calculations
+        # Note: fee_rate and slippage_rate parameters are kept for backward compatibility
+        # but the executor uses the rates it was initialized with
+        result = self._partial_exit_executor.execute_partial_exit(
+            entry_price=entry_price,
+            exit_price=float(price),
+            position_side=position_side,
+            exit_fraction=float(delta_fraction),
+            basis_balance=actual_basis,
         )
 
-        # Calculate exit notional accounting for price change
-        # NOTE: Partial exits adjust exit_notional for price movement, while full exits
-        # in close_position() calculate P&L directly without this adjustment.
-        # This is intentional: partial exits need accurate fee/slippage calculation
-        # on the actual exit value, while full exits use gross P&L calculation.
-        # Both approaches are financially correct but optimize for different use cases.
-        entry_notional = actual_basis * delta_fraction
-        price_adjustment = price / position.entry_price if position.entry_price > 0 else 1.0
-        exit_notional = entry_notional * price_adjustment
-
-        # Calculate costs on exit notional
-        exit_fee = abs(exit_notional * fee_rate)
-        slippage_cost = abs(exit_notional * slippage_rate)
-
-        # Deduct costs from realized P&L
-        gross_pnl = cash_pnl(pnl_pct, actual_basis)
-        realized_pnl = gross_pnl - exit_fee - slippage_cost
-
         logger.debug(
-            "Partial exit: %.4f of position %s, realized PnL=%.2f",
+            "Partial exit: %.4f of position %s, gross_pnl=%.2f, fee=%.2f, slippage=%.2f, net_pnl=%.2f",
             delta_fraction,
             order_id,
-            realized_pnl,
+            result.gross_pnl,
+            result.exit_fee,
+            result.slippage_cost,
+            result.realized_pnl,
         )
 
         # Persist to DB (db_id was captured under lock above)
@@ -482,9 +489,9 @@ class LivePositionTracker:
                 logger.debug("DB partial-exit update failed: %s", e)
 
         return PartialExitResult(
-            realized_pnl=realized_pnl,
-            new_current_size=position.current_size,
-            partial_exits_taken=position.partial_exits_taken,
+            realized_pnl=result.realized_pnl,
+            new_current_size=new_current_size,
+            partial_exits_taken=partial_exits_taken,
         )
 
     def apply_scale_in(

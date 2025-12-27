@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.config.constants import DEFAULT_MFE_MAE_PRECISION_DECIMALS
+from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.performance.metrics import cash_pnl
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
 
@@ -52,12 +53,17 @@ class PositionTracker:
 
         Args:
             mfe_mae_precision: Decimal precision for MFE/MAE calculations.
-            fee_rate: Fee rate for cost-adjusted MFE/MAE.
-            slippage_rate: Slippage rate for cost-adjusted MFE/MAE.
+            fee_rate: Fee rate for cost-adjusted MFE/MAE and partial exits.
+            slippage_rate: Slippage rate for cost-adjusted MFE/MAE and partial exits.
         """
         self.current_trade: ActiveTrade | None = None
         self.mfe_mae_tracker = MFEMAETracker(
             precision_decimals=mfe_mae_precision,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+        )
+        # Shared executor for consistent partial exit calculations
+        self._partial_exit_executor = PartialExitExecutor(
             fee_rate=fee_rate,
             slippage_rate=slippage_rate,
         )
@@ -131,39 +137,43 @@ class PositionTracker:
     ) -> float:
         """Reduce position size via partial exit.
 
+        Uses shared PartialExitExecutor to ensure consistent P&L calculation
+        with fees and slippage, matching the live engine behavior.
+
         Args:
             exit_fraction: Fraction of current position to exit.
             current_price: Current market price for PnL calculation.
             basis_balance: Balance basis for PnL calculation.
 
         Returns:
-            Realized PnL in cash terms.
+            Realized PnL in cash terms (net of fees and slippage).
         """
         if self.current_trade is None:
             return 0.0
 
-        # Calculate PnL for the exited portion
-        # Convert PositionSide enum to string for comparison
-        side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
-        if side_str == "long":
-            move = (current_price - self.current_trade.entry_price) / self.current_trade.entry_price
-        else:
-            move = (self.current_trade.entry_price - current_price) / self.current_trade.entry_price
-
-        pnl_pct = move * exit_fraction
-        pnl_cash = cash_pnl(pnl_pct, basis_balance)
+        # Use shared executor for consistent financial calculations
+        result = self._partial_exit_executor.execute_partial_exit(
+            entry_price=float(self.current_trade.entry_price),
+            exit_price=float(current_price),
+            position_side=self.current_trade.side,
+            exit_fraction=float(exit_fraction),
+            basis_balance=float(basis_balance),
+        )
 
         # Update position state
         self.current_trade.current_size = max(0.0, self.current_trade.current_size - exit_fraction)
         self.current_trade.partial_exits_taken += 1
 
         logger.debug(
-            "Partial exit: %.4f of position, realized PnL=%.2f",
+            "Partial exit: %.4f of position, gross_pnl=%.2f, fee=%.2f, slippage=%.2f, net_pnl=%.2f",
             exit_fraction,
-            pnl_cash,
+            result.gross_pnl,
+            result.exit_fee,
+            result.slippage_cost,
+            result.realized_pnl,
         )
 
-        return pnl_cash
+        return result.realized_pnl
 
     def apply_scale_in(self, additional_size: float) -> None:
         """Increase position size via scale-in.
