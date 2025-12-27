@@ -7,9 +7,8 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from enum import Enum
 from typing import Any
 
 import pandas as pd
@@ -81,7 +80,11 @@ from src.engines.live.execution.exit_handler import LiveExitHandler
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
-    PositionSide as LivePositionSide,
+)
+from src.engines.shared.models import (
+    BaseTrade,
+    OrderStatus,
+    PositionSide,
 )
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
@@ -93,62 +96,11 @@ from src.engines.shared.risk_configuration import (
 
 logger = logging.getLogger(__name__)
 
-
-class PositionSide(Enum):
-    LONG = "long"
-    SHORT = "short"
-
-
-class OrderStatus(Enum):
-    PENDING = "PENDING"
-    OPEN = "OPEN"
-    FILLED = "FILLED"
-    CANCELLED = "CANCELLED"
-    FAILED = "FAILED"
-
-
-@dataclass
-class Position:
-    """Represents an active trading position"""
-
-    symbol: str
-    side: PositionSide
-    size: float
-    entry_price: float
-    entry_time: datetime
-    entry_balance: float | None = None
-    stop_loss: float | None = None
-    take_profit: float | None = None
-    unrealized_pnl: float = 0.0
-    unrealized_pnl_percent: float = 0.0
-    order_id: str | None = None
-    # Partial operations runtime state
-    original_size: float | None = None
-    current_size: float | None = None
-    partial_exits_taken: int = 0
-    scale_ins_taken: int = 0
-    # Trailing stop state
-    trailing_stop_activated: bool = False
-    trailing_stop_price: float | None = None
-    breakeven_triggered: bool = False
-    # Server-side stop-loss order ID (for live trading)
-    stop_loss_order_id: str | None = None
-
-
-@dataclass
-class Trade:
-    """Represents a completed trade"""
-
-    symbol: str
-    side: PositionSide
-    size: float
-    entry_price: float
-    entry_time: datetime
-    exit_price: float | None = None
-    exit_time: datetime | None = None
-    pnl: float | None = None  # Realized PnL in account currency
-    pnl_percent: float | None = None  # Sized percentage return (decimal, e.g. 0.02 = +2%)
-    exit_reason: str | None = None
+# Type aliases for backward compatibility - use shared models
+# Position uses LivePosition which has stop_loss_order_id for server-side stop tracking
+Position = LivePosition
+# Trade uses BaseTrade which has all required fields plus MFE/MAE tracking
+Trade = BaseTrade
 
 
 def _create_exchange_provider(provider: str, config: dict, testnet: bool = False):

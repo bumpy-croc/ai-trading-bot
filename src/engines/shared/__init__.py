@@ -31,7 +31,8 @@ from src.engines.shared.partial_operations_manager import (
     PartialOperationsManager,
     ScaleInDecision,
 )
-from src.engines.shared.performance_tracker import (
+# Re-export from canonical location for backward compatibility
+from src.performance.tracker import (
     PerformanceMetrics,
     PerformanceTracker,
 )
