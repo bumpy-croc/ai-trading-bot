@@ -35,10 +35,13 @@ logger = logging.getLogger(__name__)
 class LivePosition(BasePosition):
     """Represents an active trading position in live trading.
 
-    Extends BasePosition with live-specific price tracking for partial operations.
+    Extends BasePosition with live-specific fields for order tracking
+    and partial operation price tracking.
     All core position fields are inherited from BasePosition.
     """
 
+    # Live-specific: server-side stop-loss order tracking
+    stop_loss_order_id: str | None = None
     # Live-specific: track execution prices for partial operations
     last_partial_exit_price: float | None = None
     last_scale_in_price: float | None = None
