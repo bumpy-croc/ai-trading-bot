@@ -143,7 +143,9 @@ class PositionTracker:
             return 0.0
 
         # Calculate PnL for the exited portion
-        if self.current_trade.side == "long":
+        # Convert PositionSide enum to string for comparison
+        side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+        if side_str == "long":
             move = (current_price - self.current_trade.entry_price) / self.current_trade.entry_price
         else:
             move = (self.current_trade.entry_price - current_price) / self.current_trade.entry_price
@@ -206,7 +208,9 @@ class PositionTracker:
 
         # Only update if new stop is better
         current_sl = self.current_trade.stop_loss
-        if self.current_trade.side == "long":
+        # Convert PositionSide enum to string for comparison
+        side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+        if side_str == "long":
             should_update = current_sl is None or new_stop_loss > float(current_sl)
         else:
             should_update = current_sl is None or new_stop_loss < float(current_sl)
