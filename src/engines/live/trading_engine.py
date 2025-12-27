@@ -2174,6 +2174,40 @@ class LiveTradingEngine:
                 if runtime_decision is not None:
                     runtime_strength = runtime_decision.signal.strength
                     runtime_confidence = runtime_decision.signal.confidence
+                runtime_overrides = None
+                if self._component_strategy and hasattr(self._component_strategy, "get_risk_overrides"):
+                    try:
+                        runtime_overrides = self._component_strategy.get_risk_overrides()
+                    except Exception as exc:
+                        logger.debug("Failed to fetch runtime risk overrides: %s", exc)
+                correlation_ctx = self._get_correlation_context(
+                    symbol,
+                    df,
+                    runtime_overrides,
+                    index=current_index,
+                )
+                adjusted_size, correlation_factor = self.risk_manager.apply_correlation_adjustment(
+                    position_size,
+                    correlation_ctx,
+                )
+                if correlation_factor < 1.0:
+                    logger.info(
+                        "Correlation adjustment applied: symbol=%s side=%s factor=%.4f size=%.4f->%.4f",
+                        symbol,
+                        entry_side.value,
+                        correlation_factor,
+                        position_size,
+                        adjusted_size,
+                    )
+                    log_risk_event(
+                        "correlation_size_adjustment",
+                        symbol=symbol,
+                        side=entry_side.value,
+                        position_size_before=position_size,
+                        position_size_after=adjusted_size,
+                        adjustment_factor=correlation_factor,
+                    )
+                position_size = adjusted_size
         elif isinstance(self.strategy, ComponentStrategy):
             # Component-based strategy: use process_candle() for decision
             # Note: runtime_decision should already be populated if this is a component strategy

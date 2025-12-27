@@ -280,8 +280,21 @@ class RiskManager:
         fraction = max(min_fraction, min(max_fraction, fraction))
 
         # Optional correlation-based size reduction
+        fraction, _ = self.apply_correlation_adjustment(fraction, correlation_ctx)
+        return max(0.0, min(self.params.max_position_size, fraction))
+
+    def apply_correlation_adjustment(
+        self,
+        fraction: float,
+        correlation_ctx: dict[str, Any] | None = None,
+    ) -> tuple[float, float]:
+        """Apply correlation-based size reduction to a sizing fraction."""
+        if fraction <= 0:
+            return 0.0, 1.0
+
+        factor = 1.0
         try:
-            if correlation_ctx and fraction > 0:
+            if correlation_ctx:
                 engine = correlation_ctx.get("engine")
                 candidate_symbol = correlation_ctx.get("candidate_symbol")
                 corr_matrix = correlation_ctx.get("corr_matrix")
@@ -302,7 +315,8 @@ class RiskManager:
         except Exception:
             # Fail-safe: never raise from correlation logic
             logging.exception("Exception in correlation-based size reduction logic")
-        return max(0.0, min(self.params.max_position_size, fraction))
+            return float(fraction), 1.0
+        return max(0.0, float(fraction)), max(0.0, float(factor))
 
     def compute_sl_tp(
         self,
