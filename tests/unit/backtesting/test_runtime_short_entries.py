@@ -67,6 +67,8 @@ class _ShortRiskManager(RiskManager):
         return balance * 0.1 if signal.direction != SignalDirection.HOLD else 0.0
 
     def should_exit(self, position: Position, current_data: MarketData, regime: RegimeContext | None = None) -> bool:  # type: ignore[override]
+        # After model consolidation, position.side may be either a string or enum
+        # The component Position validator ensures it's always a string
         if position.side == "short":
             return current_data.price <= position.entry_price * 0.9
         return current_data.price >= position.entry_price * 1.1
@@ -159,7 +161,9 @@ def test_runtime_short_entry_honors_metadata():
 
     assert result["total_trades"] == 1
     assert backtester.trades
-    assert backtester.trades[0].side == "short"
+    # side is now a PositionSide enum after model consolidation
+    from src.engines.shared.models import PositionSide
+    assert backtester.trades[0].side == PositionSide.SHORT
 
 
 def test_runtime_short_entry_blocks_when_metadata_missing():

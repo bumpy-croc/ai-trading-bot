@@ -109,11 +109,14 @@ class PositionTracker:
             return
 
         try:
+            # Convert PositionSide enum to string for metrics tracker compatibility
+            side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+
             self.mfe_mae_tracker.update_position_metrics(
                 position_key=self.POSITION_KEY,
                 entry_price=float(self.current_trade.entry_price),
                 current_price=float(current_price),
-                side=self.current_trade.side,
+                side=side_str,
                 position_fraction=float(self.current_trade.size),
                 current_time=current_time,
             )

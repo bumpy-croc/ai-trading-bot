@@ -462,9 +462,12 @@ class ExitHandler:
                 # (component_notional field was removed - compute on-demand)
                 notional = float(trade.current_size) * float(trade.entry_balance or 0.0)
 
+                # Convert PositionSide enum to string for component Position validator
+                side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+
                 position = ComponentPosition(
                     symbol=trade.symbol,
-                    side=trade.side,
+                    side=side_str,
                     size=notional,
                     entry_price=float(trade.entry_price),
                     current_price=float(current_price),
