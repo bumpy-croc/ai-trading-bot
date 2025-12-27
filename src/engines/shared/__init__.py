@@ -3,6 +3,7 @@
 This module provides unified implementations for common trading engine functionality:
 - Position and Trade models
 - Cost calculations (fees, slippage)
+- Exit condition checking (SL/TP)
 - Trailing stop management
 - Dynamic risk handling
 - Policy hydration
@@ -12,6 +13,13 @@ This module provides unified implementations for common trading engine functiona
 """
 
 from src.engines.shared.cost_calculator import CostCalculator, CostResult
+from src.engines.shared.exit_conditions import (
+    ExitConditionResult,
+    calculate_pnl_percent,
+    calculate_sized_pnl_percent,
+    check_stop_loss,
+    check_take_profit,
+)
 from src.engines.shared.dynamic_risk_handler import (
     DynamicRiskAdjustment,
     DynamicRiskHandler,
@@ -64,6 +72,12 @@ __all__ = [
     # Cost calculation
     "CostCalculator",
     "CostResult",
+    # Exit conditions
+    "ExitConditionResult",
+    "check_stop_loss",
+    "check_take_profit",
+    "calculate_pnl_percent",
+    "calculate_sized_pnl_percent",
     # Trailing stop management
     "TrailingStopManager",
     "TrailingStopUpdate",

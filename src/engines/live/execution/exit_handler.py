@@ -20,6 +20,10 @@ from src.engines.live.execution.position_tracker import (
     LivePositionTracker,
     PositionSide,
 )
+from src.engines.shared.exit_conditions import (
+    check_stop_loss,
+    check_take_profit,
+)
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -140,22 +144,36 @@ class LiveExitHandler:
                     limit_price=None,
                 )
 
-        # Check stop loss (priority over take profit)
+        # Check stop loss using shared logic (priority over take profit)
         if position.stop_loss is not None:
-            if self._check_stop_loss(position, current_price, candle_high, candle_low):
+            sl_result = check_stop_loss(
+                position=position,
+                current_price=current_price,
+                candle_high=candle_high,
+                candle_low=candle_low,
+                use_high_low=self.use_high_low_for_stops,
+            )
+            if sl_result.triggered:
                 return LiveExitCheck(
                     should_exit=True,
                     exit_reason="Stop loss",
-                    limit_price=position.stop_loss,
+                    limit_price=sl_result.exit_price or position.stop_loss,
                 )
 
-        # Check take profit
+        # Check take profit using shared logic
         if position.take_profit is not None:
-            if self._check_take_profit(position, current_price, candle_high, candle_low):
+            tp_result = check_take_profit(
+                position=position,
+                current_price=current_price,
+                candle_high=candle_high,
+                candle_low=candle_low,
+                use_high_low=self.use_high_low_for_stops,
+            )
+            if tp_result.triggered:
                 return LiveExitCheck(
                     should_exit=True,
                     exit_reason="Take profit",
-                    limit_price=position.take_profit,
+                    limit_price=tp_result.exit_price or position.take_profit,
                 )
 
         # Check time-based exit
@@ -364,88 +382,6 @@ class LiveExitHandler:
             logger.debug("Component exit check failed: %s", e)
 
         return False, "Hold"
-
-    def _check_stop_loss(
-        self,
-        position: LivePosition,
-        current_price: float,
-        candle_high: float | None = None,
-        candle_low: float | None = None,
-    ) -> bool:
-        """Check if stop loss should be triggered.
-
-        Uses candle high/low for realistic worst-case execution detection.
-        For long positions, uses max(stop_loss, candle_low) to model realistic fill prices
-        since stop losses typically execute at or worse than the stop level.
-
-        Args:
-            position: Position to check.
-            current_price: Current (close) price.
-            candle_high: Candle high price.
-            candle_low: Candle low price.
-
-        Returns:
-            True if stop loss was triggered.
-        """
-        if position.stop_loss is None:
-            return False
-
-        # Use high/low for more realistic detection
-        if (
-            self.use_high_low_for_stops
-            and candle_low is not None
-            and candle_high is not None
-        ):
-            if position.side == PositionSide.LONG:
-                # For long SL, check if candle_low breached the stop
-                return candle_low <= position.stop_loss
-            else:
-                # For short SL, check if candle_high breached the stop
-                return candle_high >= position.stop_loss
-        else:
-            # Fallback to close price only
-            if position.side == PositionSide.LONG:
-                return current_price <= position.stop_loss
-            else:
-                return current_price >= position.stop_loss
-
-    def _check_take_profit(
-        self,
-        position: LivePosition,
-        current_price: float,
-        candle_high: float | None = None,
-        candle_low: float | None = None,
-    ) -> bool:
-        """Check if take profit should be triggered.
-
-        Args:
-            position: Position to check.
-            current_price: Current (close) price.
-            candle_high: Candle high price.
-            candle_low: Candle low price.
-
-        Returns:
-            True if take profit was triggered.
-        """
-        if position.take_profit is None:
-            return False
-
-        # Use high/low for more realistic detection
-        if (
-            self.use_high_low_for_stops
-            and candle_high is not None
-            and candle_low is not None
-        ):
-            if position.side == PositionSide.LONG:
-                return candle_high >= position.take_profit
-            else:
-                return candle_low <= position.take_profit
-        else:
-            # Fallback to close price only
-            if position.side == PositionSide.LONG:
-                return current_price >= position.take_profit
-            else:
-                return current_price <= position.take_profit
 
     def update_trailing_stops(
         self,

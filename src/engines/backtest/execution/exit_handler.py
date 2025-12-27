@@ -15,6 +15,11 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from src.engines.backtest.models import Trade
+from src.engines.shared.exit_conditions import (
+    calculate_pnl_percent,
+    check_stop_loss,
+    check_take_profit,
+)
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -344,39 +349,38 @@ class ExitHandler:
             candle_high = float(candle["high"])
             candle_low = float(candle["low"])
         else:
-            candle_high = current_price
-            candle_low = current_price
+            candle_high = None
+            candle_low = None
 
-        # Convert PositionSide enum to string for comparisons
-        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
-
-        # Check stop loss
+        # Check stop loss using shared logic
         hit_stop_loss = False
         sl_exit_price = current_price
         if self.enable_engine_risk_exits and trade.stop_loss is not None:
-            stop_loss_val = float(trade.stop_loss)
-            if side_str == "long":
-                hit_stop_loss = candle_low <= stop_loss_val
-                if hit_stop_loss:
-                    # Use max(stop_loss, candle_low) for realistic worst-case execution
-                    sl_exit_price = max(stop_loss_val, candle_low)
-            else:
-                hit_stop_loss = candle_high >= stop_loss_val
-                if hit_stop_loss:
-                    # Use min(stop_loss, candle_high) for realistic worst-case execution
-                    sl_exit_price = min(stop_loss_val, candle_high)
+            sl_result = check_stop_loss(
+                position=trade,
+                current_price=current_price,
+                candle_high=candle_high,
+                candle_low=candle_low,
+                use_high_low=self.use_high_low_for_stops,
+            )
+            hit_stop_loss = sl_result.triggered
+            if hit_stop_loss and sl_result.exit_price is not None:
+                sl_exit_price = sl_result.exit_price
 
-        # Check take profit
+        # Check take profit using shared logic
         hit_take_profit = False
         tp_exit_price = current_price
         if self.enable_engine_risk_exits and trade.take_profit is not None:
-            take_profit_val = float(trade.take_profit)
-            if side_str == "long":
-                hit_take_profit = candle_high >= take_profit_val
-            else:
-                hit_take_profit = candle_low <= take_profit_val
-            if hit_take_profit:
-                tp_exit_price = take_profit_val
+            tp_result = check_take_profit(
+                position=trade,
+                current_price=current_price,
+                candle_high=candle_high,
+                candle_low=candle_low,
+                use_high_low=self.use_high_low_for_stops,
+            )
+            hit_take_profit = tp_result.triggered
+            if hit_take_profit and tp_result.exit_price is not None:
+                tp_exit_price = tp_result.exit_price
 
         # Check time limit
         hit_time_limit = False
@@ -576,6 +580,8 @@ class ExitHandler:
     def calculate_current_pnl_pct(self, current_price: float) -> float:
         """Calculate current unrealized PnL percentage.
 
+        Uses shared calculate_pnl_percent for consistent logic across engines.
+
         Args:
             current_price: Current market price.
 
@@ -586,8 +592,8 @@ class ExitHandler:
         if trade is None:
             return 0.0
 
-        pnl_pct = (current_price - trade.entry_price) / trade.entry_price
-        if trade.side != "long":
-            pnl_pct = -pnl_pct
-
-        return pnl_pct
+        return calculate_pnl_percent(
+            entry_price=trade.entry_price,
+            current_price=current_price,
+            side=trade.side,
+        )
