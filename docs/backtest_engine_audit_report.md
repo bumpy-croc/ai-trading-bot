@@ -28,6 +28,18 @@ This audit examined the backtesting engine (`src/engines/backtest/`) and compare
 - Backtest: `src/engines/backtest/execution/position_tracker.py:126-166`
 - Live: `src/engines/live/execution/position_tracker.py:382-488`
 
+**Root Cause**: **Incomplete Architecture Consolidation**
+
+The system has a **shared decision manager** (`PartialOperationsManager`) that both engines use to decide WHEN to exit, but **no shared execution logic** for HOW to execute the exit. Each engine's `PositionTracker` implements its own `apply_partial_exit()`, causing divergence.
+
+**Architecture Flaw**:
+```
+✅ PartialOperationsManager.check_partial_exit() - SHARED (decision)
+❌ PositionTracker.apply_partial_exit() - DUPLICATED (execution)
+```
+
+This violates the single source of truth principle. There's an existing consolidation plan (`docs/execplans/shared_models_consolidation.md`) that identified this issue but was never executed.
+
 **Issue**:
 The backtest engine **does NOT deduct fees and slippage** from partial exit P&L, while the live engine **DOES**. This creates a systematic overestimation of backtest returns when partial exits are used.
 
@@ -92,12 +104,23 @@ def apply_partial_exit(
 
 **Severity**: CRITICAL - This directly affects financial accuracy and strategy validation.
 
-**Recommendation**:
-Update backtest `PositionTracker.apply_partial_exit()` to match live engine logic by:
-1. Adding `fee_rate` and `slippage_rate` parameters
-2. Calculating exit notional with price adjustment
-3. Deducting fees and slippage from gross P&L
-4. Returning net P&L
+**Recommendation** (Two Approaches):
+
+**Option A - Quick Fix (Band-Aid)**:
+Update backtest `PositionTracker.apply_partial_exit()` to match live engine logic:
+1. Add `fee_rate` and `slippage_rate` parameters
+2. Calculate exit notional with price adjustment
+3. Deduct fees and slippage from gross P&L
+4. Return net P&L
+
+**Option B - Proper Fix (Architectural)**:
+Create shared execution module (`src/engines/shared/partial_exit_executor.py`):
+1. Extract P&L calculation logic into shared class
+2. Both position trackers delegate to shared executor
+3. Single source of truth ensures consistency
+4. Easier to maintain and test
+
+**Recommended**: Option B - Fix the root architectural issue, not just the symptom. This prevents similar divergence in the future.
 
 ---
 
