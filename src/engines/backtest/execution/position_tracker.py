@@ -254,7 +254,9 @@ class PositionTracker:
         fraction = float(getattr(trade, "current_size", trade.size))
 
         # Calculate PnL
-        if trade.side == "long":
+        # Convert PositionSide enum to string for comparison
+        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        if side_str == "long":
             trade_pnl_pct = (
                 (exit_price - trade.entry_price) / trade.entry_price
             ) * fraction
