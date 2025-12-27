@@ -122,6 +122,21 @@ Create shared execution module (`src/engines/shared/partial_exit_executor.py`):
 
 **Recommended**: Option B - Fix the root architectural issue, not just the symptom. This prevents similar divergence in the future.
 
+**✅ IMPLEMENTATION STATUS**: **FIXED** (2025-12-27)
+
+This issue has been resolved by implementing Option B. A shared `PartialExitExecutor` module was created at `src/engines/shared/partial_exit_executor.py` that both engines now use for partial exit calculations. This ensures:
+- ✅ Identical P&L calculations between backtest and live
+- ✅ Fees and slippage are consistently applied in both engines
+- ✅ Single source of truth for financial calculations
+- ✅ 22 comprehensive unit tests verify correctness
+- ✅ No more divergence possible - shared logic enforces parity
+
+**Files Modified**:
+- `src/engines/shared/partial_exit_executor.py` (new)
+- `src/engines/backtest/execution/position_tracker.py`
+- `src/engines/live/execution/position_tracker.py`
+- `tests/unit/engines/shared/test_partial_exit_executor.py` (new)
+
 ---
 
 ### 2. **Exit Fee Calculation Uses Exit Notional (CORRECT BUT UNDOCUMENTED)** ✅ VERIFIED CORRECT
