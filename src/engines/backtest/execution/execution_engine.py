@@ -176,9 +176,7 @@ class ExecutionEngine:
             take_profit=take_profit,
             entry_balance=balance - entry_fee,
         )
-        trade.component_notional = pending.get(
-            "component_notional", pending["size_fraction"] * balance
-        )
+        # Note: component_notional removed - computed on-demand as current_size * balance
 
         logger.info(
             "Entered %s at %.2f (open: %.2f) via next-bar execution",
@@ -245,9 +243,7 @@ class ExecutionEngine:
             take_profit=take_profit,
             entry_balance=balance - entry_fee,
         )
-        trade.component_notional = (
-            component_notional if component_notional else size_fraction * balance
-        )
+        # Note: component_notional removed - computed on-demand as current_size * balance
 
         logger.info(
             "Entered %s at %.2f via immediate execution",

@@ -347,12 +347,15 @@ class ExitHandler:
             candle_high = current_price
             candle_low = current_price
 
+        # Convert PositionSide enum to string for comparisons
+        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+
         # Check stop loss
         hit_stop_loss = False
         sl_exit_price = current_price
         if self.enable_engine_risk_exits and trade.stop_loss is not None:
             stop_loss_val = float(trade.stop_loss)
-            if trade.side == "long":
+            if side_str == "long":
                 hit_stop_loss = candle_low <= stop_loss_val
                 if hit_stop_loss:
                     # Use max(stop_loss, candle_low) for realistic worst-case execution
@@ -368,7 +371,7 @@ class ExitHandler:
         tp_exit_price = current_price
         if self.enable_engine_risk_exits and trade.take_profit is not None:
             take_profit_val = float(trade.take_profit)
-            if trade.side == "long":
+            if side_str == "long":
                 hit_take_profit = candle_high >= take_profit_val
             else:
                 hit_take_profit = candle_low <= take_profit_val
@@ -445,9 +448,12 @@ class ExitHandler:
         try:
             from src.strategies.components import SignalDirection
 
-            if trade.side == "long" and decision.signal.direction == SignalDirection.SELL:
+            # Convert PositionSide enum to string for comparison
+            side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+
+            if side_str == "long" and decision.signal.direction == SignalDirection.SELL:
                 return True, "Signal reversal"
-            if trade.side == "short" and decision.signal.direction == SignalDirection.BUY:
+            if side_str == "short" and decision.signal.direction == SignalDirection.BUY:
                 return True, "Signal reversal"
         except Exception:
             pass
@@ -458,10 +464,17 @@ class ExitHandler:
                 from src.strategies.components import MarketData as ComponentMarketData
                 from src.strategies.components import Position as ComponentPosition
 
+                # Compute notional value from current position size and entry balance
+                # (component_notional field was removed - compute on-demand)
+                notional = float(trade.current_size) * float(trade.entry_balance or 0.0)
+
+                # Convert PositionSide enum to string for component Position validator
+                side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+
                 position = ComponentPosition(
                     symbol=trade.symbol,
-                    side=trade.side,
-                    size=float(getattr(trade, "component_notional", 0.0) or 0.0),
+                    side=side_str,
+                    size=notional,
                     entry_price=float(trade.entry_price),
                     current_price=float(current_price),
                     entry_time=trade.entry_time,
@@ -533,9 +546,11 @@ class ExitHandler:
         position_notional = entry_notional * (exit_price / trade.entry_price)
 
         # Calculate exit costs
+        # Convert PositionSide enum to string for cost calculation
+        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
         final_exit_price, exit_fee, slippage_cost = self.execution_engine.calculate_exit_costs(
             base_price=exit_price,
-            side=trade.side,
+            side=side_str,
             position_notional=position_notional,
         )
 

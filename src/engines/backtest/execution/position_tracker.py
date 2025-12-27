@@ -109,11 +109,14 @@ class PositionTracker:
             return
 
         try:
+            # Convert PositionSide enum to string for metrics tracker compatibility
+            side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+
             self.mfe_mae_tracker.update_position_metrics(
                 position_key=self.POSITION_KEY,
                 entry_price=float(self.current_trade.entry_price),
                 current_price=float(current_price),
-                side=self.current_trade.side,
+                side=side_str,
                 position_fraction=float(self.current_trade.size),
                 current_time=current_time,
             )
@@ -140,7 +143,9 @@ class PositionTracker:
             return 0.0
 
         # Calculate PnL for the exited portion
-        if self.current_trade.side == "long":
+        # Convert PositionSide enum to string for comparison
+        side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+        if side_str == "long":
             move = (current_price - self.current_trade.entry_price) / self.current_trade.entry_price
         else:
             move = (self.current_trade.entry_price - current_price) / self.current_trade.entry_price
@@ -203,7 +208,9 @@ class PositionTracker:
 
         # Only update if new stop is better
         current_sl = self.current_trade.stop_loss
-        if self.current_trade.side == "long":
+        # Convert PositionSide enum to string for comparison
+        side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+        if side_str == "long":
             should_update = current_sl is None or new_stop_loss > float(current_sl)
         else:
             should_update = current_sl is None or new_stop_loss < float(current_sl)
@@ -251,7 +258,9 @@ class PositionTracker:
         fraction = float(getattr(trade, "current_size", trade.size))
 
         # Calculate PnL
-        if trade.side == "long":
+        # Convert PositionSide enum to string for comparison
+        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        if side_str == "long":
             trade_pnl_pct = (
                 (exit_price - trade.entry_price) / trade.entry_price
             ) * fraction

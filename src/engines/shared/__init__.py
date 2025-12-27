@@ -20,14 +20,16 @@ from src.engines.shared.models import (
     BasePosition,
     BaseTrade,
     OrderStatus,
+    PartialExitResult,
     Position,
     PositionSide,
+    ScaleInResult,
     Trade,
 )
 from src.engines.shared.partial_operations_manager import (
-    PartialExitResult,
+    PartialExitDecision,
     PartialOperationsManager,
-    ScaleInResult,
+    ScaleInDecision,
 )
 from src.engines.shared.performance_tracker import (
     PerformanceMetrics,
@@ -79,6 +81,8 @@ __all__ = [
     "get_risk_parameters",
     # Partial operations
     "PartialOperationsManager",
+    "PartialExitDecision",
+    "ScaleInDecision",
     "PartialExitResult",
     "ScaleInResult",
     # Performance tracking
