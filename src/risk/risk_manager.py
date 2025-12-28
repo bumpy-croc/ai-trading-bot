@@ -285,12 +285,18 @@ class RiskManager:
 
     def apply_correlation_adjustment(
         self,
-        fraction: float,
+        size_fraction: float,
         correlation_ctx: dict[str, Any] | None = None,
     ) -> tuple[float, float]:
         """Apply correlation-based size reduction to a sizing fraction."""
-        if fraction <= 0:
+        if size_fraction <= 0:
             return 0.0, 1.0
+        if size_fraction > 1.0:
+            logging.warning(
+                "Invalid size fraction for correlation adjustment: %.4f",
+                size_fraction,
+            )
+            size_fraction = max(0.0, min(1.0, size_fraction))
 
         factor = 1.0
         try:
@@ -306,17 +312,17 @@ class RiskManager:
                             positions=positions,
                             corr_matrix=corr_matrix,
                             candidate_symbol=str(candidate_symbol),
-                            candidate_fraction=float(fraction),
+                            candidate_fraction=float(size_fraction),
                             max_exposure_override=max_exposure_override,
                         )
                     )
                     if factor < 1.0:
-                        fraction = max(0.0, fraction * factor)
+                        size_fraction = max(0.0, size_fraction * factor)
         except Exception:
             # Fail-safe: never raise from correlation logic
             logging.exception("Exception in correlation-based size reduction logic")
-            return float(fraction), 1.0
-        return max(0.0, float(fraction)), max(0.0, float(factor))
+            return float(size_fraction), 1.0
+        return max(0.0, float(size_fraction)), max(0.0, float(factor))
 
     def compute_sl_tp(
         self,
