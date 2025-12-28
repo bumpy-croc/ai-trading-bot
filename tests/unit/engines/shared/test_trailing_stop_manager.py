@@ -261,7 +261,8 @@ class TestTrailingStopUpdate:
         result = manager.update(position, current_price=104.0)
 
         # Should not update because new stop (102.96) < current stop (103.95)
-        assert result.updated is False or result.new_stop_price is None
+        assert result.updated is False
+        assert result.new_stop_price is None
 
     def test_short_trailing_moves_down(self) -> None:
         """Short trailing stop should move down with price."""
@@ -307,7 +308,8 @@ class TestTrailingStopUpdate:
         result = manager.update(position, current_price=96.0)
 
         # Should not update because new stop (96.96) > current stop (95.95)
-        assert result.updated is False or result.new_stop_price is None
+        assert result.updated is False
+        assert result.new_stop_price is None
 
 
 class TestNullHandling:
@@ -346,8 +348,9 @@ class TestATRBasedTrailing:
         """ATR-based trailing should use ATR multiplier when no pct set."""
         # Note: Policy checks trailing_distance_pct first, then ATR.
         # To force ATR-based trailing, we set trailing_distance_pct to None explicitly.
+        # Use 1% activation threshold to ensure 3% profit triggers activation.
         policy = TrailingStopPolicy(
-            activation_threshold=0.02,
+            activation_threshold=0.01,  # 1% - lower to guarantee activation
             trailing_distance_pct=None,  # Force ATR-based
             atr_multiplier=2.0,  # 2x ATR
         )
@@ -366,27 +369,26 @@ class TestATRBasedTrailing:
                 "open": [100, 101, 102],
                 "high": [101, 102, 103],
                 "low": [99, 100, 101],
-                "close": [100.5, 101.5, 102.5],
+                "close": [100.5, 101.5, 103.0],
                 "atr": [1.0, 1.0, 1.0],  # ATR = 1.0
             }
         )
 
-        # 2.5% profit at index 2
-        result = manager.update(position, current_price=102.5, df=df, index=2)
+        # 3% profit at index 2 - well above 1% threshold
+        result = manager.update(position, current_price=103.0, df=df, index=2)
 
-        if result.trailing_activated:
-            # Trailing distance = ATR * multiplier = 1.0 * 2.0 = 2.0
-            # Trailing stop = 102.5 - 2.0 = 100.5
-            assert result.new_stop_price == pytest.approx(100.5)
-        else:
-            # If trailing wasn't activated (profit below threshold),
-            # the test is still valid - we're testing parity
-            pass
+        # Verify trailing stop was activated
+        assert result.trailing_activated is True
+        assert result.updated is True
+        # Trailing distance = ATR * multiplier = 1.0 * 2.0 = 2.0
+        # Trailing stop = 103.0 - 2.0 = 101.0
+        assert result.new_stop_price == pytest.approx(101.0)
 
     def test_fallback_to_pct_when_no_atr(self) -> None:
         """Should fallback to percentage when ATR not available."""
+        # Use 1% activation threshold to ensure 3% profit triggers activation
         policy = TrailingStopPolicy(
-            activation_threshold=0.02,
+            activation_threshold=0.01,  # 1% - lower to guarantee activation
             trailing_distance_pct=0.01,  # 1% fallback
             atr_multiplier=2.0,
         )
@@ -400,11 +402,14 @@ class TestATRBasedTrailing:
         )
 
         # No DataFrame provided, should use percentage
-        result = manager.update(position, current_price=102.0)
+        # 3% profit - well above 1% threshold
+        result = manager.update(position, current_price=103.0)
 
-        if result.trailing_activated:
-            # Should use percentage: 102 - 1.02 = 100.98
-            assert result.new_stop_price == pytest.approx(100.98)
+        # Verify trailing stop was activated
+        assert result.trailing_activated is True
+        assert result.updated is True
+        # Should use percentage: 103 - 1.03 = 101.97
+        assert result.new_stop_price == pytest.approx(101.97)
 
 
 class TestTrailingStopUpdateDataclass:
