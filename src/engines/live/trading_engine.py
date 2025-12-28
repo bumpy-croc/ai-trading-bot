@@ -684,6 +684,37 @@ class LiveTradingEngine:
             logger.warning(f"Failed to apply dynamic risk adjustment: {e}")
             return original_size
 
+    def _apply_correlation_adjustment(
+        self,
+        symbol: str,
+        side: PositionSide,
+        position_size: float,
+        correlation_ctx: dict | None,
+    ) -> float:
+        """Apply correlation adjustment and emit trace logs when it reduces size."""
+        adjusted_size, correlation_factor = self.risk_manager.apply_correlation_adjustment(
+            position_size,
+            correlation_ctx,
+        )
+        if correlation_factor < 1.0:
+            logger.info(
+                "Correlation adjustment applied: symbol=%s side=%s factor=%.4f size=%.4f->%.4f",
+                symbol,
+                side.value,
+                correlation_factor,
+                position_size,
+                adjusted_size,
+            )
+            log_risk_event(
+                "correlation_size_adjustment",
+                symbol=symbol,
+                side=side.value,
+                position_size_before=position_size,
+                position_size_after=adjusted_size,
+                adjustment_factor=correlation_factor,
+            )
+        return adjusted_size
+
     def _get_dynamic_risk_adjusted_params(self) -> RiskParameters:
         """Get risk parameters with dynamic adjustments applied"""
         if not self.dynamic_risk_manager:
@@ -946,6 +977,19 @@ class LiveTradingEngine:
                         self._component_dynamic_risk_config = dynamic_descriptor.to_config()
                 except Exception:
                     pass  # Ignore - shared function handles the main logic
+
+    def _get_strategy_risk_overrides(self) -> dict | None:
+        """Return strategy-provided risk overrides when available."""
+        strategy = getattr(self, "_component_strategy", None) or getattr(self, "strategy", None)
+        if strategy is None:
+            return None
+        if not hasattr(strategy, "get_risk_overrides"):
+            return None
+        try:
+            return strategy.get_risk_overrides()
+        except Exception as exc:
+            logger.debug("Failed to fetch strategy risk overrides: %s", exc)
+            return None
 
     # Runtime integration helpers -------------------------------------------------
 
@@ -1512,14 +1556,7 @@ class LiveTradingEngine:
                             df, current_index
                         )
                         if short_entry_signal:
-                            try:
-                                overrides = (
-                                    self.strategy.get_risk_overrides()
-                                    if hasattr(self.strategy, "get_risk_overrides")
-                                    else None
-                                )
-                            except Exception:
-                                overrides = None
+                            overrides = self._get_strategy_risk_overrides()
                             indicators = self._extract_indicators(df, current_index)
                             # Correlation context for short entries
                             short_correlation_ctx = self._get_correlation_context(
@@ -1536,7 +1573,7 @@ class LiveTradingEngine:
                                     price=current_price,
                                     indicators=indicators,
                                     strategy_overrides=overrides,
-                                    correlation_ctx=short_correlation_ctx,
+                                    correlation_ctx=None,
                                 )
                                 short_fraction = min(short_fraction, self.max_position_size)
                                 short_position_size = short_fraction
@@ -1548,6 +1585,19 @@ class LiveTradingEngine:
                                 short_position_size = 0.0
 
                             # Apply dynamic risk adjustments
+                            if short_position_size > 0:
+                                if short_correlation_ctx:
+                                    short_position_size = self._apply_correlation_adjustment(
+                                        symbol,
+                                        PositionSide.SHORT,
+                                        short_position_size,
+                                        short_correlation_ctx,
+                                    )
+                                else:
+                                    logger.debug(
+                                        "No correlation context available for %s during short sizing",
+                                        symbol,
+                                    )
                             short_position_size = self._get_dynamic_risk_adjusted_size(
                                 short_position_size
                             )
@@ -2209,10 +2259,27 @@ class LiveTradingEngine:
             self.logger.error(f"Strategy {self.strategy.name} is not a component-based strategy")
             entry_signal = False
 
-        if entry_signal and not use_runtime:
-            # Component strategies supply their own sizing. Retain correlation context computation
-            # for downstream consumers that expect it to be populated as part of the entry check.
-            self._get_correlation_context(symbol, df, None, index=current_index)
+        correlation_ctx = None
+        if entry_signal and position_size > 0:
+            overrides = self._get_strategy_risk_overrides()
+            correlation_ctx = self._get_correlation_context(
+                symbol,
+                df,
+                overrides,
+                index=current_index,
+            )
+            if correlation_ctx is None:
+                logger.debug(
+                    "No correlation context available for %s during entry sizing",
+                    symbol,
+                )
+            else:
+                position_size = self._apply_correlation_adjustment(
+                    symbol,
+                    entry_side,
+                    position_size,
+                    correlation_ctx,
+                )
 
         if position_size > 0:
             position_size = self._get_dynamic_risk_adjusted_size(position_size)
