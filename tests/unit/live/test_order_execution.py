@@ -25,6 +25,8 @@ from src.data_providers.exchange_interface import (
     OrderStatus as ExchangeOrderStatus,
 )
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
+from src.engines.live.execution.exit_handler import LiveExitHandler
+from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 
 # ============================================================================
@@ -70,6 +72,22 @@ def execution_engine_with_exchange(mock_exchange):
         slippage_rate=0.0,
         enable_live_trading=True,
         exchange_interface=mock_exchange,
+    )
+
+
+@pytest.fixture
+def live_position_tracker():
+    """Create a LivePositionTracker for handler tests."""
+    return LivePositionTracker()
+
+
+@pytest.fixture
+def live_exit_handler(execution_engine_with_exchange, live_position_tracker):
+    """Create a LiveExitHandler for handler tests."""
+    return LiveExitHandler(
+        execution_engine=execution_engine_with_exchange,
+        position_tracker=live_position_tracker,
+        risk_manager=None,
     )
 
 
@@ -268,6 +286,40 @@ class TestExecuteExit:
 
 
 # ============================================================================
+# Tests for LiveExitHandler filled exits
+# ============================================================================
+
+
+class TestExecuteFilledExit:
+    """Tests for LiveExitHandler execute_filled_exit."""
+
+    def test_execute_filled_exit_closes_position(
+        self, live_exit_handler, live_position_tracker
+    ):
+        """Filled exits close the position and return results."""
+        position = LivePosition(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            entry_price=50000.0,
+            entry_time=datetime.utcnow(),
+            order_id="entry_order_123",
+            entry_balance=10000.0,
+        )
+        live_position_tracker.track_recovered_position(position, db_id=None)
+
+        result = live_exit_handler.execute_filled_exit(
+            position=position,
+            exit_reason="stop_loss",
+            filled_price=48000.0,
+            current_balance=10000.0,
+        )
+
+        assert result.success is True
+        assert not live_position_tracker.has_position("entry_order_123")
+
+
+# ============================================================================
 # Tests for _handle_order_fill
 # ============================================================================
 
@@ -304,6 +356,24 @@ class TestHandleOrderFill:
             assert call_args.args[0] == sample_position
             assert call_args.kwargs["reason"] == "stop_loss"
             assert call_args.kwargs["limit_price"] == 48000.0
+
+    def test_handle_fill_skips_if_position_already_closed(
+        self, engine_with_exchange, sample_position
+    ):
+        """Fill callback skips exit when position is already closed."""
+        sample_position.stop_loss_order_id = "sl_order_456"
+        engine_with_exchange.live_position_tracker.track_recovered_position(
+            sample_position, db_id=None
+        )
+
+        with patch.object(engine_with_exchange.live_position_tracker, "has_position") as mock_has:
+            mock_has.return_value = False
+            with patch.object(engine_with_exchange, "_execute_exit") as mock_close:
+                engine_with_exchange._handle_order_fill(
+                    "sl_order_456", "BTCUSDT", 0.02, 48000.0
+                )
+
+                mock_close.assert_not_called()
 
     def test_handle_fill_ignores_entry_orders(
         self, engine_with_exchange, sample_position

@@ -275,6 +275,9 @@ class LivePositionTracker:
     ) -> PositionCloseResult | None:
         """Close a position and compute final trade record.
 
+        Threading:
+            Acquires _positions_lock to read and delete shared position state.
+
         Args:
             order_id: Order ID of position to close.
             exit_price: Exit price (after slippage).
@@ -445,6 +448,9 @@ class LivePositionTracker:
         Uses shared PartialExitExecutor to ensure consistent P&L calculation
         with fees and slippage, matching the backtest engine behavior.
 
+        Threading:
+            Acquires _positions_lock while mutating shared position state.
+
         Args:
             order_id: Order ID of position.
             delta_fraction: Fraction of current position to exit.
@@ -502,7 +508,7 @@ class LivePositionTracker:
         # Use shared executor for consistent financial calculations
         # Note: fee_rate and slippage_rate parameters are kept for backward compatibility
         # but the executor uses the rates it was initialized with
-        result = self._partial_exit_executor.execute_partial_exit(
+        partial_exit_result = self._partial_exit_executor.execute_partial_exit(
             entry_price=entry_price,
             exit_price=float(price),
             position_side=position_side,
@@ -514,10 +520,10 @@ class LivePositionTracker:
             "Partial exit: %.4f of position %s, gross_pnl=%.2f, fee=%.2f, slippage=%.2f, net_pnl=%.2f",
             delta_fraction,
             order_id,
-            result.gross_pnl,
-            result.exit_fee,
-            result.slippage_cost,
-            result.realized_pnl,
+            partial_exit_result.gross_pnl,
+            partial_exit_result.exit_fee,
+            partial_exit_result.slippage_cost,
+            partial_exit_result.realized_pnl,
         )
 
         # Persist to DB (db_id was captured under lock above)
@@ -530,10 +536,14 @@ class LivePositionTracker:
                     target_level=int(target_level),
                 )
             except Exception as e:
-                logger.debug("DB partial-exit update failed: %s", e)
+                logger.warning(
+                    "DB partial-exit update failed for %s - in-memory state updated but DB may be stale: %s",
+                    order_id,
+                    e,
+                )
 
         return PartialExitResult(
-            realized_pnl=result.realized_pnl,
+            realized_pnl=partial_exit_result.realized_pnl,
             new_current_size=new_current_size,
             partial_exits_taken=partial_exits_taken,
         )
@@ -548,6 +558,9 @@ class LivePositionTracker:
         max_position_size: float = 1.0,
     ) -> ScaleInResult | None:
         """Increase position size via scale-in.
+
+        Threading:
+            Acquires _positions_lock while mutating shared position state.
 
         Args:
             order_id: Order ID of position.

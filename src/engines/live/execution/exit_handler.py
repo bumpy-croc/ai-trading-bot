@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 # Maximum partial exits to process per cycle (defense-in-depth against malformed policies)
 MAX_PARTIAL_EXITS_PER_CYCLE = 10
+# Maximum acceptable filled-price deviation from entry price before logging a critical warning.
+MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -258,7 +260,7 @@ class LiveExitHandler:
         position_notional = entry_notional * price_adjustment
 
         # Execute via execution engine
-        exec_result = self.execution_engine.execute_exit(
+        execution_result = self.execution_engine.execute_exit(
             symbol=position.symbol,
             side=position.side,
             order_id=position.order_id,
@@ -266,16 +268,16 @@ class LiveExitHandler:
             position_notional=position_notional,
         )
 
-        if not exec_result.success:
+        if not execution_result.success:
             return LiveExitResult(
                 success=False,
-                error=exec_result.error,
+                error=execution_result.error,
             )
 
         # Close position in tracker
         close_result = self.position_tracker.close_position(
             order_id=position.order_id,
-            exit_price=exec_result.executed_price,
+            exit_price=execution_result.executed_price,
             exit_reason=exit_reason,
             basis_balance=current_balance,
         )
@@ -302,8 +304,8 @@ class LiveExitHandler:
             realized_pnl=close_result.realized_pnl,
             realized_pnl_percent=close_result.realized_pnl_percent,
             exit_price=close_result.exit_price,
-            exit_fee=exec_result.exit_fee,
-            slippage_cost=exec_result.slippage_cost,
+            exit_fee=execution_result.exit_fee,
+            slippage_cost=execution_result.slippage_cost,
             exit_reason=exit_reason,
         )
 
@@ -331,6 +333,24 @@ class LiveExitHandler:
                 error="Position has no order_id",
             )
 
+        if filled_price <= 0:
+            return LiveExitResult(
+                success=False,
+                error="Invalid filled price",
+            )
+
+        if position.entry_price > 0:
+            price_change = abs(filled_price - position.entry_price) / position.entry_price
+            if price_change > MAX_FILLED_PRICE_DEVIATION:
+                logger.critical(
+                    "Suspicious fill price for %s: entry=%.2f filled=%.2f (%.1f%% move)",
+                    position.symbol,
+                    position.entry_price,
+                    filled_price,
+                    price_change * 100,
+                )
+
+        # Filled exits use the exchange-reported price; slippage models adverse execution costs.
         executed_price = self.execution_engine.apply_exit_slippage(
             filled_price, position.side
         )

@@ -2310,17 +2310,23 @@ class LiveTradingEngine:
                 )
                 break
         if position_to_close:
-            # Close position using the actual SL fill price (outside lock)
-            self._execute_exit(
-                position_to_close,
-                reason="stop_loss",
-                limit_price=avg_price,
-                current_price=float(avg_price),
-                candle_high=None,
-                candle_low=None,
-                candle=None,
-                skip_live_close=True,
-            )
+            if self.live_position_tracker.has_position(position_to_close.order_id):
+                # Close position using the actual SL fill price (outside lock)
+                self._execute_exit(
+                    position_to_close,
+                    reason="stop_loss",
+                    limit_price=avg_price,
+                    current_price=float(avg_price),
+                    candle_high=None,
+                    candle_low=None,
+                    candle=None,
+                    skip_live_close=True,
+                )
+            else:
+                logger.info(
+                    "Stop-loss fill received for already closed position %s",
+                    position_to_close.order_id,
+                )
 
     def _handle_partial_fill(
         self, order_id: str, symbol: str, new_filled_qty: float, avg_price: float
@@ -2439,27 +2445,9 @@ class LiveTradingEngine:
 
             sl_already_filled = False
             sl_fill_price: float | None = None
-            if (
-                not skip_live_close
-                and self.enable_live_trading
-                and self.exchange_interface
-                and position.stop_loss_order_id
-            ):
-                try:
-                    sl_order = self.exchange_interface.get_order(
-                        position.stop_loss_order_id, position.symbol
-                    )
-                    if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
-                        sl_already_filled = True
-                        sl_fill_price = sl_order.average_price
-                        logger.info(
-                            "Stop-loss order %s already filled at $%.2f - using actual fill price",
-                            position.stop_loss_order_id,
-                            sl_fill_price,
-                        )
-                except Exception as e:
-                    logger.warning("Error checking stop-loss order status: %s", e)
-            if skip_live_close:
+            if not skip_live_close:
+                sl_already_filled, sl_fill_price = self._check_stop_loss_filled(position)
+            else:
                 sl_already_filled = True
 
             base_price = None
@@ -2597,6 +2585,50 @@ class LiveTradingEngine:
             )
         except Exception as e:
             logger.error("Failed to close position %s: %s", position.order_id, e, exc_info=True)
+
+    def _check_stop_loss_filled(self, position: Position) -> tuple[bool, float | None]:
+        """Check if a stop-loss order already filled on the exchange."""
+        if (
+            not self.enable_live_trading
+            or not self.exchange_interface
+            or not position.stop_loss_order_id
+        ):
+            return False, None
+
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                sl_order = self.exchange_interface.get_order(
+                    position.stop_loss_order_id, position.symbol
+                )
+                if sl_order and sl_order.status == ExchangeOrderStatus.FILLED:
+                    logger.info(
+                        "Stop-loss order %s already filled at $%.2f - using actual fill price",
+                        position.stop_loss_order_id,
+                        sl_order.average_price,
+                    )
+                    return True, sl_order.average_price
+                return False, None
+            except (ConnectionError, TimeoutError) as e:
+                logger.warning(
+                    "Transient error checking stop-loss order %s (attempt %s/%s): %s",
+                    position.stop_loss_order_id,
+                    attempt + 1,
+                    max_attempts,
+                    e,
+                )
+                if attempt < max_attempts - 1:
+                    time.sleep(2**attempt)
+            except Exception as e:
+                logger.warning("Error checking stop-loss order status: %s", e)
+                return False, None
+
+        logger.error(
+            "Failed to check stop-loss order %s after %s attempts",
+            position.stop_loss_order_id,
+            max_attempts,
+        )
+        return False, None
 
     def _update_performance_metrics(self):
         """Update performance tracking metrics"""
