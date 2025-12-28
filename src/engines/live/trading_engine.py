@@ -1585,16 +1585,22 @@ class LiveTradingEngine:
                                 short_position_size = 0.0
 
                             # Apply dynamic risk adjustments
+                            if short_position_size > 0:
+                                if short_correlation_ctx:
+                                    short_position_size = self._apply_correlation_adjustment(
+                                        symbol,
+                                        PositionSide.SHORT,
+                                        short_position_size,
+                                        short_correlation_ctx,
+                                    )
+                                else:
+                                    logger.debug(
+                                        "No correlation context available for %s during short sizing",
+                                        symbol,
+                                    )
                             short_position_size = self._get_dynamic_risk_adjusted_size(
                                 short_position_size
                             )
-                            if short_position_size > 0 and short_correlation_ctx:
-                                short_position_size = self._apply_correlation_adjustment(
-                                    symbol,
-                                    PositionSide.SHORT,
-                                    short_position_size,
-                                    short_correlation_ctx,
-                                )
                             if short_position_size > 0:
                                 if overrides and (
                                     ("stop_loss_pct" in overrides)
@@ -2262,17 +2268,21 @@ class LiveTradingEngine:
                 overrides,
                 index=current_index,
             )
+            if correlation_ctx is None:
+                logger.debug(
+                    "No correlation context available for %s during entry sizing",
+                    symbol,
+                )
+            else:
+                position_size = self._apply_correlation_adjustment(
+                    symbol,
+                    entry_side,
+                    position_size,
+                    correlation_ctx,
+                )
 
         if position_size > 0:
             position_size = self._get_dynamic_risk_adjusted_size(position_size)
-
-        if position_size > 0 and correlation_ctx:
-            position_size = self._apply_correlation_adjustment(
-                symbol,
-                entry_side,
-                position_size,
-                correlation_ctx,
-            )
 
         if self.db_manager:
             # Prepare logging data - include TradingDecision data if available

@@ -23,6 +23,7 @@ from src.config.constants import (
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
 from src.tech.indicators.core import calculate_atr
+from src.infrastructure.logging.events import log_risk_event
 
 
 @dataclass
@@ -280,7 +281,7 @@ class RiskManager:
         fraction = max(min_fraction, min(max_fraction, fraction))
 
         # Optional correlation-based size reduction
-        fraction, _ = self.apply_correlation_adjustment(fraction, correlation_ctx)
+        fraction = float(fraction)
         return max(0.0, min(self.params.max_position_size, fraction))
 
     def apply_correlation_adjustment(
@@ -295,6 +296,11 @@ class RiskManager:
             logging.warning(
                 "Invalid size fraction for correlation adjustment: %.4f",
                 size_fraction,
+            )
+            log_risk_event(
+                "invalid_correlation_fraction",
+                size_fraction=size_fraction,
+                clamped_to=1.0,
             )
             size_fraction = max(0.0, min(1.0, size_fraction))
 
