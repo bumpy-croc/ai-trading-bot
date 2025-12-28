@@ -18,11 +18,30 @@ if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
 
 from src.infrastructure.logging.config import configure_logging
 from src.strategies import (
+    create_aggressive_regime_adaptive_strategy,
+    create_aggressive_trend_strategy,
+    create_balanced_crash_avoider_strategy,
+    create_balanced_regime_adaptive_strategy,
+    create_buy_and_hold_strategy,
+    create_conservative_regime_adaptive_strategy,
+    create_conservative_volatility_exploiter_strategy,
+    create_crash_avoider_strategy,
     create_ensemble_weighted_strategy,
+    create_extreme_leverage_adaptive_strategy,
+    create_extreme_leverage_trend_strategy,
+    create_extreme_leverage_volatility_strategy,
+    create_mean_reversion_volatility_strategy,
     create_ml_adaptive_strategy,
     create_ml_basic_strategy,
     create_ml_sentiment_strategy,
+    create_moderate_aggressive_trend_strategy,
     create_momentum_leverage_strategy,
+    create_regime_adaptive_mega_strategy,
+    create_ultra_aggressive_trend_strategy,
+    create_ultra_defensive_crash_avoider_strategy,
+    create_ultra_volatile_exploiter_strategy,
+    create_volatility_exploiter_strategy,
+    create_yolo_strategy,
 )
 from src.trading.symbols.factory import SymbolFactory
 
@@ -32,11 +51,30 @@ logger = logging.getLogger("atb.backtest")
 def _load_strategy(strategy_name: str):
     # Define available strategies with their import paths and classes
     available_strategies = {
+        "buy_and_hold": create_buy_and_hold_strategy,
         "ml_basic": create_ml_basic_strategy,
         "ml_sentiment": create_ml_sentiment_strategy,
         "ml_adaptive": create_ml_adaptive_strategy,
         "ensemble_weighted": create_ensemble_weighted_strategy,
         "momentum_leverage": create_momentum_leverage_strategy,
+        "aggressive_trend": create_aggressive_trend_strategy,
+        "moderate_aggressive_trend": create_moderate_aggressive_trend_strategy,
+        "ultra_aggressive_trend": create_ultra_aggressive_trend_strategy,
+        "crash_avoider": create_crash_avoider_strategy,
+        "balanced_crash_avoider": create_balanced_crash_avoider_strategy,
+        "ultra_defensive_crash_avoider": create_ultra_defensive_crash_avoider_strategy,
+        "volatility_exploiter": create_volatility_exploiter_strategy,
+        "ultra_volatile_exploiter": create_ultra_volatile_exploiter_strategy,
+        "conservative_volatility_exploiter": create_conservative_volatility_exploiter_strategy,
+        "mean_reversion_volatility": create_mean_reversion_volatility_strategy,
+        "regime_adaptive_mega": create_regime_adaptive_mega_strategy,
+        "conservative_regime_adaptive": create_conservative_regime_adaptive_strategy,
+        "aggressive_regime_adaptive": create_aggressive_regime_adaptive_strategy,
+        "balanced_regime_adaptive": create_balanced_regime_adaptive_strategy,
+        "extreme_leverage_trend": create_extreme_leverage_trend_strategy,
+        "extreme_leverage_volatility": create_extreme_leverage_volatility_strategy,
+        "extreme_leverage_adaptive": create_extreme_leverage_adaptive_strategy,
+        "yolo": create_yolo_strategy,
     }
 
     try:

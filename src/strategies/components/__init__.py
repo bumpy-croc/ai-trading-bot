@@ -68,6 +68,16 @@ from .technical_signal_generator import (
     MACDSignalGenerator,
 )
 from .momentum_signal_generator import MomentumSignalGenerator
+from .aggressive_trend_signal_generator import AggressiveTrendSignalGenerator
+from .crash_detection_signal_generator import CrashDetectionSignalGenerator
+from .volatility_exploitation_signal_generator import VolatilityExploitationSignalGenerator
+from .regime_adaptive_mega_signal_generator import RegimeAdaptiveMegaSignalGenerator
+from .multi_strategy_portfolio import (
+    MultiStrategyPortfolio,
+    AllocationMethod,
+    StrategyAllocation,
+    PortfolioState,
+)
 from .testing.test_datasets import TestDatasetGenerator
 from .testing.component_performance_tester import ComponentPerformanceTester
 from .testing.regime_tester import RegimeTester
@@ -109,6 +119,10 @@ __all__ = [
     "RSISignalGenerator",
     "MACDSignalGenerator",
     "MomentumSignalGenerator",
+    "AggressiveTrendSignalGenerator",
+    "CrashDetectionSignalGenerator",
+    "VolatilityExploitationSignalGenerator",
+    "RegimeAdaptiveMegaSignalGenerator",
     "HoldSignalGenerator",
     "RandomSignalGenerator",
     "WeightedVotingSignalGenerator",
@@ -133,4 +147,9 @@ __all__ = [
     "ComponentPerformanceTester",
     "RegimeTester",
     "PerformanceAttributionAnalyzer",
+    # Portfolio management
+    "MultiStrategyPortfolio",
+    "AllocationMethod",
+    "StrategyAllocation",
+    "PortfolioState",
 ]
