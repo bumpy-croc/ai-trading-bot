@@ -67,7 +67,7 @@ class TestRiskIntegration:
             strategy=mock_strategy, data_provider=mock_data_provider, initial_balance=10000
         )
         engine.current_balance = 7000
-        engine.peak_balance = 10000
+        engine.performance_tracker.peak_balance = 10000
         if hasattr(engine, "_update_performance_metrics") and hasattr(
             engine, "get_performance_summary"
         ):

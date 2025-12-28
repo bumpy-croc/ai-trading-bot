@@ -275,7 +275,6 @@ class TestLiveTradingEngine:
         # Update balance to reflect trades (600 - 200 = 400 net, but we want 500 total PnL)
         # So use 10500 final balance with 10000 initial = 500 gain
         engine.current_balance = 10500
-        engine.peak_balance = 10800
         engine.performance_tracker.update_balance(10500, datetime.now())
         engine.performance_tracker.peak_balance = 10800
         engine.performance_tracker.max_drawdown = (10800 - 10500) / 10800  # ~2.78%

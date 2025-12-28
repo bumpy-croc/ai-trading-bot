@@ -278,11 +278,13 @@ class TestSafetyGuardrails:
 
             # Simulate large drawdown
             engine.current_balance = 7500  # 25% drawdown
-            engine.peak_balance = 10000
+            engine.performance_tracker.peak_balance = 10000
 
             # Engine should detect excessive drawdown
             # This would typically trigger in the main loop
-            current_dd = (engine.peak_balance - engine.current_balance) / engine.peak_balance
+            current_dd = (
+                engine.performance_tracker.peak_balance - engine.current_balance
+            ) / engine.performance_tracker.peak_balance
             assert current_dd > risk_params.max_drawdown
 
     def test_stop_loss_always_set(self, mock_data_provider, minimal_strategy):

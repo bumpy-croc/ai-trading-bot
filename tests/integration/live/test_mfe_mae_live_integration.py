@@ -117,7 +117,7 @@ def test_live_engine_records_mfe_mae():
 
     # Simulate price moves to record MFE/MAE metrics
     entry_price = float(position.entry_price)
-    engine.mfe_mae_tracker.update_position_metrics(
+    engine.live_position_tracker.mfe_mae_tracker.update_position_metrics(
         position_key=order_id,
         entry_price=entry_price,
         current_price=entry_price * 1.03,  # +3% move
@@ -125,7 +125,7 @@ def test_live_engine_records_mfe_mae():
         position_fraction=float(position.size),
         current_time=datetime.utcnow(),
     )
-    engine.mfe_mae_tracker.update_position_metrics(
+    engine.live_position_tracker.mfe_mae_tracker.update_position_metrics(
         position_key=order_id,
         entry_price=entry_price,
         current_price=entry_price * 0.97,  # -3% move
