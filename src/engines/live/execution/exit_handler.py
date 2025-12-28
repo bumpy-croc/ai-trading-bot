@@ -34,7 +34,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Maximum partial exits to process per cycle (defense-in-depth against malformed policies)
+# Maximum partial exits to process per cycle (defense-in-depth against malformed policies).
+# Ten caps worst-case overhead while still supporting typical multi-target exit ladders.
 MAX_PARTIAL_EXITS_PER_CYCLE = 10
 # Maximum acceptable filled-price deviation from entry price before logging a critical warning.
 MAX_FILLED_PRICE_DEVIATION = 0.5
@@ -240,24 +241,11 @@ class LiveExitHandler:
         # - Winning positions: selling more valuable assets → higher fee
         # - Losing positions: selling less valuable assets → lower fee
         # This differs from entry fees which use the original notional value.
-        fraction = float(
-            position.current_size
-            if position.current_size is not None
-            else position.size
+        position_notional = self._calculate_position_notional(
+            position=position,
+            current_balance=current_balance,
+            exit_price=base_exit_price,
         )
-        basis_balance = (
-            float(position.entry_balance)
-            if position.entry_balance is not None and position.entry_balance > 0
-            else current_balance
-        )
-        entry_notional = basis_balance * fraction
-        # Adjust for price change to get true exit notional value (this is intentional and correct)
-        price_adjustment = (
-            base_exit_price / position.entry_price
-            if position.entry_price > 0
-            else 1.0
-        )
-        position_notional = entry_notional * price_adjustment
 
         # Execute via execution engine
         execution_result = self.execution_engine.execute_exit(
@@ -355,18 +343,11 @@ class LiveExitHandler:
             filled_price, position.side
         )
 
-        fraction = float(
-            position.current_size if position.current_size is not None else position.size
+        position_notional = self._calculate_position_notional(
+            position=position,
+            current_balance=current_balance,
+            exit_price=executed_price,
         )
-        basis_balance = (
-            float(position.entry_balance)
-            if position.entry_balance is not None and position.entry_balance > 0
-            else current_balance
-        )
-        price_adjustment = (
-            executed_price / position.entry_price if position.entry_price > 0 else 1.0
-        )
-        position_notional = basis_balance * fraction * price_adjustment
 
         exit_fee = self.execution_engine.calculate_exit_fee(position_notional)
         slippage_cost = self.execution_engine.calculate_slippage_cost(position_notional)
@@ -544,6 +525,24 @@ class LiveExitHandler:
                 return current_price >= position.take_profit
             else:
                 return current_price <= position.take_profit
+
+    def _calculate_position_notional(
+        self,
+        position: LivePosition,
+        current_balance: float,
+        exit_price: float,
+    ) -> float:
+        """Calculate exit notional accounting for price movement."""
+        fraction = float(
+            position.current_size if position.current_size is not None else position.size
+        )
+        basis_balance = (
+            float(position.entry_balance)
+            if position.entry_balance is not None and position.entry_balance > 0
+            else current_balance
+        )
+        price_adjustment = exit_price / position.entry_price if position.entry_price > 0 else 1.0
+        return basis_balance * fraction * price_adjustment
 
     def update_trailing_stops(
         self,
