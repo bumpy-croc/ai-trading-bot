@@ -258,23 +258,6 @@ class LiveEntryHandler:
             strategy_name=strategy_name,
         )
 
-        # Update risk manager
-        if self.risk_manager is not None:
-            try:
-                self.risk_manager.update_position(
-                    symbol=symbol,
-                    side=signal.side.value,
-                    size=signal.size_fraction,
-                    entry_price=exec_result.executed_price,
-                )
-            except (AttributeError, ValueError, KeyError) as e:
-                logger.warning(
-                    "Failed to update risk manager for %s on %s: %s",
-                    signal.side.value,
-                    symbol,
-                    e,
-                )
-
         return LiveEntryResult(
             position=position,
             entry_fee=exec_result.entry_fee,

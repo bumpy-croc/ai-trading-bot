@@ -91,6 +91,8 @@ class LiveExecutionEngine:
         self.slippage_rate = slippage_rate
         self.enable_live_trading = enable_live_trading
         self.exchange_interface = exchange_interface
+        if self.enable_live_trading and self.exchange_interface is None:
+            raise ValueError("Cannot enable live trading without exchange interface")
 
         # Use shared cost calculator for all fee and slippage calculations
         self._cost_calculator = CostCalculator(
@@ -109,6 +111,24 @@ class LiveExecutionEngine:
             'long' or 'short'.
         """
         return "long" if side == PositionSide.LONG else "short"
+
+    @staticmethod
+    def round_quantity_to_step_size(quantity: float, symbol_info: dict | None) -> float:
+        """Round quantity to the exchange step size.
+
+        Args:
+            quantity: Raw order quantity.
+            symbol_info: Exchange symbol info with step_size.
+
+        Returns:
+            Rounded quantity.
+        """
+        if not symbol_info:
+            return quantity
+        step_size = symbol_info.get("step_size", 0.00001)
+        if step_size > 0:
+            return round(quantity / step_size) * step_size
+        return quantity
 
     @property
     def total_fees_paid(self) -> float:
@@ -356,11 +376,8 @@ class LiveExecutionEngine:
             quantity = value / price
 
             symbol_info = self.exchange_interface.get_symbol_info(symbol)
+            quantity = self.round_quantity_to_step_size(quantity, symbol_info)
             if symbol_info:
-                step_size = symbol_info.get("step_size", 0.00001)
-                if step_size > 0:
-                    quantity = round(quantity / step_size) * step_size
-
                 min_qty = symbol_info.get("min_qty", 0)
                 if quantity < min_qty:
                     logger.error(

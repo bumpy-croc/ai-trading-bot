@@ -2394,7 +2394,7 @@ class LiveTradingEngine:
             size_fraction=position_size,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            reasons=log_reasons if self.db_manager else None,
+            reasons=log_reasons,
             signal_strength=runtime_strength,
             signal_confidence=runtime_confidence,
         )
@@ -2439,6 +2439,15 @@ class LiveTradingEngine:
             )
         except Exception as exc:
             logger.error("Entry execution failed for %s: %s", symbol, exc, exc_info=True)
+            if self.trading_session_id is not None and self.db_manager:
+                self.db_manager.log_event(
+                    event_type="ERROR",
+                    message=f"Failed to open position: {exc}",
+                    severity="error",
+                    component="LiveTradingEngine",
+                    details={"stack_trace": str(exc)},
+                    session_id=self.trading_session_id,
+                )
             return
 
         if not entry_result.executed or entry_result.position is None:
@@ -2454,12 +2463,14 @@ class LiveTradingEngine:
         self.current_balance -= entry_result.entry_fee
         self.total_fees_paid += entry_result.entry_fee
         self.total_slippage_cost += entry_result.slippage_cost
+        position_db_id = self.live_position_tracker.position_db_ids.get(position.order_id)
+        self.position_db_ids[position.order_id] = position_db_id
+
+        if not self._place_stop_loss_order(position, symbol):
+            return
 
         with self._positions_lock:
             self.positions[position.order_id] = position
-
-        position_db_id = self.live_position_tracker.position_db_ids.get(position.order_id)
-        self.position_db_ids[position.order_id] = position_db_id
 
         self.mfe_mae_tracker.clear(position.order_id)
 
@@ -2480,14 +2491,35 @@ class LiveTradingEngine:
             size=float(position.size),
         )
         if self.order_tracker and self.enable_live_trading:
-            self.order_tracker.track_order(position.order_id, symbol)
+            try:
+                self.order_tracker.track_order(position.order_id, symbol)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to track order %s for %s: %s",
+                    position.order_id,
+                    symbol,
+                    exc,
+                )
+
+        if self.risk_manager:
+            try:
+                self.risk_manager.update_position(
+                    symbol=symbol,
+                    side=position.side.value,
+                    size=position.size,
+                    entry_price=position.entry_price,
+                )
+            except (AttributeError, ValueError, KeyError) as exc:
+                logger.warning(
+                    "Failed to update risk manager for %s on %s: %s",
+                    position.side.value,
+                    symbol,
+                    exc,
+                )
 
         self._send_alert(
             f"Position Opened: {symbol} {position.side.value} @ ${position.entry_price:.2f}"
         )
-
-        if not self._place_stop_loss_order(position, symbol):
-            return
 
     def _place_stop_loss_order(self, position: Position, symbol: str) -> bool:
         """Place a server-side stop-loss order for the given position."""
@@ -2504,6 +2536,15 @@ class LiveTradingEngine:
             return False
 
         quantity = (float(position.size) * basis_balance) / float(position.entry_price)
+        symbol_info = None
+        try:
+            symbol_info = self.exchange_interface.get_symbol_info(symbol)
+        except Exception as exc:
+            logger.warning("Failed to fetch symbol info for %s: %s", symbol, exc)
+        quantity = self.live_execution_engine.round_quantity_to_step_size(
+            quantity,
+            symbol_info,
+        )
         sl_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
         sl_order_id = None
         max_retries = 3
@@ -2540,7 +2581,15 @@ class LiveTradingEngine:
             )
             position.stop_loss_order_id = sl_order_id
             if self.order_tracker:
-                self.order_tracker.track_order(sl_order_id, symbol)
+                try:
+                    self.order_tracker.track_order(sl_order_id, symbol)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to track stop-loss order %s for %s: %s",
+                        sl_order_id,
+                        symbol,
+                        exc,
+                    )
             position_db_id = self.position_db_ids.get(position.order_id)
             if position_db_id and self.db_manager:
                 self.db_manager.update_position(
@@ -2550,7 +2599,7 @@ class LiveTradingEngine:
             return True
 
         logger.critical(
-            "CRITICAL: Failed to place stop-loss after %s attempts for %s - "
+            "Failed to place stop-loss after %s attempts for %s - "
             "closing position to prevent unprotected exposure",
             max_retries,
             symbol,

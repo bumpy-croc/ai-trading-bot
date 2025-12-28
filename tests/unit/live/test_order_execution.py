@@ -21,6 +21,7 @@ from src.data_providers.exchange_interface import (
     OrderStatus as ExchangeOrderStatus,
 )
 from src.engines.live.execution.entry_handler import LiveEntrySignal
+from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 
 
@@ -100,6 +101,11 @@ def sample_position():
 
 class TestExecuteOrder:
     """Tests for the LiveExecutionEngine _execute_live_order method."""
+
+    def test_execute_order_requires_exchange_in_live_mode(self):
+        """Live trading requires an exchange interface at initialization."""
+        with pytest.raises(ValueError, match="Cannot enable live trading without exchange"):
+            LiveExecutionEngine(enable_live_trading=True, exchange_interface=None)
 
     def test_execute_order_no_exchange_interface(self, mock_data_provider):
         """Order fails when exchange interface is not initialized."""
@@ -841,6 +847,54 @@ class TestOrderExecutionIntegration:
 
             mock_close.assert_called_once()
             assert mock_close.call_args.kwargs["reason"] == "stop_loss"
+
+    def test_stop_loss_failure_rolls_back_state(
+        self, engine_with_exchange, mock_exchange
+    ):
+        """Stop-loss placement failure should not leave phantom positions."""
+        mock_exchange.place_stop_loss_order.return_value = None
+
+        entry_signal = LiveEntrySignal(
+            should_enter=True,
+            side=PositionSide.LONG,
+            size_fraction=0.1,
+            stop_loss=48000.0,
+            take_profit=55000.0,
+        )
+
+        engine_with_exchange._execute_entry_signal(
+            entry_signal,
+            symbol="BTCUSDT",
+            current_price=50000.0,
+        )
+
+        assert engine_with_exchange.positions == {}
+        assert engine_with_exchange.live_position_tracker.position_count == 0
+
+    def test_entry_fee_deducted_once(
+        self, engine_with_exchange
+    ):
+        """Entry fee should be deducted exactly once per entry."""
+        starting_balance = engine_with_exchange.current_balance
+        entry_signal = LiveEntrySignal(
+            should_enter=True,
+            side=PositionSide.LONG,
+            size_fraction=0.1,
+            stop_loss=None,
+            take_profit=None,
+        )
+
+        engine_with_exchange._execute_entry_signal(
+            entry_signal,
+            symbol="BTCUSDT",
+            current_price=50000.0,
+        )
+
+        expected_fee = starting_balance * 0.1 * engine_with_exchange.fee_rate
+        assert engine_with_exchange.total_fees_paid == pytest.approx(expected_fee)
+        assert engine_with_exchange.current_balance == pytest.approx(
+            starting_balance - expected_fee
+        )
 
     def test_order_cancelled_removes_phantom_position_thread_safe(
         self, engine_with_exchange
