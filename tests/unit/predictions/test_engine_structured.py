@@ -15,6 +15,7 @@ from src.prediction.models.registry import StrategyModel
 @patch("src.prediction.engine.FeaturePipeline")
 def test_predict_uses_feature_selector_with_schema(mock_pipeline, mock_registry):
     engine = PredictionEngine()
+    engine.config.max_prediction_latency = 1.0
 
     # Mock pipeline returns a DataFrame with required columns
     df = pd.DataFrame(
