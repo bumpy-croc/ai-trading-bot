@@ -593,6 +593,312 @@ class TestPositionSizingParity:
 
 
 # =============================================================================
+# True Side-by-Side Engine Comparison Tests
+# These tests run BOTH Backtester and LiveTradingEngine with identical inputs
+# and verify they produce identical outputs
+# =============================================================================
+
+
+class TestTrueSideBySideComparison:
+    """Run both engines with identical inputs and compare final results."""
+
+    def test_single_long_trade_identical_results(self):
+        """Verify both engines produce identical results for a simple long trade.
+
+        This test runs a complete backtest AND simulates the same trade sequence
+        in the live engine, then compares final balance, P&L, and trade count.
+        """
+        # Test parameters
+        initial_balance = 10000.0
+        fee_rate = 0.001
+        slippage_rate = 0.0005
+
+        # Create deterministic market data with a profitable long opportunity
+        # Price goes: 100 -> 105 -> 110 (steady uptrend)
+        price_changes = [0.5] * 20  # 20 candles, each +0.5 price increase
+        data = create_test_data(num_candles=21, start_price=100.0, price_changes=price_changes)
+
+        # Create deterministic strategy: BUY on candle 1, HOLD for 10 candles, then SELL
+        signals = [SignalDirection.HOLD] + [SignalDirection.BUY] + [SignalDirection.HOLD] * 9 + [SignalDirection.SELL]
+        strategy = create_strategy(signals)
+
+        # Create mock data provider
+        data_provider = MockDataProvider(data)
+
+        # ==================== RUN BACKTESTER ====================
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=data_provider,
+            initial_balance=initial_balance,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            log_to_database=False,
+        )
+
+        from datetime import datetime
+        backtest_results = backtester.run(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start=datetime(2024, 1, 1),
+            end=datetime(2024, 1, 2),
+        )
+
+        # ==================== RUN LIVE ENGINE ====================
+        live_strategy = create_strategy(signals)
+        live_data_provider = MockDataProvider(data)
+
+        live_engine = LiveTradingEngine(
+            strategy=live_strategy,
+            data_provider=live_data_provider,
+            initial_balance=initial_balance,
+            enable_live_trading=False,
+            log_trades=False,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            resume_from_last_balance=False,
+        )
+
+        # Process all candles through the live engine
+        for i in range(len(data)):
+            candle_data = data.iloc[:i+1]
+            live_engine.process_candle(candle_data)
+
+        # ==================== COMPARE RESULTS ====================
+        # Final balance should match
+        assert live_engine.current_balance == pytest.approx(backtest_results["final_balance"], rel=0.01), (
+            f"Live balance {live_engine.current_balance} != Backtest balance {backtest_results['final_balance']}"
+        )
+
+        # Trade count should match
+        assert len(live_engine.completed_trades) == backtest_results["total_trades"], (
+            f"Live trades {len(live_engine.completed_trades)} != Backtest trades {backtest_results['total_trades']}"
+        )
+
+        # Total P&L should match
+        backtest_pnl = backtest_results["final_balance"] - initial_balance
+        assert live_engine.total_pnl == pytest.approx(backtest_pnl, rel=0.01), (
+            f"Live P&L {live_engine.total_pnl} != Backtest P&L {backtest_pnl}"
+        )
+
+        # Both should have made profit (sanity check)
+        assert live_engine.current_balance > initial_balance
+        assert backtest_results["final_balance"] > initial_balance
+
+    def test_multiple_trades_identical_results(self):
+        """Verify both engines produce identical results for multiple trades."""
+        initial_balance = 10000.0
+        fee_rate = 0.001
+        slippage_rate = 0.0
+
+        # Create data with multiple profitable opportunities
+        # Trade 1: 100 -> 105 (5% gain), Trade 2: 105 -> 110 (4.76% gain)
+        price_changes = [0.25] * 40  # 40 candles of gradual uptrend
+        data = create_test_data(num_candles=41, start_price=100.0, price_changes=price_changes)
+
+        # Strategy: BUY at candle 1, SELL at candle 10, BUY at candle 15, SELL at candle 25
+        signals = (
+            [SignalDirection.HOLD]  # 0
+            + [SignalDirection.BUY]  # 1
+            + [SignalDirection.HOLD] * 8  # 2-9
+            + [SignalDirection.SELL]  # 10
+            + [SignalDirection.HOLD] * 4  # 11-14
+            + [SignalDirection.BUY]  # 15
+            + [SignalDirection.HOLD] * 9  # 16-24
+            + [SignalDirection.SELL]  # 25
+            + [SignalDirection.HOLD] * 15  # 26-40
+        )
+        strategy = create_strategy(signals)
+        data_provider = MockDataProvider(data)
+
+        # Run backtest
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=data_provider,
+            initial_balance=initial_balance,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            log_to_database=False,
+        )
+
+        from datetime import datetime
+        backtest_results = backtester.run(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start=datetime(2024, 1, 1),
+            end=datetime(2024, 1, 2),
+        )
+
+        # Run live engine
+        live_strategy = create_strategy(signals)
+        live_data_provider = MockDataProvider(data)
+        live_engine = LiveTradingEngine(
+            strategy=live_strategy,
+            data_provider=live_data_provider,
+            initial_balance=initial_balance,
+            enable_live_trading=False,
+            log_trades=False,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            resume_from_last_balance=False,
+        )
+
+        for i in range(len(data)):
+            live_engine.process_candle(data.iloc[:i+1])
+
+        # Compare results
+        assert len(live_engine.completed_trades) == backtest_results["total_trades"], (
+            f"Trade count mismatch: Live {len(live_engine.completed_trades)} != Backtest {backtest_results['total_trades']}"
+        )
+
+        assert live_engine.current_balance == pytest.approx(backtest_results["final_balance"], rel=0.01), (
+            f"Balance mismatch: Live {live_engine.current_balance} != Backtest {backtest_results['final_balance']}"
+        )
+
+        backtest_pnl = backtest_results["final_balance"] - initial_balance
+        assert live_engine.total_pnl == pytest.approx(backtest_pnl, rel=0.01), (
+            f"P&L mismatch: Live {live_engine.total_pnl} != Backtest {backtest_pnl}"
+        )
+
+    def test_losing_trades_identical_results(self):
+        """Verify both engines handle losing trades identically."""
+        initial_balance = 10000.0
+        fee_rate = 0.001
+        slippage_rate = 0.0
+
+        # Create downtrend data (losing long trades)
+        price_changes = [-0.25] * 20  # Price drops from 100 to 95
+        data = create_test_data(num_candles=21, start_price=100.0, price_changes=price_changes)
+
+        # Strategy: BUY at candle 1, SELL at candle 10 (losing trade)
+        signals = (
+            [SignalDirection.HOLD]
+            + [SignalDirection.BUY]
+            + [SignalDirection.HOLD] * 8
+            + [SignalDirection.SELL]
+            + [SignalDirection.HOLD] * 10
+        )
+        strategy = create_strategy(signals)
+        data_provider = MockDataProvider(data)
+
+        # Run backtest
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=data_provider,
+            initial_balance=initial_balance,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            log_to_database=False,
+        )
+
+        from datetime import datetime
+        backtest_results = backtester.run(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start=datetime(2024, 1, 1),
+            end=datetime(2024, 1, 2),
+        )
+
+        # Run live engine
+        live_strategy = create_strategy(signals)
+        live_data_provider = MockDataProvider(data)
+        live_engine = LiveTradingEngine(
+            strategy=live_strategy,
+            data_provider=live_data_provider,
+            initial_balance=initial_balance,
+            enable_live_trading=False,
+            log_trades=False,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            resume_from_last_balance=False,
+        )
+
+        for i in range(len(data)):
+            live_engine.process_candle(data.iloc[:i+1])
+
+        # Compare results
+        assert len(live_engine.completed_trades) == backtest_results["total_trades"]
+
+        # Both should have lost money
+        assert live_engine.current_balance < initial_balance
+        assert backtest_results["final_balance"] < initial_balance
+
+        # Balances should match
+        assert live_engine.current_balance == pytest.approx(backtest_results["final_balance"], rel=0.01), (
+            f"Balance mismatch: Live {live_engine.current_balance} != Backtest {backtest_results['final_balance']}"
+        )
+
+    def test_mixed_trades_identical_results(self):
+        """Verify both engines handle mixed winning and losing trades identically."""
+        initial_balance = 10000.0
+        fee_rate = 0.001
+        slippage_rate = 0.0
+
+        # Create mixed market: up then down
+        # Trade 1: 100 -> 105 (win), Trade 2: 105 -> 102 (loss)
+        price_changes = [0.5] * 10 + [-0.3] * 10  # Up then down
+        data = create_test_data(num_candles=21, start_price=100.0, price_changes=price_changes)
+
+        signals = (
+            [SignalDirection.HOLD]
+            + [SignalDirection.BUY]  # Trade 1 entry
+            + [SignalDirection.HOLD] * 8
+            + [SignalDirection.SELL]  # Trade 1 exit (win)
+            + [SignalDirection.BUY]  # Trade 2 entry
+            + [SignalDirection.HOLD] * 8
+            + [SignalDirection.SELL]  # Trade 2 exit (loss)
+        )
+        strategy = create_strategy(signals)
+        data_provider = MockDataProvider(data)
+
+        # Run backtest
+        backtester = Backtester(
+            strategy=strategy,
+            data_provider=data_provider,
+            initial_balance=initial_balance,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            log_to_database=False,
+        )
+
+        from datetime import datetime
+        backtest_results = backtester.run(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            start=datetime(2024, 1, 1),
+            end=datetime(2024, 1, 2),
+        )
+
+        # Run live engine
+        live_strategy = create_strategy(signals)
+        live_data_provider = MockDataProvider(data)
+        live_engine = LiveTradingEngine(
+            strategy=live_strategy,
+            data_provider=live_data_provider,
+            initial_balance=initial_balance,
+            enable_live_trading=False,
+            log_trades=False,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            resume_from_last_balance=False,
+        )
+
+        for i in range(len(data)):
+            live_engine.process_candle(data.iloc[:i+1])
+
+        # Compare results
+        assert len(live_engine.completed_trades) == 2, "Should have 2 trades"
+        assert backtest_results["total_trades"] == 2, "Should have 2 trades"
+
+        assert live_engine.current_balance == pytest.approx(backtest_results["final_balance"], rel=0.01), (
+            f"Balance mismatch: Live {live_engine.current_balance} != Backtest {backtest_results['final_balance']}"
+        )
+
+        # Net should be positive (first trade wins more than second loses)
+        assert live_engine.current_balance > initial_balance
+        assert backtest_results["final_balance"] > initial_balance
+
+
+# =============================================================================
 # Shared Module Identity Tests
 # These verify both engines import and use the same shared implementations
 # =============================================================================
