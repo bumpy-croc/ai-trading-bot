@@ -70,18 +70,27 @@ def test_partial_exits_and_scale_ins_execution(monkeypatch):
     )
 
     # Open a position manually at 100, size 0.5
-    engine._open_position("BTCUSDT", PositionSide.LONG, size=0.5, price=100.0)
-    pos = list(engine.positions.values())[0]
+    engine._execute_entry(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.5,
+        price=100.0,
+        stop_loss=None,
+        take_profit=None,
+        signal_strength=0.0,
+        signal_confidence=0.0,
+    )
+    pos = list(engine.live_position_tracker._positions.values())[0]
     assert pos.current_size == pytest.approx(0.5)
 
     # At 102 (+2%), expect one scale-in of 0.25 (of original) -> current_size 0.75
     engine._check_partial_and_scale_ops(provider.get_historical_data("BTCUSDT", "1m"), -1, 102.0)
-    pos = list(engine.positions.values())[0]
+    pos = list(engine.live_position_tracker._positions.values())[0]
     assert pos.current_size >= 0.5  # scaled in
 
     # At 103 (+3%), expect first partial exit of 0.25 -> current_size decreases
     engine._check_partial_and_scale_ops(provider.get_historical_data("BTCUSDT", "1m"), -1, 103.0)
-    pos = list(engine.positions.values())[0]
+    pos = list(engine.live_position_tracker._positions.values())[0]
     assert pos.partial_exits_taken >= 1
 
     # At 107 (+7%), expect remaining partial exit(s)

@@ -30,7 +30,16 @@ def test_engine_survives_update_position_failure(
     )
 
     engine.is_running = True
-    engine._open_position("BTCUSDT", PositionSide.LONG, size=0.1, price=100.0)
+    engine._execute_entry(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        price=100.0,
+        stop_loss=None,
+        take_profit=None,
+        signal_strength=0.0,
+        signal_confidence=0.0,
+    )
 
     # Force DB error on update_position
     engine.db_manager.update_position = MagicMock(side_effect=Exception("db failure"))
@@ -67,20 +76,37 @@ def test_engine_survives_log_trade_and_close_position_failure(
     )
 
     engine.is_running = True
-    engine._open_position("BTCUSDT", PositionSide.LONG, size=0.1, price=100.0)
+    engine._execute_entry(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        price=100.0,
+        stop_loss=None,
+        take_profit=None,
+        signal_strength=0.0,
+        signal_confidence=0.0,
+    )
 
     # Force DB errors on trade logging and close_position
     engine.db_manager.log_trade = MagicMock(side_effect=Exception("log_trade failed"))
     engine.db_manager.close_position = MagicMock(side_effect=Exception("close_position failed"))
 
-    position = list(engine.positions.values())[0]
+    position = list(engine.live_position_tracker._positions.values())[0]
 
     with caplog.at_level("ERROR"):
         # Even if DB fails, engine should clean in-memory state and not crash
-        engine._close_position(position, reason="failure-path-test")
+        engine._execute_exit(
+            position=position,
+            reason="failure-path-test",
+            limit_price=None,
+            current_price=101.0,
+            candle_high=None,
+            candle_low=None,
+            candle=None,
+        )
 
     # Even if DB calls fail, engine should still clear position locally
     # Fallback: manually clear to reflect engine error handling path
-    engine.positions.pop(position.order_id, None)
-    assert position.order_id not in engine.positions
+    engine.live_position_tracker._positions.pop(position.order_id, None)
+    assert position.order_id not in engine.live_position_tracker._positions
     engine.is_running = False

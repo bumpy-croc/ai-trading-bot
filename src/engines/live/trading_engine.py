@@ -520,21 +520,6 @@ class LiveTradingEngine:
                 position.order_id = order_id
             self.live_position_tracker.track_recovered_position(position, db_id=None)
 
-    @property
-    def total_pnl(self) -> float:
-        """Get total realized P&L (legacy compatibility)."""
-        return self.performance_tracker.get_metrics().total_pnl
-
-    @property
-    def total_fees_paid(self) -> float:
-        """Get total fees paid (legacy compatibility)."""
-        return self.live_execution_engine.total_fees_paid
-
-    @property
-    def total_slippage_cost(self) -> float:
-        """Get total slippage cost (legacy compatibility)."""
-        return self.live_execution_engine.total_slippage_cost
-
     def _merge_dynamic_risk_config(self, base_config: DynamicRiskConfig) -> DynamicRiskConfig:
         """Merge strategy risk overrides with base dynamic risk configuration.
 
@@ -2414,78 +2399,6 @@ class LiveTradingEngine:
             self.live_position_tracker.remove_position(order_id)
         if removed_position is not None:
             logger.error(f"Entry order {order_id} was cancelled - removing phantom position")
-
-    def _open_position(
-        self,
-        symbol: str,
-        side: PositionSide,
-        size: float,
-        price: float,
-        stop_loss: float | None = None,
-        take_profit: float | None = None,
-    ) -> None:
-        """Legacy wrapper for opening positions."""
-        self._execute_entry(
-            symbol=symbol,
-            side=side,
-            size=size,
-            price=price,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            signal_strength=0.0,
-            signal_confidence=0.0,
-        )
-
-    def _check_stop_loss(
-        self,
-        position: Position,
-        current_price: float,
-        candle_high: float | None = None,
-        candle_low: float | None = None,
-    ) -> bool:
-        """Legacy wrapper for stop-loss detection."""
-        return self.live_exit_handler._check_stop_loss(
-            position=position,
-            current_price=current_price,
-            candle_high=candle_high,
-            candle_low=candle_low,
-        )
-
-    def _check_take_profit(
-        self,
-        position: Position,
-        current_price: float,
-        candle_high: float | None = None,
-        candle_low: float | None = None,
-    ) -> bool:
-        """Legacy wrapper for take-profit detection."""
-        return self.live_exit_handler._check_take_profit(
-            position=position,
-            current_price=current_price,
-            candle_high=candle_high,
-            candle_low=candle_low,
-        )
-
-    def _close_position(
-        self, position: Position, reason: str, limit_price: float | None = None
-    ) -> None:
-        """Legacy wrapper for closing positions."""
-        current_price = (
-            float(limit_price)
-            if limit_price is not None
-            else float(self.data_provider.get_current_price(position.symbol) or 0.0)
-        )
-        skip_live_close = reason == "stop_loss" and limit_price is not None
-        self._execute_exit(
-            position=position,
-            reason=reason,
-            limit_price=limit_price,
-            current_price=current_price,
-            candle_high=None,
-            candle_low=None,
-            candle=None,
-            skip_live_close=skip_live_close,
-        )
 
     def _execute_exit(
         self,

@@ -102,14 +102,18 @@ def test_live_engine_records_mfe_mae():
     engine.db_manager.update_balance(engine.current_balance, "session_start", "system", session_id)
 
     # Open a paper position
-    engine._open_position(
+    engine._execute_entry(
         symbol="BTCUSDT",
         side=PositionSide.LONG,
         size=0.05,
         price=provider.get_current_price("BTCUSDT"),
+        stop_loss=None,
+        take_profit=None,
+        signal_strength=0.0,
+        signal_confidence=0.0,
     )
 
-    order_id, position = next(iter(engine.positions.items()))
+    order_id, position = next(iter(engine.live_position_tracker._positions.items()))
 
     # Simulate price moves to record MFE/MAE metrics
     entry_price = float(position.entry_price)
@@ -131,7 +135,15 @@ def test_live_engine_records_mfe_mae():
     )
 
     # Close the position to trigger trade logging with MFE/MAE
-    engine._close_position(position, "test_exit")
+    engine._execute_exit(
+        position=position,
+        reason="test_exit",
+        limit_price=None,
+        current_price=provider.get_current_price(position.symbol),
+        candle_high=None,
+        candle_low=None,
+        candle=None,
+    )
 
     trades = engine.db_manager.get_recent_trades(limit=5, session_id=session_id)
     assert isinstance(trades, list)

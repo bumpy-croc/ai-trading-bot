@@ -33,7 +33,16 @@ def test_mfe_mae_throttle_prevents_rapid_db_updates(
 
     # Avoid spinning the full thread to sidestep join-on-current-thread edge case
     engine.is_running = True
-    engine._open_position("BTCUSDT", PositionSide.LONG, size=0.1, price=100.0)
+    engine._execute_entry(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        price=100.0,
+        stop_loss=None,
+        take_profit=None,
+        signal_strength=0.0,
+        signal_confidence=0.0,
+    )
 
     # Set last persist to now to block first attempt
     engine._last_mfe_mae_persist = datetime.utcnow()

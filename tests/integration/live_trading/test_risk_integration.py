@@ -25,7 +25,7 @@ except ImportError:
 
             self.risk_manager = DummyRisk()
 
-        def _open_position(self, **kwargs):
+        def _execute_entry(self, **kwargs):
             if len(self.positions) < self.risk_manager.get_max_concurrent_positions():
                 self.positions[str(len(self.positions))] = Mock(size=kwargs.get("size", 0))
 
@@ -45,8 +45,17 @@ class TestRiskIntegration:
             risk_parameters=risk_parameters,
             max_position_size=0.05,
         )
-        engine._open_position(symbol="BTCUSDT", side=PositionSide.LONG, size=0.5, price=50000)
-        position = list(engine.positions.values())[0]
+        engine._execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            price=50000,
+            stop_loss=None,
+            take_profit=None,
+            signal_strength=0.0,
+            signal_confidence=0.0,
+        )
+        position = list(engine.live_position_tracker._positions.values())[0]
         assert position.size <= 0.05
 
     @pytest.mark.live_trading
@@ -73,7 +82,14 @@ class TestRiskIntegration:
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         max_positions = engine.risk_manager.get_max_concurrent_positions()
         for i in range(max_positions + 2):
-            engine._open_position(
-                symbol=f"COIN{i}USDT", side=PositionSide.LONG, size=0.01, price=1000
+            engine._execute_entry(
+                symbol=f"COIN{i}USDT",
+                side=PositionSide.LONG,
+                size=0.01,
+                price=1000,
+                stop_loss=None,
+                take_profit=None,
+                signal_strength=0.0,
+                signal_confidence=0.0,
             )
-        assert len(engine.positions) <= max_positions
+        assert len(engine.live_position_tracker._positions) <= max_positions
