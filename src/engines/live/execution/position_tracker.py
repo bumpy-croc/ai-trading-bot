@@ -225,6 +225,47 @@ class LivePositionTracker:
             self._position_db_ids[order_id] = db_id
         return db_id
 
+    def track_recovered_position(self, position: LivePosition, db_id: int | None) -> None:
+        """Track a recovered position without re-logging it.
+
+        Args:
+            position: Position recovered from persistence.
+            db_id: Database ID associated with the position.
+        """
+        if position.order_id is None:
+            return
+
+        order_id = position.order_id
+        with self._positions_lock:
+            self._positions[order_id] = position
+            self._position_db_ids[order_id] = db_id
+
+    def set_stop_loss_order_id(self, order_id: str, stop_loss_order_id: str) -> None:
+        """Update the stop-loss order ID for a tracked position."""
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                return
+            position.stop_loss_order_id = stop_loss_order_id
+            db_id = self._position_db_ids.get(order_id)
+
+        if self.db_manager is not None and db_id is not None:
+            try:
+                self.db_manager.update_position(
+                    position_id=db_id,
+                    stop_loss_order_id=stop_loss_order_id,
+                )
+            except Exception as e:
+                logger.debug("Failed to persist stop-loss order ID: %s", e)
+
+    def remove_position(self, order_id: str) -> None:
+        """Remove a position without closing it (e.g., canceled entry)."""
+        with self._positions_lock:
+            if order_id in self._positions:
+                self.mfe_mae_tracker.clear(order_id)
+                del self._positions[order_id]
+            self._position_db_ids.pop(order_id, None)
+
     def close_position(
         self,
         order_id: str,

@@ -54,6 +54,7 @@ class LiveExitResult:
     success: bool
     realized_pnl: float = 0.0
     realized_pnl_percent: float = 0.0
+    exit_price: float = 0.0
     exit_fee: float = 0.0
     slippage_cost: float = 0.0
     exit_reason: str = ""
@@ -300,8 +301,85 @@ class LiveExitHandler:
             success=True,
             realized_pnl=close_result.realized_pnl,
             realized_pnl_percent=close_result.realized_pnl_percent,
+            exit_price=close_result.exit_price,
             exit_fee=exec_result.exit_fee,
             slippage_cost=exec_result.slippage_cost,
+            exit_reason=exit_reason,
+        )
+
+    def execute_filled_exit(
+        self,
+        position: LivePosition,
+        exit_reason: str,
+        filled_price: float,
+        current_balance: float,
+    ) -> LiveExitResult:
+        """Finalize an exit where the exchange already filled the order.
+
+        Args:
+            position: Position to close.
+            exit_reason: Reason for exit.
+            filled_price: Exchange-reported fill price.
+            current_balance: Current account balance.
+
+        Returns:
+            LiveExitResult with execution details.
+        """
+        if position.order_id is None:
+            return LiveExitResult(
+                success=False,
+                error="Position has no order_id",
+            )
+
+        executed_price = self.execution_engine.apply_exit_slippage(
+            filled_price, position.side
+        )
+
+        fraction = float(
+            position.current_size if position.current_size is not None else position.size
+        )
+        basis_balance = (
+            float(position.entry_balance)
+            if position.entry_balance is not None and position.entry_balance > 0
+            else current_balance
+        )
+        price_adjustment = (
+            executed_price / position.entry_price if position.entry_price > 0 else 1.0
+        )
+        position_notional = basis_balance * fraction * price_adjustment
+
+        exit_fee = self.execution_engine.calculate_exit_fee(position_notional)
+        slippage_cost = self.execution_engine.calculate_slippage_cost(position_notional)
+
+        close_result = self.position_tracker.close_position(
+            order_id=position.order_id,
+            exit_price=executed_price,
+            exit_reason=exit_reason,
+            basis_balance=current_balance,
+        )
+        if close_result is None:
+            return LiveExitResult(
+                success=False,
+                error="Failed to close position in tracker",
+            )
+
+        if self.risk_manager is not None:
+            try:
+                self.risk_manager.close_position(position.symbol)
+            except (AttributeError, ValueError, KeyError) as e:
+                logger.warning(
+                    "Failed to update risk manager for closed position %s: %s",
+                    position.symbol,
+                    e,
+                )
+
+        return LiveExitResult(
+            success=True,
+            realized_pnl=close_result.realized_pnl,
+            realized_pnl_percent=close_result.realized_pnl_percent,
+            exit_price=close_result.exit_price,
+            exit_fee=exit_fee,
+            slippage_cost=slippage_cost,
             exit_reason=exit_reason,
         )
 
