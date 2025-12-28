@@ -170,6 +170,7 @@ class LiveTradingEngine:
         fee_rate: float = 0.001,  # 0.1% per trade (entry + exit)
         slippage_rate: float = 0.0005,  # 0.05% slippage per trade
         use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
+        max_filled_price_deviation: float = 0.5,  # Filled-price deviation threshold
         # Handler injection (all optional - defaults created if not provided)
         position_tracker: LivePositionTracker | None = None,
         execution_engine: LiveExecutionEngine | None = None,
@@ -270,6 +271,7 @@ class LiveTradingEngine:
         self.fee_rate = fee_rate
         self.slippage_rate = slippage_rate
         self.use_high_low_for_stops = use_high_low_for_stops
+        self.max_filled_price_deviation = max_filled_price_deviation
         self.log_trades = log_trades
         self.alert_webhook_url = alert_webhook_url
         self.enable_hot_swapping = enable_hot_swapping
@@ -617,6 +619,7 @@ class LiveTradingEngine:
             partial_manager=partial_ops_manager,
             time_exit_policy=self.time_exit_policy,
             use_high_low_for_stops=self.use_high_low_for_stops,
+            max_filled_price_deviation=self.max_filled_price_deviation,
         )
 
     def _get_dynamic_risk_adjusted_size(self, original_size: float) -> float:
