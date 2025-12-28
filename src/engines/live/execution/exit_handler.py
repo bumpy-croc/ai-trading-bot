@@ -86,6 +86,7 @@ class LiveExitHandler:
         partial_manager: PartialOperationsManager | None = None,
         use_high_low_for_stops: bool = True,
         max_position_size: float = 0.1,
+        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize exit handler.
 
@@ -98,6 +99,7 @@ class LiveExitHandler:
             partial_manager: Unified partial operations manager.
             use_high_low_for_stops: Use candle high/low for SL/TP detection.
             max_position_size: Maximum position size for scale-ins.
+            max_filled_price_deviation: Threshold for logging suspicious fill prices.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -107,6 +109,7 @@ class LiveExitHandler:
         self.partial_manager = partial_manager
         self.use_high_low_for_stops = use_high_low_for_stops
         self.max_position_size = max_position_size
+        self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
 
@@ -321,6 +324,16 @@ class LiveExitHandler:
                 error="Position has no order_id",
             )
 
+        if not self.position_tracker.has_position(position.order_id):
+            logger.warning(
+                "Filled exit received for already closed position %s",
+                position.order_id,
+            )
+            return LiveExitResult(
+                success=False,
+                error="Position already closed",
+            )
+
         if filled_price <= 0:
             return LiveExitResult(
                 success=False,
@@ -329,7 +342,7 @@ class LiveExitHandler:
 
         if position.entry_price > 0:
             price_change = abs(filled_price - position.entry_price) / position.entry_price
-            if price_change > MAX_FILLED_PRICE_DEVIATION:
+            if price_change > self.max_filled_price_deviation:
                 logger.critical(
                     "Suspicious fill price for %s: entry=%.2f filled=%.2f (%.1f%% move)",
                     position.symbol,

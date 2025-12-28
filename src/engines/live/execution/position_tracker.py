@@ -536,11 +536,14 @@ class LivePositionTracker:
                     target_level=int(target_level),
                 )
             except Exception as e:
-                logger.warning(
-                    "DB partial-exit update failed for %s - in-memory state updated but DB may be stale: %s",
+                logger.critical(
+                    "DB partial-exit update failed for %s - trading state may be inconsistent: %s",
                     order_id,
                     e,
                 )
+                raise RuntimeError(
+                    f"Partial-exit persistence failed for order {order_id}"
+                ) from e
 
         return PartialExitResult(
             realized_pnl=partial_exit_result.realized_pnl,

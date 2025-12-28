@@ -2609,7 +2609,7 @@ class LiveTradingEngine:
                     )
                     return True, sl_order.average_price
                 return False, None
-            except (ConnectionError, TimeoutError) as e:
+            except (ConnectionError, TimeoutError, OSError) as e:
                 logger.warning(
                     "Transient error checking stop-loss order %s (attempt %s/%s): %s",
                     position.stop_loss_order_id,
@@ -2620,13 +2620,23 @@ class LiveTradingEngine:
                 if attempt < max_attempts - 1:
                     time.sleep(2**attempt)
             except Exception as e:
-                logger.warning("Error checking stop-loss order status: %s", e)
+                logger.error(
+                    "Unexpected error checking stop-loss order %s: %s",
+                    position.stop_loss_order_id,
+                    e,
+                    exc_info=True,
+                )
                 return False, None
 
         logger.error(
-            "Failed to check stop-loss order %s after %s attempts",
+            "Failed to check stop-loss order %s after %s attempts; assuming not filled",
             position.stop_loss_order_id,
             max_attempts,
+        )
+        log_order_event(
+            "sl_check_failed",
+            order_id=position.stop_loss_order_id,
+            symbol=position.symbol,
         )
         return False, None
 
