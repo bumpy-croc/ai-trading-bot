@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from typing import Any
 
@@ -127,9 +128,42 @@ class BasePosition:
         Raises:
             ValueError: If size exceeds 1.0 or is negative.
         """
+        def _coerce_float(
+            value: float | None, field_name: str, *, required: bool = False
+        ) -> float | None:
+            if value is None:
+                if required:
+                    raise ValueError(f"{field_name} is required and must be a real number")
+                return None
+            if isinstance(value, bool):
+                raise ValueError(f"{field_name} must be a real number, not boolean")
+            if isinstance(value, Decimal):
+                return float(value)
+            try:
+                return float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field_name} must be a real number") from exc
+
         # Normalize side to PositionSide enum if string
         if isinstance(self.side, str):
             self.side = PositionSide.from_string(self.side)
+
+        self.entry_price = _coerce_float(self.entry_price, "entry_price", required=True)
+        self.size = _coerce_float(self.size, "size", required=True)
+        self.stop_loss = _coerce_float(self.stop_loss, "stop_loss")
+        self.take_profit = _coerce_float(self.take_profit, "take_profit")
+        self.entry_balance = _coerce_float(self.entry_balance, "entry_balance")
+        self.original_size = _coerce_float(self.original_size, "original_size")
+        self.current_size = _coerce_float(self.current_size, "current_size")
+        self.trailing_stop_price = _coerce_float(
+            self.trailing_stop_price, "trailing_stop_price"
+        )
+        self.unrealized_pnl = _coerce_float(
+            self.unrealized_pnl, "unrealized_pnl"
+        ) or 0.0
+        self.unrealized_pnl_percent = (
+            _coerce_float(self.unrealized_pnl_percent, "unrealized_pnl_percent") or 0.0
+        )
 
         # Validate position size does not exceed 100% of balance
         if self.size > 1.0 + EPSILON:  # Use epsilon for float comparison
