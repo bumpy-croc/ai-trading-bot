@@ -84,16 +84,31 @@ def test_partial_exits_and_scale_ins_execution(monkeypatch):
     assert pos.current_size == pytest.approx(0.5)
 
     # At 102 (+2%), expect one scale-in of 0.25 (of original) -> current_size 0.75
-    engine._check_partial_and_scale_ops(provider.get_historical_data("BTCUSDT", "1m"), -1, 102.0)
+    engine.live_exit_handler.check_partial_operations(
+        df=provider.get_historical_data("BTCUSDT", "1m"),
+        current_index=-1,
+        current_price=102.0,
+        current_balance=engine.current_balance,
+    )
     pos = list(engine.live_position_tracker._positions.values())[0]
     assert pos.current_size >= 0.5  # scaled in
 
     # At 103 (+3%), expect first partial exit of 0.25 -> current_size decreases
-    engine._check_partial_and_scale_ops(provider.get_historical_data("BTCUSDT", "1m"), -1, 103.0)
+    engine.live_exit_handler.check_partial_operations(
+        df=provider.get_historical_data("BTCUSDT", "1m"),
+        current_index=-1,
+        current_price=103.0,
+        current_balance=engine.current_balance,
+    )
     pos = list(engine.live_position_tracker._positions.values())[0]
     assert pos.partial_exits_taken >= 1
 
     # At 107 (+7%), expect remaining partial exit(s)
-    engine._check_partial_and_scale_ops(provider.get_historical_data("BTCUSDT", "1m"), -1, 107.0)
+    engine.live_exit_handler.check_partial_operations(
+        df=provider.get_historical_data("BTCUSDT", "1m"),
+        current_index=-1,
+        current_price=107.0,
+        current_balance=engine.current_balance,
+    )
     # Position may be closed by partials
     # No strict assertion beyond ensuring engine did not error
