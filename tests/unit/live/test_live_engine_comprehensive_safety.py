@@ -17,12 +17,10 @@ Test Categories:
 10. Edge Cases - Zero balance, extreme volatility, rapid signals
 """
 
-from datetime import datetime, timedelta
-from decimal import Decimal
+from datetime import datetime
 from threading import Event
-from typing import Any
 from types import MethodType
-from unittest.mock import Mock, MagicMock, patch, PropertyMock
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
@@ -32,7 +30,6 @@ from src.database.manager import DatabaseManager
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 from src.risk.risk_manager import RiskParameters
 from src.strategies.ml_basic import create_ml_basic_strategy
-
 
 # ============================================================================
 # Test Fixtures
@@ -291,7 +288,7 @@ class TestSafetyGuardrails:
     def test_stop_loss_always_set(self, mock_data_provider, minimal_strategy):
         """All positions must have stop loss defined"""
         with patch("src.engines.live.trading_engine.DatabaseManager"):
-            engine = LiveTradingEngine(
+            LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
@@ -430,7 +427,7 @@ class TestPositionManagement:
     def test_position_creation_validation(self, mock_data_provider, minimal_strategy):
         """Position creation should validate all required fields"""
         with patch("src.engines.live.trading_engine.DatabaseManager"):
-            engine = LiveTradingEngine(
+            LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
@@ -545,17 +542,21 @@ class TestAccountSynchronization:
             mock_db.get_current_balance.return_value = 15000.0  # Different from initial
             mock_db.create_trading_session.return_value = 1
             mock_db_class.return_value = mock_db
+            with patch(
+                "src.engines.live.trading_engine._create_exchange_provider"
+            ) as mock_exchange_provider:
+                mock_exchange_provider.return_value = (Mock(), "mock")
 
-            engine = LiveTradingEngine(
-                strategy=minimal_strategy,
-                data_provider=mock_data_provider,
-                initial_balance=10000,
-                resume_from_last_balance=True,
-                enable_live_trading=True,  # Required for resume
-            )
+                engine = LiveTradingEngine(
+                    strategy=minimal_strategy,
+                    data_provider=mock_data_provider,
+                    initial_balance=10000,
+                    resume_from_last_balance=True,
+                    enable_live_trading=True,  # Required for resume
+                )
 
-            # Should have resumed from database
-            assert engine.current_balance == 15000.0
+                # Should have resumed from database
+                assert engine.current_balance == 15000.0
 
     def test_no_balance_resume_when_disabled(self, mock_data_provider, minimal_strategy):
         """Should use initial balance when resume is disabled"""
@@ -565,17 +566,21 @@ class TestAccountSynchronization:
             mock_db.get_current_balance.return_value = 15000.0
             mock_db.create_trading_session.return_value = 1
             mock_db_class.return_value = mock_db
+            with patch(
+                "src.engines.live.trading_engine._create_exchange_provider"
+            ) as mock_exchange_provider:
+                mock_exchange_provider.return_value = (Mock(), "mock")
 
-            engine = LiveTradingEngine(
-                strategy=minimal_strategy,
-                data_provider=mock_data_provider,
-                initial_balance=10000,
-                resume_from_last_balance=False,
-                enable_live_trading=True,
-            )
+                engine = LiveTradingEngine(
+                    strategy=minimal_strategy,
+                    data_provider=mock_data_provider,
+                    initial_balance=10000,
+                    resume_from_last_balance=False,
+                    enable_live_trading=True,
+                )
 
-            # Should use initial balance, not resumed
-            assert engine.current_balance == 10000
+                # Should use initial balance, not resumed
+                assert engine.current_balance == 10000
 
     def test_peak_balance_tracking(self, mock_data_provider, minimal_strategy):
         """Peak balance should track highest balance achieved"""

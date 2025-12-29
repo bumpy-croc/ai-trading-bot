@@ -2559,6 +2559,45 @@ class LiveTradingEngine:
             f"Position Opened: {symbol} {position.side.value} @ ${position.entry_price:.2f}"
         )
 
+    def _open_position(
+        self,
+        symbol: str,
+        side: PositionSide,
+        size: float,
+        price: float,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        entry_balance: float | None = None,
+        order_id: str | None = None,
+    ) -> Position:
+        """Open a position directly for test and integration scenarios."""
+        entry_balance = (
+            entry_balance if entry_balance is not None else self.current_balance
+        )
+        position = Position(
+            symbol=symbol,
+            side=side,
+            size=size,
+            entry_price=price,
+            entry_time=datetime.utcnow(),
+            entry_balance=entry_balance,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            order_id=order_id or f"manual_{int(time.time() * 1000)}",
+            original_size=size,
+            current_size=size,
+        )
+        position_db_id = self.live_position_tracker.open_position(
+            position=position,
+            session_id=self.trading_session_id,
+            strategy_name=self._strategy_name(),
+        )
+        self.position_db_ids[position.order_id] = position_db_id
+        with self._positions_lock:
+            self.positions[position.order_id] = position
+        self.mfe_mae_tracker.clear(position.order_id)
+        return position
+
     def _place_stop_loss_order(self, position: Position, symbol: str) -> bool:
         """Place a server-side stop-loss order for the given position."""
         if not (self.enable_live_trading and position.stop_loss and self.exchange_interface):
