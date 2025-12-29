@@ -2176,14 +2176,46 @@ class LiveTradingEngine:
             position.metadata["entry_fee"] = entry_fee
             position.metadata["entry_slippage_cost"] = entry_slippage_cost
 
-            # Register position with tracker
-            self.live_position_tracker.open_position(
-                position=position,
-                session_id=self.trading_session_id,
-                strategy_name=self._strategy_name(),
-            )
+            # CRITICAL: Register position with tracker IMMEDIATELY after execution
+            # to minimize race window with OrderTracker callbacks.
+            # If this fails after order execution, we have an orphaned position.
+            try:
+                self.live_position_tracker.open_position(
+                    position=position,
+                    session_id=self.trading_session_id,
+                    strategy_name=self._strategy_name(),
+                )
+            except Exception as tracker_err:
+                # Position executed on exchange but failed to track locally.
+                # This is critical - attempt emergency close to avoid orphaned position.
+                logger.critical(
+                    "CRITICAL: Position tracking failed after order execution for %s. "
+                    "Attempting emergency close. Error: %s",
+                    symbol,
+                    tracker_err,
+                )
+                if self.enable_live_trading and self.exchange_interface:
+                    try:
+                        close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+                        self.exchange_interface.place_market_order(
+                            symbol=symbol,
+                            side=close_side,
+                            quantity=position.size * self.current_balance / position.entry_price,
+                        )
+                        logger.info("Emergency close order placed for orphaned position %s", symbol)
+                    except Exception as close_err:
+                        logger.critical(
+                            "CRITICAL: Emergency close FAILED for %s. "
+                            "MANUAL INTERVENTION REQUIRED. Error: %s",
+                            symbol,
+                            close_err,
+                        )
+                # Restore balance since position tracking failed
+                self.current_balance += entry_fee
+                return
 
-            # Update risk manager tracking for new position
+            # Update risk manager tracking for new position.
+            # If this fails, close the position to maintain state consistency.
             if self.risk_manager:
                 try:
                     self.risk_manager.update_position(
@@ -2192,13 +2224,27 @@ class LiveTradingEngine:
                         size=size,
                         entry_price=position.entry_price,
                     )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to update risk manager for %s position %s: %s",
+                except (AttributeError, ValueError, KeyError, TypeError) as e:
+                    # Risk manager update failed - state is now inconsistent.
+                    # Close position to prevent exceeding risk limits.
+                    logger.error(
+                        "Risk manager update failed for %s position %s. "
+                        "Closing position to maintain risk consistency. Error: %s",
                         side.value,
                         symbol,
                         e,
                     )
+                    self._execute_exit(
+                        position,
+                        "Risk manager sync failure",
+                        None,
+                        price,
+                        None,
+                        None,
+                        None,
+                        skip_live_close=False,
+                    )
+                    return
 
             logger.info(
                 "🚀 Opened %s position: %s @ $%.2f (Size: %.2f%%)",
@@ -2216,12 +2262,16 @@ class LiveTradingEngine:
                 size=size,
             )
 
+            # Register with order tracker AFTER position is fully tracked.
+            # This ensures callbacks can find the position in the tracker.
             if position.order_id and self.order_tracker:
                 try:
                     self.order_tracker.track_order(position.order_id, symbol)
                 except Exception as e:
+                    # Order tracking failure is non-critical - position exists and is tracked.
+                    # Stop-loss monitoring may be affected but position is safe.
                     logger.warning(
-                        "Failed to track order %s for %s: %s",
+                        "Failed to track order %s for %s (position still valid): %s",
                         position.order_id,
                         symbol,
                         e,
