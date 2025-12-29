@@ -46,6 +46,30 @@ from src.data_providers.exchange_interface import (
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
+
+# Modular handlers (optional injection for testability)
+from src.engines.live.data.market_data_handler import MarketDataHandler
+from src.engines.live.execution.entry_handler import LiveEntryHandler
+from src.engines.live.execution.execution_engine import LiveExecutionEngine
+from src.engines.live.execution.exit_handler import LiveExitHandler
+from src.engines.live.execution.position_tracker import (
+    LivePosition,
+    LivePositionTracker,
+)
+from src.engines.live.health.health_monitor import HealthMonitor
+from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.live.strategy_manager import StrategyManager
+from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
+from src.engines.shared.models import (
+    BaseTrade,
+    PositionSide,
+)
+from src.engines.shared.partial_operations_manager import PartialOperationsManager
+from src.engines.shared.policy_hydration import apply_policies_to_engine
+from src.engines.shared.risk_configuration import (
+    build_trailing_stop_policy,
+    merge_dynamic_risk_config,
+)
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import (
     log_data_event,
@@ -53,12 +77,10 @@ from src.infrastructure.logging.events import (
     log_order_event,
     log_risk_event,
 )
-from src.engines.live.strategy_manager import StrategyManager
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
-from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.position_management.partial_manager import PartialExitPolicy, PositionState
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
@@ -71,28 +93,6 @@ from src.strategies.components import Strategy as ComponentStrategy
 
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
-
-# Modular handlers (optional injection for testability)
-from src.engines.live.data.market_data_handler import MarketDataHandler
-from src.engines.live.execution.entry_handler import LiveEntryHandler
-from src.engines.live.execution.execution_engine import LiveExecutionEngine
-from src.engines.live.execution.exit_handler import LiveExitHandler
-from src.engines.live.execution.position_tracker import (
-    LivePosition,
-    LivePositionTracker,
-)
-from src.engines.shared.models import (
-    BaseTrade,
-    OrderStatus,
-    PositionSide,
-)
-from src.engines.live.health.health_monitor import HealthMonitor
-from src.engines.live.logging.event_logger import LiveEventLogger
-from src.engines.shared.policy_hydration import apply_policies_to_engine
-from src.engines.shared.risk_configuration import (
-    build_trailing_stop_policy,
-    merge_dynamic_risk_config,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +355,7 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.warning(f"Failed to initialize dynamic risk manager: {e}")
                 self.dynamic_risk_manager = None
+        self._dynamic_risk_handler = DynamicRiskHandler(self.dynamic_risk_manager)
 
         # Initialize exchange interface, account synchronizer, and order tracker
         self.exchange_interface = None
@@ -627,62 +628,60 @@ class LiveTradingEngine:
             use_high_low_for_stops=self.use_high_low_for_stops,
         )
 
-    def _get_dynamic_risk_adjusted_size(self, original_size: float) -> float:
-        """Apply dynamic risk adjustments to position size"""
-        if not self.dynamic_risk_manager:
+    def _apply_dynamic_risk_adjustment(
+        self,
+        original_size: float,
+        current_time: datetime,
+    ) -> float:
+        """Apply dynamic risk adjustments to position size."""
+        if self.dynamic_risk_manager is None:
             return original_size
 
-        try:
-            # Calculate dynamic risk adjustments
-            adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
-                current_balance=self.current_balance,
-                peak_balance=self.peak_balance,
-                session_id=self.trading_session_id,
+        self._dynamic_risk_handler.set_manager(self.dynamic_risk_manager)
+        adjusted_size = self._dynamic_risk_handler.apply_dynamic_risk(
+            original_size=original_size,
+            current_time=current_time,
+            balance=float(self.current_balance or 0.0),
+            peak_balance=float(self.peak_balance or self.current_balance or 0.0),
+            trading_session_id=self.trading_session_id,
+        )
+        self._log_dynamic_risk_adjustments()
+        return adjusted_size
+
+    def _log_dynamic_risk_adjustments(self) -> None:
+        """Log dynamic risk adjustments for observability and audit."""
+        adjustments = self._dynamic_risk_handler.get_adjustment_objects(clear=True)
+        for adjustment in adjustments:
+            logger.info(
+                "🎛️ Dynamic risk adjustment applied: size factor=%.2f, reason=%s",
+                adjustment.position_size_factor,
+                adjustment.primary_reason,
+            )
+            log_risk_event(
+                "dynamic_risk_adjustment",
+                position_size_factor=adjustment.position_size_factor,
+                reason=adjustment.primary_reason,
+                original_size=adjustment.original_size,
+                adjusted_size=adjustment.adjusted_size,
+                current_drawdown=adjustment.current_drawdown,
             )
 
-            # Apply position size adjustment
-            adjusted_size = original_size * adjustments.position_size_factor
-
-            # Log the adjustment if significant
-            if abs(adjustments.position_size_factor - 1.0) > 0.1:  # >10% change
-                logger.info(
-                    f"🎛️ Dynamic risk adjustment applied: "
-                    f"size factor={adjustments.position_size_factor:.2f}, "
-                    f"reason={adjustments.primary_reason}"
-                )
-                log_risk_event(
-                    "dynamic_risk_adjustment",
-                    position_size_factor=adjustments.position_size_factor,
-                    reason=adjustments.primary_reason,
-                )
-
-                # Log to database for tracking
-                if self.db_manager and self.trading_session_id:
-                    try:
-                        self.db_manager.log_risk_adjustment(
-                            session_id=self.trading_session_id,
-                            adjustment_type=adjustments.primary_reason.split("_")[
-                                0
-                            ],  # e.g., 'drawdown' from 'drawdown_15.0%'
-                            trigger_reason=adjustments.primary_reason,
-                            parameter_name="position_size_factor",
-                            original_value=1.0,
-                            adjusted_value=adjustments.position_size_factor,
-                            adjustment_factor=adjustments.position_size_factor,
-                            current_drawdown=adjustments.adjustment_details.get("current_drawdown"),
-                            performance_score=None,  # Could be enhanced to include performance score
-                            volatility_level=adjustments.adjustment_details.get(
-                                "performance_metrics", {}
-                            ).get("estimated_volatility"),
-                        )
-                    except Exception as log_e:
-                        logger.warning(f"Failed to log risk adjustment to database: {log_e}")
-
-            return adjusted_size
-
-        except Exception as e:
-            logger.warning(f"Failed to apply dynamic risk adjustment: {e}")
-            return original_size
+            if self.db_manager and self.trading_session_id:
+                try:
+                    self.db_manager.log_risk_adjustment(
+                        session_id=self.trading_session_id,
+                        adjustment_type=adjustment.primary_reason.split("_")[0],
+                        trigger_reason=adjustment.primary_reason,
+                        parameter_name="position_size_factor",
+                        original_value=adjustment.original_size,
+                        adjusted_value=adjustment.adjusted_size,
+                        adjustment_factor=adjustment.position_size_factor,
+                        current_drawdown=adjustment.current_drawdown,
+                        performance_score=None,
+                        volatility_level=None,
+                    )
+                except Exception as log_e:
+                    logger.warning("Failed to log risk adjustment to database: %s", log_e)
 
     def _get_dynamic_risk_adjusted_params(self) -> RiskParameters:
         """Get risk parameters with dynamic adjustments applied"""
@@ -1446,13 +1445,16 @@ class LiveTradingEngine:
                 current_index = len(df) - 1
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
+                current_time = (
+                    current_candle.name if hasattr(current_candle, "name") else datetime.utcnow()
+                )
 
                 runtime_decision = self._runtime_process_decision(
                     df,
                     current_index,
                     self.current_balance,
                     float(current_price),
-                    current_candle.name if hasattr(current_candle, "name") else datetime.utcnow(),
+                    current_time,
                 )
                 if steps % heartbeat_every == 0:
                     log_engine_event(
@@ -1502,6 +1504,7 @@ class LiveTradingEngine:
                         current_index,
                         symbol,
                         current_price,
+                        current_time,
                         runtime_decision=runtime_decision,
                     )
                     # Check for short entry via legacy hook when available
@@ -1548,8 +1551,9 @@ class LiveTradingEngine:
                                 short_position_size = 0.0
 
                             # Apply dynamic risk adjustments
-                            short_position_size = self._get_dynamic_risk_adjusted_size(
-                                short_position_size
+                            short_position_size = self._apply_dynamic_risk_adjustment(
+                                short_position_size,
+                                current_time,
                             )
                             if short_position_size > 0:
                                 if overrides and (
@@ -2146,6 +2150,7 @@ class LiveTradingEngine:
         current_index: int,
         symbol: str,
         current_price: float,
+        current_time: datetime,
         runtime_decision=None,
     ):
         """Check if new positions should be opened"""
@@ -2215,7 +2220,7 @@ class LiveTradingEngine:
             self._get_correlation_context(symbol, df, None, index=current_index)
 
         if position_size > 0:
-            position_size = self._get_dynamic_risk_adjusted_size(position_size)
+            position_size = self._apply_dynamic_risk_adjustment(position_size, current_time)
 
         if self.db_manager:
             # Prepare logging data - include TradingDecision data if available
