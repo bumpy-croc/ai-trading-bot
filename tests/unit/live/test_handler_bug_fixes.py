@@ -124,6 +124,53 @@ class TestExitFeeCalculation:
         assert position_notional == pytest.approx(expected_exit_notional, rel=0.01)
 
 
+class TestTakeProfitLimitPricing:
+    """Test take profit exits use limit price instead of favorable candle extremes."""
+
+    def test_take_profit_uses_limit_price_for_long(self) -> None:
+        """Long take profit should not exceed the limit price."""
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        execution_engine.execute_exit.return_value = MagicMock(
+            success=True,
+            executed_price=100.0,
+            order_id="tp-exit-long",
+            fill_quantity=1.0,
+        )
+
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            entry_price=90.0,
+            entry_time=datetime.utcnow(),
+            entry_balance=1000.0,
+            order_id="tp-order-long",
+        )
+        position_tracker.open_position(position)
+
+        exit_handler.execute_exit(
+            position=position,
+            exit_reason="Take profit",
+            current_price=110.0,
+            limit_price=100.0,
+            current_balance=1100.0,
+            candle_high=120.0,
+            candle_low=95.0,
+        )
+
+        execute_exit_call = execution_engine.execute_exit.call_args
+        base_price = execute_exit_call.kwargs["base_price"]
+
+        assert base_price <= 100.0
+        assert base_price == pytest.approx(100.0)
+
+
 class TestPositionTrackerThreadSafety:
     """Test thread safety of LivePositionTracker."""
 
