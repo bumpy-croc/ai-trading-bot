@@ -1,0 +1,87 @@
+## Coding Style & Naming Conventions
+
+### Key Conventions
+1. Prioritize **readability, simplicity, and maintainability**.
+2. Design for **change**: isolate business logic and minimize framework lock-in.
+3. Emphasize clear **boundaries** and **dependency inversion**.
+4. Ensure all behavior is **observable, testable, and documented**.
+5. **Automate workflows** for testing, building, and deployment.
+
+### General
+
+- Use descriptive variable names
+- Use early returns and guard clauses
+- Avoid magic numbers. Define constants at module level
+- Avoid overly large files.
+- Avoid obvious within-file duplication
+- Avoid deep nesting levels
+- Remove debugging and temporary code before commits
+- Code should be transparent in its intent.
+- Keep lines at a readable length
+- Avoid unreachable dead code
+- Avoid using magic numbers. All contants should be declared with a descriptive name before its use.
+- Favor composition over inheritance
+- Avoid use of goto statements
+- Don't use break in inner loops (break statements in deeply nested loops make control flow hard to follow without clear documentation.)
+- Release locks even on exception paths (every lock acquisition must have a guaranteed release, even when exceptions occur)
+- Place all user-customizable configuration variables at the beginning of scripts.
+
+### Functions
+- Keep functions concise
+- Don't override function arguments
+- Make a function's purpose self-evident
+- Don't overuse undocumented anonymous functions
+- Functions should always have a doc comment explaining what it does
+
+
+### Regular expressions
+- Avoid slow regular expressions (nested quantifiers or ambiguous patterns can cause catastrophic backtracking and performance issues.)
+
+### Error Handling
+- Handle errors in catch blocks (no empty catch blocks)
+- Implement robust error handling.
+- Prioritize specific exception types over generic ones. 
+- Log errors with sufficient context (e.g., relevant variables, operation attempted). 
+- Avoid silencing errors unless explicitly requested and justified. 
+- Proactively include input validation and checks for null/undefined/unexpected values.
+
+### Classes
+- Classes should have single responsibility
+- Use one class per file
+
+### Databases
+- Avoid SELECT * in SQL queries
+- Avoid redundant database indexes
+
+### Math
+- Check divisor before division operations (division by zero causes runtime crashes and must be prevented with explicit checks)
+
+### Comments
+- Comment on the goal (why), not the mechanics (what)
+- Don't ever use words like "new", "updated", etc in comments or filenames. 
+- For complex algorithms or non-obvious logic, include a high-level comment explaining the approach before the code block
+- Comments must describe the code's current state and purpose, not the history of changes made to it. All comments should be written in the simple present tense to describe what the code *does*, not what it *used to do* or *now does*. Examples:
+	- **Bad:** `// New enhanced v2 API.`
+	- **Good:** `// * Fetches user data from the v2 API.`
+	- **Bad:** `// TODO: This was a temporary fix, will rewrite later.`
+	- **Good:** `// TODO: Refactor this logic to be more efficient.`
+
+### Types
+- Avoid `Any` where possible in type systems
+- **Type definitions properly**, especially when dealing with public APIs.
+
+### Security
+
+- Never embed actual sensitive information (API keys, passwords, personal data, specific user-dependent URLs/paths) directly in code.
+- Always use clear, conventional placeholders (e.g., `YOUR_API_KEY`, `DATABASE_CONNECTION_STRING`, `PATH_TO_YOUR_FILE`).
+- Apply **input validation and sanitization** rigorously, especially on inputs from external sources.
+- Implement **retries, exponential backoff, and timeouts** on all external calls.
+
+### Documentation 
+
+- Maintain documentation in `docs/` to guide team practices and architecture decisions.
+
+### Tests
+- **Keep tests stateless**: Use fixtures, avoid global state.
+- When writing tests, use the Arrange - Act - Assert (AAA) pattern
+- Unit tests should be FIRST (fast, isolated, repeatable, self-validating and timely)
