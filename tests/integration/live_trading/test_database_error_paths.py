@@ -45,7 +45,7 @@ def test_engine_survives_update_position_failure(
     engine.db_manager.update_position = MagicMock(side_effect=Exception("db failure"))
 
     with caplog.at_level("DEBUG"):
-        engine._update_positions_mfe_mae(current_price=101.0)
+        engine.live_position_tracker.update_mfe_mae(current_price=101.0)
 
     # Engine should continue running, and a debug log should be present
     assert engine.is_running is True

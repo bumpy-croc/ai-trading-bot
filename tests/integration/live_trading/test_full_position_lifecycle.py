@@ -47,7 +47,7 @@ def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, 
 
     # Trigger at least one MFE/MAE DB update (wait past throttle)
     time.sleep(0.1)
-    engine._update_positions_mfe_mae(current_price=float(prices.iloc[-1]))
+    engine.live_position_tracker.update_mfe_mae(current_price=float(prices.iloc[-1]))
 
     # Close the position through engine path
     position = list(engine.live_position_tracker._positions.values())[0]
