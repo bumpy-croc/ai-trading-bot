@@ -46,6 +46,29 @@ from src.data_providers.exchange_interface import (
 from src.data_providers.sentiment_provider import SentimentDataProvider
 from src.database.manager import DatabaseManager
 from src.database.models import TradeSource
+
+# Modular handlers (optional injection for testability)
+from src.engines.live.data.market_data_handler import MarketDataHandler
+from src.engines.live.execution.entry_handler import LiveEntryHandler
+from src.engines.live.execution.execution_engine import LiveExecutionEngine
+from src.engines.live.execution.exit_handler import LiveExitHandler
+from src.engines.live.execution.position_tracker import (
+    LivePosition,
+    LivePositionTracker,
+)
+from src.engines.live.health.health_monitor import HealthMonitor
+from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.live.strategy_manager import StrategyManager
+from src.engines.shared.models import (
+    BaseTrade,
+    PositionSide,
+)
+from src.engines.shared.partial_operations_manager import PartialOperationsManager
+from src.engines.shared.policy_hydration import apply_policies_to_engine
+from src.engines.shared.risk_configuration import (
+    build_trailing_stop_policy,
+    merge_dynamic_risk_config,
+)
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import (
     log_data_event,
@@ -53,12 +76,10 @@ from src.infrastructure.logging.events import (
     log_order_event,
     log_risk_event,
 )
-from src.engines.live.strategy_manager import StrategyManager
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 from src.position_management.mfe_mae_tracker import MFEMAETracker
-from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.position_management.partial_manager import PartialExitPolicy, PositionState
 from src.position_management.time_exits import TimeExitPolicy, TimeRestrictions
 from src.position_management.trailing_stops import TrailingStopPolicy
@@ -71,28 +92,6 @@ from src.strategies.components import Strategy as ComponentStrategy
 
 from .account_sync import AccountSynchronizer
 from .order_tracker import OrderTracker
-
-# Modular handlers (optional injection for testability)
-from src.engines.live.data.market_data_handler import MarketDataHandler
-from src.engines.live.execution.entry_handler import LiveEntryHandler
-from src.engines.live.execution.execution_engine import LiveExecutionEngine
-from src.engines.live.execution.exit_handler import LiveExitHandler
-from src.engines.live.execution.position_tracker import (
-    LivePosition,
-    LivePositionTracker,
-)
-from src.engines.shared.models import (
-    BaseTrade,
-    OrderStatus,
-    PositionSide,
-)
-from src.engines.live.health.health_monitor import HealthMonitor
-from src.engines.live.logging.event_logger import LiveEventLogger
-from src.engines.shared.policy_hydration import apply_policies_to_engine
-from src.engines.shared.risk_configuration import (
-    build_trailing_stop_policy,
-    merge_dynamic_risk_config,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -2398,7 +2397,7 @@ class LiveTradingEngine:
                 )
                 size = self.max_position_size
 
-            entry_balance = float(self.current_balance)
+            pre_fee_balance = float(self.current_balance)
             base_price = float(price)
 
             # Apply slippage to entry price (price moves against us)
@@ -2409,7 +2408,7 @@ class LiveTradingEngine:
                 # Shorting: slippage decreases price
                 entry_price = base_price * (1 - self.slippage_rate)
 
-            position_value = size * entry_balance
+            position_value = size * pre_fee_balance
             quantity = position_value / entry_price if entry_price else 0.0
 
             # Calculate and deduct entry fee
@@ -2418,6 +2417,7 @@ class LiveTradingEngine:
             self.current_balance -= entry_fee
             self.total_fees_paid += entry_fee
             self.total_slippage_cost += entry_slippage_cost
+            entry_balance = float(self.current_balance)
 
             if self.enable_live_trading:
                 # Execute real order

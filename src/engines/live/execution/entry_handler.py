@@ -236,6 +236,7 @@ class LiveEntryHandler:
                 error=exec_result.error,
             )
 
+        entry_balance = balance - exec_result.entry_fee
         # Create position
         position = LivePosition(
             symbol=symbol,
@@ -243,7 +244,7 @@ class LiveEntryHandler:
             size=signal.size_fraction,
             entry_price=exec_result.executed_price,
             entry_time=datetime.utcnow(),
-            entry_balance=balance,
+            entry_balance=entry_balance,
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             order_id=exec_result.order_id,
