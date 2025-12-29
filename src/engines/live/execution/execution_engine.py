@@ -92,6 +92,13 @@ class LiveExecutionEngine:
         self.enable_live_trading = enable_live_trading
         self.exchange_interface = exchange_interface
 
+        # Validate that live trading has required exchange interface
+        if enable_live_trading and exchange_interface is None:
+            raise ValueError(
+                "Cannot enable live trading without exchange interface. "
+                "Provide exchange_interface or set enable_live_trading=False."
+            )
+
         # Use shared cost calculator for all fee and slippage calculations
         self._cost_calculator = CostCalculator(
             fee_rate=fee_rate,

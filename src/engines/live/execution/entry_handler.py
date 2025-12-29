@@ -12,11 +12,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
-from src.engines.live.execution.position_tracker import (
-    LivePosition,
-    LivePositionTracker,
-    PositionSide,
-)
+from src.engines.live.execution.position_tracker import LivePosition, PositionSide
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.strategies.components import SignalDirection
 
@@ -67,7 +63,6 @@ class LiveEntryHandler:
     def __init__(
         self,
         execution_engine: LiveExecutionEngine,
-        position_tracker: LivePositionTracker,
         risk_manager: RiskManager | None = None,
         component_strategy: ComponentStrategy | None = None,
         dynamic_risk_manager: DynamicRiskManager | None = None,
@@ -78,7 +73,6 @@ class LiveEntryHandler:
 
         Args:
             execution_engine: Engine for executing entries.
-            position_tracker: Tracker for position state.
             risk_manager: Risk manager for position sizing.
             component_strategy: Component strategy for signals.
             dynamic_risk_manager: Manager for dynamic risk adjustments.
@@ -86,7 +80,6 @@ class LiveEntryHandler:
             default_take_profit_pct: Default take profit percentage.
         """
         self.execution_engine = execution_engine
-        self.position_tracker = position_tracker
         self.risk_manager = risk_manager
         self.component_strategy = component_strategy
         self.dynamic_risk_manager = dynamic_risk_manager
@@ -198,8 +191,6 @@ class LiveEntryHandler:
         symbol: str,
         current_price: float,
         balance: float,
-        session_id: int | None = None,
-        strategy_name: str | None = None,
     ) -> LiveEntryResult:
         """Execute an entry based on the signal result.
 
@@ -208,8 +199,6 @@ class LiveEntryHandler:
             symbol: Trading symbol.
             current_price: Current market price.
             balance: Current account balance.
-            session_id: Trading session ID.
-            strategy_name: Strategy name for logging.
 
         Returns:
             LiveEntryResult with execution details.
@@ -251,30 +240,6 @@ class LiveEntryHandler:
             original_size=signal.size_fraction,
             current_size=signal.size_fraction,
         )
-
-        # Open position in tracker
-        self.position_tracker.open_position(
-            position=position,
-            session_id=session_id,
-            strategy_name=strategy_name,
-        )
-
-        # Update risk manager
-        if self.risk_manager is not None:
-            try:
-                self.risk_manager.update_position(
-                    symbol=symbol,
-                    side=signal.side.value,
-                    size=signal.size_fraction,
-                    entry_price=exec_result.executed_price,
-                )
-            except (AttributeError, ValueError, KeyError) as e:
-                logger.warning(
-                    "Failed to update risk manager for %s on %s: %s",
-                    signal.side.value,
-                    symbol,
-                    e,
-                )
 
         return LiveEntryResult(
             position=position,

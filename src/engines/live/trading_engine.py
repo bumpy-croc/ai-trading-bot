@@ -382,6 +382,13 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.warning(f"Failed to initialize exchange interface: {e}")
 
+            # Fail fast if live trading requested but exchange interface unavailable
+            if self.exchange_interface is None:
+                raise ValueError(
+                    "Cannot enable live trading without exchange interface. "
+                    "Ensure valid API credentials are configured for the selected provider."
+                )
+
         # Optionally resume balance from last snapshot (only in live trading mode)
         if self.resume_from_last_balance and self.enable_live_trading:
             try:
@@ -595,7 +602,6 @@ class LiveTradingEngine:
         # Entry handler
         self.live_entry_handler = entry_handler or LiveEntryHandler(
             execution_engine=self.live_execution_engine,
-            position_tracker=self.live_position_tracker,
             risk_manager=self.risk_manager,
             component_strategy=(
                 self.strategy if isinstance(self.strategy, ComponentStrategy) else None
@@ -2138,51 +2144,25 @@ class LiveTradingEngine:
                 )
                 size = self.max_position_size
 
-<<<<<<< HEAD
-            pre_fee_balance = float(self.current_balance)
-            base_price = float(price)
+            # Build entry reasons for logging and analysis
+            entry_reasons = [
+                f"side_{side.value}",
+                f"size_{size:.4f}",
+                f"strength_{signal_strength:.2f}",
+                f"confidence_{signal_confidence:.2f}",
+            ]
+            if stop_loss:
+                entry_reasons.append(f"sl_{stop_loss:.2f}")
+            if take_profit:
+                entry_reasons.append(f"tp_{take_profit:.2f}")
 
-            # Apply slippage to entry price (price moves against us)
-            if side == PositionSide.LONG:
-                # Buying: slippage increases price
-                entry_price = base_price * (1 + self.slippage_rate)
-            else:
-                # Shorting: slippage decreases price
-                entry_price = base_price * (1 - self.slippage_rate)
-
-            position_value = size * pre_fee_balance
-            quantity = position_value / entry_price if entry_price else 0.0
-
-            # Calculate and deduct entry fee
-            entry_fee = abs(position_value * self.fee_rate)
-            entry_slippage_cost = abs(position_value * self.slippage_rate)
-            self.current_balance -= entry_fee
-            self.total_fees_paid += entry_fee
-            self.total_slippage_cost += entry_slippage_cost
-            entry_balance = float(self.current_balance)
-
-            if self.enable_live_trading:
-                # Execute real order
-                order_id = self._execute_order(symbol, side, position_value, entry_price)
-                if not order_id:
-                    logger.error("Failed to execute order")
-                    return
-            else:
-                order_id = f"paper_{int(time.time())}"
-                logger.info(f"📄 PAPER TRADE - Would open {side.value} position")
-
-            # Create position
-            position = Position(
-                symbol=symbol,
-=======
             entry_signal = LiveEntrySignal(
                 should_enter=True,
->>>>>>> f52a5cf1 (Route filled live exits through LiveExitHandler (#485))
                 side=side,
                 size_fraction=size,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                reasons=None,
+                reasons=entry_reasons,
                 signal_strength=signal_strength,
                 signal_confidence=signal_confidence,
             )
@@ -2191,8 +2171,6 @@ class LiveTradingEngine:
                 symbol=symbol,
                 current_price=price,
                 balance=self.current_balance,
-                session_id=self.trading_session_id,
-                strategy_name=self._strategy_name(),
             )
 
             if not result.executed or result.position is None:
@@ -2206,6 +2184,76 @@ class LiveTradingEngine:
 
             position.metadata["entry_fee"] = entry_fee
             position.metadata["entry_slippage_cost"] = entry_slippage_cost
+
+            # CRITICAL: Register position with tracker IMMEDIATELY after execution
+            # to minimize race window with OrderTracker callbacks.
+            # If this fails after order execution, we have an orphaned position.
+            try:
+                self.live_position_tracker.open_position(
+                    position=position,
+                    session_id=self.trading_session_id,
+                    strategy_name=self._strategy_name(),
+                )
+            except Exception as tracker_err:
+                # Position executed on exchange but failed to track locally.
+                # This is critical - attempt emergency close to avoid orphaned position.
+                logger.critical(
+                    "CRITICAL: Position tracking failed after order execution for %s. "
+                    "Attempting emergency close. Error: %s",
+                    symbol,
+                    tracker_err,
+                )
+                if self.enable_live_trading and self.exchange_interface:
+                    try:
+                        close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+                        self.exchange_interface.place_market_order(
+                            symbol=symbol,
+                            side=close_side,
+                            quantity=position.size * self.current_balance / position.entry_price,
+                        )
+                        logger.info("Emergency close order placed for orphaned position %s", symbol)
+                    except Exception as close_err:
+                        logger.critical(
+                            "CRITICAL: Emergency close FAILED for %s. "
+                            "MANUAL INTERVENTION REQUIRED. Error: %s",
+                            symbol,
+                            close_err,
+                        )
+                # Restore balance since position tracking failed
+                self.current_balance += entry_fee
+                return
+
+            # Update risk manager tracking for new position.
+            # If this fails, close the position to maintain state consistency.
+            if self.risk_manager:
+                try:
+                    self.risk_manager.update_position(
+                        symbol=symbol,
+                        side=side.value,
+                        size=size,
+                        entry_price=position.entry_price,
+                    )
+                except (AttributeError, ValueError, KeyError, TypeError) as e:
+                    # Risk manager update failed - state is now inconsistent.
+                    # Close position to prevent exceeding risk limits.
+                    logger.error(
+                        "Risk manager update failed for %s position %s. "
+                        "Closing position to maintain risk consistency. Error: %s",
+                        side.value,
+                        symbol,
+                        e,
+                    )
+                    self._execute_exit(
+                        position,
+                        "Risk manager sync failure",
+                        None,
+                        price,
+                        None,
+                        None,
+                        None,
+                        skip_live_close=False,
+                    )
+                    return
 
             logger.info(
                 "🚀 Opened %s position: %s @ $%.2f (Size: %.2f%%)",
@@ -2223,8 +2271,20 @@ class LiveTradingEngine:
                 size=size,
             )
 
+            # Register with order tracker AFTER position is fully tracked.
+            # This ensures callbacks can find the position in the tracker.
             if position.order_id and self.order_tracker:
-                self.order_tracker.track_order(position.order_id, symbol)
+                try:
+                    self.order_tracker.track_order(position.order_id, symbol)
+                except Exception as e:
+                    # Order tracking failure is non-critical - position exists and is tracked.
+                    # Stop-loss monitoring may be affected but position is safe.
+                    logger.warning(
+                        "Failed to track order %s for %s (position still valid): %s",
+                        position.order_id,
+                        symbol,
+                        e,
+                    )
 
             # Send alert if configured
             self._send_alert(
@@ -2300,7 +2360,7 @@ class LiveTradingEngine:
                     )
 
         except Exception as e:
-            logger.error(f"Failed to open position: {e}", exc_info=True)
+            logger.error("Failed to open position: %s", e, exc_info=True)
             if self.trading_session_id is not None:
                 self.db_manager.log_event(
                     event_type="ERROR",
