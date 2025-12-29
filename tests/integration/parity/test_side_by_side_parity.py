@@ -336,11 +336,18 @@ class TestFeeCalculationParity:
             resume_from_last_balance=False,
         )
 
-        live_engine._open_position("BTCUSDT", PositionSide.LONG, position_size, entry_price)
+        # Execute entry via execution engine
+        exec_result = live_engine.live_entry_handler.execution_engine.execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size_fraction=position_size,
+            base_price=entry_price,
+            balance=initial_balance,
+        )
 
         # CRITICAL ASSERTION: Fee matches expected
-        assert live_engine.total_fees_paid == pytest.approx(expected_result.fee, rel=0.01), (
-            f"Entry fee {live_engine.total_fees_paid} != expected {expected_result.fee}"
+        assert exec_result.entry_fee == pytest.approx(expected_result.fee, rel=0.01), (
+            f"Entry fee {exec_result.entry_fee} != expected {expected_result.fee}"
         )
 
     def test_round_trip_fees_parity(self):
@@ -369,35 +376,62 @@ class TestFeeCalculationParity:
         )
         live_engine.data_provider.get_current_price = Mock(return_value=exit_price)
 
-        # Track balance before entry
-        balance_before_entry = live_engine.current_balance
-
-        live_engine._open_position("BTCUSDT", PositionSide.LONG, position_size, entry_price)
-
-        # Entry fee should have been deducted
-        balance_after_entry = live_engine.current_balance
-        entry_fee_charged = balance_before_entry - balance_after_entry
-        expected_entry_fee = initial_balance * position_size * fee_rate
-        assert entry_fee_charged == pytest.approx(expected_entry_fee, rel=0.01), (
-            f"Entry fee {entry_fee_charged} != expected {expected_entry_fee}"
+        # Execute entry
+        entry_result = live_engine.live_entry_handler.execution_engine.execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size_fraction=position_size,
+            base_price=entry_price,
+            balance=initial_balance,
         )
 
-        position = list(live_engine.positions.values())[0]
-        live_engine._close_position(position, reason="test", limit_price=exit_price)
+        expected_entry_fee = initial_balance * position_size * fee_rate
+        assert entry_result.entry_fee == pytest.approx(expected_entry_fee, rel=0.01), (
+            f"Entry fee {entry_result.entry_fee} != expected {expected_entry_fee}"
+        )
+
+        # Create and register position
+        from datetime import datetime
+        from src.engines.live.trading_engine import Position
+        position = Position(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=position_size,
+            entry_price=entry_result.executed_price,
+            entry_time=datetime.now(),
+            order_id=entry_result.order_id,
+            original_size=position_size,
+            current_size=position_size,
+            entry_balance=initial_balance,
+        )
+        live_engine.live_position_tracker.open_position(position)
+
+        # Execute exit
+        exit_result = live_engine.live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="test",
+            current_price=exit_price,
+            limit_price=exit_price,
+            current_balance=initial_balance,
+        )
 
         # Verify trade was profitable but reduced by fees
-        assert live_engine.total_pnl > 0, "Trade should be profitable"
-        assert live_engine.current_balance > initial_balance, "Net balance should increase"
-        assert live_engine.total_fees_paid > 0, "Fees should be tracked"
+        assert exit_result.realized_pnl > 0, "Trade should be profitable"
+        assert exit_result.exit_fee > 0, "Exit fee should be charged"
+        assert entry_result.entry_fee > 0, "Entry fee should be charged"
 
-        # The balance increase should be less than gross P&L due to fees
-        gross_pnl_pct = (exit_price - entry_price) / entry_price  # 5%
-        gross_pnl = gross_pnl_pct * initial_balance * position_size  # ~50
-        actual_balance_increase = live_engine.current_balance - initial_balance
+        # Total fees should be entry + exit
+        total_fees = entry_result.entry_fee + exit_result.exit_fee
+        assert total_fees > 0, "Total fees should be positive"
 
-        # Balance increase should be less than gross P&L (fees reduced it)
-        assert actual_balance_increase < gross_pnl, (
-            f"Balance increase {actual_balance_increase} should be less than gross P&L {gross_pnl}"
+        # The P&L should be less than gross P&L due to fees
+        gross_pnl_pct = (exit_price - entry_result.executed_price) / entry_result.executed_price
+        gross_pnl = gross_pnl_pct * initial_balance * position_size
+        net_pnl = exit_result.realized_pnl
+
+        # Net P&L should be less than gross P&L (fees reduced it)
+        assert net_pnl < gross_pnl, (
+            f"Net P&L {net_pnl} should be less than gross P&L {gross_pnl}"
         )
 
 
@@ -552,15 +586,39 @@ class TestTakeProfitTriggerParity:
             resume_from_last_balance=False,
         )
 
-        live_engine._open_position(
-            "BTCUSDT", PositionSide.LONG, 0.1, 100.0, take_profit=110.0
+        # Create and register position manually
+        from datetime import datetime
+        from src.engines.live.trading_engine import Position
+        position = Position(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            entry_price=100.0,
+            entry_time=datetime.now(),
+            order_id="test-tp-order",
+            original_size=0.1,
+            current_size=0.1,
+            take_profit=110.0,
+            entry_balance=initial_balance,
         )
-        position = list(live_engine.positions.values())[0]
+        live_engine.live_position_tracker.open_position(position)
 
         # TP at 110 - should trigger when high >= 110
-        assert live_engine._check_take_profit(position, 109.0, 110.0, 108.0) is True
-        assert live_engine._check_take_profit(position, 111.0, 112.0, 110.0) is True
-        assert live_engine._check_take_profit(position, 109.0, 109.5, 108.0) is False
+        # Use LiveExitHandler to check conditions
+        exit_check_1 = live_engine.live_exit_handler.check_exit_conditions(
+            position=position, current_price=109.0, candle_low=108.0, candle_high=110.0
+        )
+        assert exit_check_1.should_exit and "Take profit" in exit_check_1.exit_reason
+
+        exit_check_2 = live_engine.live_exit_handler.check_exit_conditions(
+            position=position, current_price=111.0, candle_low=110.0, candle_high=112.0
+        )
+        assert exit_check_2.should_exit and "Take profit" in exit_check_2.exit_reason
+
+        exit_check_3 = live_engine.live_exit_handler.check_exit_conditions(
+            position=position, current_price=109.0, candle_low=108.0, candle_high=109.5
+        )
+        assert not exit_check_3.should_exit
 
 
 class TestPositionSizingParity:
@@ -584,11 +642,21 @@ class TestPositionSizingParity:
         )
 
         # Try to open 50% position - should be capped to 10%
-        live_engine._open_position("BTCUSDT", PositionSide.LONG, 0.5, 100.0)
-        position = list(live_engine.positions.values())[0]
+        # Use entry handler which enforces max_position_size
+        from src.strategies.components import Signal, SignalDirection
+        signal = Signal(direction=SignalDirection.BUY, confidence=0.9, strength=0.9)
 
-        assert position.size == pytest.approx(max_position_size), (
-            f"Position size {position.size} should be capped to {max_position_size}"
+        # Check entry - this will cap the size
+        entry_signal = live_engine.live_entry_handler.check_entry(
+            signal=signal,
+            symbol="BTCUSDT",
+            balance=initial_balance,
+            size_fraction=0.5,  # Request 50% - should be capped to 10%
+        )
+
+        assert entry_signal.should_enter
+        assert entry_signal.size_fraction == pytest.approx(max_position_size), (
+            f"Position size {entry_signal.size_fraction} should be capped to {max_position_size}"
         )
 
 

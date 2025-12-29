@@ -657,6 +657,9 @@ class TestStopLossTakeProfitParity:
             entry_balance=10_000.0,
         )
 
+        # Register position with tracker before closing
+        engine.live_position_tracker.open_position(position)
+
         # Execute exit through exit handler
         exit_result = engine.live_exit_handler.execute_exit(
             position=position,
