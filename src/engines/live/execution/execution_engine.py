@@ -92,11 +92,11 @@ class LiveExecutionEngine:
         self.enable_live_trading = enable_live_trading
         self.exchange_interface = exchange_interface
 
-        # Warn if live trading enabled without exchange interface
+        # Validate that live trading has required exchange interface
         if enable_live_trading and exchange_interface is None:
-            logger.warning(
-                "Live trading enabled without exchange interface - "
-                "orders will use paper trading fallback."
+            raise ValueError(
+                "Cannot enable live trading without exchange interface. "
+                "Provide exchange_interface or set enable_live_trading=False."
             )
 
         # Use shared cost calculator for all fee and slippage calculations

@@ -1,8 +1,8 @@
 # SageMaker Training Container for AI Trading Bot
-# Uses official AWS Deep Learning Container as base
+# Uses official TensorFlow GPU image as base
 
 # Base image: TensorFlow 2.15 GPU with Python 3.11
-FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/tensorflow-training:2.15-gpu-py311
+FROM tensorflow/tensorflow:2.15.0-gpu
 
 # Metadata
 LABEL maintainer="AI Trading Bot"
@@ -17,17 +17,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements-cloud.txt /opt/ml/code/
+COPY src/ml/cloud/requirements-cloud.txt /opt/ml/code/
 RUN pip install --no-cache-dir -r requirements-cloud.txt
 
 # Copy source code
 # We copy the entire src/ directory to maintain imports
 COPY src/ /opt/ml/code/src/
 COPY pyproject.toml /opt/ml/code/
-COPY setup.py /opt/ml/code/
 
 # Install the package in development mode
-RUN pip install --no-cache-dir -e .
+# Use --ignore-installed to avoid conflicts with base image packages
+RUN pip install --no-cache-dir --ignore-installed blinker -e .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \

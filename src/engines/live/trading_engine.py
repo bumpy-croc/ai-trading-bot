@@ -380,6 +380,13 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.warning(f"Failed to initialize exchange interface: {e}")
 
+            # Fail fast if live trading requested but exchange interface unavailable
+            if self.exchange_interface is None:
+                raise ValueError(
+                    "Cannot enable live trading without exchange interface. "
+                    "Ensure valid API credentials are configured for the selected provider."
+                )
+
         # Optionally resume balance from last snapshot (only in live trading mode)
         if self.resume_from_last_balance and self.enable_live_trading:
             try:

@@ -536,14 +536,23 @@ class TestPositionManagement:
 class TestAccountSynchronization:
     """Test account balance and position synchronization"""
 
-    def test_balance_resume_from_database(self, mock_data_provider, minimal_strategy):
+    def test_balance_resume_from_database(
+        self, mock_data_provider, minimal_strategy, mock_exchange
+    ):
         """Should resume balance from last database snapshot"""
-        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
+        with (
+            patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class,
+            patch(
+                "src.engines.live.trading_engine._create_exchange_provider"
+            ) as mock_create_exchange,
+        ):
             mock_db = Mock()
             mock_db.get_active_session_id.return_value = 1
             mock_db.get_current_balance.return_value = 15000.0  # Different from initial
             mock_db.create_trading_session.return_value = 1
             mock_db_class.return_value = mock_db
+
+            mock_create_exchange.return_value = (mock_exchange, "MockExchange")
 
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
@@ -556,14 +565,23 @@ class TestAccountSynchronization:
             # Should have resumed from database
             assert engine.current_balance == 15000.0
 
-    def test_no_balance_resume_when_disabled(self, mock_data_provider, minimal_strategy):
+    def test_no_balance_resume_when_disabled(
+        self, mock_data_provider, minimal_strategy, mock_exchange
+    ):
         """Should use initial balance when resume is disabled"""
-        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
+        with (
+            patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class,
+            patch(
+                "src.engines.live.trading_engine._create_exchange_provider"
+            ) as mock_create_exchange,
+        ):
             mock_db = Mock()
             mock_db.get_active_session_id.return_value = 1
             mock_db.get_current_balance.return_value = 15000.0
             mock_db.create_trading_session.return_value = 1
             mock_db_class.return_value = mock_db
+
+            mock_create_exchange.return_value = (mock_exchange, "MockExchange")
 
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
