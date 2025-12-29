@@ -224,13 +224,8 @@ class LiveExitHandler:
                         # Short SL: use min(stop_loss, candle_high) for realistic worst-case
                         base_exit_price = min(limit_price, candle_high)
                 elif "Take profit" in exit_reason:
-                    # Take profits execute at best available price
-                    if position.side == PositionSide.LONG:
-                        # Long TP: use candle_high if available, else limit
-                        base_exit_price = candle_high if candle_high >= limit_price else limit_price
-                    else:
-                        # Short TP: use candle_low if available, else limit
-                        base_exit_price = candle_low if candle_low <= limit_price else limit_price
+                    # Take profits execute at the limit price or worse (never better than limit)
+                    base_exit_price = limit_price
                 else:
                     base_exit_price = limit_price
             else:
