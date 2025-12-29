@@ -102,12 +102,21 @@ class TestLiveTradingEngine:
         assert len(engine.completed_trades) == 0
 
     def test_engine_initialization_with_live_trading_enabled(
-        self, mock_strategy, mock_data_provider
+        self, mock_strategy, mock_data_provider, mock_exchange
     ):
-        engine = LiveTradingEngine(
-            strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=True
-        )
-        assert engine.enable_live_trading is True
+        from unittest.mock import patch
+
+        with patch(
+            "src.engines.live.trading_engine._create_exchange_provider"
+        ) as mock_create_exchange:
+            mock_create_exchange.return_value = (mock_exchange, "MockExchange")
+
+            engine = LiveTradingEngine(
+                strategy=mock_strategy,
+                data_provider=mock_data_provider,
+                enable_live_trading=True,
+            )
+            assert engine.enable_live_trading is True
 
     @pytest.mark.live_trading
     def test_position_opening_paper_trading(self, mock_strategy, mock_data_provider):
