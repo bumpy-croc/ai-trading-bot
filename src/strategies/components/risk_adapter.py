@@ -140,11 +140,7 @@ class CoreRiskAdapter(RiskManager):
             indicators=context.get("indicators"),
             strategy_overrides=overrides,
             regime=self._normalise_regime(regime),
-            correlation_ctx=None,
-        )
-        fraction, _ = manager.apply_correlation_adjustment(
-            float(fraction),
-            context.get("correlation_ctx"),
+            correlation_ctx=context.get("correlation_ctx"),
         )
         fraction = max(0.0, min(1.0, float(fraction)))
         return balance * fraction

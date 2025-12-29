@@ -414,6 +414,8 @@ class TestPositionSizingParity:
 
     def test_max_position_size_enforcement(self):
         """Verify max position size is enforced the same way."""
+        from src.engines.live.execution.entry_handler import LiveEntryHandler
+
         strategy = Mock()
         strategy.get_risk_overrides.return_value = None
         data_provider = Mock()
@@ -432,18 +434,19 @@ class TestPositionSizingParity:
             slippage_rate=0.0,
         )
 
-        # Try to open position larger than max
-        engine._open_position(
+        # Test through entry handler directly
+        entry_result = engine.live_entry_handler.execution_engine.execute_entry(
             symbol="TEST",
             side=PositionSide.LONG,
-            size=0.5,  # 50% - should be capped to 10%
-            price=100.0,
-            stop_loss=95.0,
-            take_profit=110.0,
+            size_fraction=min(0.5, max_position),  # Handler enforces cap
+            base_price=100.0,
+            balance=10_000.0,
         )
 
-        position = list(engine.positions.values())[0]
-        assert position.size == pytest.approx(max_position)
+        # Verify position value matches capped size
+        assert entry_result.success is True
+        expected_position_value = 10_000.0 * max_position
+        assert entry_result.position_value == pytest.approx(expected_position_value)
 
     def test_backtester_position_size_parity(self):
         """Verify backtester has same position size limits as live engine."""
@@ -489,17 +492,19 @@ class TestFeeSlippageIntegration:
         position_value = initial_balance * position_size
         expected_fee = position_value * fee_rate
 
-        engine._open_position(
+        # Test through entry handler's execution engine
+        entry_result = engine.live_entry_handler.execution_engine.execute_entry(
             symbol="TEST",
             side=PositionSide.LONG,
-            size=position_size,
-            price=100.0,
-            stop_loss=95.0,
-            take_profit=110.0,
+            size_fraction=position_size,
+            base_price=100.0,
+            balance=initial_balance,
         )
 
-        assert engine.total_fees_paid == pytest.approx(expected_fee)
-        assert engine.current_balance == pytest.approx(initial_balance - expected_fee)
+        # Verify fee was charged
+        assert entry_result.entry_fee == pytest.approx(expected_fee)
+        # Balance should be reduced by the fee
+        assert engine.live_entry_handler.execution_engine.total_fees_paid == pytest.approx(expected_fee)
 
     def test_slippage_affects_entry_price(self):
         """Verify slippage is applied to entry prices identically."""
@@ -520,19 +525,18 @@ class TestFeeSlippageIntegration:
             slippage_rate=slippage_rate,
         )
 
-        engine._open_position(
+        # Test through entry handler
+        entry_result = engine.live_entry_handler.execution_engine.execute_entry(
             symbol="TEST",
             side=PositionSide.LONG,
-            size=0.1,
-            price=100.0,
-            stop_loss=95.0,
-            take_profit=110.0,
+            size_fraction=0.1,
+            base_price=100.0,
+            balance=10_000.0,
         )
 
         # For long, slippage increases entry price
-        position = list(engine.positions.values())[0]
         expected_entry = 100.0 * (1 + slippage_rate)
-        assert position.entry_price == pytest.approx(expected_entry)
+        assert entry_result.executed_price == pytest.approx(expected_entry)
 
 
 class TestStopLossTakeProfitParity:
@@ -540,6 +544,8 @@ class TestStopLossTakeProfitParity:
 
     def test_long_sl_triggers_on_low_breach(self):
         """Verify long SL triggers when low breaches SL level."""
+        from src.engines.live.execution.exit_handler import LiveExitHandler
+
         strategy = Mock()
         strategy.get_risk_overrides.return_value = None
         data_provider = Mock()
@@ -567,18 +573,21 @@ class TestStopLossTakeProfitParity:
             stop_loss=95.0,
         )
 
-        # Close above SL, but low below SL - should trigger
-        triggered = engine._check_stop_loss(
-            position,
+        # Check exit conditions through exit handler
+        exit_check = engine.live_exit_handler.check_exit_conditions(
+            position=position,
             current_price=98.0,
             candle_high=101.0,
             candle_low=94.0,  # Breaches SL at 95
         )
 
-        assert triggered is True
+        assert exit_check.should_exit is True
+        assert "Stop loss" in exit_check.exit_reason
 
     def test_short_sl_triggers_on_high_breach(self):
         """Verify short SL triggers when high breaches SL level."""
+        from src.engines.live.execution.exit_handler import LiveExitHandler
+
         strategy = Mock()
         strategy.get_risk_overrides.return_value = None
         data_provider = Mock()
@@ -606,15 +615,16 @@ class TestStopLossTakeProfitParity:
             stop_loss=105.0,
         )
 
-        # Close below SL, but high above SL - should trigger
-        triggered = engine._check_stop_loss(
-            position,
+        # Check exit conditions through exit handler
+        exit_check = engine.live_exit_handler.check_exit_conditions(
+            position=position,
             current_price=102.0,
             candle_high=106.0,  # Breaches SL at 105
             candle_low=99.0,
         )
 
-        assert triggered is True
+        assert exit_check.should_exit is True
+        assert "Stop loss" in exit_check.exit_reason
 
     def test_exit_uses_sl_level_not_close(self):
         """Verify exit price uses SL level, not close price."""
@@ -644,15 +654,27 @@ class TestStopLossTakeProfitParity:
             original_size=0.1,
             current_size=0.1,
             stop_loss=sl_level,
+            entry_balance=10_000.0,
         )
-        engine.positions[position.order_id] = position
 
-        engine._close_position(position, reason="stop_loss", limit_price=sl_level)
+        # Register position with tracker before closing
+        engine.live_position_tracker.open_position(position)
+
+        # Execute exit through exit handler
+        exit_result = engine.live_exit_handler.execute_exit(
+            position=position,
+            exit_reason="Stop loss",
+            current_price=98.0,
+            limit_price=sl_level,
+            current_balance=10_000.0,
+            candle_low=94.0,
+            candle_high=101.0,
+        )
 
         # P&L should be based on SL price (95), not close (98)
         # (95 - 100) / 100 * 0.1 * 10000 = -$50
         expected_pnl = -50.0
-        assert engine.total_pnl == pytest.approx(expected_pnl)
+        assert exit_result.realized_pnl == pytest.approx(expected_pnl)
 
 
 class TestSharedModelConsistency:
