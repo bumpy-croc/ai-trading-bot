@@ -321,18 +321,18 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
     df = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0], "atr": [1.0, 1.0, 1.0, 1.0]})
 
     # Before activation
-    engine._update_trailing_stops(df, 1, 101.0)  # +1%
+    engine.live_exit_handler.update_trailing_stops(df, 1, 101.0)  # +1%
     assert position.trailing_stop_activated is True  # activation_threshold=0.5%
     assert position.breakeven_triggered is False
 
     old_sl = position.stop_loss
     # Move further
-    engine._update_trailing_stops(df, 2, 102.0)
+    engine.live_exit_handler.update_trailing_stops(df, 2, 102.0)
     assert position.stop_loss is not None
     assert position.stop_loss >= old_sl
 
     # Hit breakeven threshold at +2%
-    engine._update_trailing_stops(df, 3, 103.0)
+    engine.live_exit_handler.update_trailing_stops(df, 3, 103.0)
     assert position.breakeven_triggered is True
 
 
