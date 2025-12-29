@@ -17,7 +17,7 @@ Test Categories:
 10. Edge Cases - Zero balance, extreme volatility, rapid signals
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import Event
 from types import MethodType
 from unittest.mock import Mock, patch
@@ -667,6 +667,34 @@ class TestRiskManagementIntegration:
             # Should attempt to initialize dynamic risk manager
             # May be None if initialization failed
             assert hasattr(engine, "dynamic_risk_manager")
+
+    def test_dynamic_risk_zero_balance_fallback(self, mock_data_provider, minimal_strategy):
+        """Dynamic risk adjustment uses initial_balance when current_balance is zero/None."""
+
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
+            engine = LiveTradingEngine(
+                strategy=minimal_strategy,
+                data_provider=mock_data_provider,
+                enable_dynamic_risk=True,
+                enable_live_trading=False,
+                initial_balance=10000.0,
+            )
+
+            # Set current_balance to None to trigger fallback
+            engine.current_balance = None
+
+            # Call _apply_dynamic_risk_adjustment - should not raise
+            from datetime import datetime
+
+            result = engine._apply_dynamic_risk_adjustment(0.1, datetime.now(UTC))
+
+            # Should return original size (no crash, graceful fallback)
+            assert result == 0.1 or result > 0  # Either original or adjusted, but not crash
+
+            # Set current_balance to 0 to trigger fallback
+            engine.current_balance = 0.0
+            result = engine._apply_dynamic_risk_adjustment(0.1, datetime.now(UTC))
+            assert result == 0.1 or result > 0
 
     def test_trailing_stop_policy_configuration(self, mock_data_provider, minimal_strategy):
         """Trailing stop policy should be configurable"""

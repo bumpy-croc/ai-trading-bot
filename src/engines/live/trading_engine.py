@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -683,10 +683,13 @@ class LiveTradingEngine:
                 adjustment.position_size_factor,
                 adjustment.primary_reason,
             )
+            # Log both factor values (for analysis) and sizes (for debugging)
             log_risk_event(
                 "dynamic_risk_adjustment",
                 position_size_factor=adjustment.position_size_factor,
                 reason=adjustment.primary_reason,
+                original_value=1.0,
+                adjusted_value=adjustment.position_size_factor,
                 original_size=adjustment.original_size,
                 adjusted_size=adjustment.adjusted_size,
                 current_drawdown=adjustment.current_drawdown,
@@ -1402,7 +1405,9 @@ class LiveTradingEngine:
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
                 current_time = (
-                    current_candle.name if hasattr(current_candle, "name") else datetime.utcnow()
+                    current_candle.name
+                    if hasattr(current_candle, "name")
+                    else datetime.now(UTC)
                 )
 
                 runtime_decision = self._runtime_process_decision(
@@ -1820,7 +1825,7 @@ class LiveTradingEngine:
                 log_reasons = [
                     exit_reason if should_exit else "holding_position",
                     f"current_pnl_{current_pnl:.4f}",
-                    f"position_age_{(datetime.utcnow() - position.entry_time).total_seconds():.0f}s",
+                    f"position_age_{(datetime.now(UTC) - position.entry_time).total_seconds():.0f}s",
                     f"entry_price_{position.entry_price:.2f}",
                 ]
 
@@ -1918,7 +1923,7 @@ class LiveTradingEngine:
                 runtime_decision=runtime_decision,
                 balance=self.current_balance,
                 current_price=float(current_price),
-                current_time=datetime.utcnow(),
+                current_time=datetime.now(UTC),
                 peak_balance=perf_metrics.peak_balance or self.current_balance,
                 trading_session_id=self.trading_session_id,
             )
