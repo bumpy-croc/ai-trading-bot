@@ -10,8 +10,49 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.engines.live.execution.entry_handler import LiveEntrySignal
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
+
+
+def _execute_entry(
+    engine: LiveTradingEngine,
+    symbol: str,
+    side: PositionSide,
+    size: float,
+    price: float,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+) -> None:
+    engine._execute_entry(
+        symbol=symbol,
+        side=side,
+        size=size,
+        price=price,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        signal_strength=0.0,
+        signal_confidence=0.0,
+    )
+
+
+def _execute_exit(
+    engine: LiveTradingEngine,
+    position: Position,
+    reason: str,
+    current_price: float,
+    limit_price: float | None = None,
+    candle_high: float | None = None,
+    candle_low: float | None = None,
+) -> None:
+    engine._execute_exit(
+        position=position,
+        reason=reason,
+        limit_price=limit_price,
+        current_price=current_price,
+        candle_high=candle_high,
+        candle_low=candle_low,
+        candle=None,
+        skip_live_close=reason == "stop_loss" and limit_price is not None,
+    )
 
 
 class TestFeeSlippageParity:
@@ -43,20 +84,17 @@ class TestFeeSlippageParity:
         expected_fee = position_value * fee_rate  # $10 fee on $1000 position
 
         # Open position through engine
-        entry_signal = LiveEntrySignal(
-            should_enter=True,
+        _execute_entry(
+            engine,
+            symbol="TEST",
             side=PositionSide.LONG,
-            size_fraction=position_size,
+            size=position_size,
+            price=100.0,
             stop_loss=95.0,
             take_profit=110.0,
         )
-        engine._execute_entry_signal(
-            entry_signal,
-            symbol="TEST",
-            current_price=100.0,
-        )
 
-        assert engine.total_fees_paid == pytest.approx(expected_fee)
+        assert engine.live_execution_engine.total_fees_paid == pytest.approx(expected_fee)
         assert engine.current_balance == pytest.approx(initial_balance - expected_fee)
 
     def test_exit_fee_deducted_from_pnl(self):
@@ -91,15 +129,15 @@ class TestFeeSlippageParity:
             original_size=position_size,
             current_size=position_size,
         )
-        engine.positions[position.order_id] = position
+        engine.live_position_tracker.track_recovered_position(position, db_id=None)
 
         # Close position
-        engine._close_position(position, reason="test")
+        _execute_exit(engine, position, reason="test", current_price=110.0)
 
         # Exit fee is based on exit notional (basis_balance * position_size * exit_price/entry_price)
         # Exit notional = 10000 * 0.1 * (110.0/100.0) = 1100
         # Exit fee: 1100 * 0.001 = 1.1
-        assert engine.total_fees_paid == pytest.approx(1.1)
+        assert engine.live_execution_engine.total_fees_paid == pytest.approx(1.1)
 
     def test_slippage_applied_adversely_on_entry(self):
         """Slippage should work against the position on entry."""
@@ -121,21 +159,18 @@ class TestFeeSlippageParity:
         )
 
         # Open long position
-        entry_signal = LiveEntrySignal(
-            should_enter=True,
+        _execute_entry(
+            engine,
+            symbol="TEST",
             side=PositionSide.LONG,
-            size_fraction=0.1,
+            size=0.1,
+            price=100.0,
             stop_loss=95.0,
             take_profit=110.0,
         )
-        engine._execute_entry_signal(
-            entry_signal,
-            symbol="TEST",
-            current_price=100.0,
-        )
 
         # For long, slippage should increase entry price (worse for buyer)
-        position = list(engine.positions.values())[0]
+        position = list(engine.live_position_tracker._positions.values())[0]
         expected_entry = 100.0 * (1 + slippage_rate)
         assert position.entry_price == pytest.approx(expected_entry)
 
@@ -170,15 +205,15 @@ class TestFeeSlippageParity:
             original_size=0.1,
             current_size=0.1,
         )
-        engine.positions[position.order_id] = position
+        engine.live_position_tracker.track_recovered_position(position, db_id=None)
 
         # Close position
-        engine._close_position(position, reason="test")
+        _execute_exit(engine, position, reason="test", current_price=110.0)
 
         # For long exit, slippage should decrease exit price (worse for seller)
         # Expected exit: 110.0 * (1 - 0.0005) = 109.945
         # P&L should reflect the slippage-adjusted exit price
-        assert engine.total_slippage_cost > 0
+        assert engine.live_execution_engine.total_slippage_cost > 0
 
 
 class TestStopLossTakeProfitParity:
@@ -215,7 +250,7 @@ class TestStopLossTakeProfitParity:
 
         # Close price above SL, but low below SL
         # SL should trigger because low breached SL
-        triggered = engine._check_stop_loss(
+        triggered = engine.live_exit_handler._check_stop_loss(
             position,
             current_price=98.0,  # Close is above SL
             candle_high=101.0,
@@ -254,7 +289,7 @@ class TestStopLossTakeProfitParity:
         )
 
         # Low is above SL, should not trigger
-        triggered = engine._check_stop_loss(
+        triggered = engine.live_exit_handler._check_stop_loss(
             position,
             current_price=98.0,
             candle_high=101.0,
@@ -293,7 +328,7 @@ class TestStopLossTakeProfitParity:
         )
 
         # Close below SL, but high above SL - should trigger
-        triggered = engine._check_stop_loss(
+        triggered = engine.live_exit_handler._check_stop_loss(
             position,
             current_price=102.0,  # Close is below SL
             candle_high=106.0,  # High breaches SL at 105
@@ -332,7 +367,7 @@ class TestStopLossTakeProfitParity:
         )
 
         # Close below TP, but high above TP - should trigger
-        triggered = engine._check_take_profit(
+        triggered = engine.live_exit_handler._check_take_profit(
             position,
             current_price=108.0,  # Close is below TP
             candle_high=112.0,  # High breaches TP at 110
@@ -374,16 +409,22 @@ class TestExitPriceParity:
             current_size=0.1,
             stop_loss=stop_loss_level,
         )
-        engine.positions[position.order_id] = position
+        engine.live_position_tracker.track_recovered_position(position, db_id=None)
 
         # Close position with SL limit price
-        engine._close_position(position, reason="stop_loss", limit_price=stop_loss_level)
+        _execute_exit(
+            engine,
+            position,
+            reason="stop_loss",
+            current_price=stop_loss_level,
+            limit_price=stop_loss_level,
+        )
 
         # P&L should be based on SL price (95), not close price (98)
         # Long: (exit - entry) / entry * size = (95 - 100) / 100 * 0.1 = -0.005 = -0.5%
         # Cash P&L on $10,000: -0.5% of $10,000 = -$50
         expected_cash_pnl = -50.0
-        assert engine.total_pnl == pytest.approx(expected_cash_pnl)
+        assert engine.performance_tracker.get_metrics().total_pnl == pytest.approx(expected_cash_pnl)
 
     def test_take_profit_exit_uses_tp_level(self):
         """When TP triggers, exit should be at TP level, not close price."""
@@ -414,16 +455,22 @@ class TestExitPriceParity:
             current_size=0.1,
             take_profit=take_profit_level,
         )
-        engine.positions[position.order_id] = position
+        engine.live_position_tracker.track_recovered_position(position, db_id=None)
 
         # Close position with TP limit price
-        engine._close_position(position, reason="take_profit", limit_price=take_profit_level)
+        _execute_exit(
+            engine,
+            position,
+            reason="take_profit",
+            current_price=take_profit_level,
+            limit_price=take_profit_level,
+        )
 
         # P&L should be based on TP price (110), not close price (115)
         # Long: (exit - entry) / entry * size = (110 - 100) / 100 * 0.1 = 0.01 = 1%
         # Cash P&L on $10,000: 1% of $10,000 = $100
         expected_cash_pnl = 100.0
-        assert engine.total_pnl == pytest.approx(expected_cash_pnl)
+        assert engine.performance_tracker.get_metrics().total_pnl == pytest.approx(expected_cash_pnl)
 
 
 class TestPositionSizeParity:
@@ -450,20 +497,17 @@ class TestPositionSizeParity:
         )
 
         # Try to open position larger than max
-        entry_signal = LiveEntrySignal(
-            should_enter=True,
+        _execute_entry(
+            engine,
+            symbol="TEST",
             side=PositionSide.LONG,
-            size_fraction=0.5,  # 50% - should be capped to 10%
+            size=0.5,  # 50% - should be capped to 10%
+            price=100.0,
             stop_loss=95.0,
             take_profit=110.0,
         )
-        engine._execute_entry_signal(
-            entry_signal,
-            symbol="TEST",
-            current_price=100.0,
-        )
 
-        position = list(engine.positions.values())[0]
+        position = list(engine.live_position_tracker._positions.values())[0]
         assert position.size == pytest.approx(max_position)
 
 
@@ -559,37 +603,31 @@ class TestCostTrackingParity:
         )
 
         # Open first position
-        first_entry_signal = LiveEntrySignal(
-            should_enter=True,
+        _execute_entry(
+            engine,
+            symbol="TEST1",
             side=PositionSide.LONG,
-            size_fraction=0.1,
+            size=0.1,
+            price=100.0,
             stop_loss=95.0,
             take_profit=110.0,
         )
-        engine._execute_entry_signal(
-            first_entry_signal,
-            symbol="TEST1",
-            current_price=100.0,
-        )
 
-        first_fee = engine.total_fees_paid
+        first_fee = engine.live_execution_engine.total_fees_paid
 
         # Open second position
-        second_entry_signal = LiveEntrySignal(
-            should_enter=True,
+        _execute_entry(
+            engine,
+            symbol="TEST2",
             side=PositionSide.SHORT,
-            size_fraction=0.1,
+            size=0.1,
+            price=100.0,
             stop_loss=105.0,
             take_profit=90.0,
         )
-        engine._execute_entry_signal(
-            second_entry_signal,
-            symbol="TEST2",
-            current_price=100.0,
-        )
 
         # Fees should have accumulated
-        assert engine.total_fees_paid > first_fee
+        assert engine.live_execution_engine.total_fees_paid > first_fee
 
     def test_slippage_costs_tracked_separately(self):
         """Slippage costs should be tracked separately from fees."""
@@ -608,20 +646,20 @@ class TestCostTrackingParity:
             slippage_rate=0.0005,
         )
 
-        entry_signal = LiveEntrySignal(
-            should_enter=True,
+        _execute_entry(
+            engine,
+            symbol="TEST",
             side=PositionSide.LONG,
-            size_fraction=0.1,
+            size=0.1,
+            price=100.0,
             stop_loss=95.0,
             take_profit=110.0,
         )
-        engine._execute_entry_signal(
-            entry_signal,
-            symbol="TEST",
-            current_price=100.0,
-        )
 
         # Both should be tracked
-        assert engine.total_fees_paid > 0
-        assert engine.total_slippage_cost > 0
-        assert engine.total_fees_paid != engine.total_slippage_cost
+        assert engine.live_execution_engine.total_fees_paid > 0
+        assert engine.live_execution_engine.total_slippage_cost > 0
+        assert (
+            engine.live_execution_engine.total_fees_paid
+            != engine.live_execution_engine.total_slippage_cost
+        )

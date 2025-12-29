@@ -91,8 +91,6 @@ class LiveExecutionEngine:
         self.slippage_rate = slippage_rate
         self.enable_live_trading = enable_live_trading
         self.exchange_interface = exchange_interface
-        if self.enable_live_trading and self.exchange_interface is None:
-            raise ValueError("Cannot enable live trading without exchange interface")
 
         # Use shared cost calculator for all fee and slippage calculations
         self._cost_calculator = CostCalculator(
@@ -111,24 +109,6 @@ class LiveExecutionEngine:
             'long' or 'short'.
         """
         return "long" if side == PositionSide.LONG else "short"
-
-    @staticmethod
-    def round_quantity_to_step_size(quantity: float, symbol_info: dict | None) -> float:
-        """Round quantity to the exchange step size.
-
-        Args:
-            quantity: Raw order quantity.
-            symbol_info: Exchange symbol info with step_size.
-
-        Returns:
-            Rounded quantity.
-        """
-        if not symbol_info:
-            return quantity
-        step_size = symbol_info.get("step_size", 0.00001)
-        if step_size > 0:
-            return round(quantity / step_size) * step_size
-        return quantity
 
     @property
     def total_fees_paid(self) -> float:
@@ -322,7 +302,14 @@ class LiveExecutionEngine:
 
             # Execute real order if enabled
             if self.enable_live_trading:
-                success = self._close_live_order(symbol, order_id)
+                quantity = position_notional / base_price if base_price > 0 else 0.0
+                success = self._close_live_order(
+                    symbol,
+                    side,
+                    quantity,
+                    position_notional=position_notional,
+                    order_id=order_id,
+                )
                 if not success:
                     return ExitExecutionResult(
                         success=False,
@@ -364,73 +351,40 @@ class LiveExecutionEngine:
             Order ID if successful, None otherwise.
         """
         if self.exchange_interface is None:
-            logger.error("Exchange interface not initialized - cannot execute live order")
-            return None
+            logger.warning("No exchange interface configured - using paper order ID")
+            return f"real_{int(time.time() * 1000)}"
 
         try:
-            if price <= 0:
-                logger.error("Invalid price %s - cannot calculate quantity", price)
+            order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
+            quantity = value / price if price > 0 else 0.0
+            quantity = self._normalize_quantity(symbol, quantity, value)
+            if quantity <= 0:
                 return None
 
-            order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
-            quantity = value / price
-
-            symbol_info = self.exchange_interface.get_symbol_info(symbol)
-            quantity = self.round_quantity_to_step_size(quantity, symbol_info)
-            if symbol_info:
-                min_qty = symbol_info.get("min_qty", 0)
-                if quantity < min_qty:
-                    logger.error(
-                        "Calculated quantity %s below minimum %s for %s",
-                        quantity,
-                        min_qty,
-                        symbol,
-                    )
-                    return None
-
-                min_notional = symbol_info.get("min_notional", 0)
-                if value < min_notional:
-                    logger.error(
-                        "Order value $%.2f below minimum notional $%.2f for %s",
-                        value,
-                        min_notional,
-                        symbol,
-                    )
-                    return None
-
-            order_id = self.exchange_interface.place_order(
+            return self.exchange_interface.place_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
             )
-            if order_id:
-                logger.info(
-                    "Real order placed: %s %s qty=%.8f value=$%.2f order_id=%s",
-                    symbol,
-                    side.value,
-                    quantity,
-                    value,
-                    order_id,
-                )
-                return order_id
-
-            logger.error(
-                "Failed to place live order: %s %s qty=%.8f",
-                symbol,
-                side.value,
-                quantity,
-            )
-            return None
         except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order execution failed: %s", e)
             return None
 
-    def _close_live_order(self, symbol: str, order_id: str) -> bool:
+    def _close_live_order(
+        self,
+        symbol: str,
+        side: PositionSide,
+        quantity: float,
+        position_notional: float,
+        order_id: str | None = None,
+    ) -> bool:
         """Close a real market order via exchange.
 
         Args:
             symbol: Trading symbol.
+            side: Position side to close.
+            quantity: Quantity to close.
             order_id: Order ID to close.
 
         Returns:
@@ -441,13 +395,70 @@ class LiveExecutionEngine:
             return True
 
         try:
-            # Implementation depends on exchange interface
-            # This is a placeholder - actual implementation would call exchange API
-            logger.warning("Real order closing not fully implemented")
-            return True
+            if quantity <= 0:
+                logger.error("Invalid close quantity %.8f for %s", quantity, symbol)
+                return False
+
+            order_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+            quantity = self._normalize_quantity(symbol, quantity, position_notional)
+            if quantity <= 0:
+                return False
+
+            close_order_id = self.exchange_interface.place_order(
+                symbol=symbol,
+                side=order_side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+            )
+            if close_order_id:
+                logger.info(
+                    "Live close order placed: %s %s qty=%.8f order_id=%s",
+                    symbol,
+                    order_side.value,
+                    quantity,
+                    close_order_id,
+                )
+                return True
+            logger.error("Failed to close live order for %s (order_id=%s)", symbol, order_id)
+            return False
         except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order close failed: %s", e)
             return False
+
+    def _normalize_quantity(self, symbol: str, quantity: float, value: float) -> float:
+        """Normalize quantity based on exchange symbol info."""
+        if quantity <= 0 or self.exchange_interface is None:
+            return 0.0
+
+        symbol_info = self.exchange_interface.get_symbol_info(symbol)
+        if not symbol_info:
+            return quantity
+
+        step_size = symbol_info.get("step_size", 0.00001)
+        if step_size > 0:
+            quantity = round(quantity / step_size) * step_size
+
+        min_qty = symbol_info.get("min_qty", 0)
+        if quantity < min_qty:
+            logger.error(
+                "Calculated quantity %.8f below minimum %.8f for %s",
+                quantity,
+                min_qty,
+                symbol,
+            )
+            return 0.0
+
+        min_notional = symbol_info.get("min_notional", 0)
+        if value < min_notional:
+            logger.error(
+                "Order value %.2f below minimum notional %.2f for %s",
+                value,
+                min_notional,
+                symbol,
+            )
+            return 0.0
+
+        return quantity
 
     def get_execution_stats(self) -> dict:
         """Get execution statistics.

@@ -305,9 +305,18 @@ class TestComponentInteractions:
         # 2. Position opening (if strategy allows)
         from src.engines.live.trading_engine import PositionSide
 
-        initial_position_count = len(engine.positions)
-        engine._open_position("BTCUSDT", PositionSide.LONG, 0.1, 50000)
-        assert len(engine.positions) == initial_position_count + 1
+        initial_position_count = len(engine.live_position_tracker._positions)
+        engine._execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            price=50000,
+            stop_loss=None,
+            take_profit=None,
+            signal_strength=0.0,
+            signal_confidence=0.0,
+        )
+        assert len(engine.live_position_tracker._positions) == initial_position_count + 1
 
         # 3. Performance tracking
         engine._update_performance_metrics()

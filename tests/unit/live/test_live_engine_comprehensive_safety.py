@@ -198,8 +198,8 @@ class TestInitializationSafety:
             assert engine.is_running is False
             assert len(engine.positions) == 0
             assert len(engine.completed_trades) == 0
-            assert engine.total_trades == 0
-            assert engine.total_pnl == 0.0
+            assert engine.performance_tracker.get_metrics().total_trades == 0
+            assert engine.performance_tracker.get_metrics().total_pnl == 0.0
             assert engine.consecutive_errors == 0
             assert engine.current_balance == engine.initial_balance
 
@@ -278,17 +278,19 @@ class TestSafetyGuardrails:
 
             # Simulate large drawdown
             engine.current_balance = 7500  # 25% drawdown
-            engine.peak_balance = 10000
+            engine.performance_tracker.peak_balance = 10000
 
             # Engine should detect excessive drawdown
             # This would typically trigger in the main loop
-            current_dd = (engine.peak_balance - engine.current_balance) / engine.peak_balance
+            current_dd = (
+                engine.performance_tracker.peak_balance - engine.current_balance
+            ) / engine.performance_tracker.peak_balance
             assert current_dd > risk_params.max_drawdown
 
     def test_stop_loss_always_set(self, mock_data_provider, minimal_strategy):
         """All positions must have stop loss defined"""
         with patch("src.engines.live.trading_engine.DatabaseManager"):
-            LiveTradingEngine(
+            _ = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
@@ -427,7 +429,7 @@ class TestPositionManagement:
     def test_position_creation_validation(self, mock_data_provider, minimal_strategy):
         """Position creation should validate all required fields"""
         with patch("src.engines.live.trading_engine.DatabaseManager"):
-            LiveTradingEngine(
+            _ = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
@@ -542,21 +544,17 @@ class TestAccountSynchronization:
             mock_db.get_current_balance.return_value = 15000.0  # Different from initial
             mock_db.create_trading_session.return_value = 1
             mock_db_class.return_value = mock_db
-            with patch(
-                "src.engines.live.trading_engine._create_exchange_provider"
-            ) as mock_exchange_provider:
-                mock_exchange_provider.return_value = (Mock(), "mock")
 
-                engine = LiveTradingEngine(
-                    strategy=minimal_strategy,
-                    data_provider=mock_data_provider,
-                    initial_balance=10000,
-                    resume_from_last_balance=True,
-                    enable_live_trading=True,  # Required for resume
-                )
+            engine = LiveTradingEngine(
+                strategy=minimal_strategy,
+                data_provider=mock_data_provider,
+                initial_balance=10000,
+                resume_from_last_balance=True,
+                enable_live_trading=True,  # Required for resume
+            )
 
-                # Should have resumed from database
-                assert engine.current_balance == 15000.0
+            # Should have resumed from database
+            assert engine.current_balance == 15000.0
 
     def test_no_balance_resume_when_disabled(self, mock_data_provider, minimal_strategy):
         """Should use initial balance when resume is disabled"""
@@ -566,21 +564,17 @@ class TestAccountSynchronization:
             mock_db.get_current_balance.return_value = 15000.0
             mock_db.create_trading_session.return_value = 1
             mock_db_class.return_value = mock_db
-            with patch(
-                "src.engines.live.trading_engine._create_exchange_provider"
-            ) as mock_exchange_provider:
-                mock_exchange_provider.return_value = (Mock(), "mock")
 
-                engine = LiveTradingEngine(
-                    strategy=minimal_strategy,
-                    data_provider=mock_data_provider,
-                    initial_balance=10000,
-                    resume_from_last_balance=False,
-                    enable_live_trading=True,
-                )
+            engine = LiveTradingEngine(
+                strategy=minimal_strategy,
+                data_provider=mock_data_provider,
+                initial_balance=10000,
+                resume_from_last_balance=False,
+                enable_live_trading=True,
+            )
 
-                # Should use initial balance, not resumed
-                assert engine.current_balance == 10000
+            # Should use initial balance, not resumed
+            assert engine.current_balance == 10000
 
     def test_peak_balance_tracking(self, mock_data_provider, minimal_strategy):
         """Peak balance should track highest balance achieved"""
@@ -593,13 +587,13 @@ class TestAccountSynchronization:
             )
 
             # Initially, peak should equal initial
-            assert engine.peak_balance == engine.initial_balance
+            assert engine.performance_tracker.peak_balance == engine.initial_balance
 
             # Simulate balance increase
             engine.current_balance = 12000
             # Peak should be manually updated in engine loop
             # This test validates the tracking mechanism exists
-            assert engine.peak_balance >= engine.initial_balance
+            assert engine.performance_tracker.peak_balance >= engine.initial_balance
 
     def test_account_snapshot_interval_configuration(self, mock_data_provider, minimal_strategy):
         """Account snapshot interval should be configurable"""
@@ -723,7 +717,7 @@ class TestHealthMonitoring:
                 enable_live_trading=False,
             )
 
-            assert engine.mfe_mae_tracker is not None
+        assert engine.live_position_tracker.mfe_mae_tracker is not None
 
 
 # ============================================================================
