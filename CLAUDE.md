@@ -383,6 +383,18 @@ When addressing review comments from a PR link:
 - Commit changes with clear message referencing the issue
 - Do not fetch the full PR diff or all comments unless necessary
 
+### Railway Environments
+
+This project is deployed on Railway. Below are guidelines for interacting with the Railway environment:
+- The project name is **innovative-transformation**.
+- Use the Railway MCP server (docs: https://docs.railway.com/reference/mcp-server) or `railway` CLI command (docs: https://docs.railway.com/guides/cli) to interact with the environment.
+- There are 3 environments
+  - **development** - synced to the `develop` branch
+  - **staging** - synced to the `staging` branch
+  - **main** - synced to the `main` branch (**CRITICAL:** this is the production environment. Never perform destructive operations here!)
+
+
+
 ## Important Context
 
 ### Model Training & Deployment Flow
