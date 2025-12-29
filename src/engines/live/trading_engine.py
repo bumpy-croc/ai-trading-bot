@@ -2135,13 +2135,25 @@ class LiveTradingEngine:
                 )
                 size = self.max_position_size
 
+            # Build entry reasons for logging and analysis
+            entry_reasons = [
+                f"side_{side.value}",
+                f"size_{size:.4f}",
+                f"strength_{signal_strength:.2f}",
+                f"confidence_{signal_confidence:.2f}",
+            ]
+            if stop_loss:
+                entry_reasons.append(f"sl_{stop_loss:.2f}")
+            if take_profit:
+                entry_reasons.append(f"tp_{take_profit:.2f}")
+
             entry_signal = LiveEntrySignal(
                 should_enter=True,
                 side=side,
                 size_fraction=size,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                reasons=None,
+                reasons=entry_reasons,
                 signal_strength=signal_strength,
                 signal_confidence=signal_confidence,
             )
@@ -2171,6 +2183,23 @@ class LiveTradingEngine:
                 strategy_name=self._strategy_name(),
             )
 
+            # Update risk manager tracking for new position
+            if self.risk_manager:
+                try:
+                    self.risk_manager.update_position(
+                        symbol=symbol,
+                        side=side.value,
+                        size=size,
+                        entry_price=position.entry_price,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to update risk manager for %s position %s: %s",
+                        side.value,
+                        symbol,
+                        e,
+                    )
+
             logger.info(
                 "🚀 Opened %s position: %s @ $%.2f (Size: %.2f%%)",
                 side.value,
@@ -2188,7 +2217,15 @@ class LiveTradingEngine:
             )
 
             if position.order_id and self.order_tracker:
-                self.order_tracker.track_order(position.order_id, symbol)
+                try:
+                    self.order_tracker.track_order(position.order_id, symbol)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to track order %s for %s: %s",
+                        position.order_id,
+                        symbol,
+                        e,
+                    )
 
             # Send alert if configured
             self._send_alert(
@@ -2264,7 +2301,7 @@ class LiveTradingEngine:
                     )
 
         except Exception as e:
-            logger.error(f"Failed to open position: {e}", exc_info=True)
+            logger.error("Failed to open position: %s", e, exc_info=True)
             if self.trading_session_id is not None:
                 self.db_manager.log_event(
                     event_type="ERROR",
