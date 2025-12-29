@@ -33,17 +33,34 @@ def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, 
     engine.is_running = True
 
     # Open a position
-    engine._open_position("BTCUSDT", PositionSide.LONG, size=0.1, price=prices.iloc[0])
-    assert len(engine.positions) == 1
+    engine._execute_entry(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        price=prices.iloc[0],
+        stop_loss=None,
+        take_profit=None,
+        signal_strength=0.0,
+        signal_confidence=0.0,
+    )
+    assert len(engine.live_position_tracker._positions) == 1
 
     # Trigger at least one MFE/MAE DB update (wait past throttle)
     time.sleep(0.1)
-    engine._update_positions_mfe_mae(current_price=float(prices.iloc[-1]))
+    engine.live_position_tracker.update_mfe_mae(current_price=float(prices.iloc[-1]))
 
     # Close the position through engine path
-    position = list(engine.positions.values())[0]
-    engine._close_position(position, reason="test_close")
-    assert len(engine.positions) == 0
+    position = list(engine.live_position_tracker._positions.values())[0]
+    engine._execute_exit(
+        position=position,
+        reason="test_close",
+        limit_price=None,
+        current_price=float(prices.iloc[-1]),
+        candle_high=None,
+        candle_low=None,
+        candle=None,
+    )
+    assert len(engine.live_position_tracker._positions) == 0
     assert len(engine.completed_trades) >= 1
 
     # Direct-methods path: validate local effects only (DB assertions require session)

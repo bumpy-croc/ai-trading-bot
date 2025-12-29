@@ -225,6 +225,47 @@ class LivePositionTracker:
             self._position_db_ids[order_id] = db_id
         return db_id
 
+    def track_recovered_position(self, position: LivePosition, db_id: int | None) -> None:
+        """Track a recovered position without re-logging it.
+
+        Args:
+            position: Position recovered from persistence.
+            db_id: Database ID associated with the position.
+        """
+        if position.order_id is None:
+            return
+
+        order_id = position.order_id
+        with self._positions_lock:
+            self._positions[order_id] = position
+            self._position_db_ids[order_id] = db_id
+
+    def set_stop_loss_order_id(self, order_id: str, stop_loss_order_id: str) -> None:
+        """Update the stop-loss order ID for a tracked position."""
+        with self._positions_lock:
+            position = self._positions.get(order_id)
+            if position is None:
+                return
+            position.stop_loss_order_id = stop_loss_order_id
+            db_id = self._position_db_ids.get(order_id)
+
+        if self.db_manager is not None and db_id is not None:
+            try:
+                self.db_manager.update_position(
+                    position_id=db_id,
+                    stop_loss_order_id=stop_loss_order_id,
+                )
+            except Exception as e:
+                logger.debug("Failed to persist stop-loss order ID: %s", e)
+
+    def remove_position(self, order_id: str) -> None:
+        """Remove a position without closing it (e.g., canceled entry)."""
+        with self._positions_lock:
+            if order_id in self._positions:
+                self.mfe_mae_tracker.clear(order_id)
+                del self._positions[order_id]
+            self._position_db_ids.pop(order_id, None)
+
     def close_position(
         self,
         order_id: str,
@@ -233,6 +274,9 @@ class LivePositionTracker:
         basis_balance: float,
     ) -> PositionCloseResult | None:
         """Close a position and compute final trade record.
+
+        Threading:
+            Acquires _positions_lock to read and delete shared position state.
 
         Args:
             order_id: Order ID of position to close.
@@ -404,6 +448,9 @@ class LivePositionTracker:
         Uses shared PartialExitExecutor to ensure consistent P&L calculation
         with fees and slippage, matching the backtest engine behavior.
 
+        Threading:
+            Acquires _positions_lock while mutating shared position state.
+
         Args:
             order_id: Order ID of position.
             delta_fraction: Fraction of current position to exit.
@@ -461,7 +508,7 @@ class LivePositionTracker:
         # Use shared executor for consistent financial calculations
         # Note: fee_rate and slippage_rate parameters are kept for backward compatibility
         # but the executor uses the rates it was initialized with
-        result = self._partial_exit_executor.execute_partial_exit(
+        partial_exit_result = self._partial_exit_executor.execute_partial_exit(
             entry_price=entry_price,
             exit_price=float(price),
             position_side=position_side,
@@ -473,10 +520,10 @@ class LivePositionTracker:
             "Partial exit: %.4f of position %s, gross_pnl=%.2f, fee=%.2f, slippage=%.2f, net_pnl=%.2f",
             delta_fraction,
             order_id,
-            result.gross_pnl,
-            result.exit_fee,
-            result.slippage_cost,
-            result.realized_pnl,
+            partial_exit_result.gross_pnl,
+            partial_exit_result.exit_fee,
+            partial_exit_result.slippage_cost,
+            partial_exit_result.realized_pnl,
         )
 
         # Persist to DB (db_id was captured under lock above)
@@ -489,10 +536,17 @@ class LivePositionTracker:
                     target_level=int(target_level),
                 )
             except Exception as e:
-                logger.debug("DB partial-exit update failed: %s", e)
+                logger.critical(
+                    "DB partial-exit update failed for %s - trading state may be inconsistent: %s",
+                    order_id,
+                    e,
+                )
+                raise RuntimeError(
+                    f"Partial-exit persistence failed for order {order_id}"
+                ) from e
 
         return PartialExitResult(
-            realized_pnl=result.realized_pnl,
+            realized_pnl=partial_exit_result.realized_pnl,
             new_current_size=new_current_size,
             partial_exits_taken=partial_exits_taken,
         )
@@ -507,6 +561,9 @@ class LivePositionTracker:
         max_position_size: float = 1.0,
     ) -> ScaleInResult | None:
         """Increase position size via scale-in.
+
+        Threading:
+            Acquires _positions_lock while mutating shared position state.
 
         Args:
             order_id: Order ID of position.

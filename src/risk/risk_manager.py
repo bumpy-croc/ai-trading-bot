@@ -23,7 +23,6 @@ from src.config.constants import (
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
 from src.tech.indicators.core import calculate_atr
-from src.infrastructure.logging.events import log_risk_event
 
 
 @dataclass
@@ -281,32 +280,8 @@ class RiskManager:
         fraction = max(min_fraction, min(max_fraction, fraction))
 
         # Optional correlation-based size reduction
-        fraction = float(fraction)
-        return max(0.0, min(self.params.max_position_size, fraction))
-
-    def apply_correlation_adjustment(
-        self,
-        size_fraction: float,
-        correlation_ctx: dict[str, Any] | None = None,
-    ) -> tuple[float, float]:
-        """Apply correlation-based size reduction to a sizing fraction."""
-        if size_fraction <= 0:
-            return 0.0, 1.0
-        if size_fraction > 1.0:
-            logging.warning(
-                "Invalid size fraction for correlation adjustment: %.4f",
-                size_fraction,
-            )
-            log_risk_event(
-                "invalid_correlation_fraction",
-                size_fraction=size_fraction,
-                clamped_to=1.0,
-            )
-            size_fraction = max(0.0, min(1.0, size_fraction))
-
-        factor = 1.0
         try:
-            if correlation_ctx:
+            if correlation_ctx and fraction > 0:
                 engine = correlation_ctx.get("engine")
                 candidate_symbol = correlation_ctx.get("candidate_symbol")
                 corr_matrix = correlation_ctx.get("corr_matrix")
@@ -318,17 +293,16 @@ class RiskManager:
                             positions=positions,
                             corr_matrix=corr_matrix,
                             candidate_symbol=str(candidate_symbol),
-                            candidate_fraction=float(size_fraction),
+                            candidate_fraction=float(fraction),
                             max_exposure_override=max_exposure_override,
                         )
                     )
                     if factor < 1.0:
-                        size_fraction = max(0.0, size_fraction * factor)
+                        fraction = max(0.0, fraction * factor)
         except Exception:
             # Fail-safe: never raise from correlation logic
             logging.exception("Exception in correlation-based size reduction logic")
-            return float(size_fraction), 1.0
-        return max(0.0, float(size_fraction)), max(0.0, float(factor))
+        return max(0.0, min(self.params.max_position_size, fraction))
 
     def compute_sl_tp(
         self,

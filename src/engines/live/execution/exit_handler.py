@@ -34,8 +34,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Maximum partial exits to process per cycle (defense-in-depth against malformed policies)
+# Maximum partial exits to process per cycle (defense-in-depth against malformed policies).
+# Ten caps worst-case overhead while still supporting typical multi-target exit ladders.
 MAX_PARTIAL_EXITS_PER_CYCLE = 10
+# Maximum acceptable filled-price deviation from entry price before logging a critical warning.
+MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -54,6 +57,7 @@ class LiveExitResult:
     success: bool
     realized_pnl: float = 0.0
     realized_pnl_percent: float = 0.0
+    exit_price: float = 0.0
     exit_fee: float = 0.0
     slippage_cost: float = 0.0
     exit_reason: str = ""
@@ -82,6 +86,7 @@ class LiveExitHandler:
         partial_manager: PartialOperationsManager | None = None,
         use_high_low_for_stops: bool = True,
         max_position_size: float = 0.1,
+        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize exit handler.
 
@@ -94,6 +99,7 @@ class LiveExitHandler:
             partial_manager: Unified partial operations manager.
             use_high_low_for_stops: Use candle high/low for SL/TP detection.
             max_position_size: Maximum position size for scale-ins.
+            max_filled_price_deviation: Threshold for logging suspicious fill prices.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -103,6 +109,7 @@ class LiveExitHandler:
         self.partial_manager = partial_manager
         self.use_high_low_for_stops = use_high_low_for_stops
         self.max_position_size = max_position_size
+        self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
 
@@ -237,27 +244,14 @@ class LiveExitHandler:
         # - Winning positions: selling more valuable assets → higher fee
         # - Losing positions: selling less valuable assets → lower fee
         # This differs from entry fees which use the original notional value.
-        fraction = float(
-            position.current_size
-            if position.current_size is not None
-            else position.size
+        position_notional = self._calculate_position_notional(
+            position=position,
+            current_balance=current_balance,
+            exit_price=base_exit_price,
         )
-        basis_balance = (
-            float(position.entry_balance)
-            if position.entry_balance is not None and position.entry_balance > 0
-            else current_balance
-        )
-        entry_notional = basis_balance * fraction
-        # Adjust for price change to get true exit notional value (this is intentional and correct)
-        price_adjustment = (
-            base_exit_price / position.entry_price
-            if position.entry_price > 0
-            else 1.0
-        )
-        position_notional = entry_notional * price_adjustment
 
         # Execute via execution engine
-        exec_result = self.execution_engine.execute_exit(
+        execution_result = self.execution_engine.execute_exit(
             symbol=position.symbol,
             side=position.side,
             order_id=position.order_id,
@@ -265,16 +259,16 @@ class LiveExitHandler:
             position_notional=position_notional,
         )
 
-        if not exec_result.success:
+        if not execution_result.success:
             return LiveExitResult(
                 success=False,
-                error=exec_result.error,
+                error=execution_result.error,
             )
 
         # Close position in tracker
         close_result = self.position_tracker.close_position(
             order_id=position.order_id,
-            exit_price=exec_result.executed_price,
+            exit_price=execution_result.executed_price,
             exit_reason=exit_reason,
             basis_balance=current_balance,
         )
@@ -300,8 +294,106 @@ class LiveExitHandler:
             success=True,
             realized_pnl=close_result.realized_pnl,
             realized_pnl_percent=close_result.realized_pnl_percent,
-            exit_fee=exec_result.exit_fee,
-            slippage_cost=exec_result.slippage_cost,
+            exit_price=close_result.exit_price,
+            exit_fee=execution_result.exit_fee,
+            slippage_cost=execution_result.slippage_cost,
+            exit_reason=exit_reason,
+        )
+
+    def execute_filled_exit(
+        self,
+        position: LivePosition,
+        exit_reason: str,
+        filled_price: float,
+        current_balance: float,
+    ) -> LiveExitResult:
+        """Finalize an exit where the exchange already filled the order.
+
+        Args:
+            position: Position to close.
+            exit_reason: Reason for exit.
+            filled_price: Exchange-reported fill price.
+            current_balance: Current account balance.
+
+        Returns:
+            LiveExitResult with execution details.
+        """
+        if position.order_id is None:
+            return LiveExitResult(
+                success=False,
+                error="Position has no order_id",
+            )
+
+        if not self.position_tracker.has_position(position.order_id):
+            logger.warning(
+                "Filled exit received for already closed position %s",
+                position.order_id,
+            )
+            return LiveExitResult(
+                success=False,
+                error="Position already closed",
+            )
+
+        if filled_price <= 0:
+            return LiveExitResult(
+                success=False,
+                error="Invalid filled price",
+            )
+
+        if position.entry_price > 0:
+            price_change = abs(filled_price - position.entry_price) / position.entry_price
+            if price_change > self.max_filled_price_deviation:
+                logger.critical(
+                    "Suspicious fill price for %s: entry=%.2f filled=%.2f (%.1f%% move)",
+                    position.symbol,
+                    position.entry_price,
+                    filled_price,
+                    price_change * 100,
+                )
+
+        # Filled exits use the exchange-reported price; slippage models adverse execution costs.
+        executed_price = self.execution_engine.apply_exit_slippage(
+            filled_price, position.side
+        )
+
+        position_notional = self._calculate_position_notional(
+            position=position,
+            current_balance=current_balance,
+            exit_price=executed_price,
+        )
+
+        exit_fee = self.execution_engine.calculate_exit_fee(position_notional)
+        slippage_cost = self.execution_engine.calculate_slippage_cost(position_notional)
+
+        close_result = self.position_tracker.close_position(
+            order_id=position.order_id,
+            exit_price=executed_price,
+            exit_reason=exit_reason,
+            basis_balance=current_balance,
+        )
+        if close_result is None:
+            return LiveExitResult(
+                success=False,
+                error="Failed to close position in tracker",
+            )
+
+        if self.risk_manager is not None:
+            try:
+                self.risk_manager.close_position(position.symbol)
+            except (AttributeError, ValueError, KeyError) as e:
+                logger.warning(
+                    "Failed to update risk manager for closed position %s: %s",
+                    position.symbol,
+                    e,
+                )
+
+        return LiveExitResult(
+            success=True,
+            realized_pnl=close_result.realized_pnl,
+            realized_pnl_percent=close_result.realized_pnl_percent,
+            exit_price=close_result.exit_price,
+            exit_fee=exit_fee,
+            slippage_cost=slippage_cost,
             exit_reason=exit_reason,
         )
 
@@ -446,6 +538,24 @@ class LiveExitHandler:
                 return current_price >= position.take_profit
             else:
                 return current_price <= position.take_profit
+
+    def _calculate_position_notional(
+        self,
+        position: LivePosition,
+        current_balance: float,
+        exit_price: float,
+    ) -> float:
+        """Calculate exit notional accounting for price movement."""
+        fraction = float(
+            position.current_size if position.current_size is not None else position.size
+        )
+        basis_balance = (
+            float(position.entry_balance)
+            if position.entry_balance is not None and position.entry_balance > 0
+            else current_balance
+        )
+        price_adjustment = exit_price / position.entry_price if position.entry_price > 0 else 1.0
+        return basis_balance * fraction * price_adjustment
 
     def update_trailing_stops(
         self,

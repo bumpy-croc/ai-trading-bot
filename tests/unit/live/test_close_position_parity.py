@@ -51,16 +51,24 @@ def test_close_position_cash_matches_backtester(side, fraction, entry_price, exi
         original_size=fraction,
         current_size=fraction,
     )
-    engine.positions[position.order_id] = position
+    engine.live_position_tracker.track_recovered_position(position, db_id=None)
 
     expected_pct = pnl_percent(entry_price, exit_price, Side(side.value), fraction)
     expected_cash = cash_pnl(expected_pct, initial_balance)
 
-    engine._close_position(position, reason="unit-test")
+    engine._execute_exit(
+        position=position,
+        reason="unit-test",
+        limit_price=None,
+        current_price=exit_price,
+        candle_high=None,
+        candle_low=None,
+        candle=None,
+    )
 
     assert engine.current_balance == pytest.approx(initial_balance + expected_cash)
-    assert engine.total_pnl == pytest.approx(expected_cash)
-    assert position.order_id not in engine.positions
+    assert engine.performance_tracker.get_metrics().total_pnl == pytest.approx(expected_cash)
+    assert position.order_id not in engine.live_position_tracker._positions
 
 
 def _build_component_strategy() -> Strategy:
