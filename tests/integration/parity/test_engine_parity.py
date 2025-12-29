@@ -439,16 +439,14 @@ class TestPositionSizingParity:
             symbol="TEST",
             side=PositionSide.LONG,
             size_fraction=min(0.5, max_position),  # Handler enforces cap
-            entry_price=100.0,
+            base_price=100.0,
             balance=10_000.0,
-            stop_loss=95.0,
-            take_profit=110.0,
-            trading_session_id=None,
         )
 
-        # Verify position was created with capped size
-        assert entry_result.position is not None
-        assert entry_result.position.size == pytest.approx(max_position)
+        # Verify position value matches capped size
+        assert entry_result.success is True
+        expected_position_value = 10_000.0 * max_position
+        assert entry_result.position_value == pytest.approx(expected_position_value)
 
     def test_backtester_position_size_parity(self):
         """Verify backtester has same position size limits as live engine."""
@@ -499,17 +497,14 @@ class TestFeeSlippageIntegration:
             symbol="TEST",
             side=PositionSide.LONG,
             size_fraction=position_size,
-            entry_price=100.0,
+            base_price=100.0,
             balance=initial_balance,
-            stop_loss=95.0,
-            take_profit=110.0,
-            trading_session_id=None,
         )
 
         # Verify fee was charged
         assert entry_result.entry_fee == pytest.approx(expected_fee)
         # Balance should be reduced by the fee
-        assert engine.live_execution_engine.cost_calculator.total_fees_paid == pytest.approx(expected_fee)
+        assert engine.live_entry_handler.execution_engine.total_fees_paid == pytest.approx(expected_fee)
 
     def test_slippage_affects_entry_price(self):
         """Verify slippage is applied to entry prices identically."""
@@ -535,16 +530,13 @@ class TestFeeSlippageIntegration:
             symbol="TEST",
             side=PositionSide.LONG,
             size_fraction=0.1,
-            entry_price=100.0,
+            base_price=100.0,
             balance=10_000.0,
-            stop_loss=95.0,
-            take_profit=110.0,
-            trading_session_id=None,
         )
 
         # For long, slippage increases entry price
         expected_entry = 100.0 * (1 + slippage_rate)
-        assert entry_result.position.entry_price == pytest.approx(expected_entry)
+        assert entry_result.executed_price == pytest.approx(expected_entry)
 
 
 class TestStopLossTakeProfitParity:
@@ -590,7 +582,7 @@ class TestStopLossTakeProfitParity:
         )
 
         assert exit_check.should_exit is True
-        assert "stop_loss" in exit_check.exit_reason
+        assert "Stop loss" in exit_check.exit_reason
 
     def test_short_sl_triggers_on_high_breach(self):
         """Verify short SL triggers when high breaches SL level."""
@@ -632,7 +624,7 @@ class TestStopLossTakeProfitParity:
         )
 
         assert exit_check.should_exit is True
-        assert "stop_loss" in exit_check.exit_reason
+        assert "Stop loss" in exit_check.exit_reason
 
     def test_exit_uses_sl_level_not_close(self):
         """Verify exit price uses SL level, not close price."""
@@ -668,12 +660,12 @@ class TestStopLossTakeProfitParity:
         # Execute exit through exit handler
         exit_result = engine.live_exit_handler.execute_exit(
             position=position,
-            current_balance=10_000.0,
-            reason="stop_loss",
+            exit_reason="Stop loss",
+            current_price=98.0,
             limit_price=sl_level,
+            current_balance=10_000.0,
             candle_low=94.0,
             candle_high=101.0,
-            trading_session_id=None,
         )
 
         # P&L should be based on SL price (95), not close (98)
