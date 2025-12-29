@@ -33,15 +33,24 @@ def test_mfe_mae_throttle_prevents_rapid_db_updates(
 
     # Avoid spinning the full thread to sidestep join-on-current-thread edge case
     engine.is_running = True
-    engine._open_position("BTCUSDT", PositionSide.LONG, size=0.1, price=100.0)
+    engine._execute_entry(
+        symbol="BTCUSDT",
+        side=PositionSide.LONG,
+        size=0.1,
+        price=100.0,
+        stop_loss=None,
+        take_profit=None,
+        signal_strength=0.0,
+        signal_confidence=0.0,
+    )
 
     # Set last persist to now to block first attempt
-    engine._last_mfe_mae_persist = datetime.utcnow()
-    engine._update_positions_mfe_mae(current_price=101.0)  # should not persist
+    engine.live_position_tracker._last_mfe_mae_persist = datetime.utcnow()
+    engine.live_position_tracker.update_mfe_mae(current_price=101.0)  # should not persist
 
     # Advance time past throttle (sleep is acceptable here; could monkeypatch utcnow if needed)
     time.sleep(0.1)
-    engine._update_positions_mfe_mae(current_price=102.0)  # should persist once
+    engine.live_position_tracker.update_mfe_mae(current_price=102.0)  # should persist once
 
     # If a DB exception occurs, test will fail; we just assert engine still runs
     # Engine remains logically active for the scope of this test

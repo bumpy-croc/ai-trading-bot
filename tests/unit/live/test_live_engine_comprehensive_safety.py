@@ -17,12 +17,10 @@ Test Categories:
 10. Edge Cases - Zero balance, extreme volatility, rapid signals
 """
 
-from datetime import datetime, timedelta
-from decimal import Decimal
+from datetime import datetime
 from threading import Event
-from typing import Any
 from types import MethodType
-from unittest.mock import Mock, MagicMock, patch, PropertyMock
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
@@ -32,7 +30,6 @@ from src.database.manager import DatabaseManager
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 from src.risk.risk_manager import RiskParameters
 from src.strategies.ml_basic import create_ml_basic_strategy
-
 
 # ============================================================================
 # Test Fixtures
@@ -201,8 +198,8 @@ class TestInitializationSafety:
             assert engine.is_running is False
             assert len(engine.positions) == 0
             assert len(engine.completed_trades) == 0
-            assert engine.total_trades == 0
-            assert engine.total_pnl == 0.0
+            assert engine.performance_tracker.get_metrics().total_trades == 0
+            assert engine.performance_tracker.get_metrics().total_pnl == 0.0
             assert engine.consecutive_errors == 0
             assert engine.current_balance == engine.initial_balance
 
@@ -281,17 +278,19 @@ class TestSafetyGuardrails:
 
             # Simulate large drawdown
             engine.current_balance = 7500  # 25% drawdown
-            engine.peak_balance = 10000
+            engine.performance_tracker.peak_balance = 10000
 
             # Engine should detect excessive drawdown
             # This would typically trigger in the main loop
-            current_dd = (engine.peak_balance - engine.current_balance) / engine.peak_balance
+            current_dd = (
+                engine.performance_tracker.peak_balance - engine.current_balance
+            ) / engine.performance_tracker.peak_balance
             assert current_dd > risk_params.max_drawdown
 
     def test_stop_loss_always_set(self, mock_data_provider, minimal_strategy):
         """All positions must have stop loss defined"""
         with patch("src.engines.live.trading_engine.DatabaseManager"):
-            engine = LiveTradingEngine(
+            _ = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
@@ -430,7 +429,7 @@ class TestPositionManagement:
     def test_position_creation_validation(self, mock_data_provider, minimal_strategy):
         """Position creation should validate all required fields"""
         with patch("src.engines.live.trading_engine.DatabaseManager"):
-            engine = LiveTradingEngine(
+            _ = LiveTradingEngine(
                 strategy=minimal_strategy,
                 data_provider=mock_data_provider,
                 enable_live_trading=False,
@@ -537,14 +536,23 @@ class TestPositionManagement:
 class TestAccountSynchronization:
     """Test account balance and position synchronization"""
 
-    def test_balance_resume_from_database(self, mock_data_provider, minimal_strategy):
+    def test_balance_resume_from_database(
+        self, mock_data_provider, minimal_strategy, mock_exchange
+    ):
         """Should resume balance from last database snapshot"""
-        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
+        with (
+            patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class,
+            patch(
+                "src.engines.live.trading_engine._create_exchange_provider"
+            ) as mock_create_exchange,
+        ):
             mock_db = Mock()
             mock_db.get_active_session_id.return_value = 1
             mock_db.get_current_balance.return_value = 15000.0  # Different from initial
             mock_db.create_trading_session.return_value = 1
             mock_db_class.return_value = mock_db
+
+            mock_create_exchange.return_value = (mock_exchange, "MockExchange")
 
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
@@ -557,14 +565,23 @@ class TestAccountSynchronization:
             # Should have resumed from database
             assert engine.current_balance == 15000.0
 
-    def test_no_balance_resume_when_disabled(self, mock_data_provider, minimal_strategy):
+    def test_no_balance_resume_when_disabled(
+        self, mock_data_provider, minimal_strategy, mock_exchange
+    ):
         """Should use initial balance when resume is disabled"""
-        with patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class:
+        with (
+            patch("src.engines.live.trading_engine.DatabaseManager") as mock_db_class,
+            patch(
+                "src.engines.live.trading_engine._create_exchange_provider"
+            ) as mock_create_exchange,
+        ):
             mock_db = Mock()
             mock_db.get_active_session_id.return_value = 1
             mock_db.get_current_balance.return_value = 15000.0
             mock_db.create_trading_session.return_value = 1
             mock_db_class.return_value = mock_db
+
+            mock_create_exchange.return_value = (mock_exchange, "MockExchange")
 
             engine = LiveTradingEngine(
                 strategy=minimal_strategy,
@@ -588,13 +605,13 @@ class TestAccountSynchronization:
             )
 
             # Initially, peak should equal initial
-            assert engine.peak_balance == engine.initial_balance
+            assert engine.performance_tracker.peak_balance == engine.initial_balance
 
             # Simulate balance increase
             engine.current_balance = 12000
             # Peak should be manually updated in engine loop
             # This test validates the tracking mechanism exists
-            assert engine.peak_balance >= engine.initial_balance
+            assert engine.performance_tracker.peak_balance >= engine.initial_balance
 
     def test_account_snapshot_interval_configuration(self, mock_data_provider, minimal_strategy):
         """Account snapshot interval should be configurable"""
@@ -718,7 +735,7 @@ class TestHealthMonitoring:
                 enable_live_trading=False,
             )
 
-            assert engine.mfe_mae_tracker is not None
+        assert engine.live_position_tracker.mfe_mae_tracker is not None
 
 
 # ============================================================================

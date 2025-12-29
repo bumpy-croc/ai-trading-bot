@@ -13,13 +13,17 @@ try:
     from src.performance.metrics import cash_pnl
     from src.position_management.trailing_stops import TrailingStopPolicy
     from src.strategies.components import (
+        ConfidenceWeightedSizer,
+        FixedRiskManager,
+        MarketData,
+        MLBasicSignalGenerator,
         Signal,
         SignalDirection,
-        Strategy,
-        MLBasicSignalGenerator,
-        FixedRiskManager,
-        ConfidenceWeightedSizer,
         SignalGenerator,
+        Strategy,
+    )
+    from src.strategies.components import (
+        Position as ComponentPosition,
     )
     from src.strategies.components.strategy import TradingDecision
 
@@ -44,6 +48,7 @@ except ImportError:
             self.is_running = False
             self.positions = {}
             self.completed_trades = []
+            self.live_position_tracker = Mock(_positions=self.positions)
 
     class Position:
         def __init__(
@@ -93,16 +98,25 @@ class TestLiveTradingEngine:
         assert engine.initial_balance == 10000
         assert engine.enable_live_trading is False
         assert engine.is_running is False
-        assert len(engine.positions) == 0
+        assert len(engine.live_position_tracker._positions) == 0
         assert len(engine.completed_trades) == 0
 
     def test_engine_initialization_with_live_trading_enabled(
-        self, mock_strategy, mock_data_provider
+        self, mock_strategy, mock_data_provider, mock_exchange
     ):
-        engine = LiveTradingEngine(
-            strategy=mock_strategy, data_provider=mock_data_provider, enable_live_trading=True
-        )
-        assert engine.enable_live_trading is True
+        from unittest.mock import patch
+
+        with patch(
+            "src.engines.live.trading_engine._create_exchange_provider"
+        ) as mock_create_exchange:
+            mock_create_exchange.return_value = (mock_exchange, "MockExchange")
+
+            engine = LiveTradingEngine(
+                strategy=mock_strategy,
+                data_provider=mock_data_provider,
+                enable_live_trading=True,
+            )
+            assert engine.enable_live_trading is True
 
     @pytest.mark.live_trading
     def test_position_opening_paper_trading(self, mock_strategy, mock_data_provider):
@@ -114,21 +128,22 @@ class TestLiveTradingEngine:
             fee_rate=0.0,
             slippage_rate=0.0,
         )
-        if hasattr(engine, "_open_position"):
-            engine._open_position(
-                symbol="BTCUSDT",
-                side=PositionSide.LONG,
-                size=0.1,
-                price=50000,
-                stop_loss=49000,
-                take_profit=52000,
-            )
-            assert len(engine.positions) == 1
-            position = list(engine.positions.values())[0]
-            assert position.symbol == "BTCUSDT"
-            assert position.size == 0.1
-            assert position.entry_price == 50000
-            assert position.stop_loss == 49000
+        engine._execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.1,
+            price=50000,
+            stop_loss=49000,
+            take_profit=52000,
+            signal_strength=0.0,
+            signal_confidence=0.0,
+        )
+        assert len(engine.live_position_tracker._positions) == 1
+        position = list(engine.live_position_tracker._positions.values())[0]
+        assert position.symbol == "BTCUSDT"
+        assert position.size == 0.1
+        assert position.entry_price == 50000
+        assert position.stop_loss == 49000
 
     @pytest.mark.live_trading
     def test_position_closing(self, mock_strategy, mock_data_provider):
@@ -148,14 +163,21 @@ class TestLiveTradingEngine:
                 stop_loss=49000,
                 order_id="test_001",
             )
-            engine.positions["test_001"] = position
+            engine.live_position_tracker.track_recovered_position(position, db_id=None)
             mock_data_provider.get_live_data.return_value = pd.DataFrame(
                 {"close": [51000]}, index=[datetime.now()]
             )
-            if hasattr(engine, "_close_position"):
-                engine._close_position(position, "Test closure")
-                assert len(engine.positions) == 0
-                assert len(engine.completed_trades) == 1
+            engine._execute_exit(
+                position=position,
+                reason="Test closure",
+                limit_price=None,
+                current_price=51000,
+                candle_high=None,
+                candle_low=None,
+                candle=None,
+            )
+            assert len(engine.live_position_tracker._positions) == 0
+            assert len(engine.completed_trades) == 1
 
     @pytest.mark.live_trading
     def test_stop_loss_trigger(self, mock_strategy, mock_data_provider):
@@ -169,9 +191,8 @@ class TestLiveTradingEngine:
             stop_loss=49000,
             order_id="test_001",
         )
-        if hasattr(engine, "_check_stop_loss"):
-            assert engine._check_stop_loss(position, 48500) is True
-            assert engine._check_stop_loss(position, 49500) is False
+        assert engine.live_exit_handler._check_stop_loss(position, 48500) is True
+        assert engine.live_exit_handler._check_stop_loss(position, 49500) is False
 
     @pytest.mark.live_trading
     def test_take_profit_trigger(self, mock_strategy, mock_data_provider):
@@ -185,15 +206,14 @@ class TestLiveTradingEngine:
             take_profit=52000,
             order_id="test_001",
         )
-        if hasattr(engine, "_check_take_profit"):
-            assert engine._check_take_profit(position, 52500) is True
-            assert engine._check_take_profit(position, 51500) is False
-            # Short case
-            if hasattr(PositionSide, "SHORT"):
-                position.side = PositionSide.SHORT
-                position.take_profit = 48000
-                assert engine._check_take_profit(position, 47500) is True
-                assert engine._check_take_profit(position, 48500) is False
+        assert engine.live_exit_handler._check_take_profit(position, 52500) is True
+        assert engine.live_exit_handler._check_take_profit(position, 51500) is False
+        # Short case
+        if hasattr(PositionSide, "SHORT"):
+            position.side = PositionSide.SHORT
+            position.take_profit = 48000
+            assert engine.live_exit_handler._check_take_profit(position, 47500) is True
+            assert engine.live_exit_handler._check_take_profit(position, 48500) is False
 
     @pytest.mark.live_trading
     def test_position_pnl_update(self, mock_strategy, mock_data_provider):
@@ -206,7 +226,7 @@ class TestLiveTradingEngine:
             entry_time=datetime.now(),
             order_id="long_001",
         )
-        engine.positions["long_001"] = long_position
+        engine.live_position_tracker.track_recovered_position(long_position, db_id=None)
         if hasattr(engine, "_update_position_pnl"):
             engine._update_position_pnl(51000)
             sized_return = (51000 - 50000) / 50000 * 0.1
@@ -219,15 +239,18 @@ class TestLiveTradingEngine:
         engine = LiveTradingEngine(
             strategy=mock_strategy, data_provider=mock_data_provider, max_position_size=0.1
         )
-        if hasattr(engine, "_open_position"):
-            engine._open_position(
-                symbol="BTCUSDT",
-                side=PositionSide.LONG,
-                size=0.5,
-                price=50000,
-            )
-            position = list(engine.positions.values())[0]
-            assert position.size <= 0.1
+        engine._execute_entry(
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            price=50000,
+            stop_loss=None,
+            take_profit=None,
+            signal_strength=0.0,
+            signal_confidence=0.0,
+        )
+        position = list(engine.live_position_tracker._positions.values())[0]
+        assert position.size <= 0.1
 
     def test_performance_metrics_calculation(self, mock_strategy, mock_data_provider):
         engine = LiveTradingEngine(
@@ -240,7 +263,7 @@ class TestLiveTradingEngine:
         # Update performance tracker with test data
         # Simulate 10 trades: 6 winning, 4 losing
         from unittest.mock import Mock
-        for i in range(6):
+        for _ in range(6):
             trade = Mock()
             trade.pnl = 100.0  # winning trade
             trade.entry_time = datetime.now()
@@ -249,7 +272,7 @@ class TestLiveTradingEngine:
             trade.side = "long"
             engine.performance_tracker.record_trade(trade)
 
-        for i in range(4):
+        for _ in range(4):
             trade = Mock()
             trade.pnl = -50.0  # losing trade
             trade.entry_time = datetime.now()
@@ -261,7 +284,6 @@ class TestLiveTradingEngine:
         # Update balance to reflect trades (600 - 200 = 400 net, but we want 500 total PnL)
         # So use 10500 final balance with 10000 initial = 500 gain
         engine.current_balance = 10500
-        engine.peak_balance = 10800
         engine.performance_tracker.update_balance(10500, datetime.now())
         engine.performance_tracker.peak_balance = 10800
         engine.performance_tracker.max_drawdown = (10800 - 10500) / 10800  # ~2.78%
@@ -301,26 +323,25 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
         stop_loss=99.0,
         order_id="test_trail_001",
     )
-    engine.positions[position.order_id] = position
-    engine.position_db_ids[position.order_id] = None  # disable db for this test
+    engine.live_position_tracker.track_recovered_position(position, db_id=None)
 
     import pandas as pd
 
     df = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0], "atr": [1.0, 1.0, 1.0, 1.0]})
 
     # Before activation
-    engine._update_trailing_stops(df, 1, 101.0)  # +1%
+    engine.live_exit_handler.update_trailing_stops(df, 1, 101.0)  # +1%
     assert position.trailing_stop_activated is True  # activation_threshold=0.5%
     assert position.breakeven_triggered is False
 
     old_sl = position.stop_loss
     # Move further
-    engine._update_trailing_stops(df, 2, 102.0)
+    engine.live_exit_handler.update_trailing_stops(df, 2, 102.0)
     assert position.stop_loss is not None
     assert position.stop_loss >= old_sl
 
     # Hit breakeven threshold at +2%
-    engine._update_trailing_stops(df, 3, 103.0)
+    engine.live_exit_handler.update_trailing_stops(df, 3, 103.0)
     assert position.breakeven_triggered is True
 
 
@@ -388,16 +409,19 @@ def test_order_execution_with_component_strategy(mock_data_provider):
             requested_notional / engine.current_balance if engine.current_balance else 0.0
         )
         capped_fraction = min(requested_fraction, engine.max_position_size)
-        engine._open_position(
+        engine._execute_entry(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
             size=capped_fraction,
             price=50200,
             stop_loss=decision.risk_metrics.get("stop_loss_price"),
+            take_profit=None,
+            signal_strength=0.0,
+            signal_confidence=0.0,
         )
 
-        assert len(engine.positions) == 1
-        position = list(engine.positions.values())[0]
+        assert len(engine.live_position_tracker._positions) == 1
+        position = list(engine.live_position_tracker._positions.values())[0]
         assert position.size == capped_fraction
         assert position.entry_price == 50200
 
@@ -495,9 +519,7 @@ def test_stop_loss_from_component_strategy(mock_data_provider):
         position_sizer=position_sizer,
     )
 
-    engine = LiveTradingEngine(
-        strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
-    )
+    _ = LiveTradingEngine(strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False)
 
     # Create test data with enough history for ML model
     df = pd.DataFrame(
@@ -549,7 +571,7 @@ def test_position_exit_with_should_exit_position(mock_data_provider):
         position_sizer=position_sizer,
     )
 
-    engine = LiveTradingEngine(
+    _ = LiveTradingEngine(
         strategy=strategy,
         data_provider=mock_data_provider,
         enable_live_trading=False,
@@ -571,8 +593,6 @@ def test_position_exit_with_should_exit_position(mock_data_provider):
     mock_data_provider.get_live_data.return_value = df
 
     # Create a position
-    from src.strategies.components import Position as ComponentPosition, MarketData
-
     position = ComponentPosition(
         symbol="BTCUSDT",
         entry_price=50000,
@@ -612,9 +632,7 @@ def test_stop_loss_update_with_component_strategy(mock_data_provider):
         position_sizer=position_sizer,
     )
 
-    engine = LiveTradingEngine(
-        strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
-    )
+    _ = LiveTradingEngine(strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False)
 
     # Create test data
     df = pd.DataFrame(
@@ -702,22 +720,33 @@ def test_position_management_with_trading_decision(mock_data_provider):
     # If we get a BUY signal, test opening and managing position
     if decision.signal.direction == SignalDirection.BUY:
         # Open position using decision data
-        engine._open_position(
+        engine._execute_entry(
             symbol="BTCUSDT",
             side=PositionSide.LONG,
             size=decision.position_size,
             price=51490,
             stop_loss=decision.risk_metrics.get("stop_loss_price"),
+            take_profit=None,
+            signal_strength=0.0,
+            signal_confidence=0.0,
         )
 
-        assert len(engine.positions) == 1
-        position = list(engine.positions.values())[0]
+        assert len(engine.live_position_tracker._positions) == 1
+        position = list(engine.live_position_tracker._positions.values())[0]
 
         # Verify position was created with data from TradingDecision
         assert position.size == decision.position_size
         assert position.entry_price == 51490
 
         # Test position exit
-        engine._close_position(position, "test_exit")
-        assert len(engine.positions) == 0
+        engine._execute_exit(
+            position=position,
+            reason="test_exit",
+            limit_price=None,
+            current_price=51490,
+            candle_high=None,
+            candle_low=None,
+            candle=None,
+        )
+        assert len(engine.live_position_tracker._positions) == 0
         assert len(engine.completed_trades) == 1
