@@ -1,3 +1,4 @@
+from datetime import datetime
 from unittest.mock import Mock
 
 import numpy as np
@@ -56,8 +57,13 @@ def test_live_engine_correlation_reduces_size(monkeypatch):
     # Simulate we have an existing open position in a correlated symbol
     engine.positions = {}
     # New entry check should compute fraction and reduce to <= 0.1 due to correlation
+    current_time = df.index[-1] if hasattr(df.index[-1], "to_pydatetime") else datetime.utcnow()
     engine._check_entry_conditions(
-        df, len(df) - 1, symbol="ETHUSDT", current_price=float(df["close"].iloc[-1])
+        df,
+        len(df) - 1,
+        symbol="ETHUSDT",
+        current_price=float(df["close"].iloc[-1]),
+        current_time=current_time,
     )
     # We cannot capture internal position_size directly without deep hooks; instead, ensure correlation engine exists
     assert engine.correlation_engine is not None

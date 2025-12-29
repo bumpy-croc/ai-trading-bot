@@ -635,21 +635,44 @@ class LiveTradingEngine:
         original_size: float,
         current_time: datetime,
     ) -> float:
-        """Apply dynamic risk adjustments to position size."""
+        """Apply dynamic risk adjustments to position size.
+
+        Reduces position size during drawdown or adverse market conditions
+        to preserve capital and prevent excessive losses.
+        """
         if self.dynamic_risk_manager is None:
             return original_size
 
-        perf_metrics = self.performance_tracker.get_metrics()
-        self._dynamic_risk_handler.set_manager(self.dynamic_risk_manager)
-        adjusted_size = self._dynamic_risk_handler.apply_dynamic_risk(
-            original_size=original_size,
-            current_time=current_time,
-            balance=float(self.current_balance or 0.0),
-            peak_balance=float(perf_metrics.peak_balance or self.current_balance or 0.0),
-            trading_session_id=self.trading_session_id,
-        )
-        self._log_dynamic_risk_adjustments()
-        return adjusted_size
+        try:
+            perf_metrics = self.performance_tracker.get_metrics()
+
+            # Guard against zero/None balances to prevent division by zero in drawdown calc
+            balance = (
+                float(self.current_balance)
+                if self.current_balance and self.current_balance > 0
+                else float(self.initial_balance)
+            )
+            peak = (
+                float(perf_metrics.peak_balance)
+                if perf_metrics.peak_balance and perf_metrics.peak_balance > 0
+                else balance
+            )
+            # Peak should never be less than current balance
+            peak_balance = max(peak, balance)
+
+            adjusted_size = self._dynamic_risk_handler.apply_dynamic_risk(
+                original_size=original_size,
+                current_time=current_time,
+                balance=balance,
+                peak_balance=peak_balance,
+                trading_session_id=self.trading_session_id,
+            )
+            self._log_dynamic_risk_adjustments()
+            return adjusted_size
+
+        except Exception as e:
+            logger.warning("Failed to apply dynamic risk adjustment: %s", e)
+            return original_size
 
     def _log_dynamic_risk_adjustments(self) -> None:
         """Log dynamic risk adjustments for observability and audit."""
@@ -671,13 +694,14 @@ class LiveTradingEngine:
 
             if self.db_manager and self.trading_session_id:
                 try:
+                    # Log factor values (not position sizes) for backward compatibility
                     self.db_manager.log_risk_adjustment(
                         session_id=self.trading_session_id,
                         adjustment_type=adjustment.primary_reason.split("_")[0],
                         trigger_reason=adjustment.primary_reason,
                         parameter_name="position_size_factor",
-                        original_value=adjustment.original_size,
-                        adjusted_value=adjustment.adjusted_size,
+                        original_value=1.0,
+                        adjusted_value=adjustment.position_size_factor,
                         adjustment_factor=adjustment.position_size_factor,
                         current_drawdown=adjustment.current_drawdown,
                         performance_score=None,
