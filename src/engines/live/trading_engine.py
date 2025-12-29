@@ -593,7 +593,6 @@ class LiveTradingEngine:
         # Entry handler
         self.live_entry_handler = entry_handler or LiveEntryHandler(
             execution_engine=self.live_execution_engine,
-            position_tracker=self.live_position_tracker,
             risk_manager=self.risk_manager,
             component_strategy=(
                 self.strategy if isinstance(self.strategy, ComponentStrategy) else None
@@ -2151,8 +2150,6 @@ class LiveTradingEngine:
                 symbol=symbol,
                 current_price=price,
                 balance=self.current_balance,
-                session_id=self.trading_session_id,
-                strategy_name=self._strategy_name(),
             )
 
             if not result.executed or result.position is None:
@@ -2166,6 +2163,13 @@ class LiveTradingEngine:
 
             position.metadata["entry_fee"] = entry_fee
             position.metadata["entry_slippage_cost"] = entry_slippage_cost
+
+            # Register position with tracker
+            self.live_position_tracker.open_position(
+                position=position,
+                session_id=self.trading_session_id,
+                strategy_name=self._strategy_name(),
+            )
 
             logger.info(
                 "🚀 Opened %s position: %s @ $%.2f (Size: %.2f%%)",
