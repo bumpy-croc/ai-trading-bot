@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -50,7 +50,7 @@ class TestExitFeeCalculation:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             entry_balance=1000.0,
             order_id="test-order-123",
         )
@@ -98,7 +98,7 @@ class TestExitFeeCalculation:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             entry_balance=1000.0,
             order_id="test-order-456",
         )
@@ -148,7 +148,7 @@ class TestTakeProfitLimitPricing:
             side=PositionSide.LONG,
             size=0.5,
             entry_price=90.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             entry_balance=1000.0,
             order_id="tp-order-long",
         )
@@ -167,8 +167,50 @@ class TestTakeProfitLimitPricing:
         execute_exit_call = execution_engine.execute_exit.call_args
         base_price = execute_exit_call.kwargs["base_price"]
 
-        assert base_price <= 100.0
         assert base_price == pytest.approx(100.0)
+
+    def test_take_profit_uses_limit_price_for_short(self) -> None:
+        """Short take profit should not exceed the limit price."""
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        execution_engine.execute_exit.return_value = MagicMock(
+            success=True,
+            executed_price=80.0,
+            order_id="tp-exit-short",
+            fill_quantity=1.0,
+        )
+
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.SHORT,
+            size=0.5,
+            entry_price=100.0,
+            entry_time=datetime.now(timezone.utc),
+            entry_balance=1000.0,
+            order_id="tp-order-short",
+        )
+        position_tracker.open_position(position)
+
+        exit_handler.execute_exit(
+            position=position,
+            exit_reason="Take profit",
+            current_price=70.0,
+            limit_price=80.0,
+            current_balance=1100.0,
+            candle_high=95.0,
+            candle_low=65.0,  # More favorable than limit, should not be used
+        )
+
+        execute_exit_call = execution_engine.execute_exit.call_args
+        base_price = execute_exit_call.kwargs["base_price"]
+
+        # Base price should be the limit price (80.0), not the more favorable candle_low (65.0)
+        assert base_price == pytest.approx(80.0)
 
 
 class TestPositionTrackerThreadSafety:
@@ -191,7 +233,7 @@ class TestPositionTrackerThreadSafety:
                         side=PositionSide.LONG,
                         size=0.1,
                         entry_price=50000.0 + i,
-                        entry_time=datetime.utcnow(),
+                        entry_time=datetime.now(timezone.utc),
                         order_id=f"open-{i}",
                     )
                     tracker.open_position(position)
@@ -248,7 +290,7 @@ class TestPositionTrackerThreadSafety:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             order_id="test-1",
         )
         tracker.open_position(position)
