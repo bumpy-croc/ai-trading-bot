@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import numpy as np
@@ -57,7 +57,7 @@ def test_live_engine_correlation_reduces_size(monkeypatch):
     # Simulate we have an existing open position in a correlated symbol
     engine.positions = {}
     # New entry check should compute fraction and reduce to <= 0.1 due to correlation
-    current_time = df.index[-1] if hasattr(df.index[-1], "to_pydatetime") else datetime.utcnow()
+    current_time = df.index[-1] if hasattr(df.index[-1], "to_pydatetime") else datetime.now(UTC)
     engine._check_entry_conditions(
         df,
         len(df) - 1,
