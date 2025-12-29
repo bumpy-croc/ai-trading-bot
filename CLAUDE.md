@@ -13,7 +13,10 @@ This is a modular cryptocurrency trading system focused on long-term, risk-balan
 ### Environment Setup
 
 **Remote Environments (Claude Code Web)**:
-- The virtual environment is automatically created and configured by the sessionStart hook
+
+You are operating in a claude code web environment if CLAUDE_CODE_REMOTE == true:
+
+- The virtual environment is automatically created and configured by the `sessionStart` hook
 - Dependencies from `requirements-server.txt` are installed automatically at session start
 - Use the existing `.venv` for all operations - it's already activated
 - Only install packages manually as a fallback if venv is unavailable or broken
@@ -258,7 +261,7 @@ LOG_JSON=true  # Enable structured logging
    git checkout -b feature/your-feature
    ```
 
-2. **Write code** following conventions (see AGENTS.md for full details):
+2. **Write code** following conventions (see CODE.md for full details):
    - **Functions**: Keep concise, self-evident purpose, always include docstrings
    - **Types**: Use type hints, avoid `Any` where possible
    - **Variables**: Use descriptive names, extract magic numbers to constants
@@ -292,19 +295,6 @@ LOG_JSON=true  # Enable structured logging
    # Only commit changes made during the session, not whole working tree
    # Verify correct branch before committing
    ```
-
-### Using ExecPlans for Complex Work
-
-For significant features or refactors, create an ExecPlan following `.agents/PLANS.md`:
-
-**ExecPlan Structure**:
-- **Purpose**: User-visible behavior enabled by this change
-- **Progress**: Checkbox list with timestamps of granular steps
-- **Surprises & Discoveries**: Unexpected behaviors encountered
-- **Decision Log**: Key decisions with rationale and dates
-- **Outcomes & Retrospective**: Summary of achievements and lessons
-
-**Location**: Store in `docs/execplans/descriptive_name.md`
 
 **Key Requirements**:
 - Self-contained - includes all context needed
@@ -485,8 +475,6 @@ railway logs --environment production
 ## Regression Prevention
 
 When Claude makes a mistake or you discover a best practice during development, add it to the "Learned Constraints" section below. This builds institutional knowledge and prevents repeating mistakes.
-
-**How to add**: Simply tell Claude "Add to learned constraints: [your rule]" or use the `#` prefix pattern.
 
 ### Learned Constraints
 
