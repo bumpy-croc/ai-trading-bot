@@ -9,7 +9,7 @@ import hashlib
 import json
 import logging
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -215,7 +215,7 @@ class StrategyRegistry:
             name=strategy.name,
             version="1.0.0",
             parent_id=parent_id,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             created_by=metadata.get("created_by", "system"),
             description=metadata.get("description", ""),
             tags=metadata.get("tags", []),
@@ -240,7 +240,7 @@ class StrategyRegistry:
             StrategyVersion(
                 version="1.0.0",
                 strategy_id=strategy_id,
-                created_at=datetime.now(),
+                created_at=datetime.now(UTC),
                 changes=["Initial version"],
                 performance_delta=None,
                 is_major=True,
@@ -312,7 +312,7 @@ class StrategyRegistry:
             name=strategy.name,
             version=new_version,
             parent_id=current_metadata.parent_id,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             created_by=current_metadata.created_by,
             description=current_metadata.description,
             tags=current_metadata.tags,
@@ -339,7 +339,7 @@ class StrategyRegistry:
         version_record = StrategyVersion(
             version=new_version,
             strategy_id=strategy_id,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             changes=changes,
             performance_delta=None,
             is_major=is_major,
@@ -708,7 +708,7 @@ class StrategyRegistry:
             "valid": len(errors) == 0,
             "errors": errors,
             "warnings": warnings,
-            "validated_at": datetime.now().isoformat(),
+            "validated_at": datetime.now(UTC).isoformat(),
         }
 
     def _generate_strategy_id(self, name: str) -> str:

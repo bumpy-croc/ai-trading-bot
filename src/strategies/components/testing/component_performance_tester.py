@@ -13,7 +13,7 @@ Error Handling Strategy:
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -718,7 +718,7 @@ class ComponentPerformanceTester:
                         size=position_size,
                         entry_price=entry_price,
                         current_price=scenario_data.iloc[i + 1]["close"],
-                        entry_time=datetime.now(),
+                        entry_time=datetime.now(UTC),
                     )
 
                     # Test exit decision

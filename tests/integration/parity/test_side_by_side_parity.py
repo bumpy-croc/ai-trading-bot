@@ -8,6 +8,7 @@ Key principle: Given the same trade (entry price, exit price, size, fees),
 both engines must produce the same final balance and P&L.
 """
 
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pandas as pd
@@ -455,7 +456,7 @@ class TestFeeCalculationParity:
             side=PositionSide.LONG,
             size=position_size,
             entry_price=entry_result.executed_price,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id=entry_result.order_id,
             original_size=position_size,
             current_size=position_size,
@@ -666,7 +667,7 @@ class TestStopLossTriggerParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-sl-order",
             original_size=0.1,
             current_size=0.1,
@@ -704,7 +705,7 @@ class TestStopLossTriggerParity:
             side=PositionSide.SHORT,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-sl-order-short",
             original_size=0.1,
             current_size=0.1,
@@ -746,7 +747,7 @@ class TestTakeProfitTriggerParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-tp-order",
             original_size=0.1,
             current_size=0.1,

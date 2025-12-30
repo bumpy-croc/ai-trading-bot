@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pandas as pd
@@ -18,8 +18,8 @@ def test_short_entry_uses_overrides_and_caps_fraction():
     provider = MockDataProvider(interval_seconds=60, num_candles=50)
     bt = Backtester(strategy=strategy, data_provider=provider)
 
-    start = datetime.now() - timedelta(hours=5)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(hours=5)
+    end = datetime.now(UTC)
     result = bt.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)
 
     # We should have at least one trade attempted; if none, the test still

@@ -1,6 +1,6 @@
 """Unit tests for MFE/MAE analyzer functionality."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -166,7 +166,7 @@ class TestMFEMAEAnalyzer:
 
     def test_identify_optimal_exit_points_basic(self):
         """Test identification of optimal exit points."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         trades = [
             {
                 "strategy": "ml_basic",
@@ -249,7 +249,7 @@ class TestTradeMFERecord:
 
     def test_trade_mfe_record_creation(self):
         """Test TradeMFERecord creation and attributes."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         record = TradeMFERecord(
             strategy_name="ml_basic",
             mfe=0.05,

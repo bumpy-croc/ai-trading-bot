@@ -11,7 +11,7 @@ This module tests the following components:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, Mock, patch
 
@@ -117,7 +117,7 @@ def sample_position():
         entry_price=50000.0,
         stop_loss=48000.0,
         take_profit=55000.0,
-        entry_time=datetime.utcnow(),
+        entry_time=datetime.now(UTC),
         order_id="entry_order_123",
         entry_balance=Decimal("10000.0"),
         stop_loss_order_id="sl_order_456",
@@ -302,7 +302,7 @@ class TestExecuteFilledExit:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(UTC),
             order_id="entry_order_123",
             entry_balance=10000.0,
         )

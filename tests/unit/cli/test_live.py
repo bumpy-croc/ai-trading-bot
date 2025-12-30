@@ -25,10 +25,10 @@ class TestDateRange:
         """Test that date range is calculated correctly for given days."""
         # Arrange & Act
         with patch("cli.commands.live.datetime") as mock_datetime:
-            from datetime import datetime, timedelta
+            from datetime import UTC, datetime, timedelta
 
-            mock_now = datetime(2024, 10, 29)
-            mock_datetime.utcnow.return_value = mock_now
+            mock_now = datetime(2024, 10, 29, tzinfo=UTC)
+            mock_datetime.now.return_value = mock_now
 
             start, end = _date_range(7)
 

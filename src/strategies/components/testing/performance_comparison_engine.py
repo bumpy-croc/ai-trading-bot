@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -165,7 +165,7 @@ class PerformanceComparisonEngine:
         Returns:
             Complete comparison result with validation and recommendations
         """
-        comparison_id = comparison_id or f"comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        comparison_id = comparison_id or f"comparison_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
 
         self.logger.info(f"Starting strategy comparison: {comparison_id}")
 
@@ -189,7 +189,7 @@ class PerformanceComparisonEngine:
                 f"{legacy_strategy.__class__.__name__} vs {new_strategy.__class__.__name__}",
                 f"legacy_{legacy_strategy.__class__.__name__}",
                 f"new_{new_strategy.__class__.__name__}",
-                f"backtest_{datetime.now().strftime('%Y-%m-%d')}",
+                f"backtest_{datetime.now(UTC).strftime('%Y-%m-%d')}",
             )
 
             # Perform statistical tests
@@ -203,7 +203,7 @@ class PerformanceComparisonEngine:
             # Create comparison result
             result = StrategyComparisonResult(
                 comparison_id=comparison_id,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
                 legacy_strategy_name=legacy_strategy.__class__.__name__,
                 new_strategy_name=new_strategy.__class__.__name__,
                 parity_report=parity_report,
@@ -230,7 +230,7 @@ class PerformanceComparisonEngine:
             # Return a failed result
             return StrategyComparisonResult(
                 comparison_id=comparison_id,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
                 legacy_strategy_name=legacy_strategy.__class__.__name__,
                 new_strategy_name=new_strategy.__class__.__name__,
                 parity_report=PerformanceComparisonReport(

@@ -4,7 +4,7 @@ Unit tests for order status management methods in DatabaseManager.
 Tests the new methods for handling order status transitions and validation.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -67,7 +67,7 @@ class TestOrderStatusMethods:
 
         mock_order = Mock()
         mock_order.status = OrderStatus.FILLED  # Already filled
-        mock_order.filled_at = datetime.utcnow()  # Already has filled timestamp
+        mock_order.filled_at = datetime.now(UTC)  # Already has filled timestamp
 
         with patch.object(db_manager, "get_session") as mock_get_session:
             mock_session = Mock()

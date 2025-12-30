@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -138,7 +138,7 @@ class TestBinanceDataProvider:
             mock_config.return_value = mock_config_obj
             provider = BinanceProvider()
             try:
-                result = provider.get_historical_data("BTCUSDT", "invalid", datetime.now())
+                result = provider.get_historical_data("BTCUSDT", "invalid", datetime.now(UTC))
                 assert isinstance(result, pd.DataFrame)
                 assert len(result) == 0
             except (ValueError, Exception) as e:

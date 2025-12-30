@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
@@ -46,7 +46,7 @@ def test_close_position_cash_matches_backtester(side, fraction, entry_price, exi
         side=side,
         size=fraction,
         entry_price=entry_price,
-        entry_time=datetime.now(),
+        entry_time=datetime.now(UTC),
         order_id="order-1",
         original_size=fraction,
         current_size=fraction,

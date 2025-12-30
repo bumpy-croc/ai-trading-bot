@@ -5,7 +5,7 @@ These tests validate end-to-end workflows and component interactions.
 They are slower but critical for ensuring the system works as a whole.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pandas as pd
@@ -292,7 +292,7 @@ class TestComponentInteractions:
         # Mock data provider
         market_data = pd.DataFrame(
             {"open": [50000], "high": [50200], "low": [49800], "close": [50100], "volume": [1000]},
-            index=[datetime.now()],
+            index=[datetime.now(UTC)],
         )
 
         mock_data_provider.get_live_data.return_value = market_data
@@ -388,7 +388,7 @@ class TestRealTimeScenarios:
                     "close": [50050],
                     "volume": [1000],
                 },
-                index=[datetime.now()],
+                index=[datetime.now(UTC)],
             ),
         ]
 
@@ -414,7 +414,7 @@ class TestRealTimeScenarios:
         # Mock continuous data
         mock_data_provider.get_live_data.return_value = pd.DataFrame(
             {"open": [50000], "high": [50100], "low": [49900], "close": [50050], "volume": [1000]},
-            index=[datetime.now()],
+            index=[datetime.now(UTC)],
         )
 
         # Simulate extended operation
@@ -477,7 +477,7 @@ class TestProductionReadiness:
 
         # Mock data for closing positions - make sure the mock is configured properly
         mock_data_provider.get_live_data.return_value = pd.DataFrame(
-            {"close": [51000]}, index=[datetime.now()]
+            {"close": [51000]}, index=[datetime.now(UTC)]
         )
 
         # Add some mock positions
@@ -488,7 +488,7 @@ class TestProductionReadiness:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test_001",
         )
         engine.positions["test_001"] = position

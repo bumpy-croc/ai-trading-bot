@@ -8,7 +8,7 @@ based on detected market regimes for optimal performance.
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -176,7 +176,7 @@ class RegimeStrategySwitcher:
         return {
             "timeframe_regimes": regime_results,
             "consensus_regime": consensus_regime,
-            "analysis_timestamp": datetime.now(),
+            "analysis_timestamp": datetime.now(UTC),
         }
 
     def _determine_consensus_regime(self, regime_results: dict[str, dict]) -> dict[str, Any]:
@@ -286,7 +286,7 @@ class RegimeStrategySwitcher:
 
         # Check cooldown
         if self.last_switch_time:
-            time_since_switch = datetime.now() - self.last_switch_time
+            time_since_switch = datetime.now(UTC) - self.last_switch_time
             cooldown = timedelta(minutes=self.switching_config.switch_cooldown_minutes)
             if time_since_switch < cooldown:
                 decision["reason"] = f"Switch cooldown: {time_since_switch} < {cooldown}"
@@ -303,7 +303,7 @@ class RegimeStrategySwitcher:
         else:
             self.regime_duration = 1
             self.current_regime = new_regime
-            self.regime_start_time = datetime.now()
+            self.regime_start_time = datetime.now(UTC)
             if current_candle_index is not None:
                 self.regime_start_candle_index = current_candle_index
 
@@ -395,7 +395,7 @@ class RegimeStrategySwitcher:
             )
 
             if success:
-                self.last_switch_time = datetime.now()
+                self.last_switch_time = datetime.now(UTC)
 
                 # Record the switch
                 switch_record = {

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -50,7 +50,7 @@ def test_update_position_mfe_mae():
         entry_order_id="order-2",
         session_id=session_id,
     )
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     db.update_position(
         position_id=pos_id,
         current_price=195.0,
@@ -81,8 +81,8 @@ def test_log_trade_with_mfe_mae():
         entry_price=100.0,
         exit_price=110.0,
         size=0.1,
-        entry_time=datetime.utcnow(),
-        exit_time=datetime.utcnow(),
+        entry_time=datetime.now(UTC),
+        exit_time=datetime.now(UTC),
         pnl=10.0,
         exit_reason="test",
         strategy_name="TestStrategy",

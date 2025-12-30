@@ -7,7 +7,7 @@ and data freshness validation.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -77,7 +77,7 @@ class MarketDataHandler:
             df = self.data_provider.get_live_data(
                 symbol, timeframe, limit=self.data_limit
             )
-            self.last_data_update = datetime.now()
+            self.last_data_update = datetime.now(UTC)
             return df
         except (ConnectionError, TimeoutError) as e:
             logger.error("Network error fetching market data: %s", e)
@@ -158,7 +158,7 @@ class MarketDataHandler:
         latest_timestamp = (
             df.index[-1]
             if hasattr(df.index[-1], "timestamp")
-            else datetime.now()
+            else datetime.now(UTC)
         )
         if isinstance(latest_timestamp, str):
             try:
@@ -166,7 +166,7 @@ class MarketDataHandler:
             except (ValueError, TypeError):
                 return True  # Assume fresh if we can't parse timestamp
 
-        age_seconds = (datetime.now() - latest_timestamp).total_seconds()
+        age_seconds = (datetime.now(UTC) - latest_timestamp).total_seconds()
         return age_seconds <= self.data_freshness_threshold
 
     def check_context_ready(

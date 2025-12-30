@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -21,7 +21,7 @@ class SimpleMockProvider(MockDataProvider):
     def get_historical_data(self, symbol, timeframe, start=None, end=None):
         # Build minimal OHLCV DataFrame
         idx = pd.date_range(
-            start=datetime.utcnow() - timedelta(minutes=len(self.prices)),
+            start=datetime.now(UTC) - timedelta(minutes=len(self.prices)),
             periods=len(self.prices),
             freq="T",
         )

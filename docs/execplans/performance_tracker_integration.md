@@ -345,7 +345,7 @@ class LiveTradingEngine:
 
         # Record trade
         self.performance_tracker.record_trade(trade, fee, slippage)
-        self.performance_tracker.update_balance(self.current_balance, datetime.now())
+        self.performance_tracker.update_balance(self.current_balance, datetime.now(UTC))
 
         # Persist to database
         metrics = self.performance_tracker.get_metrics()
@@ -362,7 +362,7 @@ class LiveTradingEngine:
         """Update real-time performance tracking."""
         self.performance_tracker.update_balance(
             self.current_balance,
-            datetime.now()
+            datetime.now(UTC)
         )
 ```
 
@@ -546,7 +546,7 @@ class LiveTradingEngine:
 4. ✅ Update `_close_position()` to use tracker:
    ```python
    self.performance_tracker.record_trade(trade, fee, slippage)
-   self.performance_tracker.update_balance(self.current_balance, datetime.now())
+   self.performance_tracker.update_balance(self.current_balance, datetime.now(UTC))
 
    # Persist to DB
    metrics = self.performance_tracker.get_metrics()
@@ -557,7 +557,7 @@ class LiveTradingEngine:
    ```python
    def _update_performance_metrics(self):
        """Update performance tracking and persist to database."""
-       self.performance_tracker.update_balance(self.current_balance, datetime.now())
+       self.performance_tracker.update_balance(self.current_balance, datetime.now(UTC))
 
        # Database persistence
        if self._should_save_snapshot():

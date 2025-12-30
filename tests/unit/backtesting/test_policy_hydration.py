@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -57,7 +57,7 @@ def backtester() -> Backtester:
 
 def test_apply_policies_from_decision_updates_backtester_state(backtester: Backtester) -> None:
     decision = TradingDecision(
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
         signal=Signal(
             direction=SignalDirection.BUY,
             strength=1.0,

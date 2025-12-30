@@ -5,7 +5,7 @@ Unit tests for Performance Comparison Engine.
 import numpy as np
 import pandas as pd
 import pytest
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 from src.strategies.components.testing.performance_comparison_engine import (
@@ -371,7 +371,7 @@ class TestPerformanceComparisonEngine:
 
         result = StrategyComparisonResult(
             comparison_id="test",
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
             legacy_strategy_name="Legacy",
             new_strategy_name="New",
             parity_report=parity_report,
@@ -432,7 +432,7 @@ class TestPerformanceComparisonEngine:
 
         result = StrategyComparisonResult(
             comparison_id="test",
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
             legacy_strategy_name="Legacy",
             new_strategy_name="New",
             parity_report=parity_report,

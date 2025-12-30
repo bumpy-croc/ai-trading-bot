@@ -78,6 +78,7 @@ class BasePosition:
         stop_loss: Stop loss price level.
         take_profit: Take profit price level (optional).
         entry_balance: Account balance at entry time (optional).
+        quantity: Actual quantity of asset bought/sold at entry.
         original_size: Original position size before partial operations.
         current_size: Current position size after partial operations.
         partial_exits_taken: Number of partial exits executed.
@@ -100,6 +101,7 @@ class BasePosition:
     stop_loss: float | None = None
     take_profit: float | None = None
     entry_balance: float | None = None
+    quantity: float | None = None
     # Partial operations runtime state
     original_size: float | None = None
     current_size: float | None = None

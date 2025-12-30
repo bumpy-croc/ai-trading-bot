@@ -10,7 +10,7 @@ import logging
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -222,7 +222,7 @@ class PerformanceMonitor:
         switch_confidence = self._calculate_switch_confidence(timeframe_results, severity)
 
         # Record degradation
-        self.degradation_history.append((datetime.now(), current_strategy_id, severity))
+        self.degradation_history.append((datetime.now(UTC), current_strategy_id, severity))
 
         return SwitchDecision(
             should_switch=True,
@@ -249,7 +249,7 @@ class PerformanceMonitor:
         # Update baselines for each timeframe
         for timeframe in TimeFrame:
             days = self._get_timeframe_days(timeframe)
-            end_date = datetime.now()
+            end_date = datetime.now(UTC)
             start_date = end_date - timedelta(days=days)
 
             # Get performance metrics for this timeframe
@@ -328,7 +328,7 @@ class PerformanceMonitor:
             return False
 
         oldest_trade = min(performance_tracker.trades, key=lambda t: t.timestamp)
-        days_active = (datetime.now() - oldest_trade.timestamp).days
+        days_active = (datetime.now(UTC) - oldest_trade.timestamp).days
 
         if days_active < self.config.min_days_for_evaluation:
             self.logger.debug(
@@ -349,7 +349,7 @@ class PerformanceMonitor:
 
         for timeframe in TimeFrame:
             days = self._get_timeframe_days(timeframe)
-            end_date = datetime.now()
+            end_date = datetime.now(UTC)
             start_date = end_date - timedelta(days=days)
 
             # Get current performance for this timeframe
@@ -431,7 +431,7 @@ class PerformanceMonitor:
     ) -> float:
         """Calculate statistical significance of performance difference"""
         # Get recent trades for the timeframe
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
         recent_trades = [t for t in performance_tracker.trades if t.timestamp >= cutoff_date]
 
         if len(recent_trades) < 10:
@@ -477,7 +477,7 @@ class PerformanceMonitor:
         self, metrics: PerformanceMetrics, performance_tracker: PerformanceTracker, days: int
     ) -> tuple[float, float]:
         """Calculate confidence interval for performance metrics"""
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
         recent_trades = [t for t in performance_tracker.trades if t.timestamp >= cutoff_date]
 
         if len(recent_trades) < 5:
@@ -622,7 +622,7 @@ class PerformanceMonitor:
         self, strategy_id: str | None = None, days: int = 30
     ) -> list[dict[str, Any]]:
         """Get degradation history for analysis"""
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
 
         filtered_history = [
             {"timestamp": timestamp.isoformat(), "strategy_id": sid, "severity": severity.value}

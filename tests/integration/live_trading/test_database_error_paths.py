@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -15,7 +15,7 @@ def test_engine_survives_update_position_failure(
 ):
     from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
-    idx = pd.date_range(datetime.utcnow(), periods=2, freq="1min")
+    idx = pd.date_range(datetime.now(UTC), periods=2, freq="1min")
     prices = pd.Series([100.0, 101.0], index=idx)
     mock_data_provider.get_live_data.return_value = pd.DataFrame({"close": prices})
     mock_data_provider.get_current_price.return_value = 101.0
@@ -61,7 +61,7 @@ def test_engine_survives_log_trade_and_close_position_failure(
 
     from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
-    idx = pd.date_range(datetime.utcnow(), periods=2, freq="1min")
+    idx = pd.date_range(datetime.now(UTC), periods=2, freq="1min")
     prices = pd.Series([100.0, 101.0], index=idx)
     mock_data_provider.get_live_data.return_value = pd.DataFrame({"close": prices})
     mock_data_provider.get_current_price.return_value = 101.0

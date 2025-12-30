@@ -50,7 +50,7 @@ from src.optimizer.schemas import ExperimentConfig, ParameterSet
 from src.optimizer.analyzer import PerformanceAnalyzer
 
 # Configure experiment
-end = datetime.now()
+end = datetime.now(UTC)
 start = end - timedelta(days=365)
 
 config = ExperimentConfig(

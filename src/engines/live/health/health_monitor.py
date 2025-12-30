@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -81,7 +81,7 @@ class HealthMonitor:
     def record_success(self) -> None:
         """Record a successful operation, resetting error count."""
         self.consecutive_errors = 0
-        self.last_success_time = datetime.utcnow()
+        self.last_success_time = datetime.now(UTC)
 
     def record_error(self, error: Exception | str) -> None:
         """Record an error occurrence.
@@ -90,11 +90,11 @@ class HealthMonitor:
             error: The error that occurred.
         """
         self.consecutive_errors += 1
-        self.last_error_time = datetime.utcnow()
+        self.last_error_time = datetime.now(UTC)
 
         error_msg = str(error) if isinstance(error, Exception) else error
         self.recent_errors.append(
-            f"{datetime.utcnow().isoformat()}: {error_msg}"
+            f"{datetime.now(UTC).isoformat()}: {error_msg}"
         )
         if len(self.recent_errors) > self._max_recent_errors:
             self.recent_errors = self.recent_errors[-self._max_recent_errors:]
@@ -139,7 +139,7 @@ class HealthMonitor:
         # Check for recent trading activity
         recent_trades = 0
         if positions:
-            now = datetime.utcnow()
+            now = datetime.now(UTC)
             for pos in positions.values():
                 entry_time = getattr(pos, "entry_time", None)
                 if entry_time and entry_time > now - timedelta(hours=1):
@@ -153,7 +153,7 @@ class HealthMonitor:
             interval = min(self.max_check_interval, interval * 2)
 
         # Consider time of day (basic market hours awareness, UTC)
-        current_hour = datetime.utcnow().hour
+        current_hour = datetime.now(UTC).hour
         if current_hour < 6 or current_hour > 22:
             interval = min(self.max_check_interval, int(interval * 1.5))
 

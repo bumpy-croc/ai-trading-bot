@@ -5,7 +5,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -139,7 +139,7 @@ class StrategyManager:
             version_id=version_id,
             strategy_name=strategy_name,
             version=version,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             config=config,
         )
 
@@ -211,7 +211,7 @@ class StrategyManager:
                     "new_strategy": new_strategy,
                     "new_version": staged_version,
                     "close_positions": close_existing_positions,
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(UTC),
                 }
 
                 # Set pending update (trading engine will pick this up)
@@ -281,7 +281,7 @@ class StrategyManager:
                     "strategy_name": strategy_name,
                     "old_model_path": getattr(self.current_strategy, "model_path", None),
                     "new_model_path": str(staging_path),
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(UTC),
                 }
 
                 # Set pending update

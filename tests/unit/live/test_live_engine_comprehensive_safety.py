@@ -81,7 +81,7 @@ def create_mock_candle_data(price: float = 50000.0) -> pd.DataFrame:
             "close": [price],
             "volume": [1000],
         },
-        index=[datetime.now()],
+        index=[datetime.now(UTC)],
     )
 
 
@@ -302,7 +302,7 @@ class TestSafetyGuardrails:
                 side=PositionSide.LONG,
                 size=0.05,
                 entry_price=50000.0,
-                entry_time=datetime.now(),
+                entry_time=datetime.now(UTC),
                 stop_loss=49000.0,  # Must be set
             )
 
@@ -441,7 +441,7 @@ class TestPositionManagement:
                 side=PositionSide.LONG,
                 size=0.05,
                 entry_price=50000.0,
-                entry_time=datetime.now(),
+                entry_time=datetime.now(UTC),
                 stop_loss=49000.0,
                 take_profit=52000.0,
             )
@@ -459,7 +459,7 @@ class TestPositionManagement:
             side=PositionSide.LONG,
             size=0.05,
             entry_price=50000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             stop_loss=49000.0,
         )
 
@@ -472,7 +472,7 @@ class TestPositionManagement:
             side=PositionSide.SHORT,
             size=0.05,
             entry_price=50000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             stop_loss=51000.0,
         )
 
@@ -485,7 +485,7 @@ class TestPositionManagement:
             side=PositionSide.LONG,
             size=0.05,
             entry_price=50000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
 
         # Calculate PnL manually
@@ -503,7 +503,7 @@ class TestPositionManagement:
             side=PositionSide.SHORT,
             size=0.05,
             entry_price=50000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
 
         # Calculate PnL manually

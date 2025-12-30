@@ -4,7 +4,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 # Ensure project root and src are in sys.path for absolute imports
 from src.infrastructure.runtime.paths import get_project_root
@@ -58,12 +58,12 @@ def _get_date_range(args):
         end_date = datetime.strptime(args.end, "%Y-%m-%d")
     elif args.start:
         start_date = datetime.strptime(args.start, "%Y-%m-%d")
-        end_date = datetime.now()
+        end_date = datetime.now(UTC)
     elif args.days:
-        end_date = datetime.now()
+        end_date = datetime.now(UTC)
         start_date = end_date - timedelta(days=args.days)
     else:
-        end_date = datetime.now()
+        end_date = datetime.now(UTC)
         start_date = end_date - timedelta(days=30)
     return start_date, end_date
 
@@ -182,7 +182,7 @@ def _handle(ns: argparse.Namespace) -> int:
             import re
 
             duration_years = round((end_date - start_date).days / 365.25, 2)
-            timestamp_for_file = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp_for_file = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
             sanitized_strategy_name = re.sub(r"[^a-zA-Z0-9_-]", "_", strategy.name)
             filename = f"{timestamp_for_file}_{sanitized_strategy_name}_{duration_years}yrs.json"
             logs_dir = PROJECT_ROOT / "logs" / "backtest"
@@ -191,7 +191,7 @@ def _handle(ns: argparse.Namespace) -> int:
             with open(filepath, "w") as _f:
                 json.dump(
                     {
-                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
                         "strategy": strategy.name,
                         "symbol": trading_symbol,
                         "timeframe": ns.timeframe,

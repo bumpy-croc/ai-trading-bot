@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -282,7 +282,7 @@ class LiveEventLogger:
 
             log_file = os.path.join(
                 self.trade_log_dir,
-                f"trades_{datetime.now().strftime('%Y%m')}.json",
+                f"trades_{datetime.now(UTC).strftime('%Y%m')}.json",
             )
             trade_data = {
                 "timestamp": exit_time.isoformat(),
@@ -515,7 +515,7 @@ class LiveEventLogger:
             return None
 
         try:
-            date_str = datetime.now().strftime("%Y%m%d_%H%M")
+            date_str = datetime.now(UTC).strftime("%Y%m%d_%H%M")
             session_name = f"Live_{symbol}_{date_str}"
             session_id = self.db_manager.create_trading_session(
                 strategy_name=strategy_name,

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -244,7 +244,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             data = self._request("GET", "/accounts", auth=True)
             account_info = {
                 "total_accounts": len(data),
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(UTC),
             }
             return account_info
         except Exception:
@@ -265,7 +265,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                         free=available,
                         locked=balance - available,
                         total=balance,
-                        last_updated=datetime.utcnow(),
+                        last_updated=datetime.now(UTC),
                     )
                 )
             return balances
@@ -313,7 +313,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                         update_time=(
                             datetime.fromisoformat(od.get("done_at"))
                             if od.get("done_at")
-                            else datetime.utcnow()
+                            else datetime.now(UTC)
                         ),
                         stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
                         time_in_force=od.get("time_in_force", "GTC"),
@@ -347,7 +347,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                 update_time=(
                     datetime.fromisoformat(od.get("done_at"))
                     if od.get("done_at")
-                    else datetime.utcnow()
+                    else datetime.now(UTC)
                 ),
                 stop_price=float(od.get("stop_price")) if od.get("stop_price") else None,
                 time_in_force=od.get("time_in_force", "GTC"),
@@ -542,7 +542,7 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             granularity = self._convert_timeframe(timeframe)
             product_id = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
             candles = self._fetch_candles_range(
-                product_id, granularity, start, end or datetime.utcnow()
+                product_id, granularity, start, end or datetime.now(UTC)
             )
             df = self._process_ohlcv(candles, timestamp_unit="s")
             self.data = df

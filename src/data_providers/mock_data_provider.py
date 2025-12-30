@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -42,7 +42,7 @@ class MockDataProvider(DataProvider):
         """Create synthetic data covering [start, end] if not already available."""
         freq = _TIMEFRAME_TO_FREQ.get(timeframe, "h")
         if end is None:
-            end = datetime.now()
+            end = datetime.now(UTC)
         index = pd.date_range(start=start, end=end, freq=freq)
         if len(index) == 0:
             # Provide at least some data
@@ -91,7 +91,7 @@ class MockDataProvider(DataProvider):
     def get_live_data(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         # Provide the last `limit` candles
         if self.data is None:
-            end = datetime.now()
+            end = datetime.now(UTC)
             start = end - timedelta(seconds=self.interval_seconds * max(self.num_candles, limit))
             self._ensure_data(start=start, end=end, timeframe=timeframe)
         return self.data.tail(limit) if self.data is not None else pd.DataFrame()

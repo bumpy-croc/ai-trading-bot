@@ -6,7 +6,7 @@ a real database connection. This significantly speeds up unit tests.
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Optional
 from unittest.mock import Mock
 
@@ -97,7 +97,7 @@ class MockDatabaseManager:
             "initial_balance": initial_balance,
             "strategy_config": json.dumps(strategy_config or {}),
             "mode": mode,
-            "start_time": datetime.now(),
+            "start_time": datetime.now(UTC),
             "end_time": None,
             "final_balance": None,
             "total_trades": 0,
@@ -118,7 +118,7 @@ class MockDatabaseManager:
 
         if session_id and session_id in self._sessions:
             session = self._sessions[session_id]
-            session["end_time"] = datetime.now()
+            session["end_time"] = datetime.now(UTC)
             if final_balance is not None:
                 session["final_balance"] = final_balance
 
@@ -214,7 +214,7 @@ class MockDatabaseManager:
             "take_profit": take_profit,
             "confidence_score": confidence_score,
             "status": Any,
-            "entry_time": datetime.now(),
+            "entry_time": datetime.now(UTC),
             "session_id": session_id or self._current_session_id,
             # Rolling MFE/MAE fields (optional)
             "mfe": kwargs.get("mfe"),
@@ -264,7 +264,7 @@ class MockDatabaseManager:
             ):
                 if k in kwargs and kwargs[k] is not None:
                     position[k] = kwargs[k]
-            position["last_updated"] = datetime.now()
+            position["last_updated"] = datetime.now(UTC)
 
     def close_position(
         self,
@@ -278,7 +278,7 @@ class MockDatabaseManager:
         if position_id in self._positions:
             position = self._positions[position_id]
             position["status"] = Any
-            position["exit_time"] = exit_time or datetime.now()
+            position["exit_time"] = exit_time or datetime.now(UTC)
             if exit_price is not None:
                 position["exit_price"] = exit_price
             if pnl is not None:
@@ -306,7 +306,7 @@ class MockDatabaseManager:
 
         self._events[event_id] = {
             "id": event_id,
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(UTC),
             "event_type": event_type,
             "description": message,
             "metadata": json.dumps(details or {}),
@@ -330,7 +330,7 @@ class MockDatabaseManager:
     ):
         """Log account snapshot"""
         snapshot = {
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(UTC),
             "balance": balance,
             "equity": equity,
             "margin_used": margin_used,
@@ -378,7 +378,7 @@ class MockDatabaseManager:
     ):
         """Log strategy execution details"""
         execution = {
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(UTC),
             "signal": signal,
             "confidence": confidence,
             "indicators": json.dumps(indicators),

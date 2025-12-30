@@ -6,6 +6,8 @@ A simple script to run various test suites for the crypto trading bot.
 This provides quick access to common testing scenarios.
 """
 
+from datetime import UTC, datetime
+
 import argparse
 import os
 import subprocess
@@ -428,7 +430,7 @@ def run_quick_smoke_test():
         account_balance = 10_000.0
         pnl_pct = pnl_percent(entry_price, exit_price, Side.LONG, fraction)
         expected_cash = cash_pnl(pnl_pct, account_balance)
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         live_trade = LiveTrade(
             symbol="BTCUSDT",
             side=PositionSide.LONG,

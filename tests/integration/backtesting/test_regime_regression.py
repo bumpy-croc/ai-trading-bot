@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -263,7 +263,7 @@ class StubRegimeStrategySwitcher:
 
     def execute_strategy_switch(self, decision: dict[str, Any]) -> bool:
         if decision.get("should_switch"):
-            self.last_switch_time = datetime.now()
+            self.last_switch_time = datetime.now(UTC)
             return True
         return False
 

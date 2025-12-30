@@ -6,7 +6,7 @@ database operations, cache hit/miss scenarios, and performance characteristics.
 """
 
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -96,7 +96,7 @@ class TestPredictionCachingIntegration:
         mock_entry.confidence = 0.8
         mock_entry.direction = 1
         mock_entry.access_count = 5
-        mock_entry.expires_at = datetime.utcnow() + timedelta(seconds=30)
+        mock_entry.expires_at = datetime.now(UTC) + timedelta(seconds=30)
 
         mock_session.query.return_value.filter.return_value.first.return_value = mock_entry
 
@@ -118,7 +118,7 @@ class TestPredictionCachingIntegration:
         cache_manager = PredictionCacheManager(mock_db, ttl=60, max_size=100)
 
         # Mock the query to return None for expired entries (this is handled by the database filter)
-        # The actual cache manager queries with expires_at > datetime.utcnow(), so expired entries aren't returned
+        # The actual cache manager queries with expires_at > datetime.now(UTC), so expired entries aren't returned
         mock_session.query.return_value.filter.return_value.first.return_value = None
 
         # Test expired cache - should return None since expired entries are filtered out by the query
@@ -246,7 +246,7 @@ class TestPredictionCachingIntegration:
         mock_entry.confidence = 0.8
         mock_entry.direction = 1
         mock_entry.access_count = 0
-        mock_entry.expires_at = datetime.utcnow() + timedelta(seconds=30)
+        mock_entry.expires_at = datetime.now(UTC) + timedelta(seconds=30)
 
         mock_session.query.return_value.filter.return_value.first.return_value = mock_entry
 
@@ -357,7 +357,7 @@ class TestPredictionCachingIntegration:
         mock_entry.confidence = 0.8
         mock_entry.direction = 1
         mock_entry.access_count = 0
-        mock_entry.expires_at = datetime.utcnow() + timedelta(seconds=0.5)
+        mock_entry.expires_at = datetime.now(UTC) + timedelta(seconds=0.5)
 
         # Set up mock to return entry initially, then None after expiration
         mock_query_result = mock_session.query.return_value.filter.return_value.first

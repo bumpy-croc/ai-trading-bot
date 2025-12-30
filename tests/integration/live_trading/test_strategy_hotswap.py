@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
@@ -46,7 +46,7 @@ class TestStrategyHotSwapping:
             side="LONG",
             size=0.1,
             entry_price=50000,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test_001",
         )
         engine.positions = {"test_001": position}

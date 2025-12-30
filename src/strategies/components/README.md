@@ -499,7 +499,7 @@ tracker = PerformanceTracker(strategy_name="my_strategy")
 
 # Record trade result
 tracker.record_trade_result(
-    timestamp=datetime.now(),
+    timestamp=datetime.now(UTC),
     symbol="BTCUSDT",
     side="long",
     entry_price=50000.0,

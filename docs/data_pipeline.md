@@ -37,8 +37,8 @@ from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.cached_data_provider import CachedDataProvider
 
 provider = CachedDataProvider(BinanceProvider(), cache_ttl_hours=24)
-start = datetime.utcnow() - timedelta(days=90)
-end = datetime.utcnow()
+start = datetime.now(UTC) - timedelta(days=90)
+end = datetime.now(UTC)
 df = provider.get_historical_data("BTCUSDT", "1h", start, end)
 ```
 

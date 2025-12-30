@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -159,13 +159,13 @@ class TestLiveTradingEngine:
                 side=PositionSide.LONG,
                 size=0.1,
                 entry_price=50000,
-                entry_time=datetime.now(),
+                entry_time=datetime.now(UTC),
                 stop_loss=49000,
                 order_id="test_001",
             )
             engine.live_position_tracker.track_recovered_position(position, db_id=None)
             mock_data_provider.get_live_data.return_value = pd.DataFrame(
-                {"close": [51000]}, index=[datetime.now()]
+                {"close": [51000]}, index=[datetime.now(UTC)]
             )
             engine._execute_exit(
                 position=position,
@@ -187,7 +187,7 @@ class TestLiveTradingEngine:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             stop_loss=49000,
             order_id="test_001",
         )
@@ -202,7 +202,7 @@ class TestLiveTradingEngine:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             take_profit=52000,
             order_id="test_001",
         )
@@ -223,7 +223,7 @@ class TestLiveTradingEngine:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="long_001",
         )
         engine.live_position_tracker.track_recovered_position(long_position, db_id=None)
@@ -266,8 +266,8 @@ class TestLiveTradingEngine:
         for _ in range(6):
             trade = Mock()
             trade.pnl = 100.0  # winning trade
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             trade.symbol = "BTCUSDT"
             trade.side = "long"
             engine.performance_tracker.record_trade(trade)
@@ -275,8 +275,8 @@ class TestLiveTradingEngine:
         for _ in range(4):
             trade = Mock()
             trade.pnl = -50.0  # losing trade
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             trade.symbol = "BTCUSDT"
             trade.side = "long"
             engine.performance_tracker.record_trade(trade)
@@ -284,7 +284,7 @@ class TestLiveTradingEngine:
         # Update balance to reflect trades (600 - 200 = 400 net, but we want 500 total PnL)
         # So use 10500 final balance with 10000 initial = 500 gain
         engine.current_balance = 10500
-        engine.performance_tracker.update_balance(10500, datetime.now())
+        engine.performance_tracker.update_balance(10500, datetime.now(UTC))
         engine.performance_tracker.peak_balance = 10800
         engine.performance_tracker.max_drawdown = (10800 - 10500) / 10800  # ~2.78%
 
@@ -319,7 +319,7 @@ def test_trailing_stop_update_flow(mock_strategy, mock_data_provider):
         side=PositionSide.LONG,
         size=1.0,  # Use full position size so 1% price move = 1% sized PnL
         entry_price=100.0,
-        entry_time=datetime.now(),
+        entry_time=datetime.now(UTC),
         stop_loss=99.0,
         order_id="test_trail_001",
     )
@@ -599,11 +599,11 @@ def test_position_exit_with_should_exit_position(mock_data_provider):
         current_price=51490,
         size=0.1,
         side="long",
-        entry_time=datetime.now(),
+        entry_time=datetime.now(UTC),
     )
 
     # Create market data
-    market_data = MarketData(symbol="BTCUSDT", price=51490, volume=2490, timestamp=datetime.now())
+    market_data = MarketData(symbol="BTCUSDT", price=51490, volume=2490, timestamp=datetime.now(UTC))
 
     # Test should_exit_position
     should_exit = strategy.should_exit_position(position, market_data)

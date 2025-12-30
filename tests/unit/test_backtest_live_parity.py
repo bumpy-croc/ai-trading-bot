@@ -5,7 +5,7 @@ These tests verify that both engines produce identical results for the same
 trading scenarios, ensuring backtests accurately represent live trading behavior.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
@@ -124,7 +124,7 @@ class TestFeeSlippageParity:
             side=PositionSide.LONG,
             size=position_size,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=position_size,
             current_size=position_size,
@@ -200,7 +200,7 @@ class TestFeeSlippageParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,
@@ -241,7 +241,7 @@ class TestStopLossTakeProfitParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,
@@ -281,7 +281,7 @@ class TestStopLossTakeProfitParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,
@@ -320,7 +320,7 @@ class TestStopLossTakeProfitParity:
             side=PositionSide.SHORT,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,
@@ -359,7 +359,7 @@ class TestStopLossTakeProfitParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,
@@ -403,7 +403,7 @@ class TestExitPriceParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,
@@ -449,7 +449,7 @@ class TestExitPriceParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,

@@ -15,7 +15,7 @@ Test Categories:
 8. Real-time Data - WebSocket errors, reconnection
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import Mock, MagicMock, patch
 from typing import Any
@@ -398,8 +398,8 @@ class TestHistoricalDataEdgeCases:
 
     def test_future_dates_rejected(self, mock_binance_provider):
         """Future dates should raise error or return empty"""
-        future_start = datetime.now() + timedelta(days=365)
-        future_end = datetime.now() + timedelta(days=366)
+        future_start = datetime.now(UTC) + timedelta(days=365)
+        future_end = datetime.now(UTC) + timedelta(days=366)
 
         mock_binance_provider.get_historical_data.return_value = pd.DataFrame()
 
