@@ -6,7 +6,12 @@ and is used identically by both backtesting and live trading engines.
 
 import pytest
 
-from src.engines.shared.cost_calculator import CostCalculator, CostResult
+from src.engines.shared.cost_calculator import (
+    CostCalculator,
+    CostResult,
+    LIQUIDITY_MAKER,
+    LIQUIDITY_TAKER,
+)
 
 
 class TestCostCalculatorInitialization:
@@ -246,3 +251,36 @@ class TestEdgeCases:
         result_upper = calc.calculate_entry_costs(price=100.0, notional=1000.0, side="LONG")
 
         assert result_lower.executed_price == result_upper.executed_price
+
+
+class TestLiquidityOverrides:
+    """Test maker/taker liquidity behavior."""
+
+    def test_maker_entry_uses_maker_fee_and_no_slippage(self) -> None:
+        """Maker liquidity should disable adverse slippage and use maker fee."""
+        calc = CostCalculator(fee_rate=0.002, slippage_rate=0.01, maker_fee_rate=0.0005)
+        result = calc.calculate_entry_costs(
+            price=100.0,
+            notional=1000.0,
+            side="long",
+            liquidity=LIQUIDITY_MAKER,
+        )
+
+        assert result.executed_price == pytest.approx(100.0)
+        assert result.slippage_cost == pytest.approx(0.0)
+        assert result.fee == pytest.approx(0.5)
+
+    def test_taker_exit_applies_slippage_and_fee(self) -> None:
+        """Taker liquidity should apply adverse slippage and taker fee."""
+        calc = CostCalculator(fee_rate=0.002, slippage_rate=0.01, maker_fee_rate=0.0005)
+        result = calc.calculate_exit_costs(
+            price=100.0,
+            notional=1000.0,
+            side="long",
+            liquidity=LIQUIDITY_TAKER,
+        )
+
+        expected_price = 100.0 * (1 - 0.01)
+        assert result.executed_price == pytest.approx(expected_price)
+        assert result.slippage_cost > 0
+        assert result.fee == pytest.approx(2.0)

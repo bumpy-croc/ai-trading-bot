@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.exit_handler import LiveExitHandler
 from src.engines.live.execution.position_tracker import (
     LivePosition,
@@ -22,6 +23,8 @@ from src.engines.live.execution.position_tracker import (
     PositionSide,
 )
 from src.engines.live.logging.event_logger import LiveEventLogger
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.fill_policy import default_fill_policy
 
 
 class TestExitFeeCalculation:
@@ -42,6 +45,7 @@ class TestExitFeeCalculation:
         exit_handler = LiveExitHandler(
             position_tracker=position_tracker,
             execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
         )
 
         # Create winning position: entry at 50000, exit at 55000 (+10%)
@@ -90,6 +94,7 @@ class TestExitFeeCalculation:
         exit_handler = LiveExitHandler(
             position_tracker=position_tracker,
             execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
         )
 
         # Create losing position: entry at 50000, exit at 45000 (-10%)
@@ -122,6 +127,99 @@ class TestExitFeeCalculation:
         # Exit notional = 100 * 0.90 = 90
         expected_exit_notional = 1000.0 * 0.1 * (45000.0 / 50000.0)
         assert position_notional == pytest.approx(expected_exit_notional, rel=0.01)
+
+
+
+class TestTakeProfitLimitPricing:
+    """Test take profit exits use limit price instead of favorable candle extremes."""
+
+    def test_take_profit_uses_limit_price_for_long(self) -> None:
+        """Long take profit should not exceed the limit price."""
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        execution_engine.execute_exit.return_value = MagicMock(
+            success=True,
+            executed_price=100.0,
+            order_id="tp-exit-long",
+            fill_quantity=1.0,
+        )
+
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            entry_price=90.0,
+            entry_time=datetime.now(timezone.utc),
+            entry_balance=1000.0,
+            order_id="tp-order-long",
+        )
+        position_tracker.open_position(position)
+
+        exit_handler.execute_exit(
+            position=position,
+            exit_reason="Take profit",
+            current_price=110.0,
+            limit_price=100.0,
+            current_balance=1100.0,
+            candle_high=120.0,
+            candle_low=95.0,
+        )
+
+        execute_exit_call = execution_engine.execute_exit.call_args
+        base_price = execute_exit_call.kwargs["base_price"]
+
+        assert base_price == pytest.approx(100.0)
+
+    def test_take_profit_uses_limit_price_for_short(self) -> None:
+        """Short take profit should not exceed the limit price."""
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        execution_engine.execute_exit.return_value = MagicMock(
+            success=True,
+            executed_price=80.0,
+            order_id="tp-exit-short",
+            fill_quantity=1.0,
+        )
+
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.SHORT,
+            size=0.5,
+            entry_price=100.0,
+            entry_time=datetime.now(timezone.utc),
+            entry_balance=1000.0,
+            order_id="tp-order-short",
+        )
+        position_tracker.open_position(position)
+
+        exit_handler.execute_exit(
+            position=position,
+            exit_reason="Take profit",
+            current_price=70.0,
+            limit_price=80.0,
+            current_balance=1100.0,
+            candle_high=95.0,
+            candle_low=65.0,  # More favorable than limit, should not be used
+        )
+
+        execute_exit_call = execution_engine.execute_exit.call_args
+        base_price = execute_exit_call.kwargs["base_price"]
+
+        # Base price should be the limit price (80.0), not the more favorable candle_low (65.0)
+        assert base_price == pytest.approx(80.0)
+
 
 
 class TestPositionTrackerThreadSafety:
@@ -269,6 +367,48 @@ class TestDailyPnLTracking:
         # Assert: daily_pnl should be the difference from day start
         call_kwargs = db_manager.log_account_snapshot.call_args.kwargs
         assert call_kwargs["daily_pnl"] == pytest.approx(50.0, rel=0.01)
+
+
+
+class TestEntryBalanceBasis:
+    """Test entry balance basis uses pre-fee balance."""
+
+    def test_entry_balance_does_not_net_entry_fee(self) -> None:
+        """Entry balance should remain the pre-fee balance."""
+        # Arrange
+        execution_engine = MagicMock()
+        execution_engine.execute_entry.return_value = MagicMock(
+            success=True,
+            executed_price=100.0,
+            order_id="entry-1",
+            quantity=0.1,
+            entry_fee=1.23,
+            slippage_cost=0.0,
+        )
+        entry_handler = LiveEntryHandler(
+            execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+        signal = LiveEntrySignal(
+            should_enter=True,
+            side=PositionSide.LONG,
+            size_fraction=0.1,
+        )
+        balance = 1000.0
+
+        # Act
+        result = entry_handler.execute_entry(
+            signal=signal,
+            symbol="BTCUSDT",
+            current_price=100.0,
+            balance=balance,
+        )
+
+        # Assert
+        assert result.executed is True
+        assert result.position is not None
+        assert result.position.entry_balance == balance
+
 
     def test_daily_pnl_resets_on_date_change(self) -> None:
         """Daily P&L should reset when the trading date changes."""

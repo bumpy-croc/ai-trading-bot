@@ -27,6 +27,8 @@ from src.data_providers.exchange_interface import (
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.exit_handler import LiveExitHandler
 from src.engines.live.execution.position_tracker import LivePosition, LivePositionTracker
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.fill_policy import default_fill_policy
 from src.engines.live.trading_engine import LiveTradingEngine, Position, PositionSide
 
 # ============================================================================
@@ -87,6 +89,7 @@ def live_exit_handler(execution_engine_with_exchange, live_position_tracker):
     return LiveExitHandler(
         execution_engine=execution_engine_with_exchange,
         position_tracker=live_position_tracker,
+        execution_model=ExecutionModel(default_fill_policy()),
         risk_manager=None,
     )
 
