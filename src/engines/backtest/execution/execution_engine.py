@@ -127,6 +127,8 @@ class ExecutionEngine:
         open_price: float,
         current_time: datetime,
         balance: float,
+        base_price: float | None = None,
+        liquidity: str | None = None,
     ) -> ExecutionResult:
         """Execute a pending entry on the current bar's open.
 
@@ -135,6 +137,8 @@ class ExecutionEngine:
             open_price: Opening price of the current bar.
             current_time: Current timestamp.
             balance: Current account balance.
+            base_price: Base price to use for execution costs (defaults to open price).
+            liquidity: Liquidity classification for fee and slippage handling.
 
         Returns:
             ExecutionResult with trade details and costs.
@@ -147,10 +151,12 @@ class ExecutionEngine:
 
         # Calculate costs using shared cost calculator
         position_notional = balance * pending["size_fraction"]
+        execution_price_basis = base_price if base_price is not None else open_price
         cost_result = self._cost_calculator.calculate_entry_costs(
-            price=open_price,
+            price=execution_price_basis,
             notional=position_notional,
             side=pending["side"],
+            liquidity=liquidity,
         )
 
         entry_price = cost_result.executed_price
@@ -197,12 +203,13 @@ class ExecutionEngine:
         symbol: str,
         side: str,
         size_fraction: float,
-        current_price: float,
+        base_price: float,
         current_time: datetime,
         balance: float,
         stop_loss: float,
         take_profit: float,
         component_notional: float | None = None,
+        liquidity: str | None = None,
     ) -> ExecutionResult:
         """Execute an entry immediately with slippage applied.
 
@@ -210,12 +217,13 @@ class ExecutionEngine:
             symbol: Trading symbol.
             side: 'long' or 'short'.
             size_fraction: Position size as fraction of balance.
-            current_price: Current market price.
+            base_price: Base price for execution costs.
             current_time: Current timestamp.
             balance: Current account balance.
             stop_loss: Stop loss price level.
             take_profit: Take profit price level.
             component_notional: Notional value for component tracking.
+            liquidity: Liquidity classification for fee and slippage handling.
 
         Returns:
             ExecutionResult with trade details and costs.
@@ -223,9 +231,10 @@ class ExecutionEngine:
         # Calculate costs using shared cost calculator
         position_notional = balance * size_fraction
         cost_result = self._cost_calculator.calculate_entry_costs(
-            price=current_price,
+            price=base_price,
             notional=position_notional,
             side=side,
+            liquidity=liquidity,
         )
 
         entry_price = cost_result.executed_price
@@ -263,6 +272,7 @@ class ExecutionEngine:
         base_price: float,
         side: str,
         position_notional: float,
+        liquidity: str | None = None,
     ) -> tuple[float, float, float]:
         """Calculate exit price and costs with slippage applied.
 
@@ -270,6 +280,7 @@ class ExecutionEngine:
             base_price: Base exit price (SL, TP, or close).
             side: 'long' or 'short' (the position side).
             position_notional: Notional value of the position.
+            liquidity: Liquidity classification for fee and slippage handling.
 
         Returns:
             Tuple of (exit_price, exit_fee, slippage_cost).
@@ -279,6 +290,7 @@ class ExecutionEngine:
             price=base_price,
             notional=position_notional,
             side=side,
+            liquidity=liquidity,
         )
 
         return cost_result.executed_price, cost_result.fee, cost_result.slippage_cost

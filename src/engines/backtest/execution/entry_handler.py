@@ -13,8 +13,12 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.backtest.models import ActiveTrade
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.market_snapshot import MarketSnapshot
+from src.engines.shared.execution.order_intent import OrderIntent
 from src.strategies.components import SignalDirection
 
 if TYPE_CHECKING:
@@ -25,6 +29,8 @@ if TYPE_CHECKING:
     from src.strategies.components import Strategy as ComponentStrategy
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_VOLUME = 0.0
 
 
 @dataclass
@@ -68,6 +74,7 @@ class EntryHandler:
         execution_engine: ExecutionEngine,
         position_tracker: PositionTracker,
         risk_manager: RiskManager,
+        execution_model: ExecutionModel,
         component_strategy: ComponentStrategy | None = None,
         dynamic_risk_manager: DynamicRiskManager | None = None,
         correlation_handler: Any | None = None,
@@ -79,6 +86,7 @@ class EntryHandler:
             execution_engine: Engine for executing entries.
             position_tracker: Tracker for position state.
             risk_manager: Risk manager for position sizing.
+            execution_model: Execution model for fill decisions.
             component_strategy: Component strategy for signals.
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             correlation_handler: Handler for correlation-based sizing.
@@ -87,6 +95,7 @@ class EntryHandler:
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
         self.risk_manager = risk_manager
+        self.execution_model = execution_model
         self.component_strategy = component_strategy
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
@@ -101,6 +110,54 @@ class EntryHandler:
             strategy: New component strategy.
         """
         self.component_strategy = strategy
+
+    def _coerce_float(self, value: Any, fallback: float) -> float:
+        """Coerce a value to float or return fallback on failure."""
+        if value is None:
+            return fallback
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _build_snapshot(
+        self,
+        symbol: str,
+        current_time: datetime,
+        current_price: float,
+        candle: pd.Series | None,
+    ) -> MarketSnapshot:
+        """Build a MarketSnapshot from the available candle data."""
+        if candle is not None and hasattr(candle, "get"):
+            high = self._coerce_float(candle.get("high"), current_price)
+            low = self._coerce_float(candle.get("low"), current_price)
+            close = self._coerce_float(candle.get("close"), current_price)
+            volume = self._coerce_float(candle.get("volume"), DEFAULT_VOLUME)
+        else:
+            high = current_price
+            low = current_price
+            close = current_price
+            volume = DEFAULT_VOLUME
+
+        return MarketSnapshot(
+            symbol=symbol,
+            timestamp=current_time,
+            last_price=current_price,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+        )
+
+    def _map_order_side(self, side: str) -> OrderSide:
+        """Map a position side string to an order side."""
+        side_lower = side.lower()
+        if side_lower == "long":
+            return OrderSide.BUY
+        if side_lower == "short":
+            return OrderSide.SELL
+
+        raise ValueError(f"Unsupported entry side: {side}")
 
     def process_runtime_decision(
         self,
@@ -220,6 +277,7 @@ class EntryHandler:
         current_price: float,
         current_time: datetime,
         balance: float,
+        candle: pd.Series | None = None,
     ) -> EntryExecutionResult:
         """Execute an entry based on the signal result.
 
@@ -229,6 +287,7 @@ class EntryHandler:
             current_price: Current market price.
             current_time: Current timestamp.
             balance: Current account balance.
+            candle: Optional candle data for execution modeling.
 
         Returns:
             EntryExecutionResult with execution details.
@@ -281,17 +340,45 @@ class EntryHandler:
                 reasons=signal.reasons,
             )
 
+        try:
+            order_side = self._map_order_side(signal.side)
+        except ValueError as exc:
+            reasons = list(signal.reasons or [])
+            reasons.append(f"entry_side_invalid_{exc}")
+            return EntryExecutionResult(executed=False, reasons=reasons)
+
+        snapshot = self._build_snapshot(
+            symbol=symbol,
+            current_time=current_time,
+            current_price=current_price,
+            candle=candle,
+        )
+        order_intent = OrderIntent(
+            symbol=symbol,
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=signal.size_fraction,
+        )
+        decision = self.execution_model.decide_fill(order_intent, snapshot)
+        if not decision.should_fill or decision.fill_price is None:
+            reasons = list(signal.reasons or [])
+            reasons.append(f"entry_no_fill_{decision.reason}")
+            return EntryExecutionResult(executed=False, reasons=reasons)
+
+        base_price = decision.fill_price
+
         # Immediate execution
         result = self.execution_engine.execute_immediate_entry(
             symbol=symbol,
             side=signal.side,
             size_fraction=signal.size_fraction,
-            current_price=current_price,
+            base_price=base_price,
             current_time=current_time,
             balance=balance,
             stop_loss=signal.stop_loss or current_price * 0.95,
             take_profit=signal.take_profit or current_price * 1.04,
             component_notional=signal.component_notional,
+            liquidity=decision.liquidity,
         )
 
         if result.executed and result.trade:
@@ -328,6 +415,7 @@ class EntryHandler:
         open_price: float,
         current_time: datetime,
         balance: float,
+        candle: pd.Series | None = None,
     ) -> EntryExecutionResult:
         """Process a pending entry on bar open.
 
@@ -336,6 +424,7 @@ class EntryHandler:
             open_price: Opening price of current bar.
             current_time: Current timestamp.
             balance: Current account balance.
+            candle: Optional candle data for execution modeling.
 
         Returns:
             EntryExecutionResult with execution details.
@@ -343,11 +432,43 @@ class EntryHandler:
         if not self.execution_engine.has_pending_entry:
             return EntryExecutionResult(executed=False)
 
+        pending = self.execution_engine.pending_entry
+        if pending is None:
+            return EntryExecutionResult(executed=False)
+
+        try:
+            order_side = self._map_order_side(pending["side"])
+        except ValueError as exc:
+            logger.warning("Pending entry side invalid for %s: %s", symbol, exc)
+            return EntryExecutionResult(executed=False)
+
+        snapshot = self._build_snapshot(
+            symbol=symbol,
+            current_time=current_time,
+            current_price=open_price,
+            candle=candle,
+        )
+        order_intent = OrderIntent(
+            symbol=symbol,
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=pending["size_fraction"],
+        )
+        decision = self.execution_model.decide_fill(order_intent, snapshot)
+        if not decision.should_fill or decision.fill_price is None:
+            logger.warning(
+                "Pending entry fill decision failed for %s: %s",
+                symbol,
+                decision.reason,
+            )
+
         result = self.execution_engine.execute_pending_entry(
             symbol=symbol,
             open_price=open_price,
             current_time=current_time,
             balance=balance,
+            base_price=decision.fill_price if decision.fill_price is not None else open_price,
+            liquidity=decision.liquidity if decision.should_fill else None,
         )
 
         if result.executed and result.trade:

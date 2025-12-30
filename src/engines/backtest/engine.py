@@ -32,6 +32,8 @@ from src.engines.backtest.utils import extract_indicators as util_extract_indica
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.fill_policy import FillPolicy, resolve_fill_policy
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
     build_time_exit_policy,
@@ -41,6 +43,7 @@ from src.engines.shared.risk_configuration import (
 from src.config.config_manager import get_config
 from src.config.constants import (
     DEFAULT_DYNAMIC_RISK_ENABLED,
+    DEFAULT_EXECUTION_FILL_POLICY,
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
@@ -262,6 +265,8 @@ class Backtester:
             slippage_rate=slippage_rate,
             use_next_bar_execution=use_next_bar_execution,
         )
+        self.execution_fill_policy = self._resolve_execution_fill_policy()
+        self.execution_model = ExecutionModel(self.execution_fill_policy)
 
         self.position_tracker = PositionTracker(
             mfe_mae_precision=DEFAULT_MFE_MAE_PRECISION_DECIMALS
@@ -309,6 +314,7 @@ class Backtester:
             execution_engine=self.execution_engine,
             position_tracker=self.position_tracker,
             risk_manager=self.risk_manager,
+            execution_model=self.execution_model,
             component_strategy=self._component_strategy,
             dynamic_risk_manager=self.dynamic_risk_manager,
             correlation_handler=self.correlation_handler,
@@ -324,6 +330,7 @@ class Backtester:
             execution_engine=self.execution_engine,
             position_tracker=self.position_tracker,
             risk_manager=self.risk_manager,
+            execution_model=self.execution_model,
             trailing_stop_policy=self.trailing_stop_policy,
             time_exit_policy=self.time_exit_policy,
             partial_manager=partial_ops_manager,
@@ -523,6 +530,17 @@ class Backtester:
         Uses shared risk configuration logic for consistency.
         """
         return merge_dynamic_risk_config(base_config, strategy)
+
+    def _resolve_execution_fill_policy(self) -> FillPolicy:
+        """Resolve execution fill policy from configuration."""
+        policy_name = DEFAULT_EXECUTION_FILL_POLICY
+        try:
+            cfg = get_config()
+            policy_name = cfg.get("EXECUTION_FILL_POLICY", DEFAULT_EXECUTION_FILL_POLICY)
+        except Exception as exc:
+            logger.warning("Failed to read execution fill policy config: %s", exc)
+
+        return resolve_fill_policy(policy_name)
 
     def _build_trailing_policy(self) -> TrailingStopPolicy | None:
         """Build trailing stop policy from strategy/risk overrides.
@@ -843,6 +861,7 @@ class Backtester:
                     open_price=open_price,
                     current_time=current_time,
                     balance=self.balance,
+                    candle=candle,
                 )
                 if entry_result.executed:
                     self.balance -= entry_result.entry_fee
@@ -922,6 +941,7 @@ class Backtester:
                     runtime_decision=runtime_decision,
                     df=df,
                     index=i,
+                    candle=candle,
                     current_price=current_price,
                     current_time=current_time,
                     symbol=symbol,
@@ -1018,8 +1038,10 @@ class Backtester:
                 exit_price=exit_check.exit_price,
                 exit_reason=exit_check.exit_reason,
                 current_time=current_time,
+                current_price=current_price,
                 balance=self.balance,
                 symbol=symbol,
+                candle=candle,
             )
 
             self.balance += net_pnl
@@ -1057,6 +1079,7 @@ class Backtester:
         runtime_decision: Any,
         df: pd.DataFrame,
         index: int,
+        candle: pd.Series,
         current_price: float,
         current_time: datetime,
         symbol: str,
@@ -1104,6 +1127,7 @@ class Backtester:
             current_price=current_price,
             current_time=current_time,
             balance=self.balance,
+            candle=candle,
         )
 
         if entry_result.executed:
