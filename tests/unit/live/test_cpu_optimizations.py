@@ -63,6 +63,18 @@ class MockTradingEngine:
             except (ValueError, TypeError):
                 return True  # Assume fresh if we can't parse timestamp
 
+        # Normalizes to UTC to avoid naive/aware datetime comparisons.
+        if isinstance(latest_timestamp, pd.Timestamp):
+            if latest_timestamp.tz is None:
+                latest_timestamp = latest_timestamp.tz_localize(UTC)
+            else:
+                latest_timestamp = latest_timestamp.tz_convert(UTC)
+        elif isinstance(latest_timestamp, datetime):
+            if latest_timestamp.tzinfo is None:
+                latest_timestamp = latest_timestamp.replace(tzinfo=UTC)
+            else:
+                latest_timestamp = latest_timestamp.astimezone(UTC)
+
         age_seconds = (datetime.now(UTC) - latest_timestamp).total_seconds()
         return age_seconds <= self.data_freshness_threshold
 
@@ -148,6 +160,15 @@ class TestCPUOptimizations(unittest.TestCase):
 
         is_fresh = self.engine._is_data_fresh(None)
         self.assertFalse(is_fresh)
+
+    def test_data_freshness_check_naive_timestamp(self):
+        """Test data freshness check with naive timestamps"""
+        current_time = datetime.now(UTC)
+        naive_time = current_time.replace(tzinfo=None)
+        df = pd.DataFrame({"close": [100]}, index=[naive_time])
+
+        is_fresh = self.engine._is_data_fresh(df)
+        self.assertTrue(is_fresh)
 
     def test_constants_are_reasonable(self):
         """Test that the CPU optimization constants have reasonable values"""

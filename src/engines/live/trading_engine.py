@@ -3013,6 +3013,18 @@ class LiveTradingEngine:
             except (ValueError, TypeError):
                 return True  # Assume fresh if we can't parse timestamp
 
+        # Normalizes to UTC to avoid naive/aware datetime comparisons.
+        if isinstance(latest_timestamp, pd.Timestamp):
+            if latest_timestamp.tz is None:
+                latest_timestamp = latest_timestamp.tz_localize(UTC)
+            else:
+                latest_timestamp = latest_timestamp.tz_convert(UTC)
+        elif isinstance(latest_timestamp, datetime):
+            if latest_timestamp.tzinfo is None:
+                latest_timestamp = latest_timestamp.replace(tzinfo=UTC)
+            else:
+                latest_timestamp = latest_timestamp.astimezone(UTC)
+
         age_seconds = (datetime.now(UTC) - latest_timestamp).total_seconds()
         return age_seconds <= self.data_freshness_threshold
 

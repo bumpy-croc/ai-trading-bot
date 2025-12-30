@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pandas as pd
 import pytest
 
-from cli.commands.data import _download, _prefill
+from cli.commands.data import _download, _prefill, _preload_offline
 
 
 class TestDataDownload:
@@ -156,3 +156,55 @@ class TestDataPrefill:
 
             # Assert
             assert result == 0
+
+
+class TestDataPreloadOffline:
+    """Tests for the data preload-offline command."""
+
+    def test_preload_offline_uses_utc_aware_bounds(self, tmp_path):
+        """Test that preload uses UTC-aware datetime ranges."""
+        # Arrange
+        args = argparse.Namespace(
+            symbols=["BTCUSDT"],
+            timeframes=["1h"],
+            years_back=1,
+            cache_dir=str(tmp_path),
+            force_refresh=True,
+            test_offline=False,
+        )
+
+        class DummyCachedProvider:
+            def __init__(self, provider, cache_dir=None, cache_ttl_hours=None):
+                self.provider = provider
+
+            def get_historical_data(self, symbol, timeframe, start, end):
+                assert start.tzinfo is UTC
+                assert end.tzinfo is UTC
+                return pd.DataFrame({"close": [50000]}, index=pd.DatetimeIndex([start]))
+
+        class DummyTqdm:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def update(self, count):
+                return None
+
+        # Act
+        with (
+            patch("src.data_providers.binance_provider.BinanceProvider") as mock_provider,
+            patch(
+                "src.data_providers.cached_data_provider.CachedDataProvider", DummyCachedProvider
+            ),
+            patch("tqdm.tqdm", DummyTqdm),
+        ):
+            mock_provider.return_value = Mock()
+            result = _preload_offline(args)
+
+        # Assert
+        assert result == 0

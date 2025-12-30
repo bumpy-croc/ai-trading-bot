@@ -206,8 +206,8 @@ def _preload_offline(ns: argparse.Namespace) -> int:
                 for year in years:
                     try:
                         # Define year boundaries
-                        year_start = datetime(year, 1, 1)
-                        year_end = datetime(year + 1, 1, 1) - timedelta(seconds=1)
+                        year_start = datetime(year, 1, 1, tzinfo=UTC)
+                        year_end = datetime(year + 1, 1, 1, tzinfo=UTC) - timedelta(seconds=1)
 
                         # Don't fetch beyond current time
                         current_time = datetime.now(UTC)
