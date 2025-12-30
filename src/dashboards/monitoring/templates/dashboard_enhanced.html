@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot Monitor - Enhanced</title>
+
+    <!-- CSS Libraries -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Custom CSS -->
+    <link href="/static/css/dashboard.css" rel="stylesheet">
+    <style>
+        /* Enhanced tab styles */
+        .nav-tabs {
+            border-bottom: 2px solid var(--border-color);
+            margin-bottom: 2rem;
+        }
+
+        .nav-tabs .nav-link {
+            color: var(--text-secondary);
+            border: none;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            padding: 0.75rem 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .nav-tabs .nav-link:hover {
+            color: var(--text-primary);
+            border-bottom-color: var(--primary-color);
+        }
+
+        .nav-tabs .nav-link.active {
+            color: var(--primary-color);
+            background: none;
+            border-bottom-color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .tab-pane {
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Chart containers */
+        .chart-wrapper {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .chart-wrapper h6 {
+            color: var(--text-primary);
+            margin-bottom: 1rem;
+            font-weight: 600;
+        }
+
+        .chart-wrapper canvas {
+            max-height: 300px;
+        }
+
+        /* Export button styles */
+        .export-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Loading skeleton */
+        .skeleton {
+            background: linear-gradient(90deg, var(--card-bg) 25%, var(--border-color) 50%, var(--card-bg) 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s ease-in-out infinite;
+            border-radius: 4px;
+        }
+
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .skeleton-text {
+            height: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .skeleton-chart {
+            height: 300px;
+        }
+
+        /* Keyboard shortcuts indicator */
+        .keyboard-hint {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            opacity: 0.7;
+            transition: opacity 0.3s;
+            z-index: 1000;
+        }
+
+        .keyboard-hint:hover {
+            opacity: 1;
+        }
+
+        .keyboard-hint kbd {
+            background: var(--darker-bg);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+
+        /* Dark mode toggle */
+        .theme-toggle {
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 6px;
+            transition: background 0.3s;
+        }
+
+        .theme-toggle:hover {
+            background: var(--border-color);
+        }
+    </style>
+</head>
+<body data-theme="dark">
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-chart-line me-2"></i>
+                Trading Bot Monitor
+            </a>
+            <div class="navbar-nav ms-auto d-flex flex-row align-items-center gap-3">
+                <span class="theme-toggle" id="themeToggle" title="Toggle dark/light mode">
+                    <i class="fas fa-moon"></i>
+                </span>
+                <button class="btn btn-outline-primary btn-sm" id="configToggle">
+                    <i class="fas fa-cog me-1"></i>
+                    Settings
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container-fluid mt-4">
+        <!-- Loading Spinner -->
+        <div class="loading-spinner d-none" id="loadingSpinner">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+
+        <!-- Tabs Navigation -->
+        <ul class="nav nav-tabs" id="dashboardTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview" type="button" role="tab">
+                    <i class="fas fa-tachometer-alt me-2"></i>Overview
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="performance-tab" data-bs-toggle="tab" data-bs-target="#performance" type="button" role="tab">
+                    <i class="fas fa-chart-area me-2"></i>Performance
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="trades-tab" data-bs-toggle="tab" data-bs-target="#trades" type="button" role="tab">
+                    <i class="fas fa-exchange-alt me-2"></i>Trade Analysis
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="models-tab" data-bs-toggle="tab" data-bs-target="#models" type="button" role="tab">
+                    <i class="fas fa-brain me-2"></i>ML Models
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="risk-tab" data-bs-toggle="tab" data-bs-target="#risk" type="button" role="tab">
+                    <i class="fas fa-shield-alt me-2"></i>Risk
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="system-tab" data-bs-toggle="tab" data-bs-target="#system" type="button" role="tab">
+                    <i class="fas fa-server me-2"></i>System
+                </button>
+            </li>
+        </ul>
+
+        <!-- Tab Content -->
+        <div class="tab-content" id="dashboardTabsContent">
+            <!-- Overview Tab -->
+            <div class="tab-pane fade show active" id="overview" role="tabpanel">
+                <!-- Key Metrics -->
+                <div class="row mb-4" id="keyMetrics"></div>
+
+                <!-- Performance Chart -->
+                <div class="row mb-4">
+                    <div class="col-12">
+                        <div class="chart-container">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h5 class="section-title mb-0">
+                                    <i class="fas fa-chart-area"></i>
+                                    Portfolio Performance
+                                </h5>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <button type="button" class="btn btn-outline-secondary" data-days="7">7D</button>
+                                    <button type="button" class="btn btn-outline-secondary active" data-days="30">30D</button>
+                                    <button type="button" class="btn btn-outline-secondary" data-days="90">90D</button>
+                                </div>
+                            </div>
+                            <canvas id="performanceChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Positions -->
+                <div class="row mb-4">
+                    <div class="col-12">
+                        <div class="table-container">
+                            <h5 class="section-title p-3 mb-0 d-flex justify-content-between align-items-center">
+                                <span>
+                                    <i class="fas fa-wallet"></i>
+                                    Active Positions
+                                </span>
+                                <div class="btn-group" role="group">
+                                    <button id="toggleCloseTargetDisplay" class="btn btn-sm btn-outline-secondary" title="Toggle between currency and percentage display">
+                                        <i class="fas fa-percentage"></i>
+                                    </button>
+                                    <button id="closeTargetConfigBtn" class="btn btn-sm btn-outline-secondary" title="Configure close target display options">
+                                        <i class="fas fa-cog"></i>
+                                    </button>
+                                    <button id="exportPositionsBtn" class="btn btn-sm btn-outline-primary">
+                                        <i class="fas fa-download me-1"></i>Export
+                                    </button>
+                                </div>
+                            </h5>
+                            <div class="table-responsive">
+                                <table class="table table-hover" id="positionsTable" role="table">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Symbol</th>
+                                            <th scope="col">Side</th>
+                                            <th scope="col">Size</th>
+                                            <th scope="col">Entry</th>
+                                            <th scope="col">Current</th>
+                                            <th scope="col">P&L</th>
+                                            <th scope="col">Trail SL</th>
+                                            <th scope="col">BE</th>
+                                            <th scope="col">MFE</th>
+                                            <th scope="col">MAE</th>
+                                            <th scope="col">Close Target</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td colspan="11" class="text-center">Loading...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Trades -->
+                <div class="row mb-4">
+                    <div class="col-12">
+                        <div class="table-container">
+                            <h5 class="section-title p-3 mb-0 d-flex justify-content-between align-items-center">
+                                <span>
+                                    <i class="fas fa-exchange-alt"></i>
+                                    Recent Trades
+                                </span>
+                                <button id="exportTradesBtn" class="btn btn-sm btn-outline-primary">
+                                    <i class="fas fa-download me-1"></i>Export
+                                </button>
+                            </h5>
+                            <div class="table-responsive">
+                                <table class="table table-hover" id="tradesTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Symbol</th>
+                                            <th>Side</th>
+                                            <th>Quantity</th>
+                                            <th>Entry</th>
+                                            <th>Exit</th>
+                                            <th>P&L</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td colspan="6" class="text-center">Loading...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Performance Tab -->
+            <div class="tab-pane fade" id="performance" role="tabpanel">
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <select class="form-select" id="perfTimeRange">
+                            <option value="7">Last 7 Days</option>
+                            <option value="30" selected>Last 30 Days</option>
+                            <option value="90">Last 90 Days</option>
+                            <option value="365">Last Year</option>
+                        </select>
+                    </div>
+                    <div class="col-md-8 text-end">
+                        <button id="exportPerformanceBtn" class="btn btn-outline-primary btn-sm export-btn">
+                            <i class="fas fa-download"></i>Export Data
+                        </button>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-chart-line me-2"></i>Rolling Sharpe Ratio</h6>
+                            <canvas id="sharpeChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-chart-area me-2"></i>Drawdown Over Time</h6>
+                            <canvas id="drawdownChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-percent me-2"></i>Win Rate Trending</h6>
+                            <canvas id="winRateChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-chart-bar me-2"></i>Equity Curve with Drawdown</h6>
+                            <canvas id="equityDrawdownChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trade Analysis Tab -->
+            <div class="tab-pane fade" id="trades" role="tabpanel">
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <select class="form-select" id="tradeTimeRange">
+                            <option value="7">Last 7 Days</option>
+                            <option value="30" selected>Last 30 Days</option>
+                            <option value="90">Last 90 Days</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Trade Statistics Cards -->
+                <div class="row mb-4" id="tradeStats">
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Total Trades</div>
+                            <div class="metric-value" id="totalTradesMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Avg Duration</div>
+                            <div class="metric-value" id="avgDurationMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Median Duration</div>
+                            <div class="metric-value" id="medianDurationMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Best Trade</div>
+                            <div class="metric-value text-success" id="bestTradeMetric">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-chart-bar me-2"></i>P&L Distribution</h6>
+                            <canvas id="pnlDistributionChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-clock me-2"></i>Profit by Hour of Day</h6>
+                            <canvas id="profitByHourChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-calendar me-2"></i>Profit by Day of Week</h6>
+                            <canvas id="profitByDowChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-list me-2"></i>Best & Worst Trades</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Type</th>
+                                            <th>Symbol</th>
+                                            <th>P&L</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="bestWorstTradesTable">
+                                        <tr><td colspan="3" class="text-center">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ML Models Tab -->
+            <div class="tab-pane fade" id="models" role="tabpanel">
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <select class="form-select" id="modelSelect">
+                            <option value="">All Models</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <select class="form-select" id="modelTimeRange">
+                            <option value="7">Last 7 Days</option>
+                            <option value="30" selected>Last 30 Days</option>
+                            <option value="90">Last 90 Days</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Model Performance Summary -->
+                <div class="row mb-4" id="modelSummary">
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Avg MAE</div>
+                            <div class="metric-value" id="avgMAEMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Avg RMSE</div>
+                            <div class="metric-value" id="avgRMSEMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Avg MAPE</div>
+                            <div class="metric-value" id="avgMAPEMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Info Coefficient</div>
+                            <div class="metric-value" id="avgICMetric">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-chart-line me-2"></i>MAE Over Time</h6>
+                            <canvas id="maeChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-chart-line me-2"></i>RMSE Over Time</h6>
+                            <canvas id="rmseChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="alert alert-info" id="noModelData" style="display: none;">
+                    <i class="fas fa-info-circle me-2"></i>
+                    No model performance data available. Model performance is tracked when predictions are made during live trading or backtesting.
+                </div>
+            </div>
+
+            <!-- Risk Tab -->
+            <div class="tab-pane fade" id="risk" role="tabpanel">
+                <!-- Risk Metrics Cards -->
+                <div class="row mb-4" id="riskMetrics">
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">VaR (95%)</div>
+                            <div class="metric-value text-danger" id="varMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Current Drawdown</div>
+                            <div class="metric-value" id="currentDDMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Max Drawdown</div>
+                            <div class="metric-value" id="maxDDMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Total Exposure</div>
+                            <div class="metric-value" id="exposureMetric">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-pie-chart me-2"></i>Position Concentration</h6>
+                            <canvas id="concentrationChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-table me-2"></i>Risk Adjustments History</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Parameter</th>
+                                            <th>Factor</th>
+                                            <th>Reason</th>
+                                            <th>Time</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="riskAdjustmentsTable">
+                                        <tr><td colspan="4" class="text-center">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-12 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-th me-2"></i>Correlation Heatmap</h6>
+                            <div id="correlationHeatmap" class="text-center text-muted">
+                                <p class="mt-3">Correlation data will be displayed here when available</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Tab -->
+            <div class="tab-pane fade" id="system" role="tabpanel">
+                <!-- System Health Cards -->
+                <div class="row mb-4" id="systemMetrics">
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">DB Latency</div>
+                            <div class="metric-value" id="dbLatencyMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">API Status</div>
+                            <div class="metric-value" id="apiStatusMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Memory Usage</div>
+                            <div class="metric-value" id="memoryMetric">-</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <div class="metric-title">Uptime</div>
+                            <div class="metric-value" id="uptimeMetric">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-exclamation-triangle me-2"></i>Error Rate (Last Hour)</h6>
+                            <div class="d-flex align-items-center justify-content-center" style="height: 100px;">
+                                <div class="text-center">
+                                    <div class="display-4" id="errorRateValue">0%</div>
+                                    <small class="text-muted">Errors / Total Events</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-4">
+                        <div class="chart-wrapper">
+                            <h6><i class="fas fa-list me-2"></i>Recent Errors</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Message</th>
+                                            <th>Severity</th>
+                                            <th>Time</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="recentErrorsTable">
+                                        <tr><td colspan="3" class="text-center">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Close Target Configuration Modal (from original) -->
+    <div class="modal fade" id="closeTargetConfigModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Close Target Display Options</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="closeTargetConfigForm">
+                        <div class="mb-3">
+                            <h6>Display Options</h6>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showTakeProfit" checked>
+                                <label class="form-check-label" for="showTakeProfit">Show Take Profit targets</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showStopLoss" checked>
+                                <label class="form-check-label" for="showStopLoss">Show Stop Loss targets</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showTrailingStop" checked>
+                                <label class="form-check-label" for="showTrailingStop">Show Trailing Stop targets</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showPartialExits" checked>
+                                <label class="form-check-label" for="showPartialExits">Show Partial Exit targets</label>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <h6>Tooltip Information</h6>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showRiskReward" checked>
+                                <label class="form-check-label" for="showRiskReward">Show Risk:Reward ratios</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showTimeInPosition" checked>
+                                <label class="form-check-label" for="showTimeInPosition">Show time in position</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showMultipleTargets" checked>
+                                <label class="form-check-label" for="showMultipleTargets">Show multiple target indicators</label>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="maxTooltipLength" class="form-label">Maximum tooltip length (characters)</label>
+                            <input type="number" class="form-control" id="maxTooltipLength" value="200" min="50" max="500">
+                        </div>
+                        <div class="mb-3">
+                            <label for="refreshInterval" class="form-label">Refresh interval (milliseconds)</label>
+                            <input type="number" class="form-control" id="refreshInterval" value="5000" min="1000" max="30000" step="1000">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="saveCloseTargetConfig">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuration Panel (from original) -->
+    <div class="config-panel" id="configPanel">
+        <div class="config-header">
+            <h5 class="mb-0">
+                <i class="fas fa-cog me-2"></i>
+                Dashboard Settings
+            </h5>
+            <button class="btn btn-sm btn-secondary" id="closeConfig">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="config-content">
+            <form id="configForm">
+                <div class="form-group">
+                    <label for="updateInterval" class="form-label">Update Interval (seconds)</label>
+                    <input type="number" class="form-control" id="updateInterval" name="updateInterval" min="1" max="3600" value="5">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Visible Metrics</label>
+                    <div id="metricsConfig"></div>
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-1"></i>
+                        Save Settings
+                    </button>
+                    <button type="button" class="btn btn-secondary ms-2" id="closeConfig">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Overlay -->
+    <div class="overlay" id="overlay"></div>
+
+    <!-- Keyboard Shortcuts Hint -->
+    <div class="keyboard-hint" id="keyboardHint">
+        Press <kbd>?</kbd> for keyboard shortcuts
+    </div>
+
+    <!-- JavaScript Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Custom JavaScript -->
+    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/dashboard-enhanced.js"></script>
+</body>
+</html>

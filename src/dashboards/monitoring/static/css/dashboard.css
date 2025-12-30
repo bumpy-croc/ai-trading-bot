@@ -11,6 +11,39 @@
     --border-color: #4b5563;
 }
 
+/* Light Theme */
+[data-theme="light"] {
+    --dark-bg: #f9fafb;
+    --darker-bg: #ffffff;
+    --card-bg: #ffffff;
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+    --border-color: #e5e7eb;
+}
+
+[data-theme="light"] body {
+    background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+}
+
+[data-theme="light"] .navbar {
+    background: rgba(255, 255, 255, 0.9);
+}
+
+[data-theme="light"] .table {
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .table thead {
+    background: #f3f4f6;
+}
+
+[data-theme="light"] .metric-card,
+[data-theme="light"] .chart-container,
+[data-theme="light"] .table-container,
+[data-theme="light"] .chart-wrapper {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
 * {
     margin: 0;
     padding: 0;
