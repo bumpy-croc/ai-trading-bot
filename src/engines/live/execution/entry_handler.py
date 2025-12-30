@@ -11,9 +11,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.market_snapshot import MarketSnapshot
+from src.engines.shared.execution.order_intent import OrderIntent
 from src.strategies.components import SignalDirection
 
 if TYPE_CHECKING:
@@ -22,6 +26,8 @@ if TYPE_CHECKING:
     from src.strategies.components import Strategy as ComponentStrategy
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_VOLUME = 0.0
 
 
 @dataclass
@@ -63,6 +69,7 @@ class LiveEntryHandler:
     def __init__(
         self,
         execution_engine: LiveExecutionEngine,
+        execution_model: ExecutionModel,
         risk_manager: RiskManager | None = None,
         component_strategy: ComponentStrategy | None = None,
         dynamic_risk_manager: DynamicRiskManager | None = None,
@@ -73,6 +80,7 @@ class LiveEntryHandler:
 
         Args:
             execution_engine: Engine for executing entries.
+            execution_model: Execution model for fill decisions.
             risk_manager: Risk manager for position sizing.
             component_strategy: Component strategy for signals.
             dynamic_risk_manager: Manager for dynamic risk adjustments.
@@ -80,6 +88,7 @@ class LiveEntryHandler:
             default_take_profit_pct: Default take profit percentage.
         """
         self.execution_engine = execution_engine
+        self.execution_model = execution_model
         self.risk_manager = risk_manager
         self.component_strategy = component_strategy
         self.dynamic_risk_manager = dynamic_risk_manager
@@ -95,6 +104,30 @@ class LiveEntryHandler:
             strategy: New component strategy.
         """
         self.component_strategy = strategy
+
+    def _build_snapshot(
+        self,
+        symbol: str,
+        current_price: float,
+    ) -> MarketSnapshot:
+        """Build a MarketSnapshot from the current price."""
+        return MarketSnapshot(
+            symbol=symbol,
+            timestamp=datetime.utcnow(),
+            last_price=current_price,
+            high=current_price,
+            low=current_price,
+            close=current_price,
+            volume=DEFAULT_VOLUME,
+        )
+
+    def _map_order_side(self, side: PositionSide) -> OrderSide:
+        """Map a position side to an order side."""
+        if side == PositionSide.LONG:
+            return OrderSide.BUY
+        if side == PositionSide.SHORT:
+            return OrderSide.SELL
+        raise ValueError(f"Unsupported entry side: {side}")
 
     def process_runtime_decision(
         self,
@@ -209,13 +242,36 @@ class LiveEntryHandler:
                 reasons=signal.reasons,
             )
 
+        try:
+            order_side = self._map_order_side(signal.side)
+        except ValueError as exc:
+            reasons = list(signal.reasons or [])
+            reasons.append(f"entry_side_invalid_{exc}")
+            return LiveEntryResult(executed=False, reasons=reasons, error=str(exc))
+
+        snapshot = self._build_snapshot(symbol, current_price)
+        order_intent = OrderIntent(
+            symbol=symbol,
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=signal.size_fraction,
+        )
+        decision = self.execution_model.decide_fill(order_intent, snapshot)
+        if not decision.should_fill or decision.fill_price is None:
+            return LiveEntryResult(
+                executed=False,
+                reasons=signal.reasons,
+                error=f"entry_no_fill_{decision.reason}",
+            )
+
         # Execute via execution engine
         exec_result = self.execution_engine.execute_entry(
             symbol=symbol,
             side=signal.side,
             size_fraction=signal.size_fraction,
-            base_price=current_price,
+            base_price=decision.fill_price,
             balance=balance,
+            liquidity=decision.liquidity,
         )
 
         if not exec_result.success:

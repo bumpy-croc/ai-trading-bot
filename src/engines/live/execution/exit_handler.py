@@ -14,12 +14,16 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import (
     LivePosition,
     LivePositionTracker,
     PositionSide,
 )
+from src.engines.shared.execution.execution_model import ExecutionModel
+from src.engines.shared.execution.market_snapshot import MarketSnapshot
+from src.engines.shared.execution.order_intent import OrderIntent
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -39,6 +43,7 @@ logger = logging.getLogger(__name__)
 MAX_PARTIAL_EXITS_PER_CYCLE = 10
 # Maximum acceptable filled-price deviation from entry price before logging a critical warning.
 MAX_FILLED_PRICE_DEVIATION = 0.5
+ZERO_VALUE = 0.0
 
 
 @dataclass
@@ -80,6 +85,7 @@ class LiveExitHandler:
         self,
         execution_engine: LiveExecutionEngine,
         position_tracker: LivePositionTracker,
+        execution_model: ExecutionModel,
         risk_manager: RiskManager | None = None,
         trailing_stop_policy: TrailingStopPolicy | None = None,
         time_exit_policy: TimeExitPolicy | None = None,
@@ -93,6 +99,7 @@ class LiveExitHandler:
         Args:
             execution_engine: Engine for executing exits.
             position_tracker: Tracker for position state.
+            execution_model: Execution model for fill decisions.
             risk_manager: Risk manager for position updates.
             trailing_stop_policy: Policy for trailing stops.
             time_exit_policy: Policy for time-based exits.
@@ -103,6 +110,7 @@ class LiveExitHandler:
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
+        self.execution_model = execution_model
         self.risk_manager = risk_manager
         self.trailing_stop_policy = trailing_stop_policy
         self.time_exit_policy = time_exit_policy
@@ -112,6 +120,74 @@ class LiveExitHandler:
         self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
+
+    def _build_snapshot(
+        self,
+        symbol: str,
+        current_price: float,
+        candle_high: float | None,
+        candle_low: float | None,
+    ) -> MarketSnapshot:
+        """Build a MarketSnapshot from current price and candle extremes."""
+        high = candle_high if candle_high is not None else current_price
+        low = candle_low if candle_low is not None else current_price
+        return MarketSnapshot(
+            symbol=symbol,
+            timestamp=datetime.utcnow(),
+            last_price=current_price,
+            high=float(high),
+            low=float(low),
+            close=current_price,
+            volume=ZERO_VALUE,
+        )
+
+    def _map_exit_order_side(self, position: LivePosition) -> OrderSide:
+        """Map a position side to the exit order side."""
+        if position.side == PositionSide.LONG:
+            return OrderSide.SELL
+        if position.side == PositionSide.SHORT:
+            return OrderSide.BUY
+        raise ValueError(f"Unsupported position side: {position.side}")
+
+    def _build_exit_intent(
+        self,
+        position: LivePosition,
+        exit_reason: str,
+        limit_price: float | None,
+    ) -> OrderIntent:
+        """Build an OrderIntent for an exit based on the reason."""
+        reason_lower = exit_reason.lower()
+        order_type = OrderType.MARKET
+        stop_price = None
+        effective_limit = limit_price
+
+        if (
+            "stop loss" in reason_lower
+            or "stop_loss" in reason_lower
+            or "stop-loss" in reason_lower
+        ):
+            order_type = OrderType.STOP_LOSS
+            stop_price = limit_price if limit_price is not None else position.stop_loss
+        elif "take profit" in reason_lower or "take_profit" in reason_lower:
+            order_type = OrderType.TAKE_PROFIT
+            if effective_limit is None:
+                effective_limit = position.take_profit
+
+        quantity = (
+            float(position.current_size)
+            if position.current_size is not None
+            else float(position.size)
+        )
+
+        return OrderIntent(
+            symbol=position.symbol,
+            side=self._map_exit_order_side(position),
+            order_type=order_type,
+            quantity=quantity,
+            limit_price=effective_limit,
+            stop_price=stop_price,
+            exit_reason=exit_reason,
+        )
 
     def check_exit_conditions(
         self,
@@ -211,32 +287,26 @@ class LiveExitHandler:
                 error="Position has no order_id",
             )
 
-        # Determine base exit price with realistic execution modeling
-        if limit_price is not None:
-            # For SL/TP, use worst-case execution price from candle high/low
-            if self.use_high_low_for_stops and candle_high is not None and candle_low is not None:
-                if "Stop loss" in exit_reason:
-                    # Stop losses execute at worst price
-                    if position.side == PositionSide.LONG:
-                        # Long SL: use max(stop_loss, candle_low) for realistic worst-case
-                        base_exit_price = max(limit_price, candle_low)
-                    else:
-                        # Short SL: use min(stop_loss, candle_high) for realistic worst-case
-                        base_exit_price = min(limit_price, candle_high)
-                elif "Take profit" in exit_reason:
-                    # Take profits execute at best available price
-                    if position.side == PositionSide.LONG:
-                        # Long TP: use candle_high if available, else limit
-                        base_exit_price = candle_high if candle_high >= limit_price else limit_price
-                    else:
-                        # Short TP: use candle_low if available, else limit
-                        base_exit_price = candle_low if candle_low <= limit_price else limit_price
-                else:
-                    base_exit_price = limit_price
-            else:
-                base_exit_price = limit_price
+        snapshot = self._build_snapshot(
+            symbol=position.symbol,
+            current_price=current_price,
+            candle_high=candle_high,
+            candle_low=candle_low,
+        )
+        order_intent = self._build_exit_intent(position, exit_reason, limit_price)
+        decision = self.execution_model.decide_fill(order_intent, snapshot)
+
+        base_exit_price = limit_price if limit_price is not None else current_price
+        liquidity = None
+        if decision.should_fill and decision.fill_price is not None:
+            base_exit_price = decision.fill_price
+            liquidity = decision.liquidity
         else:
-            base_exit_price = current_price
+            logger.warning(
+                "Exit fill decision fallback for %s: %s",
+                position.symbol,
+                decision.reason,
+            )
 
         # IMPORTANT: Use exit notional (accounting for price change) for accurate fee calculation.
         # This correctly models real exchange behavior where fees are charged on the actual
@@ -257,6 +327,7 @@ class LiveExitHandler:
             order_id=position.order_id,
             base_price=base_exit_price,
             position_notional=position_notional,
+            liquidity=liquidity,
         )
 
         if not execution_result.success:
@@ -351,10 +422,8 @@ class LiveExitHandler:
                     price_change * 100,
                 )
 
-        # Filled exits use the exchange-reported price; slippage models adverse execution costs.
-        executed_price = self.execution_engine.apply_exit_slippage(
-            filled_price, position.side
-        )
+        # Filled exits use the exchange-reported price without simulated slippage.
+        executed_price = filled_price
 
         position_notional = self._calculate_position_notional(
             position=position,
@@ -363,7 +432,7 @@ class LiveExitHandler:
         )
 
         exit_fee = self.execution_engine.calculate_exit_fee(position_notional)
-        slippage_cost = self.execution_engine.calculate_slippage_cost(position_notional)
+        slippage_cost = ZERO_VALUE
 
         close_result = self.position_tracker.close_position(
             order_id=position.order_id,

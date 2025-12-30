@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.data_providers.exchange_interface import OrderSide, OrderType
+from src.data_providers.exchange_interface import OrderSide, OrderStatus, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
 
@@ -131,6 +131,45 @@ class LiveExecutionEngine:
         """Reset fee and slippage tracking."""
         self._cost_calculator.reset_totals()
 
+    def _fetch_order_details(self, symbol: str, order_id: str) -> Any | None:
+        """Fetch order details from the exchange when available."""
+        if self.exchange_interface is None:
+            return None
+
+        try:
+            return self.exchange_interface.get_order(order_id, symbol)
+        except (ConnectionError, TimeoutError, ValueError) as exc:
+            logger.debug("Order detail fetch failed for %s: %s", order_id, exc)
+            return None
+
+    def _is_filled_status(self, status: Any) -> bool:
+        """Return True when the order status indicates a fill."""
+        if isinstance(status, OrderStatus):
+            return status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
+        if isinstance(status, str):
+            normalized = status.upper()
+            return normalized in (
+                OrderStatus.FILLED.value,
+                OrderStatus.PARTIALLY_FILLED.value,
+            )
+        return False
+
+    def _adjust_cost_totals(self, fee_delta: float, slippage_delta: float) -> None:
+        """Adjust accumulated cost totals after reconciliation."""
+        self._cost_calculator.total_fees_paid += fee_delta
+        self._cost_calculator.total_slippage_cost += slippage_delta
+
+    def _calculate_slippage_from_fill(
+        self,
+        base_price: float,
+        executed_price: float,
+        notional: float,
+    ) -> float:
+        """Calculate slippage cost from actual fill price versus base price."""
+        if base_price <= 0 or notional <= 0:
+            return 0.0
+        return abs(executed_price - base_price) * (notional / base_price)
+
     def apply_entry_slippage(self, price: float, side: PositionSide) -> float:
         """Apply slippage to entry price (price moves against us).
 
@@ -215,6 +254,7 @@ class LiveExecutionEngine:
         size_fraction: float,
         base_price: float,
         balance: float,
+        liquidity: str | None = None,
     ) -> EntryExecutionResult:
         """Execute an entry order with fees and slippage.
 
@@ -224,6 +264,7 @@ class LiveExecutionEngine:
             size_fraction: Position size as fraction of balance.
             base_price: Current market price.
             balance: Account balance.
+            liquidity: Liquidity classification for fee and slippage handling.
 
         Returns:
             EntryExecutionResult with execution details.
@@ -237,6 +278,7 @@ class LiveExecutionEngine:
                 price=base_price,
                 notional=position_value,
                 side=side_str,
+                liquidity=liquidity,
             )
 
             executed_price = cost_result.executed_price
@@ -252,6 +294,42 @@ class LiveExecutionEngine:
                         success=False,
                         error="Failed to execute live order",
                     )
+                order_details = self._fetch_order_details(symbol, order_id)
+                if order_details:
+                    status = getattr(order_details, "status", None)
+                    if status is not None and not self._is_filled_status(status):
+                        logger.debug(
+                            "Entry order %s not filled yet (status=%s); using simulated execution",
+                            order_id,
+                            status,
+                        )
+                    elif order_details.average_price:
+                        executed_price = float(order_details.average_price)
+                        filled_qty = float(order_details.filled_quantity or 0.0)
+                        if filled_qty > 0:
+                            quantity = filled_qty
+                            position_value = quantity * executed_price
+                        fee_from_order = float(order_details.commission or 0.0)
+                        if fee_from_order > 0:
+                            fee_delta = fee_from_order - entry_fee
+                            entry_fee = fee_from_order
+                            slippage_cost = self._calculate_slippage_from_fill(
+                                base_price, executed_price, position_value
+                            )
+                            slippage_delta = slippage_cost - cost_result.slippage_cost
+                            self._adjust_cost_totals(fee_delta, slippage_delta)
+                        else:
+                            slippage_cost = self._calculate_slippage_from_fill(
+                                base_price, executed_price, position_value
+                            )
+                            slippage_delta = slippage_cost - cost_result.slippage_cost
+                            if slippage_delta != 0:
+                                self._adjust_cost_totals(0.0, slippage_delta)
+                    else:
+                        logger.debug(
+                            "Entry order %s fill missing average price; using simulated execution",
+                            order_id,
+                        )
             else:
                 order_id = f"paper_{int(time.time() * 1000)}"
                 logger.info("PAPER TRADE - Would open %s position on %s", side.value, symbol)
@@ -280,6 +358,7 @@ class LiveExecutionEngine:
         order_id: str,
         base_price: float,
         position_notional: float,
+        liquidity: str | None = None,
     ) -> ExitExecutionResult:
         """Execute an exit order with fees and slippage.
 
@@ -289,6 +368,7 @@ class LiveExecutionEngine:
             order_id: Order ID of position to close.
             base_price: Exit price before slippage.
             position_notional: Notional value of position.
+            liquidity: Liquidity classification for fee and slippage handling.
 
         Returns:
             ExitExecutionResult with execution details.
@@ -301,6 +381,7 @@ class LiveExecutionEngine:
                 price=base_price,
                 notional=position_notional,
                 side=side_str,
+                liquidity=liquidity,
             )
 
             executed_price = cost_result.executed_price
@@ -310,18 +391,54 @@ class LiveExecutionEngine:
             # Execute real order if enabled
             if self.enable_live_trading:
                 quantity = position_notional / base_price if base_price > 0 else 0.0
-                success = self._close_live_order(
+                close_order_id = self._close_live_order(
                     symbol,
                     side,
                     quantity,
                     position_notional=position_notional,
                     order_id=order_id,
                 )
-                if not success:
+                if not close_order_id:
                     return ExitExecutionResult(
                         success=False,
                         error="Failed to close live order",
                     )
+                order_details = self._fetch_order_details(symbol, close_order_id)
+                if order_details:
+                    status = getattr(order_details, "status", None)
+                    if status is not None and not self._is_filled_status(status):
+                        logger.debug(
+                            "Exit order %s not filled yet (status=%s); using simulated execution",
+                            close_order_id,
+                            status,
+                        )
+                    elif order_details.average_price:
+                        executed_price = float(order_details.average_price)
+                        filled_qty = float(order_details.filled_quantity or 0.0)
+                        if filled_qty > 0:
+                            position_notional = filled_qty * executed_price
+                        fee_from_order = float(order_details.commission or 0.0)
+                        if fee_from_order > 0:
+                            fee_delta = fee_from_order - exit_fee
+                            exit_fee = fee_from_order
+                            slippage_cost = self._calculate_slippage_from_fill(
+                                base_price, executed_price, position_notional
+                            )
+                            slippage_delta = slippage_cost - cost_result.slippage_cost
+                            self._adjust_cost_totals(fee_delta, slippage_delta)
+                        else:
+                            exit_fee = self._cost_calculator.calculate_fee(position_notional)
+                            slippage_cost = self._calculate_slippage_from_fill(
+                                base_price, executed_price, position_notional
+                            )
+                            fee_delta = exit_fee - cost_result.fee
+                            slippage_delta = slippage_cost - cost_result.slippage_cost
+                            self._adjust_cost_totals(fee_delta, slippage_delta)
+                    else:
+                        logger.debug(
+                            "Exit order %s fill missing average price; using simulated execution",
+                            close_order_id,
+                        )
             else:
                 logger.info("PAPER TRADE - Would close %s position on %s", side.value, symbol)
 
@@ -385,7 +502,7 @@ class LiveExecutionEngine:
         quantity: float,
         position_notional: float,
         order_id: str | None = None,
-    ) -> bool:
+    ) -> str | None:
         """Close a real market order via exchange.
 
         Args:
@@ -395,21 +512,21 @@ class LiveExecutionEngine:
             order_id: Order ID to close.
 
         Returns:
-            True if successful, False otherwise.
+            Order ID if successful, None otherwise.
         """
         if self.exchange_interface is None:
             logger.warning("No exchange interface configured - simulating order close")
-            return True
+            return None
 
         try:
             if quantity <= 0:
                 logger.error("Invalid close quantity %.8f for %s", quantity, symbol)
-                return False
+                return None
 
             order_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
             quantity = self._normalize_quantity(symbol, quantity, position_notional)
             if quantity <= 0:
-                return False
+                return None
 
             close_order_id = self.exchange_interface.place_order(
                 symbol=symbol,
@@ -425,12 +542,12 @@ class LiveExecutionEngine:
                     quantity,
                     close_order_id,
                 )
-                return True
+                return close_order_id
             logger.error("Failed to close live order for %s (order_id=%s)", symbol, order_id)
-            return False
+            return None
         except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order close failed: %s", e)
-            return False
+            return None
 
     def _normalize_quantity(self, symbol: str, quantity: float, value: float) -> float:
         """Normalize quantity based on exchange symbol info."""
