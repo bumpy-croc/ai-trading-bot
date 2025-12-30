@@ -189,11 +189,13 @@ class LivePositionTracker:
         db_id = None
         if self.db_manager is not None and session_id is not None:
             try:
-                quantity = (
-                    (position.size * (position.entry_balance or 0)) / position.entry_price
-                    if position.entry_price > 0
-                    else 0.0
-                )
+                quantity = position.quantity
+                if quantity is None:
+                    quantity = (
+                        (position.size * (position.entry_balance or 0)) / position.entry_price
+                        if position.entry_price > 0
+                        else 0.0
+                    )
                 db_id = self.db_manager.log_position(
                     symbol=position.symbol,
                     side=position.side.value,
@@ -748,6 +750,7 @@ class LivePositionTracker:
                     entry_price=float(db_pos.entry_price),
                     entry_time=db_pos.entry_time,
                     entry_balance=float(db_pos.entry_balance) if db_pos.entry_balance else None,
+                    quantity=float(db_pos.quantity) if db_pos.quantity is not None else None,
                     stop_loss=float(db_pos.stop_loss) if db_pos.stop_loss else None,
                     take_profit=float(db_pos.take_profit) if db_pos.take_profit else None,
                     order_id=db_pos.entry_order_id,
