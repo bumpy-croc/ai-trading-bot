@@ -225,7 +225,7 @@ class LiveEntryHandler:
                 error=exec_result.error,
             )
 
-        entry_balance = balance - exec_result.entry_fee
+        entry_balance = balance
         # Create position with actual quantity from execution
         position = LivePosition(
             symbol=symbol,

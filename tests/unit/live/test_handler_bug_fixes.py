@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.engines.live.execution.entry_handler import LiveEntryHandler, LiveEntrySignal
 from src.engines.live.execution.exit_handler import LiveExitHandler
 from src.engines.live.execution.position_tracker import (
     LivePosition,
@@ -358,6 +359,43 @@ class TestDailyPnLTracking:
         # Assert: daily_pnl should be the difference from day start
         call_kwargs = db_manager.log_account_snapshot.call_args.kwargs
         assert call_kwargs["daily_pnl"] == pytest.approx(50.0, rel=0.01)
+
+
+class TestEntryBalanceBasis:
+    """Test entry balance basis uses pre-fee balance."""
+
+    def test_entry_balance_does_not_net_entry_fee(self) -> None:
+        """Entry balance should remain the pre-fee balance."""
+        # Arrange
+        execution_engine = MagicMock()
+        execution_engine.execute_entry.return_value = MagicMock(
+            success=True,
+            executed_price=100.0,
+            order_id="entry-1",
+            quantity=0.1,
+            entry_fee=1.23,
+            slippage_cost=0.0,
+        )
+        entry_handler = LiveEntryHandler(execution_engine=execution_engine)
+        signal = LiveEntrySignal(
+            should_enter=True,
+            side=PositionSide.LONG,
+            size_fraction=0.1,
+        )
+        balance = 1000.0
+
+        # Act
+        result = entry_handler.execute_entry(
+            signal=signal,
+            symbol="BTCUSDT",
+            current_price=100.0,
+            balance=balance,
+        )
+
+        # Assert
+        assert result.executed is True
+        assert result.position is not None
+        assert result.position.entry_balance == balance
 
     def test_daily_pnl_resets_on_date_change(self) -> None:
         """Daily P&L should reset when the trading date changes."""
