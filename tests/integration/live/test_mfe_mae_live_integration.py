@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -47,7 +47,7 @@ class StaticRegimeDetector:
             confidence=0.8,
             duration=index + 1,
             strength=1.0,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
 
     def get_feature_generators(self):
@@ -123,7 +123,7 @@ def test_live_engine_records_mfe_mae():
         current_price=entry_price * 1.03,  # +3% move
         side=position.side.value,
         position_fraction=float(position.size),
-        current_time=datetime.utcnow(),
+        current_time=datetime.now(UTC),
     )
     engine.live_position_tracker.mfe_mae_tracker.update_position_metrics(
         position_key=order_id,
@@ -131,7 +131,7 @@ def test_live_engine_records_mfe_mae():
         current_price=entry_price * 0.97,  # -3% move
         side=position.side.value,
         position_fraction=float(position.size),
-        current_time=datetime.utcnow(),
+        current_time=datetime.now(UTC),
     )
 
     # Close the position to trigger trade logging with MFE/MAE

@@ -27,7 +27,7 @@ class AlwaysBuySignalGenerator(SignalGenerator):
             confidence=1.0,
             strength=1.0,
             metadata={
-                "timestamp": df.index[index] if len(df.index) > index else pd.Timestamp.utcnow()
+                "timestamp": df.index[index] if len(df.index) > index else pd.Timestamp.now(tz="UTC")
             },
         )
 

@@ -47,7 +47,7 @@ assert round(trade_return, 4) == 0.025  # +2.5 % on total balance
 print(f"Cash PnL on $20k account: ${cash_pnl(trade_return, balance_before=20_000):.2f}")
 
 # Equity curve metrics
-index = pd.date_range(end=datetime.utcnow(), periods=120, freq="D")
+index = pd.date_range(end=datetime.now(UTC), periods=120, freq="D")
 equity_curve = pd.Series(10_000).reindex(index)
 equity_curve += (pd.Series(range(len(index)), index=index) * 25)  # toy growth
 

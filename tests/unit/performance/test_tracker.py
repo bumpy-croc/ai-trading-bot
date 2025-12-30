@@ -1,6 +1,6 @@
 """Unit tests for src.performance.tracker module."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pandas as pd
@@ -77,8 +77,8 @@ class TestPerformanceTracker:
         # Create mock trade
         trade = Mock()
         trade.pnl = 100.0
-        trade.entry_time = datetime.now() - timedelta(hours=2)
-        trade.exit_time = datetime.now()
+        trade.entry_time = datetime.now(UTC) - timedelta(hours=2)
+        trade.exit_time = datetime.now(UTC)
         trade.symbol = "BTCUSDT"
         trade.side = "long"
 
@@ -102,8 +102,8 @@ class TestPerformanceTracker:
         # Create mock trade
         trade = Mock()
         trade.pnl = -50.0
-        trade.entry_time = datetime.now() - timedelta(hours=1)
-        trade.exit_time = datetime.now()
+        trade.entry_time = datetime.now(UTC) - timedelta(hours=1)
+        trade.exit_time = datetime.now(UTC)
         trade.symbol = "ETHUSDT"
         trade.side = "short"
 
@@ -128,8 +128,8 @@ class TestPerformanceTracker:
         for i in range(3):
             trade = Mock()
             trade.pnl = 50.0 + i * 10
-            trade.entry_time = datetime.now() - timedelta(hours=i + 1)
-            trade.exit_time = datetime.now() - timedelta(hours=i)
+            trade.entry_time = datetime.now(UTC) - timedelta(hours=i + 1)
+            trade.exit_time = datetime.now(UTC) - timedelta(hours=i)
             trade.symbol = "BTCUSDT"
             trade.side = "long"
             tracker.record_trade(trade)
@@ -146,8 +146,8 @@ class TestPerformanceTracker:
         for i in range(4):
             trade = Mock()
             trade.pnl = -30.0 - i * 5
-            trade.entry_time = datetime.now() - timedelta(hours=i + 1)
-            trade.exit_time = datetime.now() - timedelta(hours=i)
+            trade.entry_time = datetime.now(UTC) - timedelta(hours=i + 1)
+            trade.exit_time = datetime.now(UTC) - timedelta(hours=i)
             trade.symbol = "ETHUSDT"
             trade.side = "short"
             tracker.record_trade(trade)
@@ -164,8 +164,8 @@ class TestPerformanceTracker:
         for pnl in [100, 50, -30]:
             trade = Mock()
             trade.pnl = pnl
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             trade.symbol = "BTCUSDT"
             trade.side = "long"
             tracker.record_trade(trade)
@@ -207,7 +207,7 @@ class TestPerformanceTracker:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Add balance updates
-        now = datetime.now()
+        now = datetime.now(UTC)
         for i in range(5):
             tracker.update_balance(10000 + i * 100, timestamp=now + timedelta(days=i))
 
@@ -225,16 +225,16 @@ class TestPerformanceTracker:
         for pnl in [100, 200]:
             trade = Mock()
             trade.pnl = pnl
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             tracker.record_trade(trade)
 
         # 3 losses totaling $150
         for pnl in [-50, -50, -50]:
             trade = Mock()
             trade.pnl = pnl
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             tracker.record_trade(trade)
 
         metrics = tracker.get_metrics()
@@ -250,8 +250,8 @@ class TestPerformanceTracker:
         for pnl in pnls:
             trade = Mock()
             trade.pnl = pnl
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             tracker.record_trade(trade)
 
         metrics = tracker.get_metrics()
@@ -269,8 +269,8 @@ class TestPerformanceTracker:
         for pnl in pnls:
             trade = Mock()
             trade.pnl = pnl
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             tracker.record_trade(trade)
 
         metrics = tracker.get_metrics()
@@ -285,8 +285,8 @@ class TestPerformanceTracker:
         for pnl in pnls:
             trade = Mock()
             trade.pnl = pnl
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             tracker.record_trade(trade)
 
         metrics = tracker.get_metrics()
@@ -302,8 +302,8 @@ class TestPerformanceTracker:
         for hours in durations:
             trade = Mock()
             trade.pnl = 50.0
-            trade.entry_time = datetime.now() - timedelta(hours=hours)
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC) - timedelta(hours=hours)
+            trade.exit_time = datetime.now(UTC)
             tracker.record_trade(trade)
 
         metrics = tracker.get_metrics()
@@ -327,8 +327,8 @@ class TestPerformanceTracker:
         for i in range(3):
             trade = Mock()
             trade.pnl = 100.0 * (i + 1)
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             trade.symbol = f"BTC{i}"
             trade.side = "long"
             tracker.record_trade(trade, fee=1.0)
@@ -347,8 +347,8 @@ class TestPerformanceTracker:
         for i in range(3):
             trade = Mock()
             trade.pnl = 100.0
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             tracker.record_trade(trade)
 
         tracker.update_balance(11000)
@@ -415,8 +415,8 @@ class TestPerformanceTracker:
         for pnl in [100, -50, 100, -50, 100]:
             trade = Mock()
             trade.pnl = pnl
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             tracker.record_trade(trade)
 
         metrics = tracker.get_metrics()
@@ -452,7 +452,7 @@ class TestPerformanceMetricsFunctions:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Simulate daily balance growth
-        now = datetime.now()
+        now = datetime.now(UTC)
         for i in range(30):
             balance = 10000 + i * 100  # Linear growth
             tracker.update_balance(balance, timestamp=now + timedelta(days=i))
@@ -466,7 +466,7 @@ class TestPerformanceMetricsFunctions:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Simulate volatile but upward trending balance
-        now = datetime.now()
+        now = datetime.now(UTC)
         balances = [10000, 10100, 9950, 10200, 10050, 10300]
         for i, bal in enumerate(balances):
             tracker.update_balance(bal, timestamp=now + timedelta(days=i))
@@ -480,7 +480,7 @@ class TestPerformanceMetricsFunctions:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Add balance history with some volatility
-        now = datetime.now()
+        now = datetime.now(UTC)
         balances = [10000, 10100, 9900, 10200, 9800, 10300]
         for i, bal in enumerate(balances):
             tracker.update_balance(bal, timestamp=now + timedelta(days=i))
@@ -494,7 +494,7 @@ class TestPerformanceMetricsFunctions:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Simulate growth with drawdown
-        now = datetime.now()
+        now = datetime.now(UTC)
         tracker.update_balance(12000, timestamp=now)  # Peak
         tracker.update_balance(10800, timestamp=now + timedelta(days=30))  # Drawdown
         tracker.update_balance(13000, timestamp=now + timedelta(days=60))  # Recovery
@@ -516,8 +516,8 @@ class TestPerformanceTrackerEdgeCases:
         for pnl in [100, 0, -50, 0, 150]:
             trade = Mock()
             trade.pnl = pnl
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             trade.symbol = "BTCUSDT"
             trade.side = "long"
             tracker.record_trade(trade)
@@ -554,8 +554,8 @@ class TestPerformanceTrackerEdgeCases:
 
         trade = Mock()
         trade.pnl = None
-        trade.entry_time = datetime.now()
-        trade.exit_time = datetime.now()
+        trade.entry_time = datetime.now(UTC)
+        trade.exit_time = datetime.now(UTC)
         trade.symbol = "BTCUSDT"
         trade.side = "long"
 
@@ -571,7 +571,7 @@ class TestPerformanceTrackerEdgeCases:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Add only 10 balance updates (less than 30 required)
-        now = datetime.now()
+        now = datetime.now(UTC)
         for i in range(10):
             tracker.update_balance(10000 + i * 10, timestamp=now + timedelta(days=i))
 
@@ -584,7 +584,7 @@ class TestPerformanceTrackerEdgeCases:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Add 40 balance updates (more than 30 required)
-        now = datetime.now()
+        now = datetime.now(UTC)
         for i in range(40):
             # Add some volatility
             balance = 10000 + i * 10 + (i % 3 - 1) * 50
@@ -599,7 +599,7 @@ class TestPerformanceTrackerEdgeCases:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Simulate only upward growth (no downside)
-        now = datetime.now()
+        now = datetime.now(UTC)
         for i in range(30):
             tracker.update_balance(10000 + i * 100, timestamp=now + timedelta(days=i))
 
@@ -612,7 +612,7 @@ class TestPerformanceTrackerEdgeCases:
         tracker = PerformanceTracker(initial_balance=10000)
 
         # Simulate growth with no drawdown
-        now = datetime.now()
+        now = datetime.now(UTC)
         for i in range(30):
             tracker.update_balance(10000 + i * 50, timestamp=now + timedelta(days=i))
 
@@ -628,8 +628,8 @@ class TestPerformanceTrackerEdgeCases:
         for i in range(tracker._max_trade_history + 100):
             trade = Mock()
             trade.pnl = float(i)
-            trade.entry_time = datetime.now()
-            trade.exit_time = datetime.now()
+            trade.entry_time = datetime.now(UTC)
+            trade.exit_time = datetime.now(UTC)
             trade.symbol = f"BTC{i}"
             trade.side = "long"
             tracker.record_trade(trade)
@@ -667,8 +667,8 @@ class TestPerformanceTrackerEdgeCases:
             for i in range(1, 51):  # Start from 1 to avoid zero-PnL trades
                 trade = Mock()
                 trade.pnl = float(i)
-                trade.entry_time = datetime.now()
-                trade.exit_time = datetime.now()
+                trade.entry_time = datetime.now(UTC)
+                trade.exit_time = datetime.now(UTC)
                 trade.symbol = "BTCUSDT"
                 trade.side = "long"
                 tracker.record_trade(trade)

@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
@@ -221,7 +221,7 @@ class DynamicRiskManager:
 
     def _get_performance_metrics(self, session_id: int | None) -> dict[str, Any]:
         """Get cached performance metrics or calculate new ones"""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         # Check cache validity
         if (

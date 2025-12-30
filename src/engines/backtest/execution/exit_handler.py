@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -382,7 +382,7 @@ class ExitHandler:
         hit_time_limit = False
         if self.time_exit_policy is not None:
             try:
-                current_time = candle.name if hasattr(candle, "name") else datetime.now()
+                current_time = candle.name if hasattr(candle, "name") else datetime.now(UTC)
                 should_time_exit, _ = self.time_exit_policy.check_time_exit_conditions(
                     trade.entry_time, current_time
                 )

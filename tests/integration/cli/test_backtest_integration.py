@@ -3,7 +3,7 @@
 import argparse
 import json
 import tempfile
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch, Mock
 
@@ -31,7 +31,7 @@ class TestBacktestIntegration:
         """Provides mock historical OHLCV data."""
         # Create 7 days of hourly data
         dates = pd.date_range(
-            start=datetime.now() - timedelta(days=7), periods=168, freq="1h"  # 7 days * 24 hours
+            start=datetime.now(UTC) - timedelta(days=7), periods=168, freq="1h"  # 7 days * 24 hours
         )
         data = {
             "timestamp": dates,
@@ -142,8 +142,8 @@ class TestBacktestIntegration:
     def test_backtest_with_date_range(self, temp_project_root, mock_historical_data):
         """Test backtest with explicit start and end dates."""
         # Arrange
-        start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%d")
+        end_date = datetime.now(UTC).strftime("%Y-%m-%d")
 
         args = argparse.Namespace(
             strategy="ml_basic",

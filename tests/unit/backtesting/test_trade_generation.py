@@ -1,6 +1,6 @@
 """Tests validating Trade lifecycle behaviour for backtesting."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from src.engines.live.trading_engine import Trade, PositionSide
 
@@ -17,8 +17,8 @@ class TestTradeGeneration:
             size=0.1,
             entry_price=50000,
             exit_price=50000,
-            entry_time=datetime.now(),
-            exit_time=datetime.now(),
+            entry_time=datetime.now(UTC),
+            exit_time=datetime.now(UTC),
             pnl=0.0,
             exit_reason="init",
         )

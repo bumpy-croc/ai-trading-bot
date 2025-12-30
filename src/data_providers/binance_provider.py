@@ -12,7 +12,7 @@ providing a single interface for all Binance operations including:
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from typing import Any, TypeVar
 
@@ -381,7 +381,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                 logger.info(f"Fetched {len(df)} candles from {df.index.min()} to {df.index.max()}")
             else:
                 # Check if this is expected (future dates) or an error
-                current_time = datetime.now()
+                current_time = datetime.now(UTC)
                 if end is not None and end > current_time:
                     logger.info(
                         f"No data available for future dates: requested {start} to {end}, current time is {current_time}"
@@ -522,7 +522,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         free=free,
                         locked=locked,
                         total=total,
-                        last_updated=datetime.utcnow(),
+                        last_updated=datetime.now(UTC),
                     )
                     balances.append(balance)
 
@@ -552,7 +552,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         free=free,
                         locked=locked,
                         total=total,
-                        last_updated=datetime.utcnow(),
+                        last_updated=datetime.now(UTC),
                     )
 
             return None
@@ -593,8 +593,8 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                             margin_type="spot",
                             leverage=1.0,
                             order_id="",  # No order ID for holdings
-                            open_time=datetime.utcnow(),  # Simplified
-                            last_update_time=datetime.utcnow(),
+                            open_time=datetime.now(UTC),  # Simplified
+                            last_update_time=datetime.now(UTC),
                         )
                         positions.append(position)
 

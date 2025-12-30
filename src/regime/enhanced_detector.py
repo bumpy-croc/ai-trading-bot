@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -198,7 +198,7 @@ class EnhancedRegimeDetector:
             confidence=enhanced_confidence,
             duration=duration,
             strength=strength,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
             metadata={
                 "trend_score": float(current_row.get("trend_score", 0.0)),
                 "atr_percentile": float(current_row.get("atr_percentile", 0.5)),
@@ -301,7 +301,7 @@ class EnhancedRegimeDetector:
                 transition = RegimeTransition(
                     from_regime=prev_regime,
                     to_regime=current_regime,
-                    transition_time=current_regime.timestamp or datetime.now(),
+                    transition_time=current_regime.timestamp or datetime.now(UTC),
                     confidence=min(prev_regime.confidence, current_regime.confidence),
                 )
                 transitions.append(transition)
@@ -427,7 +427,7 @@ class EnhancedRegimeDetector:
                 transition = RegimeTransition(
                     from_regime=self.current_regime,
                     to_regime=regime_context,
-                    transition_time=regime_context.timestamp or datetime.now(),
+                    transition_time=regime_context.timestamp or datetime.now(UTC),
                     confidence=min(self.current_regime.confidence, regime_context.confidence),
                 )
                 self.transition_history.append(transition)

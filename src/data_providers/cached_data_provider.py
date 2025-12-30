@@ -1,7 +1,7 @@
 import hashlib
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
@@ -74,6 +74,24 @@ class CachedDataProvider(DataProvider):
                 # Disable caching by setting cache_dir to None
                 self.cache_dir = None
 
+    @staticmethod
+    def _normalize_datetime(value: datetime | None) -> datetime | None:
+        """Normalize datetimes to timezone-aware UTC for comparisons."""
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _ensure_utc_index(data: pd.DataFrame) -> pd.DataFrame:
+        """Ensure DataFrame datetime index is timezone-aware UTC."""
+        if isinstance(data.index, pd.DatetimeIndex):
+            if data.index.tz is None:
+                return data.tz_localize(UTC)
+            return data.tz_convert(UTC)
+        return data
+
     def _generate_year_cache_key(self, symbol: str, timeframe: str, year: int) -> str:
         """
         Generate a cache key for a specific year of data.
@@ -114,13 +132,13 @@ class CachedDataProvider(DataProvider):
 
         # For fully historical years, treat cache as permanently valid
         if year is not None:
-            current_year = datetime.now().year
+            current_year = datetime.now(UTC).year
             if year < current_year:
                 return True
 
         # Check if cache is expired
         file_time = datetime.fromtimestamp(os.path.getmtime(cache_path))
-        current_time = datetime.now()
+        current_time = datetime.now(UTC)
         age_hours = (current_time - file_time).total_seconds() / 3600
 
         return age_hours < self.cache_ttl_hours
@@ -188,11 +206,11 @@ class CachedDataProvider(DataProvider):
 
         while current <= end:
             year = current.year
-            year_start = max(current, datetime(year, 1, 1))
-            year_end = min(end, datetime(year + 1, 1, 1) - timedelta(seconds=1))
+            year_start = max(current, datetime(year, 1, 1, tzinfo=UTC))
+            year_end = min(end, datetime(year + 1, 1, 1, tzinfo=UTC) - timedelta(seconds=1))
 
             ranges.append((year, year_start, year_end))
-            current = datetime(year + 1, 1, 1)
+            current = datetime(year + 1, 1, 1, tzinfo=UTC)
 
         return ranges
 
@@ -237,7 +255,7 @@ class CachedDataProvider(DataProvider):
             DataFrame for the year or None if failed
         """
         # Check if we're trying to fetch future data
-        current_year = datetime.now().year
+        current_year = datetime.now(UTC).year
         if year > current_year:
             logger.warning(
                 f"Cannot fetch data for future year {year} (current year: {current_year})"
@@ -251,6 +269,7 @@ class CachedDataProvider(DataProvider):
         if cache_path and self._is_cache_valid(cache_path, year):
             cached_data = self._load_from_cache(cache_path)
             if cached_data is not None and not cached_data.empty:
+                cached_data = self._ensure_utc_index(cached_data)
                 logger.debug(f"Loaded {year} data from cache for {symbol} {timeframe}")
 
                 # Check if cached data covers the requested range
@@ -284,11 +303,11 @@ class CachedDataProvider(DataProvider):
         logger.info(f"Fetching {year} data for {symbol} {timeframe}")
 
         # Fetch the entire year to maximize cache efficiency
-        fetch_start = datetime(year, 1, 1)
-        fetch_end = datetime(year + 1, 1, 1) - timedelta(seconds=1)
+        fetch_start = datetime(year, 1, 1, tzinfo=UTC)
+        fetch_end = datetime(year + 1, 1, 1, tzinfo=UTC) - timedelta(seconds=1)
 
         # Don't fetch beyond current time
-        current_time = datetime.now()
+        current_time = datetime.now(UTC)
         if fetch_end > current_time:
             fetch_end = current_time
 
@@ -298,6 +317,7 @@ class CachedDataProvider(DataProvider):
             )
 
             if not year_data.empty:
+                year_data = self._ensure_utc_index(year_data)
                 # Cache the entire year's data
                 self._save_to_cache(cache_path, year_data)
 
@@ -312,7 +332,7 @@ class CachedDataProvider(DataProvider):
                 return year_data
             else:
                 # Check if this is expected (future data) or an actual error
-                current_time = datetime.now()
+                current_time = datetime.now(UTC)
                 if fetch_end > current_time - timedelta(hours=1):  # Within last hour
                     logger.info(
                         f"No recent data available for {symbol} {timeframe} in {year} (fetch_end: {fetch_end}, current_time: {current_time})"
@@ -349,14 +369,18 @@ class CachedDataProvider(DataProvider):
         # Detect if caller swapped parameters (timeframe passed as datetime)
         if isinstance(timeframe, datetime):
             # Shift parameters
-            end = start if end is not None else datetime.now()
+            end = start if end is not None else datetime.now(UTC)
             start = timeframe
             timeframe = "1d"  # default to daily
         if end is None:
-            end = datetime.now()
+            end = datetime.now(UTC)
+        start = self._normalize_datetime(start)
+        end = self._normalize_datetime(end)
 
         # Don't fetch future data
-        current_time = datetime.now()
+        current_time = datetime.now(UTC)
+        if end is None:
+            end = current_time
         if end > current_time:
             logger.info(f"Adjusting end time from {end} to {current_time} to avoid future data")
             end = current_time

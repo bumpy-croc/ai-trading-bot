@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -8,7 +8,7 @@ from src.position_management.mfe_mae_tracker import MFEMAETracker
 def test_mfe_mae_tracker_long_case():
     tracker = MFEMAETracker(precision_decimals=8)
     entry = 100.0
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
 
     # Move up +10%
     m = tracker.update_position_metrics(
@@ -40,7 +40,7 @@ def test_mfe_mae_tracker_long_case():
 def test_mfe_mae_tracker_short_case():
     tracker = MFEMAETracker(precision_decimals=8)
     entry = 100.0
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
 
     # Price drops 10% is favorable for short: +10% * 0.3 = 0.03, minus exit costs = 0.0285
     m = tracker.update_position_metrics(
@@ -71,7 +71,7 @@ def test_mfe_mae_tracker_short_case():
 def test_mfe_mae_no_movement_extremes():
     tracker = MFEMAETracker()
     entry = 100.0
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
 
     # No movement
     m = tracker.update_position_metrics("p3", entry, 100.0, "long", 1.0, now)

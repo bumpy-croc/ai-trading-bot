@@ -87,7 +87,7 @@ class TestGenerateVersionId:
 
         # Act
         with patch("src.ml.training_pipeline.pipeline.datetime") as mock_datetime:
-            mock_datetime.utcnow.return_value.strftime.return_value = "2024-01-01_10h"
+            mock_datetime.now.return_value.strftime.return_value = "2024-01-01_10h"
             version_id = _generate_version_id(models_dir, "BTCUSDT", "basic")
 
         # Assert
@@ -105,7 +105,7 @@ class TestGenerateVersionId:
 
         # Act
         with patch("src.ml.training_pipeline.pipeline.datetime") as mock_datetime:
-            mock_datetime.utcnow.return_value.strftime.return_value = "2024-01-01_10h"
+            mock_datetime.now.return_value.strftime.return_value = "2024-01-01_10h"
             version_id = _generate_version_id(models_dir, "BTCUSDT", "basic")
 
         # Assert
@@ -119,7 +119,7 @@ class TestGenerateVersionId:
 
         # Create all versions up to max
         with patch("src.ml.training_pipeline.pipeline.datetime") as mock_datetime:
-            mock_datetime.utcnow.return_value.strftime.return_value = "2024-01-01_10h"
+            mock_datetime.now.return_value.strftime.return_value = "2024-01-01_10h"
             for i in range(1, 1001):
                 (symbol_dir / f"2024-01-01_10h_v{i}").mkdir(parents=True, exist_ok=True)
 

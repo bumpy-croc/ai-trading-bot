@@ -11,7 +11,7 @@ import logging
 import pickle  # nosec B403: used for internal caching; no untrusted inputs
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from typing import Any
 
@@ -459,7 +459,7 @@ class PredictionCacheManager:
                     session.query(PredictionCache)
                     .filter(
                         PredictionCache.cache_key == cache_key,
-                        PredictionCache.expires_at > datetime.utcnow(),
+                        PredictionCache.expires_at > datetime.now(UTC),
                     )
                     .first()
                 )
@@ -470,7 +470,7 @@ class PredictionCacheManager:
 
                 # Update access statistics
                 cache_entry.access_count += 1
-                cache_entry.last_accessed = datetime.utcnow()
+                cache_entry.last_accessed = datetime.now(UTC)
                 session.commit()
 
                 self._stats["hits"] += 1
@@ -511,7 +511,7 @@ class PredictionCacheManager:
         cache_key = self._generate_cache_key(features, model_name, config)
         features_hash = self._generate_features_hash(features)
         config_hash = self._generate_config_hash(model_name, config)
-        expires_at = datetime.utcnow() + timedelta(seconds=self.ttl)
+        expires_at = datetime.now(UTC) + timedelta(seconds=self.ttl)
 
         try:
             with self.db_manager.get_session() as session:
@@ -528,7 +528,7 @@ class PredictionCacheManager:
                     existing_entry.confidence = confidence
                     existing_entry.direction = direction
                     existing_entry.expires_at = expires_at
-                    existing_entry.last_accessed = datetime.utcnow()
+                    existing_entry.last_accessed = datetime.now(UTC)
                 else:
                     # Create new entry
                     cache_entry = PredictionCache(
@@ -566,7 +566,7 @@ class PredictionCacheManager:
         try:
             expired_count = (
                 session.query(PredictionCache)
-                .filter(PredictionCache.expires_at <= datetime.utcnow())
+                .filter(PredictionCache.expires_at <= datetime.now(UTC))
                 .delete()
             )
 
@@ -701,7 +701,7 @@ class PredictionCacheManager:
                 total_entries = session.query(PredictionCache).count()
                 expired_entries = (
                     session.query(PredictionCache)
-                    .filter(PredictionCache.expires_at <= datetime.utcnow())
+                    .filter(PredictionCache.expires_at <= datetime.now(UTC))
                     .count()
                 )
 

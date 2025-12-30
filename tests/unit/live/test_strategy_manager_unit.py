@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -141,7 +141,7 @@ class TestStrategyVersioning:
             version_id="ml_basic_v1.0",
             strategy_name="ml_basic",
             version="v1.0",
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             config={"sequence_length": 120},
         )
         assert version.strategy_name == "ml_basic"

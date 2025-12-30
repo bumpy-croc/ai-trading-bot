@@ -1,5 +1,5 @@
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import ModuleType, SimpleNamespace
 
 import pandas as pd
@@ -83,8 +83,8 @@ def test_backtester_regime_annotation(monkeypatch):
     monkeypatch.setenv("FEATURE_ENABLE_REGIME_DETECTION", "true")
     strategy = create_dummy_strategy()
     provider = MockDataProvider(interval_seconds=1, num_candles=500)
-    start = datetime.now() - timedelta(hours=400)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(hours=400)
+    end = datetime.now(UTC)
     backtester = Backtester(
         strategy=strategy,
         data_provider=provider,
@@ -109,7 +109,7 @@ def test_backtester_regime_annotation(monkeypatch):
                     "confidence": 0.75,
                     "agreement_score": 0.6,
                 },
-                "analysis_timestamp": datetime.now(),
+                "analysis_timestamp": datetime.now(UTC),
             }
 
         def should_switch_strategy(self, regime_analysis, current_candle_index):
@@ -204,7 +204,7 @@ def test_regime_switcher_respects_lookback(monkeypatch):
                     "agreement_score": 1.0,
                 },
                 "timeframe_regimes": {},
-                "analysis_timestamp": datetime.now(),
+                "analysis_timestamp": datetime.now(UTC),
             }
 
         @staticmethod
@@ -229,8 +229,8 @@ def test_regime_switcher_respects_lookback(monkeypatch):
 
     strategy = create_dummy_strategy()
     provider = MockDataProvider(interval_seconds=3600, num_candles=500, seed=123)
-    start = datetime.now() - timedelta(hours=600)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(hours=600)
+    end = datetime.now(UTC)
 
     raw_df = provider.get_historical_data("BTCUSDT", "1h", start, end)
     prepared_df = raw_df.copy()

@@ -9,7 +9,7 @@ import math
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
@@ -485,7 +485,7 @@ class DatabaseManager:
             # Generate session name if not provided - use UTC for consistency
             if session_name is None:
                 session_name = (
-                    f"{strategy_name}_{symbol}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+                    f"{strategy_name}_{symbol}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
                 )
 
             trading_session = TradingSession(
@@ -496,7 +496,7 @@ class DatabaseManager:
                 mode=mode,
                 initial_balance=initial_balance,
                 strategy_config=strategy_config,
-                start_time=datetime.utcnow(),
+                start_time=datetime.now(UTC),
                 time_exit_config=time_exit_config,
                 market_timezone=market_timezone,
             )
@@ -541,7 +541,7 @@ class DatabaseManager:
             # Calculate final metrics
             trades = db.query(Trade).filter_by(session_id=session_id).all()
 
-            trading_session.end_time = datetime.utcnow()
+            trading_session.end_time = datetime.now(UTC)
             trading_session.is_active = False
             trading_session.final_balance = final_balance
             trading_session.total_trades = len(trades)
@@ -768,7 +768,7 @@ class DatabaseManager:
                 entry_balance=Decimal(str(entry_balance)) if entry_balance is not None else None,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                entry_time=datetime.utcnow(),
+                entry_time=datetime.now(UTC),
                 strategy_name=strategy_name,
                 confidence_score=confidence_score,
                 session_id=session_id or self._current_session_id,
@@ -810,14 +810,14 @@ class DatabaseManager:
                     order_type=OrderType.ENTRY,
                     status=OrderStatus.FILLED,  # Already filled since position exists
                     exchange_order_id=entry_order_id,  # Use the entry_order_id
-                    internal_order_id=f"entry_{position.id}_{int(datetime.utcnow().timestamp())}",
+                    internal_order_id=f"entry_{position.id}_{int(datetime.now(UTC).timestamp())}",
                     symbol=symbol,
                     side=side,
                     quantity=Decimal(str(quantity or size)),
                     price=Decimal(str(entry_price)),
                     filled_quantity=Decimal(str(quantity or size)),
                     filled_price=Decimal(str(entry_price)),
-                    filled_at=datetime.utcnow(),
+                    filled_at=datetime.now(UTC),
                     strategy_name=strategy_name,
                     session_id=position.session_id,
                 )
@@ -888,7 +888,7 @@ class DatabaseManager:
                 position.last_partial_exit_price = Decimal(str(last_partial_exit_price))
             if last_scale_in_price is not None:
                 position.last_scale_in_price = Decimal(str(last_scale_in_price))
-            position.last_update = datetime.utcnow()
+            position.last_update = datetime.now(UTC)
 
             # Calculate unrealized P&L if not provided - with division by zero protection
             if unrealized_pnl is None and current_price is not None and position.entry_price > 0:
@@ -960,7 +960,7 @@ class DatabaseManager:
                 return False
 
             position.status = PositionStatus.CLOSED
-            position.last_update = exit_time or datetime.utcnow()
+            position.last_update = exit_time or datetime.now(UTC)
 
             # Update position with exit details if provided
             if exit_price is not None:
@@ -1011,7 +1011,7 @@ class DatabaseManager:
                 normalized = self._normalize_order_status(status)
                 old_status = order.status
                 order.status = normalized
-                order.last_update = datetime.utcnow()
+                order.last_update = datetime.now(UTC)
                 session.commit()
                 logger.info(
                     f"Updated order {order_id} status from {old_status.value} to {normalized.value}"
@@ -1128,7 +1128,7 @@ class DatabaseManager:
         """Log a snapshot of account state."""
         with self.get_session() as session:
             snapshot = AccountHistory(
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
                 balance=balance,
                 equity=equity,
                 total_pnl=total_pnl,
@@ -1187,7 +1187,7 @@ class DatabaseManager:
                 component=component,
                 details=details,
                 session_id=session_id or self._current_session_id,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
 
             session.add(event)
@@ -1242,7 +1242,7 @@ class DatabaseManager:
         trade_id = _sanitize_scalar(trade_id)
         with self.get_session() as session:
             execution = StrategyExecution(
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
                 strategy_name=strategy_name,
                 symbol=symbol,
                 timeframe=timeframe,
@@ -1511,7 +1511,7 @@ class DatabaseManager:
 
         try:
             # Calculate daily metrics
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
             daily_metrics = self.get_performance_metrics(
                 period="daily", start_date=today_start, session_id=session_id
             )
@@ -1540,7 +1540,7 @@ class DatabaseManager:
                     metrics = PerformanceMetrics(
                         period="daily",
                         period_start=today_start,
-                        period_end=datetime.utcnow(),
+                        period_end=datetime.now(UTC),
                         session_id=session_id,
                         total_trades=daily_metrics.get("total_trades", 0),
                         winning_trades=daily_metrics.get("winning_trades", 0),
@@ -1565,7 +1565,7 @@ class DatabaseManager:
 
     def cleanup_old_data(self, days_to_keep: int = 90):
         """Clean up old data to prevent database bloat."""
-        cutoff_date = datetime.utcnow() - timedelta(days=days_to_keep)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days_to_keep)
 
         with self.get_session() as session:
             # Delete old inactive sessions and their related data
@@ -1902,7 +1902,7 @@ class DatabaseManager:
         try:
             with self.get_session() as session:
                 metrics = DynamicPerformanceMetrics(
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                     session_id=session_id,
                     rolling_win_rate=(
                         Decimal(str(rolling_win_rate)) if rolling_win_rate is not None else None
@@ -1982,7 +1982,7 @@ class DatabaseManager:
         try:
             with self.get_session() as session:
                 adjustment = RiskAdjustment(
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                     session_id=session_id,
                     adjustment_type=adjustment_type,
                     trigger_reason=trigger_reason,
@@ -2036,7 +2036,7 @@ class DatabaseManager:
         """
         try:
             if end_date is None:
-                end_date = datetime.utcnow()
+                end_date = datetime.now(UTC)
             if start_date is None:
                 start_date = end_date - timedelta(days=30)
 
@@ -2230,7 +2230,7 @@ class DatabaseManager:
                     price=Decimal(str(price)),
                     pnl=Decimal(str(pnl)) if pnl is not None else None,
                     target_level=target_level,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 )
                 session.add(record)
                 session.commit()
@@ -2260,7 +2260,7 @@ class DatabaseManager:
                 size=Decimal(str(executed_fraction_of_original)),
                 price=Decimal(str(price)),
                 target_level=target_level,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
             session.add(pt)
             # Update position current size and counters
@@ -2269,7 +2269,7 @@ class DatabaseManager:
             position.current_size = Decimal(str(new_cur))
             position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
             position.last_partial_exit_price = Decimal(str(price))
-            position.last_update = datetime.utcnow()
+            position.last_update = datetime.now(UTC)
             session.commit()
 
     def apply_scale_in_update(
@@ -2292,7 +2292,7 @@ class DatabaseManager:
                 size=Decimal(str(added_fraction_of_original)),
                 price=Decimal(str(price)),
                 target_level=threshold_level,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
             session.add(pt)
             # Update position current size and counters
@@ -2301,7 +2301,7 @@ class DatabaseManager:
             position.current_size = Decimal(str(new_cur))
             position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
             position.last_scale_in_price = Decimal(str(price))
-            position.last_update = datetime.utcnow()
+            position.last_update = datetime.now(UTC)
             session.commit()
 
     # ==========================================
@@ -2351,7 +2351,7 @@ class DatabaseManager:
 
             # * Generate internal order ID if not provided
             if internal_order_id is None:
-                timestamp = int(datetime.utcnow().timestamp() * 1000)
+                timestamp = int(datetime.now(UTC).timestamp() * 1000)
                 internal_order_id = f"{order_type.value.lower()}_{position_id}_{timestamp}"
 
             order = Order(
@@ -2381,7 +2381,7 @@ class DatabaseManager:
                 session.rollback()
                 if "internal_order_id" in str(exc).lower():
                     # * Handle duplicate internal order ID
-                    retry_timestamp = int(datetime.utcnow().timestamp() * 1000000)  # microseconds
+                    retry_timestamp = int(datetime.now(UTC).timestamp() * 1000000)  # microseconds
                     order.internal_order_id = (
                         f"{order_type.value.lower()}_{position_id}_{retry_timestamp}"
                     )
@@ -2427,7 +2427,7 @@ class DatabaseManager:
 
                 old_status = order.status
                 order.status = status
-                order.last_update = datetime.utcnow()
+                order.last_update = datetime.now(UTC)
 
                 # * Update execution details if provided
                 if filled_quantity is not None:
@@ -2441,9 +2441,9 @@ class DatabaseManager:
 
                 # * Set timestamps based on status
                 if status == OrderStatus.FILLED and order.filled_at is None:
-                    order.filled_at = datetime.utcnow()
+                    order.filled_at = datetime.now(UTC)
                 elif status == OrderStatus.CANCELLED and order.cancelled_at is None:
-                    order.cancelled_at = datetime.utcnow()
+                    order.cancelled_at = datetime.now(UTC)
 
                 session.commit()
                 logger.info(f"Updated order {order_id} status: {old_status.value} → {status.value}")

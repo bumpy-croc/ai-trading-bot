@@ -1,6 +1,6 @@
 """Unit tests for cloud training orchestrator."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -306,7 +306,7 @@ class TestCheckStatus:
         mock_provider.get_job_status.return_value = TrainingJobStatus(
             job_name="job-123",
             status="InProgress",
-            start_time=datetime.now(),
+            start_time=datetime.now(UTC),
         )
 
         orchestrator = CloudTrainingOrchestrator(cloud_config, mock_provider)
@@ -322,8 +322,8 @@ class TestCheckStatus:
         mock_provider.get_job_status.return_value = TrainingJobStatus(
             job_name="job-123",
             status="Completed",
-            start_time=datetime.now(),
-            end_time=datetime.now(),
+            start_time=datetime.now(UTC),
+            end_time=datetime.now(UTC),
             output_s3_path="s3://bucket/output",
             metrics={"loss": 0.05},
         )

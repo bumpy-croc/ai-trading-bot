@@ -7,7 +7,7 @@ automatic strategy switching components together in a complete system.
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -60,7 +60,7 @@ class PerformanceMonitoringSystem:
         self.strategy_activation_callback: Callable[[str], bool] | None = None
 
         # Monitoring state
-        self.last_monitoring_update = datetime.now()
+        self.last_monitoring_update = datetime.now(UTC)
         self.monitoring_enabled = True
 
         self.logger.info("PerformanceMonitoringSystem initialized")
@@ -124,7 +124,7 @@ class PerformanceMonitoringSystem:
             return {"monitoring_enabled": False}
 
         results = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "current_strategy": self.current_strategy_id,
             "monitoring_enabled": True,
             "actions_taken": [],
@@ -220,7 +220,7 @@ class PerformanceMonitoringSystem:
             # Get switch statistics
             results["switch_statistics"] = self.strategy_switcher.get_switch_statistics()
 
-            self.last_monitoring_update = datetime.now()
+            self.last_monitoring_update = datetime.now(UTC)
 
         except Exception as e:
             self.logger.error(f"Monitoring update failed: {e}")

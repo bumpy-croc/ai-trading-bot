@@ -198,7 +198,7 @@ from src.strategies.ml_basic import create_ml_basic_strategy
 strategy = create_ml_basic_strategy()
 provider = CachedDataProvider(BinanceProvider(), cache_ttl_hours=24)
 backtester = Backtester(strategy=strategy, data_provider=provider, initial_balance=10_000)
-start = datetime.utcnow() - timedelta(days=120)
+start = datetime.now(UTC) - timedelta(days=120)
 results = backtester.run(symbol="BTCUSDT", timeframe="1h", start=start)
 print(results["total_return"], results["max_drawdown"])
 ```

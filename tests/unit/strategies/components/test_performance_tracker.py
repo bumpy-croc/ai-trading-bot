@@ -5,7 +5,7 @@ This module tests the PerformanceTracker implementation including real-time metr
 historical data storage, comparison utilities, and performance calculations.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -24,7 +24,7 @@ class TestTradeResult:
 
     def test_trade_result_creation(self):
         """Test TradeResult creation"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         trade = TradeResult(
             timestamp=timestamp,
             symbol="BTCUSDT",
@@ -50,7 +50,7 @@ class TestTradeResult:
 
     def test_trade_result_serialization(self):
         """Test TradeResult serialization and deserialization"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         trade = TradeResult(
             timestamp=timestamp,
             symbol="ETHUSDT",
@@ -84,7 +84,7 @@ class TestPerformanceMetrics:
 
     def test_performance_metrics_creation(self):
         """Test PerformanceMetrics creation"""
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         end_time = start_time + timedelta(days=30)
 
         metrics = PerformanceMetrics(
@@ -127,7 +127,7 @@ class TestPerformanceMetrics:
 
     def test_performance_metrics_serialization(self):
         """Test PerformanceMetrics serialization"""
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         end_time = start_time + timedelta(days=7)
 
         metrics = PerformanceMetrics(
@@ -187,7 +187,7 @@ class TestPerformanceTracker:
     @pytest.fixture
     def sample_trades(self):
         """Create sample trades for testing"""
-        base_time = datetime.now() - timedelta(days=10)
+        base_time = datetime.now(UTC) - timedelta(days=10)
         trades = []
 
         # Create a mix of winning and losing trades
@@ -236,7 +236,7 @@ class TestPerformanceTracker:
     def test_record_single_trade(self, tracker):
         """Test recording a single trade"""
         trade = TradeResult(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
             symbol="BTCUSDT",
             side="long",
             entry_price=50000.0,
@@ -282,13 +282,13 @@ class TestPerformanceTracker:
         """Test balance and drawdown tracking"""
         trades = [
             TradeResult(
-                datetime.now(), "BTCUSDT", "long", 50000, 51000, 0.1, 100.0, 2.0, 24.0, "test", 0.8
+                datetime.now(UTC), "BTCUSDT", "long", 50000, 51000, 0.1, 100.0, 2.0, 24.0, "test", 0.8
             ),
             TradeResult(
-                datetime.now(), "BTCUSDT", "long", 51000, 52000, 0.1, 100.0, 2.0, 24.0, "test", 0.8
+                datetime.now(UTC), "BTCUSDT", "long", 51000, 52000, 0.1, 100.0, 2.0, 24.0, "test", 0.8
             ),
             TradeResult(
-                datetime.now(),
+                datetime.now(UTC),
                 "BTCUSDT",
                 "short",
                 52000,
@@ -301,7 +301,7 @@ class TestPerformanceTracker:
                 0.7,
             ),
             TradeResult(
-                datetime.now(),
+                datetime.now(UTC),
                 "BTCUSDT",
                 "short",
                 51500,
@@ -508,7 +508,7 @@ class TestPerformanceTracker:
 
         # Adding a new trade should clear cache
         new_trade = TradeResult(
-            datetime.now(), "BTCUSDT", "long", 50000, 51000, 0.1, 100.0, 2.0, 24.0, "test", 0.8
+            datetime.now(UTC), "BTCUSDT", "long", 50000, 51000, 0.1, 100.0, 2.0, 24.0, "test", 0.8
         )
         tracker.record_trade(new_trade)
 
@@ -523,7 +523,7 @@ class TestPerformanceTracker:
 
         for i, ret in enumerate(returns):
             trade = TradeResult(
-                timestamp=datetime.now() + timedelta(hours=i),
+                timestamp=datetime.now(UTC) + timedelta(hours=i),
                 symbol="BTCUSDT",
                 side="long",
                 entry_price=50000.0,
@@ -551,7 +551,7 @@ class TestPerformanceTracker:
 
         for i, pnl in enumerate(pnl_sequence):
             trade = TradeResult(
-                timestamp=datetime.now() + timedelta(hours=i),
+                timestamp=datetime.now(UTC) + timedelta(hours=i),
                 symbol="BTCUSDT",
                 side="long" if pnl > 0 else "short",
                 entry_price=50000.0,
@@ -577,7 +577,7 @@ class TestPerformanceTracker:
 
         for i, pnl in enumerate(pnl_sequence):
             trade = TradeResult(
-                timestamp=datetime.now() + timedelta(hours=i),
+                timestamp=datetime.now(UTC) + timedelta(hours=i),
                 symbol="BTCUSDT",
                 side="long" if pnl > 0 else "short",
                 entry_price=50000.0,
@@ -597,7 +597,7 @@ class TestPerformanceTracker:
 
     def test_period_filtering(self, tracker):
         """Test filtering trades by different periods"""
-        now = datetime.now()
+        now = datetime.now(UTC)
 
         # Create trades across different time periods
         trades = [

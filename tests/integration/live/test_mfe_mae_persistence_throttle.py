@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -16,7 +16,7 @@ def test_mfe_mae_throttle_prevents_rapid_db_updates(
     from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     # Minimal data feed
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     idx = pd.date_range(now, periods=3, freq="1min")
     prices = pd.Series([100.0, 101.0, 102.0], index=idx)
     mock_data_provider.get_live_data.return_value = pd.DataFrame({"close": prices})
@@ -45,7 +45,7 @@ def test_mfe_mae_throttle_prevents_rapid_db_updates(
     )
 
     # Set last persist to now to block first attempt
-    engine.live_position_tracker._last_mfe_mae_persist = datetime.utcnow()
+    engine.live_position_tracker._last_mfe_mae_persist = datetime.now(UTC)
     engine.live_position_tracker.update_mfe_mae(current_price=101.0)  # should not persist
 
     # Advance time past throttle (sleep is acceptable here; could monkeypatch utcnow if needed)

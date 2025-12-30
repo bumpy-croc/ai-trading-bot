@@ -9,7 +9,7 @@ while maintaining consistent data synchronization.
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -251,7 +251,7 @@ class ExchangeInterface(ABC):
             open_orders = self.get_open_orders()
 
             sync_data = {
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(UTC),
                 "account_info": account_info,
                 "balances": balances,
                 "positions": positions,
@@ -268,7 +268,7 @@ class ExchangeInterface(ABC):
 
         except Exception as e:
             logger.error(f"Account synchronization failed: {e}")
-            return {"timestamp": datetime.utcnow(), "sync_successful": False, "error": str(e)}
+            return {"timestamp": datetime.now(UTC), "sync_successful": False, "error": str(e)}
 
     def validate_order_parameters(
         self,

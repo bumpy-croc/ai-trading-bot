@@ -6,7 +6,7 @@ This module contains all the test functionality ported from the scripts director
 """
 
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.database.manager import DatabaseManager
@@ -131,7 +131,7 @@ def heartbeat_main(args):
             message="Heartbeat",
             severity="info",
             component=component,
-            details={"timestamp": datetime.utcnow().isoformat()},
+            details={"timestamp": datetime.now(UTC).isoformat()},
         )
 
         print("✅ Heartbeat logged")

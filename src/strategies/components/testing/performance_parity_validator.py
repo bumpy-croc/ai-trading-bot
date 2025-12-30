@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -593,7 +593,7 @@ class PerformanceParityValidator:
             if report.metrics_warning == 0:
                 report.overall_result = ValidationResult.PASS
                 report.certified = True
-                report.certification_timestamp = datetime.now()
+                report.certification_timestamp = datetime.now(UTC)
                 report.certification_notes = "All metrics passed validation"
             else:
                 report.overall_result = ValidationResult.WARNING
@@ -665,7 +665,7 @@ class PerformanceParityValidator:
             f"Comparison Period: {report.comparison_period}",
             f"Legacy Strategy ID: {report.legacy_strategy_id}",
             f"New Strategy ID: {report.new_strategy_id}",
-            f"Validation Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Validation Date: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             f"OVERALL RESULT: {report.overall_result.value.upper()}",
             f"Certified: {'YES' if report.certified else 'NO'}",

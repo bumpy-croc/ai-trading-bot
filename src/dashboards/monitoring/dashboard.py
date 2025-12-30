@@ -156,7 +156,7 @@ class MonitoringDashboard:
         self.update_interval = update_interval
         self.is_running = False
         self.update_thread: threading.Thread | None = None
-        self.start_time = datetime.now()
+        self.start_time = datetime.now(UTC)
 
         # Configurable monitoring parameters
         self.monitoring_config: dict[str, dict[str, Any]] = {
@@ -456,7 +456,7 @@ class MonitoringDashboard:
                     {
                         "positions_by_status": results,
                         "validation": validation,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     }
                 )
             except Exception as e:
@@ -472,7 +472,7 @@ class MonitoringDashboard:
                     {
                         "success": True,
                         "fixes_applied": fixes,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     }
                 )
             except Exception as e:
@@ -549,7 +549,7 @@ class MonitoringDashboard:
             if "api_latency" in enabled_metrics:
                 metrics["api_latency"] = self._get_api_latency()
             if "last_data_update" in enabled_metrics:
-                metrics["last_data_update"] = datetime.now().isoformat()
+                metrics["last_data_update"] = datetime.now(UTC).isoformat()
             if "system_uptime" in enabled_metrics:
                 metrics["system_uptime"] = float(self._get_system_uptime())
 
@@ -632,7 +632,7 @@ class MonitoringDashboard:
 
         except Exception as e:
             logger.error(f"Error collecting metrics: {e}")
-            return {"error": str(e), "last_update": datetime.now().isoformat()}
+            return {"error": str(e), "last_update": datetime.now(UTC).isoformat()}
 
     def _get_total_pnl(self) -> float:
         """Get total PnL across all trades"""
@@ -881,7 +881,7 @@ class MonitoringDashboard:
                 return "Unknown"
 
             last_update = pd.to_datetime(result[0]["timestamp"])
-            time_diff = (datetime.now() - last_update).total_seconds()
+            time_diff = (datetime.now(UTC) - last_update).total_seconds()
 
             if time_diff < 300:  # 5 minutes
                 return "Healthy"
@@ -965,7 +965,7 @@ class MonitoringDashboard:
         """Get 24h price change percentage"""
         try:
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now() - timedelta(days=2), datetime.now()
+                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=2), datetime.now(UTC)
             )
             if len(df) >= 2:
                 current_price = df.iloc[-1]["close"]
@@ -980,7 +980,7 @@ class MonitoringDashboard:
         """Get 24h trading volume"""
         try:
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now() - timedelta(days=1), datetime.now()
+                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=1), datetime.now(UTC)
             )
             if not df.empty:
                 return df["volume"].sum()
@@ -995,7 +995,7 @@ class MonitoringDashboard:
             from src.tech.indicators.core import calculate_rsi
 
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now() - timedelta(days=30), datetime.now()
+                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=30), datetime.now(UTC)
             )
             if len(df) > 14:
                 rsi = calculate_rsi(df["close"], period=14)
@@ -1011,7 +1011,7 @@ class MonitoringDashboard:
             from src.tech.indicators.core import calculate_ema
 
             df = self.data_provider.get_historical_data(
-                "BTCUSDT", "1h", datetime.now() - timedelta(days=30), datetime.now()
+                "BTCUSDT", "1h", datetime.now(UTC) - timedelta(days=30), datetime.now(UTC)
             )
             if len(df) > 50:
                 ema_short = calculate_ema(df["close"], period=9)
@@ -1064,7 +1064,7 @@ class MonitoringDashboard:
                 return "No Data"
 
             last_update = pd.to_datetime(result[0]["timestamp"])
-            time_diff = (datetime.now() - last_update).total_seconds()
+            time_diff = (datetime.now(UTC) - last_update).total_seconds()
 
             if time_diff < 300:  # 5 minutes
                 return "Active"
@@ -1112,7 +1112,7 @@ class MonitoringDashboard:
     def _get_system_uptime(self) -> float:
         """Get system uptime in minutes"""
         try:
-            uptime = datetime.now() - self.start_time
+            uptime = datetime.now(UTC) - self.start_time
             total_minutes = uptime.total_seconds() / 60.0
             return float(total_minutes)
         except Exception as e:

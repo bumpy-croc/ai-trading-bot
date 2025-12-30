@@ -5,7 +5,7 @@ the same market data and configuration, ensuring backtest results accurately
 predict live trading behavior.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -94,7 +94,7 @@ class MockSignalGenerator(SignalGenerator):
             direction=direction,
             confidence=0.8 if direction != SignalDirection.HOLD else 0.0,
             strength=0.8 if direction != SignalDirection.HOLD else 0.0,
-            metadata={"timestamp": df.index[index] if len(df) > index else datetime.now()},
+            metadata={"timestamp": df.index[index] if len(df) > index else datetime.now(UTC)},
         )
 
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
@@ -342,7 +342,7 @@ class TestDynamicRiskParity:
         handler = DynamicRiskHandler(manager)
 
         original_size = 0.05
-        current_time = datetime.now()
+        current_time = datetime.now(UTC)
 
         # No drawdown - should return original size
         adjusted = handler.apply_dynamic_risk(
@@ -378,7 +378,7 @@ class TestDynamicRiskParity:
         original_size = 0.05
         adjusted = handler.apply_dynamic_risk(
             original_size=original_size,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=10000.0,
             peak_balance=10000.0,
         )
@@ -398,7 +398,7 @@ class TestDynamicRiskParity:
         # Trigger a significant adjustment
         handler.apply_dynamic_risk(
             original_size=0.05,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,  # 10% drawdown
             peak_balance=10000.0,
         )
@@ -566,7 +566,7 @@ class TestStopLossTakeProfitParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,
@@ -608,7 +608,7 @@ class TestStopLossTakeProfitParity:
             side=PositionSide.SHORT,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,
@@ -649,7 +649,7 @@ class TestStopLossTakeProfitParity:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=100.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             order_id="test-order",
             original_size=0.1,
             current_size=0.1,

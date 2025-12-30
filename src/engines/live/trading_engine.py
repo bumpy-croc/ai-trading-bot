@@ -1404,11 +1404,13 @@ class LiveTradingEngine:
                 current_index = len(df) - 1
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
-                current_time = (
-                    current_candle.name
-                    if hasattr(current_candle, "name")
-                    else datetime.now(UTC)
-                )
+                current_time = current_candle.name if hasattr(current_candle, "name") else None
+                if hasattr(current_time, "to_pydatetime"):
+                    current_time = current_time.to_pydatetime()
+                if not isinstance(current_time, datetime):
+                    current_time = datetime.now(UTC)
+                elif current_time.tzinfo is None:
+                    current_time = current_time.replace(tzinfo=UTC)
 
                 runtime_decision = self._runtime_process_decision(
                     df,
@@ -1558,7 +1560,7 @@ class LiveTradingEngine:
                 # Update performance metrics
                 self._update_performance_metrics()
                 # Log account snapshot to database periodically (configurable interval)
-                now = datetime.now()
+                now = datetime.now(UTC)
                 if self.account_snapshot_interval > 0 and (
                     self.last_account_snapshot is None
                     or (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval
@@ -1671,7 +1673,7 @@ class LiveTradingEngine:
         try:
             # Fetch with a generous limit to satisfy indicator and ML warmups
             df = self.data_provider.get_live_data(symbol, timeframe, limit=500)
-            self.last_data_update = datetime.now()
+            self.last_data_update = datetime.now(UTC)
             return df
         except Exception as e:
             logger.error(f"Failed to fetch market data: {e}", exc_info=True)
@@ -2626,7 +2628,7 @@ class LiveTradingEngine:
                 entry_price=position.entry_price,
                 exit_price=exit_price,
                 entry_time=position.entry_time,
-                exit_time=datetime.now(),
+                exit_time=datetime.now(UTC),
                 pnl=net_trade_pnl,
                 pnl_percent=pnl_percent,
                 exit_reason=reason,
@@ -2653,7 +2655,7 @@ class LiveTradingEngine:
                     strategy_name=self._strategy_name(),
                     exit_reason=reason,
                     entry_time=position.entry_time,
-                    exit_time=datetime.now(),
+                    exit_time=datetime.now(UTC),
                     session_id=self.trading_session_id,
                     mfe=(metrics.mfe if metrics else None),
                     mae=(metrics.mae if metrics else None),
@@ -2765,7 +2767,7 @@ class LiveTradingEngine:
         # Update performance tracker on every metric update cycle
         # Note: Less frequent than backtest (every candle vs every update cycle)
         # This trade-off reduces overhead while maintaining statistical validity for risk metrics
-        self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now())
+        self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now(UTC))
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
@@ -2926,7 +2928,7 @@ class LiveTradingEngine:
             # Create logs/trades directory if it doesn't exist
             os.makedirs("logs/trades", exist_ok=True)
 
-            log_file = f"logs/trades/trades_{datetime.now().strftime('%Y%m')}.json"
+            log_file = f"logs/trades/trades_{datetime.now(UTC).strftime('%Y%m')}.json"
             trade_data = {
                 "timestamp": trade.exit_time.isoformat(),
                 "symbol": trade.symbol,
@@ -2957,7 +2959,7 @@ class LiveTradingEngine:
 
             payload = {
                 "text": f"🤖 Trading Bot: {message}",
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             requests.post(self.alert_webhook_url, json=payload, timeout=10)
         except Exception as e:
@@ -2982,7 +2984,7 @@ class LiveTradingEngine:
             [
                 p
                 for p in self.live_position_tracker.positions.values()
-                if p.entry_time > datetime.now() - timedelta(hours=1)
+                if p.entry_time > datetime.now(UTC) - timedelta(hours=1)
             ]
         )
         if recent_trades > 0:
@@ -2993,7 +2995,7 @@ class LiveTradingEngine:
             interval = min(self.max_check_interval, interval * 2)
 
         # Consider time of day (basic market hours awareness)
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         if current_hour < 6 or current_hour > 22:  # Off-hours (UTC)
             interval = min(self.max_check_interval, interval * 1.5)
 
@@ -3004,14 +3006,14 @@ class LiveTradingEngine:
         if df is None or df.empty:
             return False
 
-        latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now()
+        latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now(UTC)
         if isinstance(latest_timestamp, str):
             try:
                 latest_timestamp = pd.to_datetime(latest_timestamp)
             except (ValueError, TypeError):
                 return True  # Assume fresh if we can't parse timestamp
 
-        age_seconds = (datetime.now() - latest_timestamp).total_seconds()
+        age_seconds = (datetime.now(UTC) - latest_timestamp).total_seconds()
         return age_seconds <= self.data_freshness_threshold
 
     def _print_final_stats(self):
@@ -3301,7 +3303,7 @@ class LiveTradingEngine:
                         entry_price=position.entry_price,
                         exit_price=exit_price,
                         entry_time=position.entry_time,
-                        exit_time=datetime.now(),
+                        exit_time=datetime.now(UTC),
                         pnl=realized_pnl,
                         pnl_percent=pnl_pct,
                         exit_reason="stop_loss_offline",

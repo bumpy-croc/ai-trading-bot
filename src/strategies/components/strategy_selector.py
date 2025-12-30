@@ -12,7 +12,7 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -267,7 +267,7 @@ class StrategySelector:
                 "confidence": current_regime.confidence if current_regime else None,
             },
             "best_strategy": max(strategy_scores, key=lambda s: s.total_score).strategy_id,
-            "comparison_timestamp": datetime.now().isoformat(),
+            "comparison_timestamp": datetime.now(UTC).isoformat(),
         }
 
         return comparison
@@ -322,7 +322,7 @@ class StrategySelector:
             # Check minimum active days
             if tracker.trades:
                 oldest_trade = min(tracker.trades, key=lambda t: t.timestamp)
-                days_active = (datetime.now() - oldest_trade.timestamp).days
+                days_active = (datetime.now(UTC) - oldest_trade.timestamp).days
 
                 if days_active < self.config.min_days_active:
                     self.logger.debug(
@@ -574,7 +574,7 @@ class StrategySelector:
         with self._correlation_lock:
             # Check if cache is still valid AND strategy set hasn't changed AND cache version matches
             if (
-                datetime.now() < self.correlation_cache_expiry
+                datetime.now(UTC) < self.correlation_cache_expiry
                 and self.correlation_strategy_set == current_strategy_set
                 and hasattr(self, "correlation_cache_version")
                 and self.correlation_cache_version == cache_version
@@ -597,7 +597,7 @@ class StrategySelector:
 
                 # Re-check cache after waiting
                 if (
-                    datetime.now() < self.correlation_cache_expiry
+                    datetime.now(UTC) < self.correlation_cache_expiry
                     and self.correlation_strategy_set == current_strategy_set
                 ):
                     return self.correlation_matrix
@@ -607,7 +607,7 @@ class StrategySelector:
 
         # Calculate correlation matrix outside lock to avoid holding it during computation
         # Pre-compute all daily returns for vectorized correlation calculation
-        cutoff_date = datetime.now() - timedelta(days=90)
+        cutoff_date = datetime.now(UTC) - timedelta(days=90)
         strategy_returns: dict[str, dict] = {}
 
         for sid in strategy_ids:
@@ -638,7 +638,7 @@ class StrategySelector:
         with self._correlation_lock:
             # Double-check: another thread might have computed while we were calculating
             if (
-                datetime.now() < self.correlation_cache_expiry
+                datetime.now(UTC) < self.correlation_cache_expiry
                 and self.correlation_strategy_set == current_strategy_set
             ):
                 # Another thread already updated the cache, use that
@@ -647,7 +647,7 @@ class StrategySelector:
 
             # Update cache with strategy set tracking and version
             self.correlation_matrix = correlation_matrix
-            self.correlation_cache_expiry = datetime.now() + timedelta(hours=1)
+            self.correlation_cache_expiry = datetime.now(UTC) + timedelta(hours=1)
             self.correlation_strategy_set = current_strategy_set
             self.correlation_cache_version = cache_version
 
@@ -747,7 +747,7 @@ class StrategySelector:
             if (
                 strategy_id in self.performance_cache
                 and strategy_id in self.cache_expiry
-                and datetime.now() < self.cache_expiry[strategy_id]
+                and datetime.now(UTC) < self.cache_expiry[strategy_id]
             ):
                 return self.performance_cache[strategy_id]
 
@@ -758,7 +758,7 @@ class StrategySelector:
         with self._cache_lock:
             # Update cache
             self.performance_cache[strategy_id] = metrics
-            self.cache_expiry[strategy_id] = datetime.now() + self.cache_duration
+            self.cache_expiry[strategy_id] = datetime.now(UTC) + self.cache_duration
 
         return metrics
 

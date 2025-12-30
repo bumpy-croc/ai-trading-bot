@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -141,8 +141,8 @@ class ExperimentRunner:
         if name == "mock":
             # Internal random-walk provider
             return _RandomWalkProvider(
-                start or (datetime.utcnow() - timedelta(days=30)),
-                end or datetime.utcnow(),
+                start or (datetime.now(UTC) - timedelta(days=30)),
+                end or datetime.now(UTC),
                 timeframe=timeframe,
                 seed=seed,
             )

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import UTC, datetime
 
 import argparse
 import os
@@ -207,7 +208,7 @@ def _backup_database(env: str) -> int:
 
         # Create temp directory for backup
         with tempfile.TemporaryDirectory() as temp_dir:
-            timestamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            timestamp = dt.datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             backup_filename = f"railway_{env}_backup_{timestamp}.dump"
             backup_path = Path(temp_dir) / backup_filename
 

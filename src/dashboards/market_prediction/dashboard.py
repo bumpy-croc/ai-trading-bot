@@ -208,7 +208,7 @@ class MarketPredictionDashboard:
         payload = {
             "symbol": symbol,
             "current_price": round(current_price, 2),
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "predictions": predictions,
             "sentiment": sentiment_info,
             "sources": [

@@ -13,7 +13,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -137,7 +137,7 @@ class Strategy:
             "avg_execution_time_ms": 0.0,
             "avg_signal_confidence": 0.0,
             "avg_position_size": 0.0,
-            "last_updated": datetime.now(),
+            "last_updated": datetime.now(UTC),
         }
 
         # Runtime configuration
@@ -239,7 +239,7 @@ class Strategy:
             IndexError: If index is out of bounds
         """
         start_time = time.time()
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
 
         try:
             # Validate inputs
@@ -455,7 +455,7 @@ class Strategy:
                 "risk_manager": self.risk_manager.get_parameters(),
                 "position_sizer": self.position_sizer.get_parameters(),
             },
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": datetime.now(UTC).isoformat(),
         }
 
     def get_recent_decisions(self, count: int = 10) -> list[dict[str, Any]]:
@@ -482,7 +482,7 @@ class Strategy:
             "avg_execution_time_ms": 0.0,
             "avg_signal_confidence": 0.0,
             "avg_position_size": 0.0,
-            "last_updated": datetime.now(),
+            "last_updated": datetime.now(UTC),
         }
         self.logger.info("Strategy history and metrics cleared")
 
@@ -834,7 +834,7 @@ class Strategy:
             self.metrics["avg_position_size"] * (total - 1) + decision.position_size
         ) / total
 
-        self.metrics["last_updated"] = datetime.now()
+        self.metrics["last_updated"] = datetime.now(UTC)
 
     def _log_decision(self, decision: TradingDecision) -> None:
         """Log trading decision"""

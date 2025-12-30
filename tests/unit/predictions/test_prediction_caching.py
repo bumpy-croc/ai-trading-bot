@@ -5,7 +5,7 @@ This module tests the prediction cache manager, cache integration with OnnxRunne
 and cache management features.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -85,7 +85,7 @@ class TestPredictionCacheManager:
         mock_entry.confidence = 0.8
         mock_entry.direction = 1
         mock_entry.access_count = 5
-        mock_entry.expires_at = datetime.utcnow() + timedelta(seconds=30)
+        mock_entry.expires_at = datetime.now(UTC) + timedelta(seconds=30)
 
         self.mock_session.query.return_value.filter.return_value.first.return_value = mock_entry
 

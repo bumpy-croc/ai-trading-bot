@@ -1,6 +1,6 @@
 """Utility method tests for DatabaseManager."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -14,7 +14,7 @@ class TestUtilityMethods:
     def test_cleanup_old_data(self, mock_postgresql_db):
         """Test cleaning up old data"""
         mock_session = Mock()
-        mock_session.end_time = datetime.utcnow() - timedelta(days=100)
+        mock_session.end_time = datetime.now(UTC) - timedelta(days=100)
         mock_session.is_active = False
 
         mock_query = Mock()

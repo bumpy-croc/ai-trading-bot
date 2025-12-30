@@ -1,7 +1,7 @@
 """Tests for atb data commands."""
 
 import argparse
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -148,7 +148,7 @@ class TestDataPrefill:
 
             mock_cached = Mock()
             mock_cached.get_historical_data.return_value = pd.DataFrame(
-                {"close": [50000]}, index=pd.DatetimeIndex([datetime.now()])
+                {"close": [50000]}, index=pd.DatetimeIndex([datetime.now(UTC)])
             )
             mock_cached_provider.return_value = mock_cached
 

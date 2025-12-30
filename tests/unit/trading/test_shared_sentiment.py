@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
@@ -33,7 +33,7 @@ def test_merge_historical_sentiment():
 
 
 def test_apply_live_sentiment_adds_freshness():
-    now = datetime.now()
+    now = datetime.now(UTC)
     idx = pd.date_range(end=now, periods=10, freq="h")
     df = pd.DataFrame(
         {
