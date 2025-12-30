@@ -137,7 +137,7 @@ class CachedDataProvider(DataProvider):
                 return True
 
         # Check if cache is expired
-        file_time = datetime.fromtimestamp(os.path.getmtime(cache_path))
+        file_time = datetime.fromtimestamp(os.path.getmtime(cache_path), tz=UTC)
         current_time = datetime.now(UTC)
         age_hours = (current_time - file_time).total_seconds() / 3600
 
