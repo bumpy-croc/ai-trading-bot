@@ -2330,13 +2330,18 @@ class LiveTradingEngine:
                 sl_order_id = None
                 max_retries = 3
                 retry_delay = 1.0
-                entry_balance = (
-                    float(position.entry_balance)
-                    if position.entry_balance is not None and position.entry_balance > 0
-                    else float(self.current_balance)
-                )
-                position_value = size * entry_balance
-                quantity = position_value / float(position.entry_price) if position.entry_price else 0.0
+                # Use stored quantity directly to ensure stop-loss covers exact position size
+                if position.quantity is not None and position.quantity > 0:
+                    quantity = position.quantity
+                else:
+                    # Fallback for legacy positions without quantity field
+                    entry_balance = (
+                        float(position.entry_balance)
+                        if position.entry_balance is not None and position.entry_balance > 0
+                        else float(self.current_balance)
+                    )
+                    position_value = size * entry_balance
+                    quantity = position_value / float(position.entry_price) if position.entry_price else 0.0
 
                 for attempt in range(max_retries):
                     try:
