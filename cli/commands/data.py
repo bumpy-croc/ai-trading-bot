@@ -103,7 +103,11 @@ def _prefill(ns: argparse.Namespace) -> int:
             cur = datetime(y + 1, 1, 1, tzinfo=UTC)
         return chunks
 
-    end = datetime.strptime(ns.end, "%Y-%m-%d") if ns.end else datetime.now(UTC)
+    end = (
+        datetime.strptime(ns.end, "%Y-%m-%d").replace(tzinfo=UTC)
+        if ns.end
+        else datetime.now(UTC)
+    )
     if ns.start:
         start = datetime.strptime(ns.start, "%Y-%m-%d").replace(tzinfo=UTC)
     else:
