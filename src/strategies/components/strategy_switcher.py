@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -353,12 +353,12 @@ class StrategySwitcher:
 
         # Create switch request
         request = SwitchRequest(
-            request_id=f"auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            request_id=f"auto_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
             trigger=SwitchTrigger.PERFORMANCE_DEGRADATION,
             from_strategy=current_strategy_id,
             to_strategy=alternative_scores[0].strategy_id,
             reason=switch_decision.reason,
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by="automatic_evaluation",
             priority=self._determine_priority(switch_decision.degradation_severity),
             switch_decision=switch_decision,
@@ -388,12 +388,12 @@ class StrategySwitcher:
             Request ID for tracking
         """
         request = SwitchRequest(
-            request_id=f"manual_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            request_id=f"manual_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
             trigger=SwitchTrigger.MANUAL_REQUEST,
             from_strategy=from_strategy,
             to_strategy=to_strategy,
             reason=reason,
-            requested_at=datetime.now(),
+            requested_at=datetime.now(UTC),
             requested_by=requested_by,
             priority=2,  # Medium priority for manual requests
         )
@@ -425,7 +425,7 @@ class StrategySwitcher:
             Switch record with execution results
         """
         switch_record = SwitchRecord(
-            switch_id=f"switch_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}",
+            switch_id=f"switch_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S_%f')}",
             request=request,
             validation_result=ValidationResult.APPROVED,  # Will be updated
             status=SwitchStatus.PENDING,
@@ -442,7 +442,7 @@ class StrategySwitcher:
                 return switch_record
 
             switch_record.status = SwitchStatus.EXECUTING
-            switch_record.executed_at = datetime.now()
+            switch_record.executed_at = datetime.now(UTC)
 
             # Capture pre-switch performance with detailed metrics if tracker available
             from_tracker = (
@@ -550,9 +550,9 @@ class StrategySwitcher:
                 return switch_record
 
             # Update switch state only after successful activation
-            self.last_switch_time = datetime.now()
+            self.last_switch_time = datetime.now(UTC)
             switch_record.status = SwitchStatus.COMPLETED
-            switch_record.completed_at = datetime.now()
+            switch_record.completed_at = datetime.now(UTC)
 
             # Execute post-switch callbacks with timeout protection (non-blocking)
             for i, callback in enumerate(self.post_switch_callbacks):
@@ -621,7 +621,7 @@ class StrategySwitcher:
         self.manual_override_active = active
 
         if active and duration_hours:
-            self.manual_override_until = datetime.now() + timedelta(hours=duration_hours)
+            self.manual_override_until = datetime.now(UTC) + timedelta(hours=duration_hours)
         else:
             self.manual_override_until = None
 
@@ -646,7 +646,7 @@ class StrategySwitcher:
         Returns:
             List of switch records
         """
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
 
         filtered_history = []
         for record in self.switch_history:
@@ -780,7 +780,7 @@ class StrategySwitcher:
         if not self.manual_override_active:
             return False
 
-        if self.manual_override_until and datetime.now() > self.manual_override_until:
+        if self.manual_override_until and datetime.now(UTC) > self.manual_override_until:
             # Override has expired
             self.manual_override_active = False
             self.manual_override_until = None
@@ -809,11 +809,11 @@ class StrategySwitcher:
         else:
             min_interval = timedelta(hours=self.config.min_switch_interval_hours)
 
-        return datetime.now() - self.last_switch_time >= min_interval
+        return datetime.now(UTC) - self.last_switch_time >= min_interval
 
     def _within_switch_limits(self) -> bool:
         """Check if we're within daily/weekly switch limits"""
-        now = datetime.now()
+        now = datetime.now(UTC)
 
         # Check daily limit
         daily_cutoff = now - timedelta(days=1)
@@ -950,7 +950,7 @@ class StrategySwitcher:
         self, strategy_id: str, performance_tracker: PerformanceTracker | None = None
     ) -> dict[str, float]:
         """Capture performance snapshot before/after switch"""
-        snapshot = {"timestamp": datetime.now().timestamp(), "strategy_id": strategy_id}
+        snapshot = {"timestamp": datetime.now(UTC).timestamp(), "strategy_id": strategy_id}
 
         # If performance tracker is provided, capture detailed metrics
         if performance_tracker:
@@ -979,8 +979,8 @@ class StrategySwitcher:
 
         tracking_info = {
             "switch_id": switch_record.switch_id,
-            "start_time": datetime.now(),
-            "end_time": datetime.now() + timedelta(days=self.config.switch_performance_window_days),
+            "start_time": datetime.now(UTC),
+            "end_time": datetime.now(UTC) + timedelta(days=self.config.switch_performance_window_days),
             "from_strategy": switch_record.request.from_strategy,
             "to_strategy": switch_record.request.to_strategy,
             "pre_switch_performance": switch_record.pre_switch_performance,
@@ -994,7 +994,7 @@ class StrategySwitcher:
         self, performance_trackers: dict[str, PerformanceTracker]
     ) -> None:
         """Update performance tracking for recent switches"""
-        now = datetime.now()
+        now = datetime.now(UTC)
         completed_tracking = []
 
         for switch_id, tracking_info in self.switch_performance_tracking.items():
@@ -1032,7 +1032,7 @@ class StrategySwitcher:
         self, pre_performance: dict[str, float], post_performance: dict[str, float]
     ) -> dict[str, float]:
         """Calculate performance impact of a switch"""
-        impact = {"calculated_at": datetime.now().timestamp()}
+        impact = {"calculated_at": datetime.now(UTC).timestamp()}
 
         # Calculate changes in key metrics
         metrics_to_compare = [
@@ -1097,7 +1097,7 @@ class StrategySwitcher:
             last_known_strategy: Last strategy that was known to be active
         """
         self.circuit_breaker_active = True
-        self.circuit_breaker_activated_at = datetime.now()
+        self.circuit_breaker_activated_at = datetime.now(UTC)
         self.circuit_breaker_reason = reason
         self.last_active_strategy = last_known_strategy
 

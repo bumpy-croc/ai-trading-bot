@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -24,7 +24,7 @@ def test_correlation_models_crud(monkeypatch):
             correlation_value=0.85,
             p_value=0.01,
             sample_size=120,
-            last_updated=datetime.utcnow(),
+            last_updated=datetime.now(UTC),
             window_days=30,
         )
         session.add(row)
@@ -33,7 +33,7 @@ def test_correlation_models_crud(monkeypatch):
             total_exposure=0.12,
             position_count=2,
             symbols=["BTCUSDT", "ETHUSDT"],
-            last_updated=datetime.utcnow(),
+            last_updated=datetime.now(UTC),
         )
         session.add(px)
         session.commit()

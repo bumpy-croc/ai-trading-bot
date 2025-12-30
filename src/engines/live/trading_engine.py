@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -54,6 +54,7 @@ from src.engines.live.execution.position_tracker import (
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
 from src.engines.live.strategy_manager import StrategyManager
+from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.models import (
     BaseTrade,
     PositionSide,
@@ -350,6 +351,7 @@ class LiveTradingEngine:
             except Exception as e:
                 logger.warning(f"Failed to initialize dynamic risk manager: {e}")
                 self.dynamic_risk_manager = None
+        self._dynamic_risk_handler = DynamicRiskHandler(self.dynamic_risk_manager)
 
         # Initialize exchange interface, account synchronizer, and order tracker
         self.exchange_interface = None
@@ -637,63 +639,88 @@ class LiveTradingEngine:
             max_filled_price_deviation=self.max_filled_price_deviation,
         )
 
-    def _get_dynamic_risk_adjusted_size(self, original_size: float) -> float:
-        """Apply dynamic risk adjustments to position size"""
-        if not self.dynamic_risk_manager:
+    def _apply_dynamic_risk_adjustment(
+        self,
+        original_size: float,
+        current_time: datetime,
+    ) -> float:
+        """Apply dynamic risk adjustments to position size.
+
+        Reduces position size during drawdown or adverse market conditions
+        to preserve capital and prevent excessive losses.
+        """
+        if self.dynamic_risk_manager is None:
             return original_size
 
         try:
-            # Calculate dynamic risk adjustments
             perf_metrics = self.performance_tracker.get_metrics()
-            adjustments = self.dynamic_risk_manager.calculate_dynamic_risk_adjustments(
-                current_balance=self.current_balance,
-                peak_balance=perf_metrics.peak_balance or self.current_balance,
-                session_id=self.trading_session_id,
+
+            # Guard against zero/None balances to prevent division by zero in drawdown calc
+            balance = (
+                float(self.current_balance)
+                if self.current_balance and self.current_balance > 0
+                else float(self.initial_balance)
             )
+            peak = (
+                float(perf_metrics.peak_balance)
+                if perf_metrics.peak_balance and perf_metrics.peak_balance > 0
+                else balance
+            )
+            # Peak should never be less than current balance
+            peak_balance = max(peak, balance)
 
-            # Apply position size adjustment
-            adjusted_size = original_size * adjustments.position_size_factor
-
-            # Log the adjustment if significant
-            if abs(adjustments.position_size_factor - 1.0) > 0.1:  # >10% change
-                logger.info(
-                    f"🎛️ Dynamic risk adjustment applied: "
-                    f"size factor={adjustments.position_size_factor:.2f}, "
-                    f"reason={adjustments.primary_reason}"
-                )
-                log_risk_event(
-                    "dynamic_risk_adjustment",
-                    position_size_factor=adjustments.position_size_factor,
-                    reason=adjustments.primary_reason,
-                )
-
-                # Log to database for tracking
-                if self.db_manager and self.trading_session_id:
-                    try:
-                        self.db_manager.log_risk_adjustment(
-                            session_id=self.trading_session_id,
-                            adjustment_type=adjustments.primary_reason.split("_")[
-                                0
-                            ],  # e.g., 'drawdown' from 'drawdown_15.0%'
-                            trigger_reason=adjustments.primary_reason,
-                            parameter_name="position_size_factor",
-                            original_value=1.0,
-                            adjusted_value=adjustments.position_size_factor,
-                            adjustment_factor=adjustments.position_size_factor,
-                            current_drawdown=adjustments.adjustment_details.get("current_drawdown"),
-                            performance_score=None,  # Could be enhanced to include performance score
-                            volatility_level=adjustments.adjustment_details.get(
-                                "performance_metrics", {}
-                            ).get("estimated_volatility"),
-                        )
-                    except Exception as log_e:
-                        logger.warning(f"Failed to log risk adjustment to database: {log_e}")
-
+            adjusted_size = self._dynamic_risk_handler.apply_dynamic_risk(
+                original_size=original_size,
+                current_time=current_time,
+                balance=balance,
+                peak_balance=peak_balance,
+                trading_session_id=self.trading_session_id,
+            )
+            self._log_dynamic_risk_adjustments()
             return adjusted_size
 
         except Exception as e:
-            logger.warning(f"Failed to apply dynamic risk adjustment: {e}")
+            logger.warning("Failed to apply dynamic risk adjustment: %s", e)
             return original_size
+
+    def _log_dynamic_risk_adjustments(self) -> None:
+        """Log dynamic risk adjustments for observability and audit."""
+        adjustments = self._dynamic_risk_handler.get_adjustment_objects(clear=True)
+        for adjustment in adjustments:
+            logger.info(
+                "🎛️ Dynamic risk adjustment applied: size factor=%.2f, reason=%s",
+                adjustment.position_size_factor,
+                adjustment.primary_reason,
+            )
+            # Log both factor values (for analysis) and sizes (for debugging)
+            log_risk_event(
+                "dynamic_risk_adjustment",
+                position_size_factor=adjustment.position_size_factor,
+                reason=adjustment.primary_reason,
+                original_value=1.0,
+                adjusted_value=adjustment.position_size_factor,
+                original_size=adjustment.original_size,
+                adjusted_size=adjustment.adjusted_size,
+                current_drawdown=adjustment.current_drawdown,
+            )
+
+            if self.db_manager and self.trading_session_id:
+                try:
+                    # Log factor values (not position sizes) for backward compatibility
+                    self.db_manager.log_risk_adjustment(
+                        session_id=self.trading_session_id,
+                        adjustment_type=adjustment.primary_reason.split("_")[0],
+                        trigger_reason=adjustment.primary_reason,
+                        parameter_name="position_size_factor",
+                        original_value=1.0,
+                        adjusted_value=adjustment.position_size_factor,
+                        adjustment_factor=adjustment.position_size_factor,
+                        current_drawdown=adjustment.current_drawdown,
+                        performance_score=None,
+                        volatility_level=None,
+                    )
+                except Exception as log_e:
+                    logger.warning("Failed to log risk adjustment to database: %s", log_e)
 
     def _get_dynamic_risk_adjusted_params(self) -> RiskParameters:
         """Get risk parameters with dynamic adjustments applied"""
@@ -1386,13 +1413,20 @@ class LiveTradingEngine:
                 current_index = len(df) - 1
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
+                current_time = current_candle.name if hasattr(current_candle, "name") else None
+                if hasattr(current_time, "to_pydatetime"):
+                    current_time = current_time.to_pydatetime()
+                if not isinstance(current_time, datetime):
+                    current_time = datetime.now(UTC)
+                elif current_time.tzinfo is None:
+                    current_time = current_time.replace(tzinfo=UTC)
 
                 runtime_decision = self._runtime_process_decision(
                     df,
                     current_index,
                     self.current_balance,
                     float(current_price),
-                    current_candle.name if hasattr(current_candle, "name") else datetime.utcnow(),
+                    current_time,
                 )
                 if steps % heartbeat_every == 0:
                     log_engine_event(
@@ -1442,6 +1476,7 @@ class LiveTradingEngine:
                         current_index,
                         symbol,
                         current_price,
+                        current_time,
                         runtime_decision=runtime_decision,
                     )
                     # Check for short entry via legacy hook when available
@@ -1488,8 +1523,9 @@ class LiveTradingEngine:
                                 short_position_size = 0.0
 
                             # Apply dynamic risk adjustments
-                            short_position_size = self._get_dynamic_risk_adjusted_size(
-                                short_position_size
+                            short_position_size = self._apply_dynamic_risk_adjustment(
+                                short_position_size,
+                                current_time,
                             )
                             if short_position_size > 0:
                                 if overrides and (
@@ -1533,7 +1569,7 @@ class LiveTradingEngine:
                 # Update performance metrics
                 self._update_performance_metrics()
                 # Log account snapshot to database periodically (configurable interval)
-                now = datetime.now()
+                now = datetime.now(UTC)
                 if self.account_snapshot_interval > 0 and (
                     self.last_account_snapshot is None
                     or (now - self.last_account_snapshot).seconds >= self.account_snapshot_interval
@@ -1646,7 +1682,7 @@ class LiveTradingEngine:
         try:
             # Fetch with a generous limit to satisfy indicator and ML warmups
             df = self.data_provider.get_live_data(symbol, timeframe, limit=500)
-            self.last_data_update = datetime.now()
+            self.last_data_update = datetime.now(UTC)
             return df
         except Exception as e:
             logger.error(f"Failed to fetch market data: {e}", exc_info=True)
@@ -1800,7 +1836,7 @@ class LiveTradingEngine:
                 log_reasons = [
                     exit_reason if should_exit else "holding_position",
                     f"current_pnl_{current_pnl:.4f}",
-                    f"position_age_{(datetime.utcnow() - position.entry_time).total_seconds():.0f}s",
+                    f"position_age_{(datetime.now(UTC) - position.entry_time).total_seconds():.0f}s",
                     f"entry_price_{position.entry_price:.2f}",
                 ]
 
@@ -1873,6 +1909,7 @@ class LiveTradingEngine:
         current_index: int,
         symbol: str,
         current_price: float,
+        current_time: datetime,
         runtime_decision=None,
     ):
         """Check if new positions should be opened"""
@@ -1897,7 +1934,7 @@ class LiveTradingEngine:
                 runtime_decision=runtime_decision,
                 balance=self.current_balance,
                 current_price=float(current_price),
-                current_time=datetime.utcnow(),
+                current_time=datetime.now(UTC),
                 peak_balance=perf_metrics.peak_balance or self.current_balance,
                 trading_session_id=self.trading_session_id,
             )
@@ -1950,7 +1987,7 @@ class LiveTradingEngine:
             self._get_correlation_context(symbol, df, None, index=current_index)
 
         if position_size > 0 and not use_runtime:
-            position_size = self._get_dynamic_risk_adjusted_size(position_size)
+            position_size = self._apply_dynamic_risk_adjustment(position_size, current_time)
 
         if self.db_manager:
             # Prepare logging data - include TradingDecision data if available
@@ -2315,13 +2352,18 @@ class LiveTradingEngine:
                 sl_order_id = None
                 max_retries = 3
                 retry_delay = 1.0
-                entry_balance = (
-                    float(position.entry_balance)
-                    if position.entry_balance is not None and position.entry_balance > 0
-                    else float(self.current_balance)
-                )
-                position_value = size * entry_balance
-                quantity = position_value / float(position.entry_price) if position.entry_price else 0.0
+                # Use stored quantity directly to ensure stop-loss covers exact position size
+                if position.quantity is not None and position.quantity > 0:
+                    quantity = position.quantity
+                else:
+                    # Fallback for legacy positions without quantity field
+                    entry_balance = (
+                        float(position.entry_balance)
+                        if position.entry_balance is not None and position.entry_balance > 0
+                        else float(self.current_balance)
+                    )
+                    position_value = size * entry_balance
+                    quantity = position_value / float(position.entry_price) if position.entry_price else 0.0
 
                 for attempt in range(max_retries):
                     try:
@@ -2606,7 +2648,7 @@ class LiveTradingEngine:
                 entry_price=position.entry_price,
                 exit_price=exit_price,
                 entry_time=position.entry_time,
-                exit_time=datetime.now(),
+                exit_time=datetime.now(UTC),
                 pnl=net_trade_pnl,
                 pnl_percent=pnl_percent,
                 exit_reason=reason,
@@ -2633,7 +2675,7 @@ class LiveTradingEngine:
                     strategy_name=self._strategy_name(),
                     exit_reason=reason,
                     entry_time=position.entry_time,
-                    exit_time=datetime.now(),
+                    exit_time=datetime.now(UTC),
                     session_id=self.trading_session_id,
                     mfe=(metrics.mfe if metrics else None),
                     mae=(metrics.mae if metrics else None),
@@ -2745,7 +2787,7 @@ class LiveTradingEngine:
         # Update performance tracker on every metric update cycle
         # Note: Less frequent than backtest (every candle vs every update cycle)
         # This trade-off reduces overhead while maintaining statistical validity for risk metrics
-        self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now())
+        self.performance_tracker.update_balance(self.current_balance, timestamp=datetime.now(UTC))
 
     def _extract_indicators(self, df: pd.DataFrame, index: int) -> dict:
         """Extract indicator values from dataframe for logging"""
@@ -2906,7 +2948,7 @@ class LiveTradingEngine:
             # Create logs/trades directory if it doesn't exist
             os.makedirs("logs/trades", exist_ok=True)
 
-            log_file = f"logs/trades/trades_{datetime.now().strftime('%Y%m')}.json"
+            log_file = f"logs/trades/trades_{datetime.now(UTC).strftime('%Y%m')}.json"
             trade_data = {
                 "timestamp": trade.exit_time.isoformat(),
                 "symbol": trade.symbol,
@@ -2937,7 +2979,7 @@ class LiveTradingEngine:
 
             payload = {
                 "text": f"🤖 Trading Bot: {message}",
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             requests.post(self.alert_webhook_url, json=payload, timeout=10)
         except Exception as e:
@@ -2962,7 +3004,7 @@ class LiveTradingEngine:
             [
                 p
                 for p in self.live_position_tracker.positions.values()
-                if p.entry_time > datetime.now() - timedelta(hours=1)
+                if p.entry_time > datetime.now(UTC) - timedelta(hours=1)
             ]
         )
         if recent_trades > 0:
@@ -2973,7 +3015,7 @@ class LiveTradingEngine:
             interval = min(self.max_check_interval, interval * 2)
 
         # Consider time of day (basic market hours awareness)
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         if current_hour < 6 or current_hour > 22:  # Off-hours (UTC)
             interval = min(self.max_check_interval, interval * 1.5)
 
@@ -2984,14 +3026,26 @@ class LiveTradingEngine:
         if df is None or df.empty:
             return False
 
-        latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now()
+        latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now(UTC)
         if isinstance(latest_timestamp, str):
             try:
                 latest_timestamp = pd.to_datetime(latest_timestamp)
             except (ValueError, TypeError):
                 return True  # Assume fresh if we can't parse timestamp
 
-        age_seconds = (datetime.now() - latest_timestamp).total_seconds()
+        # Normalizes to UTC to avoid naive/aware datetime comparisons.
+        if isinstance(latest_timestamp, pd.Timestamp):
+            if latest_timestamp.tz is None:
+                latest_timestamp = latest_timestamp.tz_localize(UTC)
+            else:
+                latest_timestamp = latest_timestamp.tz_convert(UTC)
+        elif isinstance(latest_timestamp, datetime):
+            if latest_timestamp.tzinfo is None:
+                latest_timestamp = latest_timestamp.replace(tzinfo=UTC)
+            else:
+                latest_timestamp = latest_timestamp.astimezone(UTC)
+
+        age_seconds = (datetime.now(UTC) - latest_timestamp).total_seconds()
         return age_seconds <= self.data_freshness_threshold
 
     def _print_final_stats(self):
@@ -3281,7 +3335,7 @@ class LiveTradingEngine:
                         entry_price=position.entry_price,
                         exit_price=exit_price,
                         entry_time=position.entry_time,
-                        exit_time=datetime.now(),
+                        exit_time=datetime.now(UTC),
                         pnl=realized_pnl,
                         pnl_percent=pnl_pct,
                         exit_reason="stop_loss_offline",

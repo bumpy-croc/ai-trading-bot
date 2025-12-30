@@ -4,7 +4,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import matplotlib.patches as patches
@@ -32,7 +32,7 @@ LOGGER = logging.getLogger("atb.regime")
 def _fetch_price_data(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
     LOGGER.info("Fetching %s days of %s data for %s", days, timeframe, symbol)
     provider = BinanceProvider()
-    end_date = datetime.now()
+    end_date = datetime.now(UTC)
     start_date = end_date - timedelta(days=days)
     df = provider.get_historical_data(symbol, timeframe, start_date, end_date)
     if df.empty:

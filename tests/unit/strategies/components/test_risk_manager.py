@@ -2,7 +2,7 @@
 Unit tests for RiskManager components
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -22,7 +22,7 @@ class TestPosition:
 
     def test_position_creation_valid(self):
         """Test creating a valid position"""
-        entry_time = datetime.now()
+        entry_time = datetime.now(UTC)
         position = Position(
             symbol="BTCUSDT",
             side="long",
@@ -50,7 +50,7 @@ class TestPosition:
                 size=1.0,
                 entry_price=100.0,
                 current_price=100.0,
-                entry_time=datetime.now(),
+                entry_time=datetime.now(UTC),
             )
 
     def test_position_validation_side(self):
@@ -62,7 +62,7 @@ class TestPosition:
                 size=1.0,
                 entry_price=100.0,
                 current_price=100.0,
-                entry_time=datetime.now(),
+                entry_time=datetime.now(UTC),
             )
 
     def test_position_validation_size(self):
@@ -74,7 +74,7 @@ class TestPosition:
                 size=-1.0,
                 entry_price=100.0,
                 current_price=100.0,
-                entry_time=datetime.now(),
+                entry_time=datetime.now(UTC),
             )
 
     def test_position_validation_entry_price(self):
@@ -86,7 +86,7 @@ class TestPosition:
                 size=1.0,
                 entry_price=-100.0,
                 current_price=100.0,
-                entry_time=datetime.now(),
+                entry_time=datetime.now(UTC),
             )
 
     def test_position_validation_current_price(self):
@@ -98,7 +98,7 @@ class TestPosition:
                 size=1.0,
                 entry_price=100.0,
                 current_price=-100.0,
-                entry_time=datetime.now(),
+                entry_time=datetime.now(UTC),
             )
 
     def test_update_current_price_long(self):
@@ -109,7 +109,7 @@ class TestPosition:
             size=1.0,
             entry_price=50000.0,
             current_price=50000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
 
         # Price goes up - profit
@@ -130,7 +130,7 @@ class TestPosition:
             size=1.0,
             entry_price=50000.0,
             current_price=50000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
 
         # Price goes down - profit for short
@@ -151,7 +151,7 @@ class TestPosition:
             size=1.0,
             entry_price=50000.0,
             current_price=50000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
 
         with pytest.raises(ValueError, match="price must be positive"):
@@ -165,7 +165,7 @@ class TestPosition:
             size=1.0,
             entry_price=50000.0,
             current_price=51000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
             realized_pnl=500.0,
         )
 
@@ -181,7 +181,7 @@ class TestPosition:
             size=2.0,
             entry_price=50000.0,
             current_price=50000.0,
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
 
         position.update_current_price(55000.0)  # 10000 profit on 100000 entry value
@@ -194,7 +194,7 @@ class TestMarketData:
 
     def test_market_data_creation_valid(self):
         """Test creating valid market data"""
-        timestamp = datetime.now()
+        timestamp = datetime.now(UTC)
         market_data = MarketData(
             symbol="BTCUSDT",
             price=50000.0,
@@ -424,7 +424,7 @@ class TestFixedRiskManager:
             size=1.0,
             entry_price=50000.0,
             current_price=52000.0,  # Profitable
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
         position.update_current_price(52000.0)
 
@@ -442,7 +442,7 @@ class TestFixedRiskManager:
             size=1.0,
             entry_price=50000.0,
             current_price=47000.0,  # 6% loss > 5% stop loss
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
         position.update_current_price(47000.0)
 
@@ -586,7 +586,7 @@ class TestVolatilityRiskManager:
             size=1.0,
             entry_price=50000.0,
             current_price=47000.0,  # 6% loss
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
         position.update_current_price(47000.0)
 
@@ -766,7 +766,7 @@ class TestRegimeAdaptiveRiskManager:
             size=1.0,
             entry_price=50000.0,
             current_price=47500.0,  # 5% loss
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
         position.update_current_price(47500.0)
 
@@ -790,7 +790,7 @@ class TestRegimeAdaptiveRiskManager:
             size=1.0,
             entry_price=50000.0,
             current_price=50500.0,  # Profitable position
-            entry_time=datetime.now(),
+            entry_time=datetime.now(UTC),
         )
         position.update_current_price(50500.0)
 

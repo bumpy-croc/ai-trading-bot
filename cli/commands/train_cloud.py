@@ -7,7 +7,7 @@ AWS SageMaker or other cloud providers.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 
 def _handle_cloud(ns: argparse.Namespace) -> int:
@@ -122,7 +122,7 @@ def _handle_cloud(ns: argparse.Namespace) -> int:
         return 1
 
     # Build training configuration
-    end_date = datetime.utcnow()
+    end_date = datetime.now(UTC)
     start_date = end_date - timedelta(days=args.days)
 
     training_config = TrainingConfig(

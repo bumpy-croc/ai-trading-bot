@@ -8,7 +8,7 @@ including forward-looking validation, persistence analysis, and calibration.
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -458,7 +458,7 @@ class RegimeAssessment:
 
         # Set metadata
         self.metrics.total_periods = len(self.df)
-        self.metrics.assessment_timestamp = datetime.now().isoformat()
+        self.metrics.assessment_timestamp = datetime.now(UTC).isoformat()
         self.metrics.config = {
             "lookahead": self.config.lookahead,
             "range_threshold": self.config.range_threshold,

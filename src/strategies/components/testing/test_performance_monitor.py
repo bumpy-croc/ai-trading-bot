@@ -6,7 +6,7 @@ multi-timeframe analysis, and statistical significance testing.
 """
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -55,7 +55,7 @@ class TestPerformanceMonitor(unittest.TestCase):
 
     def _populate_performance_tracker(self):
         """Populate performance tracker with test data"""
-        base_time = datetime.now() - timedelta(days=100)
+        base_time = datetime.now(UTC) - timedelta(days=100)
 
         # Add 50 trades over 100 days with declining performance
         for i in range(50):
@@ -113,7 +113,7 @@ class TestPerformanceMonitor(unittest.TestCase):
         recent_tracker = PerformanceTracker("recent_strategy")
 
         # Add trades only from yesterday
-        yesterday = datetime.now() - timedelta(days=1)
+        yesterday = datetime.now(UTC) - timedelta(days=1)
         for i in range(25):  # Enough trades but too recent
             trade = TradeResult(
                 timestamp=yesterday + timedelta(hours=i),
@@ -164,8 +164,8 @@ class TestPerformanceMonitor(unittest.TestCase):
             worst_trade=-0.04,
             consecutive_wins=3,
             consecutive_losses=4,
-            period_start=datetime.now() - timedelta(days=30),
-            period_end=datetime.now(),
+            period_start=datetime.now(UTC) - timedelta(days=30),
+            period_end=datetime.now(UTC),
             period_type=PerformancePeriod.MONTHLY,
         )
 
@@ -198,8 +198,8 @@ class TestPerformanceMonitor(unittest.TestCase):
             worst_trade=-0.02,
             consecutive_wins=8,
             consecutive_losses=2,
-            period_start=datetime.now() - timedelta(days=60),
-            period_end=datetime.now() - timedelta(days=30),
+            period_start=datetime.now(UTC) - timedelta(days=60),
+            period_end=datetime.now(UTC) - timedelta(days=30),
             period_type=PerformancePeriod.MONTHLY,
         )
 
@@ -237,8 +237,8 @@ class TestPerformanceMonitor(unittest.TestCase):
             worst_trade=-0.015,
             consecutive_wins=12,
             consecutive_losses=1,
-            period_start=datetime.now() - timedelta(days=30),
-            period_end=datetime.now(),
+            period_start=datetime.now(UTC) - timedelta(days=30),
+            period_end=datetime.now(UTC),
             period_type=PerformancePeriod.MONTHLY,
         )
 
@@ -271,8 +271,8 @@ class TestPerformanceMonitor(unittest.TestCase):
             worst_trade=-0.02,
             consecutive_wins=8,
             consecutive_losses=2,
-            period_start=datetime.now() - timedelta(days=60),
-            period_end=datetime.now() - timedelta(days=30),
+            period_start=datetime.now(UTC) - timedelta(days=60),
+            period_end=datetime.now(UTC) - timedelta(days=30),
             period_type=PerformancePeriod.MONTHLY,
         )
 
@@ -310,8 +310,8 @@ class TestPerformanceMonitor(unittest.TestCase):
             worst_trade=-0.01,
             consecutive_wins=15,
             consecutive_losses=1,
-            period_start=datetime.now() - timedelta(days=90),
-            period_end=datetime.now() - timedelta(days=60),
+            period_start=datetime.now(UTC) - timedelta(days=90),
+            period_end=datetime.now(UTC) - timedelta(days=60),
             period_type=PerformancePeriod.QUARTERLY,
         )
 
@@ -366,8 +366,8 @@ class TestPerformanceMonitor(unittest.TestCase):
             worst_trade=-0.06,
             consecutive_wins=2,
             consecutive_losses=6,
-            period_start=datetime.now() - timedelta(days=30),
-            period_end=datetime.now(),
+            period_start=datetime.now(UTC) - timedelta(days=30),
+            period_end=datetime.now(UTC),
             period_type=PerformancePeriod.MONTHLY,
         )
 
@@ -400,8 +400,8 @@ class TestPerformanceMonitor(unittest.TestCase):
             worst_trade=-0.02,
             consecutive_wins=8,
             consecutive_losses=2,
-            period_start=datetime.now() - timedelta(days=60),
-            period_end=datetime.now() - timedelta(days=30),
+            period_start=datetime.now(UTC) - timedelta(days=60),
+            period_end=datetime.now(UTC) - timedelta(days=30),
             period_type=PerformancePeriod.MONTHLY,
         )
 
@@ -533,10 +533,10 @@ class TestPerformanceMonitor(unittest.TestCase):
         # Add some degradation history
         self.monitor.degradation_history.extend(
             [
-                (datetime.now() - timedelta(days=5), "strategy1", DegradationSeverity.MODERATE),
-                (datetime.now() - timedelta(days=10), "strategy2", DegradationSeverity.SEVERE),
+                (datetime.now(UTC) - timedelta(days=5), "strategy1", DegradationSeverity.MODERATE),
+                (datetime.now(UTC) - timedelta(days=10), "strategy2", DegradationSeverity.SEVERE),
                 (
-                    datetime.now() - timedelta(days=40),
+                    datetime.now(UTC) - timedelta(days=40),
                     "strategy1",
                     DegradationSeverity.MINOR,
                 ),  # Too old

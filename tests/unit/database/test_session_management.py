@@ -1,6 +1,6 @@
 """Session management tests for DatabaseManager."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -37,7 +37,7 @@ class TestSessionManagement:
         mock_session_obj = Mock()
         mock_session_obj.id = 123
         mock_session_obj.session_name = "test_session"
-        mock_session_obj.start_time = datetime.utcnow()
+        mock_session_obj.start_time = datetime.now(UTC)
 
         mock_query = Mock()
         mock_query.filter_by.return_value.first.return_value = mock_session_obj

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -15,7 +15,7 @@ def test_full_position_lifecycle_with_database_logging(tmp_path, mock_strategy, 
     from src.engines.live.trading_engine import LiveTradingEngine, PositionSide
 
     # Minimal data feed
-    idx = pd.date_range(datetime.utcnow(), periods=10, freq="1min")
+    idx = pd.date_range(datetime.now(UTC), periods=10, freq="1min")
     prices = pd.Series([100.0 + i for i in range(10)], index=idx)
     mock_data_provider.get_live_data.return_value = pd.DataFrame({"close": prices})
     mock_data_provider.get_current_price.return_value = float(prices.iloc[-1])

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import UTC, datetime
 
 import argparse
 import datetime as _dt
@@ -787,8 +788,8 @@ def _backup(ns: argparse.Namespace) -> int:
     dbname = parsed.path.lstrip("/")
     password = parsed.password or ""
 
-    timestamp = _dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    backup_path = Path(backup_dir) / dbname / _dt.datetime.utcnow().strftime("%Y/%m/%d")
+    timestamp = _dt.datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = Path(backup_dir) / dbname / _dt.datetime.now(UTC).strftime("%Y/%m/%d")
     dump_filename = f"backup-{timestamp}.dump"
     dump_path = backup_path / dump_filename
 
@@ -806,7 +807,7 @@ def _backup(ns: argparse.Namespace) -> int:
 
     print("✅ Backup created successfully")
     if retention_days > 0:
-        cutoff = _dt.datetime.utcnow() - _dt.timedelta(days=retention_days)
+        cutoff = _dt.datetime.now(UTC) - _dt.timedelta(days=retention_days)
         print(f"🧹 Deleting backups older than {retention_days} days (before {cutoff.date()})")
         db_backup_dir = Path(backup_dir) / dbname
         if db_backup_dir.exists():

@@ -41,7 +41,7 @@ class TestGenerateVersionId:
 
         # Create existing version directories with same timestamp
         with patch("src.ml.training_pipeline.pipeline.datetime") as mock_dt:
-            mock_dt.utcnow.return_value.strftime.return_value = "2025-01-15_14h"
+            mock_dt.now.return_value.strftime.return_value = "2025-01-15_14h"
 
             # Create v1 and v2 to force v3
             (symbol_dir / "2025-01-15_14h_v1").mkdir()
@@ -60,7 +60,7 @@ class TestGenerateVersionId:
         symbol_dir.mkdir(parents=True)
 
         with patch("src.ml.training_pipeline.pipeline.datetime") as mock_dt:
-            mock_dt.utcnow.return_value.strftime.return_value = "2025-01-15_09h"
+            mock_dt.now.return_value.strftime.return_value = "2025-01-15_09h"
 
             # Create many versions
             for i in range(1, 6):

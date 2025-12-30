@@ -11,7 +11,7 @@ from __future__ import annotations
 import inspect
 import logging
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -211,7 +211,7 @@ class ComponentStrategyManager:
         Returns:
             Tuple of (signal, position_size, execution_metadata)
         """
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
 
         try:
             # Detect current market regime
@@ -242,7 +242,7 @@ class ComponentStrategyManager:
             position_size = self._validate_position_size(position_size, signal, balance, regime)
 
             # Calculate execution time
-            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            execution_time = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
             # Create execution metadata
             metadata = {
@@ -402,7 +402,7 @@ class ComponentStrategyManager:
             version_id=version_id,
             name=name,
             description=description,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             components=components,
             parameters=parameters or {},
             is_active=False,
@@ -577,7 +577,7 @@ class ComponentStrategyManager:
         Returns:
             Dictionary of execution statistics
         """
-        cutoff_time = datetime.now() - pd.Timedelta(hours=lookback_hours)
+        cutoff_time = datetime.now(UTC) - pd.Timedelta(hours=lookback_hours)
 
         recent_executions = [
             exec for exec in self.execution_history if exec.timestamp >= cutoff_time

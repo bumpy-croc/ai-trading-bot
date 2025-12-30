@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -42,8 +42,8 @@ class TestDatabaseLogging:
             "entry_price": 50000.0,
             "exit_price": 51000.0,
             "size": 0.1,
-            "entry_time": datetime.now() - timedelta(hours=1),
-            "exit_time": datetime.now(),
+            "entry_time": datetime.now(UTC) - timedelta(hours=1),
+            "exit_time": datetime.now(UTC),
             "pnl": 100.0,
             "exit_reason": "take_profit",
             "strategy_name": "TestStrategy",
@@ -204,8 +204,8 @@ class TestDatabaseLogging:
             "entry_price": 50000.0,
             "exit_price": 51000.0,
             "size": 0.1,
-            "entry_time": datetime.now() - timedelta(hours=2),
-            "exit_time": datetime.now() - timedelta(hours=1),
+            "entry_time": datetime.now(UTC) - timedelta(hours=2),
+            "exit_time": datetime.now(UTC) - timedelta(hours=1),
             "pnl": 100.0,
             "exit_reason": "take_profit",
             "strategy_name": "TestStrategy",

@@ -9,7 +9,7 @@ evolution visualization, and change impact analysis.
 import logging
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -209,7 +209,7 @@ class StrategyLineageTracker:
         self.strategies[strategy_id] = {
             "id": strategy_id,
             "parent_id": parent_id,
-            "created_at": datetime.now(),
+            "created_at": datetime.now(UTC),
             "generation": 0,
             "branch_id": None,
             **(metadata or {}),
@@ -283,14 +283,14 @@ class StrategyLineageTracker:
             changed_components=changed_components or [],
             parameter_changes=parameter_changes or {},
             performance_impact=performance_impact,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             created_by=created_by,
         )
 
         self.changes[strategy_id].append(change_record)
 
         # Update strategy metadata
-        self.strategies[strategy_id]["last_modified"] = datetime.now()
+        self.strategies[strategy_id]["last_modified"] = datetime.now(UTC)
         self.strategies[strategy_id]["change_count"] = len(self.changes[strategy_id])
 
         # Clear caches
@@ -334,7 +334,7 @@ class StrategyLineageTracker:
             branch_id=branch_id,
             branch_name=branch_name,
             parent_strategy_id=parent_strategy_id,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             created_by=created_by,
             description=description,
             active=True,
@@ -423,7 +423,7 @@ class StrategyLineageTracker:
             merged_strategy_id=merged_strategy_id,
             merge_strategy=merge_strategy,
             conflict_resolution=conflict_resolution or {},
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             created_by=created_by,
         )
 

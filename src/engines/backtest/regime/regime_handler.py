@@ -6,7 +6,7 @@ Coordinates market regime analysis and strategy switching during backtests.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -308,7 +308,7 @@ class RegimeHandler:
         except Exception as e:
             # Fallback to manual state update
             logger.debug("Using fallback state update: %s", e)
-            self.regime_switcher.last_switch_time = datetime.now()
+            self.regime_switcher.last_switch_time = datetime.now(UTC)
 
             # Update strategy manager's current strategy if available
             if hasattr(self.regime_switcher, "strategy_manager"):

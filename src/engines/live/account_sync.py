@@ -8,7 +8,7 @@ or trades due to shutdowns or errors.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.data_providers.exchange_interface import (
@@ -74,14 +74,14 @@ class AccountSynchronizer:
 
             # Check if we should sync (avoid too frequent syncs)
             if not force and self.last_sync_time:
-                time_since_last_sync = datetime.utcnow() - self.last_sync_time
+                time_since_last_sync = datetime.now(UTC) - self.last_sync_time
                 if time_since_last_sync < timedelta(minutes=5):  # Minimum 5 minutes between syncs
                     logger.info("Skipping sync - too recent")
                     return SyncResult(
                         success=True,
                         message="Sync skipped - too recent",
                         data={},
-                        timestamp=datetime.utcnow(),
+                        timestamp=datetime.now(UTC),
                     )
 
             # Get data from exchange
@@ -94,7 +94,7 @@ class AccountSynchronizer:
                     success=False,
                     message=f"Exchange sync failed: {error_msg}",
                     data=exchange_data,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(UTC),
                 )
 
             # Sync balances
@@ -107,7 +107,7 @@ class AccountSynchronizer:
             order_sync_result = self._sync_orders(exchange_data.get("open_orders", []))
 
             # Update last sync time
-            self.last_sync_time = datetime.utcnow()
+            self.last_sync_time = datetime.now(UTC)
 
             sync_data = {
                 "exchange_data": exchange_data,
@@ -132,7 +132,7 @@ class AccountSynchronizer:
                 success=False,
                 message=f"Sync failed: {str(e)}",
                 data={},
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(UTC),
             )
 
     def _sync_balances(self, exchange_balances: list[AccountBalance]) -> dict[str, Any]:
@@ -250,7 +250,7 @@ class AccountSynchronizer:
                         size=exchange_pos.size,
                         strategy_name="exchange_sync",
                         entry_order_id=exchange_pos.order_id
-                        or f"sync_{int(datetime.utcnow().timestamp())}",
+                        or f"sync_{int(datetime.now(UTC).timestamp())}",
                         session_id=self.session_id,
                     )
 
@@ -435,7 +435,7 @@ class AccountSynchronizer:
             exchange_trades = self.exchange.get_recent_trades(symbol, limit=1000)
 
             # Filter by date
-            cutoff_date = datetime.utcnow() - timedelta(days=days_back)
+            cutoff_date = datetime.now(UTC) - timedelta(days=days_back)
             recent_exchange_trades = [
                 trade for trade in exchange_trades if trade.time >= cutoff_date
             ]

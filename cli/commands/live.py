@@ -4,7 +4,7 @@ import argparse
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,7 +52,7 @@ def _handle(ns: argparse.Namespace) -> int:
 
 
 def _date_range(days: int) -> tuple[str, str]:
-    end = datetime.utcnow().date()
+    end = datetime.now(UTC).date()
     start = end - timedelta(days=days)
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 

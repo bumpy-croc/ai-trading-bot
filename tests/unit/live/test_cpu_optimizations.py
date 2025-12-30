@@ -3,7 +3,7 @@ Unit tests for CPU optimization features in the live trading engine.
 """
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pandas as pd
@@ -36,7 +36,7 @@ class MockTradingEngine:
             [
                 p
                 for p in self.positions.values()
-                if hasattr(p, "entry_time") and p.entry_time > datetime.now() - timedelta(hours=1)
+                if hasattr(p, "entry_time") and p.entry_time > datetime.now(UTC) - timedelta(hours=1)
             ]
         )
         if recent_trades > 0:
@@ -45,7 +45,7 @@ class MockTradingEngine:
             interval = min(self.max_check_interval, interval * 2)
 
         # Consider time of day (basic market hours awareness)
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         if current_hour < 6 or current_hour > 22:  # Off-hours (UTC)
             interval = min(self.max_check_interval, interval * 1.5)
 
@@ -56,14 +56,26 @@ class MockTradingEngine:
         if df is None or df.empty:
             return False
 
-        latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now()
+        latest_timestamp = df.index[-1] if hasattr(df.index[-1], "timestamp") else datetime.now(UTC)
         if isinstance(latest_timestamp, str):
             try:
                 latest_timestamp = pd.to_datetime(latest_timestamp)
             except (ValueError, TypeError):
                 return True  # Assume fresh if we can't parse timestamp
 
-        age_seconds = (datetime.now() - latest_timestamp).total_seconds()
+        # Normalizes to UTC to avoid naive/aware datetime comparisons.
+        if isinstance(latest_timestamp, pd.Timestamp):
+            if latest_timestamp.tz is None:
+                latest_timestamp = latest_timestamp.tz_localize(UTC)
+            else:
+                latest_timestamp = latest_timestamp.tz_convert(UTC)
+        elif isinstance(latest_timestamp, datetime):
+            if latest_timestamp.tzinfo is None:
+                latest_timestamp = latest_timestamp.replace(tzinfo=UTC)
+            else:
+                latest_timestamp = latest_timestamp.astimezone(UTC)
+
+        age_seconds = (datetime.now(UTC) - latest_timestamp).total_seconds()
         return age_seconds <= self.data_freshness_threshold
 
 
@@ -71,7 +83,7 @@ class MockPosition:
     """Mock position for testing"""
 
     def __init__(self, entry_time=None):
-        self.entry_time = entry_time or datetime.now()
+        self.entry_time = entry_time or datetime.now(UTC)
 
 
 class TestCPUOptimizations(unittest.TestCase):
@@ -90,7 +102,7 @@ class TestCPUOptimizations(unittest.TestCase):
     def test_adaptive_interval_with_recent_activity(self):
         """Test that interval decreases with recent trading activity"""
         # Add a recent position
-        recent_position = MockPosition(datetime.now() - timedelta(minutes=30))
+        recent_position = MockPosition(datetime.now(UTC) - timedelta(minutes=30))
         self.engine.positions["TEST"] = recent_position
 
         interval = self.engine._calculate_adaptive_interval()
@@ -116,7 +128,7 @@ class TestCPUOptimizations(unittest.TestCase):
 
         # Test minimum bound with multiple recent positions
         for i in range(5):
-            recent_position = MockPosition(datetime.now() - timedelta(minutes=10))
+            recent_position = MockPosition(datetime.now(UTC) - timedelta(minutes=10))
             self.engine.positions[f"TEST_{i}"] = recent_position
 
         interval = self.engine._calculate_adaptive_interval()
@@ -125,7 +137,7 @@ class TestCPUOptimizations(unittest.TestCase):
     def test_data_freshness_check_fresh_data(self):
         """Test data freshness check with recent data"""
         # Create DataFrame with recent timestamp
-        current_time = datetime.now()
+        current_time = datetime.now(UTC)
         df = pd.DataFrame({"close": [100]}, index=[current_time - timedelta(seconds=30)])
 
         is_fresh = self.engine._is_data_fresh(df)
@@ -134,7 +146,7 @@ class TestCPUOptimizations(unittest.TestCase):
     def test_data_freshness_check_stale_data(self):
         """Test data freshness check with stale data"""
         # Create DataFrame with old timestamp
-        old_time = datetime.now() - timedelta(seconds=self.engine.data_freshness_threshold + 60)
+        old_time = datetime.now(UTC) - timedelta(seconds=self.engine.data_freshness_threshold + 60)
         df = pd.DataFrame({"close": [100]}, index=[old_time])
 
         is_fresh = self.engine._is_data_fresh(df)
@@ -148,6 +160,15 @@ class TestCPUOptimizations(unittest.TestCase):
 
         is_fresh = self.engine._is_data_fresh(None)
         self.assertFalse(is_fresh)
+
+    def test_data_freshness_check_naive_timestamp(self):
+        """Test data freshness check with naive timestamps"""
+        current_time = datetime.now(UTC)
+        naive_time = current_time.replace(tzinfo=None)
+        df = pd.DataFrame({"close": [100]}, index=[naive_time])
+
+        is_fresh = self.engine._is_data_fresh(df)
+        self.assertTrue(is_fresh)
 
     def test_constants_are_reasonable(self):
         """Test that the CPU optimization constants have reasonable values"""

@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from src.optimizer.schemas import ExperimentConfig, ExperimentResult
 from src.optimizer.validator import StatisticalValidator, ValidationConfig
 
 
 def _mk_result(ann_ret: float, mdd: float) -> ExperimentResult:
-    now = datetime.now()
+    now = datetime.now(UTC)
     cfg = ExperimentConfig(
         strategy_name="ml_basic",
         symbol="BTCUSDT",

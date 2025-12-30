@@ -8,7 +8,7 @@ including historical market data, synthetic scenarios, and edge case datasets.
 import logging
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -787,7 +787,7 @@ class SyntheticDataGenerator:
 
         # Generate timestamps
         timestamps = pd.date_range(
-            start=datetime.now() - timedelta(days=scenario.duration_days),
+            start=datetime.now(UTC) - timedelta(days=scenario.duration_days),
             periods=scenario.duration_days,
             freq="D",
         )

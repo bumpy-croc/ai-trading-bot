@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -43,7 +43,7 @@ class CorrelationEngine:
         self._last_signature: tuple[tuple[str, ...], pd.Timestamp | None, int] | None = None
 
     def should_update(self, now: datetime | None = None) -> bool:
-        now = now or datetime.utcnow()
+        now = now or datetime.now(UTC)
         if self._last_update_at is None:
             return True
         return now - self._last_update_at >= timedelta(
@@ -109,7 +109,7 @@ class CorrelationEngine:
         returns = prices.pct_change().dropna(how="any")
         corr = returns.corr()
         self._last_matrix = corr
-        self._last_update_at = now or datetime.utcnow()
+        self._last_update_at = now or datetime.now(UTC)
         self._last_signature = signature
         return corr
 
@@ -239,6 +239,6 @@ class CorrelationGroupManager:
                 "total_exposure": round(total, 8),
                 "position_count": len(present),
                 "symbols": present,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(UTC).isoformat(),
             }
         return out

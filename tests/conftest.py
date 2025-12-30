@@ -10,7 +10,7 @@ import random
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
@@ -164,7 +164,7 @@ def maybe_setup_database(pytestconfig):
             from testcontainers.postgres import PostgresContainer  # type: ignore
 
             print(
-                f"\n[Database Setup] Starting PostgreSQL container at {datetime.now().strftime('%H:%M:%S')}"
+                f"\n[Database Setup] Starting PostgreSQL container at {datetime.now(UTC).strftime('%H:%M:%S')}"
             )
             container = PostgresContainer("postgres:15-alpine")
             container.start()
@@ -306,7 +306,7 @@ def mock_data_provider():
 
     mock_provider.get_live_data.return_value = pd.DataFrame(
         {"open": [50300], "high": [50400], "low": [50200], "close": [50350], "volume": [1150]},
-        index=[datetime.now()],
+        index=[datetime.now(UTC)],
     )
 
     return mock_provider
@@ -405,7 +405,7 @@ def sample_positions():
             "side": "long",
             "size": 0.1,
             "entry_price": 50000,
-            "entry_time": datetime.now() - timedelta(hours=1),
+            "entry_time": datetime.now(UTC) - timedelta(hours=1),
             "stop_loss": 49000,
             "take_profit": 52000,
         },
@@ -414,7 +414,7 @@ def sample_positions():
             "side": "long",
             "size": 0.15,
             "entry_price": 3000,
-            "entry_time": datetime.now() - timedelta(hours=2),
+            "entry_time": datetime.now(UTC) - timedelta(hours=2),
             "stop_loss": 2900,
             "take_profit": 3200,
         },
@@ -445,7 +445,7 @@ def test_data_dir():
 def sample_account_balance():
     """Create a sample account balance for testing."""
     return AccountBalance(
-        asset="USDT", free=10000.0, locked=100.0, total=10100.0, last_updated=datetime.utcnow()
+        asset="USDT", free=10000.0, locked=100.0, total=10100.0, last_updated=datetime.now(UTC)
     )
 
 
@@ -462,8 +462,8 @@ def sample_position():
         margin_type="isolated",
         leverage=10.0,
         order_id="test_order_123",
-        open_time=datetime.utcnow(),
-        last_update_time=datetime.utcnow(),
+        open_time=datetime.now(UTC),
+        last_update_time=datetime.now(UTC),
     )
 
 
@@ -482,8 +482,8 @@ def sample_order():
         average_price=None,
         commission=0.0,
         commission_asset="USDT",
-        create_time=datetime.utcnow(),
-        update_time=datetime.utcnow(),
+        create_time=datetime.now(UTC),
+        update_time=datetime.now(UTC),
     )
 
 
@@ -499,7 +499,7 @@ def sample_trade():
         price=50000.0,
         commission=0.0,
         commission_asset="USDT",
-        time=datetime.utcnow(),
+        time=datetime.now(UTC),
     )
 
 
@@ -625,10 +625,10 @@ def sample_sync_data():
                 free=10000.0,
                 locked=100.0,
                 total=10100.0,
-                last_updated=datetime.utcnow(),
+                last_updated=datetime.now(UTC),
             ),
             AccountBalance(
-                asset="BTC", free=0.5, locked=0.0, total=0.5, last_updated=datetime.utcnow()
+                asset="BTC", free=0.5, locked=0.0, total=0.5, last_updated=datetime.now(UTC)
             ),
         ],
         "positions": [
@@ -642,8 +642,8 @@ def sample_sync_data():
                 margin_type="isolated",
                 leverage=10.0,
                 order_id="order_123",
-                open_time=datetime.utcnow(),
-                last_update_time=datetime.utcnow(),
+                open_time=datetime.now(UTC),
+                last_update_time=datetime.now(UTC),
             )
         ],
         "open_orders": [
@@ -659,8 +659,8 @@ def sample_sync_data():
                 average_price=None,
                 commission=0.0,
                 commission_asset="USDT",
-                create_time=datetime.utcnow(),
-                update_time=datetime.utcnow(),
+                create_time=datetime.now(UTC),
+                update_time=datetime.now(UTC),
             )
         ],
     }

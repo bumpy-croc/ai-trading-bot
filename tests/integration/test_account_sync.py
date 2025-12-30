@@ -5,7 +5,7 @@ This module tests the account synchronization service with focused, non-redundan
 that cover all critical functionality without unnecessary repetition.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
@@ -132,7 +132,7 @@ class TestAccountSynchronizer:
                     free=10000.0,
                     locked=0.0,
                     total=10000.0,
-                    last_updated=datetime.utcnow(),
+                    last_updated=datetime.now(UTC),
                 )
             ],
             "positions": [],
@@ -163,7 +163,7 @@ class TestAccountSynchronizer:
     def test_sync_account_data_frequency_control(self, synchronizer, mock_exchange):
         """Test sync frequency control and force sync"""
         # Test that sync is skipped if too recent
-        synchronizer.last_sync_time = datetime.utcnow() - timedelta(minutes=2)
+        synchronizer.last_sync_time = datetime.now(UTC) - timedelta(minutes=2)
 
         result = synchronizer.sync_account_data()
         assert result.success is True
@@ -185,7 +185,7 @@ class TestAccountSynchronizer:
                 free=10000.0,
                 locked=0.0,
                 total=10000.0,
-                last_updated=datetime.utcnow(),
+                last_updated=datetime.now(UTC),
             )
         ]
 
@@ -210,7 +210,7 @@ class TestAccountSynchronizer:
         # Test no USDT balance
         balances = [
             AccountBalance(
-                asset="BTC", free=1.0, locked=0.0, total=1.0, last_updated=datetime.utcnow()
+                asset="BTC", free=1.0, locked=0.0, total=1.0, last_updated=datetime.now(UTC)
             )
         ]
 
@@ -238,8 +238,8 @@ class TestAccountSynchronizer:
                 margin_type="isolated",
                 leverage=10.0,
                 order_id="test_order_123",
-                open_time=datetime.utcnow(),
-                last_update_time=datetime.utcnow(),
+                open_time=datetime.now(UTC),
+                last_update_time=datetime.now(UTC),
             )
         ]
 
@@ -288,8 +288,8 @@ class TestAccountSynchronizer:
                 average_price=None,
                 commission=0.0,
                 commission_asset="USDT",
-                create_time=datetime.utcnow(),
-                update_time=datetime.utcnow(),
+                create_time=datetime.now(UTC),
+                update_time=datetime.now(UTC),
             )
         ]
 
@@ -312,7 +312,7 @@ class TestAccountSynchronizer:
                 "side": "SELL",
                 "quantity": 0.1,
                 "price": 51000.0,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(UTC),
             }
         ]
         orders[0].status = ExchangeOrderStatus.FILLED
@@ -345,7 +345,7 @@ class TestAccountSynchronizer:
                 price=50000.0,
                 commission=0.0,
                 commission_asset="USDT",
-                time=datetime.utcnow(),
+                time=datetime.now(UTC),
             )
         ]
 
@@ -375,7 +375,7 @@ class TestAccountSynchronizer:
                     free=10000.0,
                     locked=0.0,
                     total=10000.0,
-                    last_updated=datetime.utcnow(),
+                    last_updated=datetime.now(UTC),
                 )
             ],
             "positions": [],
@@ -469,7 +469,7 @@ class TestAccountSynchronizer:
                 "side": "SELL",
                 "quantity": 0.01,
                 "price": 3000.0,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(UTC),
             },
             {
                 "id": 2,
@@ -483,7 +483,7 @@ class TestAccountSynchronizer:
                 "side": "BUY",
                 "quantity": 0.001,
                 "price": 50000.0,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(UTC),
             },
         ]
 
@@ -505,8 +505,8 @@ class TestAccountSynchronizer:
                 average_price=3000.0,
                 commission=0.0,
                 commission_asset="USDT",
-                create_time=datetime.utcnow(),
-                update_time=datetime.utcnow(),
+                create_time=datetime.now(UTC),
+                update_time=datetime.now(UTC),
             ),
             ExchangeOrder(
                 order_id="new_order_555",
@@ -520,8 +520,8 @@ class TestAccountSynchronizer:
                 average_price=50000.0,
                 commission=0.0,
                 commission_asset="USDT",
-                create_time=datetime.utcnow(),
-                update_time=datetime.utcnow(),
+                create_time=datetime.now(UTC),
+                update_time=datetime.now(UTC),
             ),
         ]
 
@@ -567,10 +567,10 @@ class TestAccountSynchronizerIntegration:
                         free=10200.0,
                         locked=0.0,
                         total=10200.0,
-                        last_updated=datetime.utcnow(),
+                        last_updated=datetime.now(UTC),
                     ),
                     AccountBalance(
-                        asset="BTC", free=0.5, locked=0.0, total=0.5, last_updated=datetime.utcnow()
+                        asset="BTC", free=0.5, locked=0.0, total=0.5, last_updated=datetime.now(UTC)
                     ),
                 ],
                 "positions": [
@@ -584,8 +584,8 @@ class TestAccountSynchronizerIntegration:
                         margin_type="isolated",
                         leverage=10.0,
                         order_id="order_123",
-                        open_time=datetime.utcnow(),
-                        last_update_time=datetime.utcnow(),
+                        open_time=datetime.now(UTC),
+                        last_update_time=datetime.now(UTC),
                     )
                 ],
                 "open_orders": [
@@ -601,8 +601,8 @@ class TestAccountSynchronizerIntegration:
                         average_price=None,
                         commission=0.0,
                         commission_asset="USDT",
-                        create_time=datetime.utcnow(),
-                        update_time=datetime.utcnow(),
+                        create_time=datetime.now(UTC),
+                        update_time=datetime.now(UTC),
                     )
                 ],
             }
@@ -684,8 +684,8 @@ class TestAccountSynchronizerIntegration:
                 average_price=3000.0,
                 commission=0.0,
                 commission_asset="USDT",
-                create_time=datetime.utcnow(),
-                update_time=datetime.utcnow(),
+                create_time=datetime.now(UTC),
+                update_time=datetime.now(UTC),
             ),
             ExchangeOrder(
                 order_id="new_order_555",
@@ -699,8 +699,8 @@ class TestAccountSynchronizerIntegration:
                 average_price=50000.0,
                 commission=0.0,
                 commission_asset="USDT",
-                create_time=datetime.utcnow(),
-                update_time=datetime.utcnow(),
+                create_time=datetime.now(UTC),
+                update_time=datetime.now(UTC),
             ),
         ]
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import UTC, datetime
 
 import argparse
 import os
@@ -70,7 +71,7 @@ def _download(ns: argparse.Namespace) -> int:
 
 
 def _prefill(ns: argparse.Namespace) -> int:
-    from datetime import datetime
+    from datetime import UTC, datetime
 
     from src.config.paths import get_cache_dir
     from src.data_providers.binance_provider import BinanceProvider
@@ -86,28 +87,32 @@ def _prefill(ns: argparse.Namespace) -> int:
         return normalized
 
     def _year_chunks(start: datetime, end: datetime):
-        from datetime import timedelta
+        from datetime import UTC, timedelta
 
         chunks = []
         cur = start
         while cur <= end:
             y = cur.year
-            y_start = datetime(y, 1, 1)
-            y_end = datetime(y + 1, 1, 1) - timedelta(seconds=1)
+            y_start = datetime(y, 1, 1, tzinfo=UTC)
+            y_end = datetime(y + 1, 1, 1, tzinfo=UTC) - timedelta(seconds=1)
             if y_start < start:
                 y_start = start
             if y_end > end:
                 y_end = end
             chunks.append((y, y_start, y_end))
-            cur = datetime(y + 1, 1, 1)
+            cur = datetime(y + 1, 1, 1, tzinfo=UTC)
         return chunks
 
-    end = datetime.strptime(ns.end, "%Y-%m-%d") if ns.end else datetime.now()
+    end = (
+        datetime.strptime(ns.end, "%Y-%m-%d").replace(tzinfo=UTC)
+        if ns.end
+        else datetime.now(UTC)
+    )
     if ns.start:
-        start = datetime.strptime(ns.start, "%Y-%m-%d")
+        start = datetime.strptime(ns.start, "%Y-%m-%d").replace(tzinfo=UTC)
     else:
         cy = end.year
-        start = datetime(cy - ns.years, 1, 1)
+        start = datetime(cy - ns.years, 1, 1, tzinfo=UTC)
 
     symbols = _normalize_symbols(ns.symbols)
     timeframes = [tf.strip() for tf in ns.timeframes]
@@ -157,7 +162,7 @@ def _preload_offline(ns: argparse.Namespace) -> int:
     logger.info(f"Using cache directory: {cache_dir}")
 
     # Get years to download
-    current_year = datetime.now().year
+    current_year = datetime.now(UTC).year
     years = list(range(current_year - ns.years_back + 1, current_year + 1))
     logger.info(f"Pre-loading data for years: {years}")
 
@@ -201,11 +206,11 @@ def _preload_offline(ns: argparse.Namespace) -> int:
                 for year in years:
                     try:
                         # Define year boundaries
-                        year_start = datetime(year, 1, 1)
-                        year_end = datetime(year + 1, 1, 1) - timedelta(seconds=1)
+                        year_start = datetime(year, 1, 1, tzinfo=UTC)
+                        year_end = datetime(year + 1, 1, 1, tzinfo=UTC) - timedelta(seconds=1)
 
                         # Don't fetch beyond current time
-                        current_time = datetime.now()
+                        current_time = datetime.now(UTC)
                         if year_end > current_time:
                             year_end = current_time
 
@@ -296,7 +301,7 @@ def _test_offline_access(cache_dir: str, symbol: str = "BTCUSDT", timeframe: str
         )
 
         # Try to fetch recent data (should come from cache)
-        end_date = datetime.now()
+        end_date = datetime.now(UTC)
         start_date = end_date - timedelta(days=30)
 
         data = cached_provider.get_historical_data(symbol, timeframe, start_date, end_date)
@@ -416,7 +421,7 @@ def _cache_manager(ns: argparse.Namespace) -> int:
         files = [f for f in os.listdir(cache_dir) if f.endswith(".pkl")]
         from datetime import datetime
 
-        now = datetime.now()
+        now = datetime.now(UTC)
         deleted = 0
         total = 0
         for filename in files:
@@ -491,7 +496,7 @@ def _populate_dummy(ns: argparse.Namespace) -> int:
             sid = random.choice(session_ids)
             sym = random.choice(symbols)
             side = random.choice([PositionSide.LONG, PositionSide.SHORT])
-            entry_time = datetime.utcnow() - timedelta(
+            entry_time = datetime.now(UTC) - timedelta(
                 days=random.randint(1, 10), hours=random.randint(0, 23)
             )
             exit_time = entry_time + timedelta(hours=random.randint(1, 24))

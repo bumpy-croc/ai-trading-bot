@@ -10,7 +10,7 @@ import logging
 import statistics
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -293,7 +293,7 @@ class PerformanceTracker:
 
         if not filtered_trades:
             # Return empty metrics
-            now = datetime.now()
+            now = datetime.now(UTC)
             return PerformanceMetrics(
                 total_return=0.0,
                 total_return_pct=0.0,
@@ -332,7 +332,7 @@ class PerformanceTracker:
 
         # Cache results
         self._metrics_cache[cache_key] = metrics
-        self._cache_expiry[cache_key] = datetime.now() + self._cache_duration
+        self._cache_expiry[cache_key] = datetime.now(UTC) + self._cache_duration
 
         return metrics
 
@@ -404,7 +404,7 @@ class PerformanceTracker:
                 "volatility_difference": self_metrics.volatility - other_metrics.volatility,
             },
             "winner": self._determine_winner(self_metrics, other_metrics),
-            "comparison_date": datetime.now().isoformat(),
+            "comparison_date": datetime.now(UTC).isoformat(),
         }
 
         return comparison
@@ -434,7 +434,7 @@ class PerformanceTracker:
                 "max_drawdown": self.max_drawdown,
             },
             "trade_count": self.trade_count,
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": datetime.now(UTC).isoformat(),
         }
 
     def get_trade_history(
@@ -564,7 +564,7 @@ class PerformanceTracker:
             return trades
 
         # Calculate period boundaries
-        now = datetime.now()
+        now = datetime.now(UTC)
 
         if period == PerformancePeriod.DAILY:
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -592,7 +592,7 @@ class PerformanceTracker:
     ) -> PerformanceMetrics:
         """Calculate comprehensive performance metrics"""
         if not trades:
-            now = datetime.now()
+            now = datetime.now(UTC)
             return PerformanceMetrics(
                 total_return=0.0,
                 total_return_pct=0.0,
@@ -817,7 +817,7 @@ class PerformanceTracker:
         if cache_key not in self._cache_expiry:
             return False
 
-        return datetime.now() < self._cache_expiry[cache_key]
+        return datetime.now(UTC) < self._cache_expiry[cache_key]
 
     def _clear_metrics_cache(self) -> None:
         """Clear all cached metrics"""

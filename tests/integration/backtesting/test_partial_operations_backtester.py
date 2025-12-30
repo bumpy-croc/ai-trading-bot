@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -17,7 +17,7 @@ class SimpleMockProvider(MockDataProvider):
 
     def get_historical_data(self, symbol, timeframe, start=None, end=None):
         idx = pd.date_range(
-            start=datetime.utcnow() - timedelta(minutes=len(self._prices)),
+            start=datetime.now(UTC) - timedelta(minutes=len(self._prices)),
             periods=len(self._prices),
             freq="T",
         )
@@ -48,7 +48,7 @@ def test_backtester_partial_ops_flow():
         max_scale_ins=1,
     )
     bt = Backtester(strategy=strategy, data_provider=provider, partial_manager=pem)
-    res = bt.run("BTCUSDT", "1m", start=datetime.utcnow() - timedelta(minutes=10))
+    res = bt.run("BTCUSDT", "1m", start=datetime.now(UTC) - timedelta(minutes=10))
     # Basic sanity: produces results without error
     assert "total_trades" in res
     assert strategy.name == "MlAdaptive"

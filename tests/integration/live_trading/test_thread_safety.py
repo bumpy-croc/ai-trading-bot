@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -32,7 +32,7 @@ class TestThreadSafety:
             pytest.skip("Live trading components not available")
         engine = LiveTradingEngine(strategy=mock_strategy, data_provider=mock_data_provider)
         mock_data_provider.get_live_data.return_value = pd.DataFrame(
-            {"close": [51000]}, index=[datetime.now()]
+            {"close": [51000]}, index=[datetime.now(UTC)]
         )
 
         def open_positions():
@@ -88,7 +88,7 @@ class TestThreadSafety:
         )
         mock_data_provider.get_live_data.return_value = pd.DataFrame(
             {"open": [50000], "high": [50100], "low": [49900], "close": [50050], "volume": [1000]},
-            index=[datetime.now()],
+            index=[datetime.now(UTC)],
         )
 
         def run_trading():

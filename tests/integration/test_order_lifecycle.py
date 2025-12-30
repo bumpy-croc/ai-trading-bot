@@ -5,7 +5,7 @@ Tests the complete flow from order creation to position management,
 ensuring proper status transitions and data consistency.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
@@ -61,7 +61,7 @@ class TestOrderLifecycle:
                 size=0.02,
                 strategy_name="test_strategy",
                 session_id=session_id,
-                entry_time=datetime.utcnow(),
+                entry_time=datetime.now(UTC),
             )
             session.add(position)
             session.commit()
@@ -215,8 +215,8 @@ class TestOrderLifecycle:
             average_price=51000.0,
             commission=0.0,
             commission_asset="USDT",
-            create_time=datetime.utcnow(),
-            update_time=datetime.utcnow(),
+            create_time=datetime.now(UTC),
+            update_time=datetime.now(UTC),
         )
 
         synchronizer.exchange.get_open_orders.return_value = [filled_order]
@@ -253,7 +253,7 @@ class TestOrderLifecycle:
                 size=0.02,
                 strategy_name="test_strategy",
                 session_id=session_id,
-                entry_time=datetime.utcnow(),
+                entry_time=datetime.now(UTC),
             )
             session.add(position)
             session.commit()
@@ -296,7 +296,7 @@ class TestOrderLifecycle:
                 size=0.02,
                 strategy_name="test_strategy",
                 session_id=session_id,
-                entry_time=datetime.utcnow(),
+                entry_time=datetime.now(UTC),
             )
             session.add(position)
             session.commit()

@@ -2,7 +2,7 @@
 Test database persistence functionality for dynamic risk management.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
@@ -251,8 +251,8 @@ class TestDatabaseManagerMethods:
         for i in range(20):
             trade = Mock()
             trade.pnl = 100 if i % 3 == 0 else -50  # Mixed results
-            trade.entry_time = datetime.utcnow() - timedelta(hours=i * 2)
-            trade.exit_time = datetime.utcnow() - timedelta(hours=i * 2 - 1)
+            trade.entry_time = datetime.now(UTC) - timedelta(hours=i * 2)
+            trade.exit_time = datetime.now(UTC) - timedelta(hours=i * 2 - 1)
             mock_trades.append(trade)
 
         # Set up proper mock chain
@@ -263,7 +263,7 @@ class TestDatabaseManagerMethods:
 
         # Test calculation
         metrics = db_manager.get_dynamic_risk_performance_metrics(
-            session_id=123, start_date=datetime.utcnow() - timedelta(days=30)
+            session_id=123, start_date=datetime.now(UTC) - timedelta(days=30)
         )
 
         # Verify basic metrics are calculated

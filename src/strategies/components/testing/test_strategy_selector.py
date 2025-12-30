@@ -6,7 +6,7 @@ performance weighting, risk-adjusted selection, and correlation analysis.
 """
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
@@ -88,7 +88,7 @@ class TestStrategySelector(unittest.TestCase):
         drawdown_target: float,
     ):
         """Populate a performance tracker with synthetic data"""
-        base_time = datetime.now() - timedelta(days=60)
+        base_time = datetime.now(UTC) - timedelta(days=60)
 
         # Calculate trade parameters to achieve target metrics
         num_trades = 30
@@ -205,7 +205,7 @@ class TestStrategySelector(unittest.TestCase):
         insufficient_strategy = PerformanceTracker("insufficient_strategy")
         for i in range(5):  # Only 5 trades (less than minimum 10)
             trade = TradeResult(
-                timestamp=datetime.now() - timedelta(days=i),
+                timestamp=datetime.now(UTC) - timedelta(days=i),
                 symbol="BTCUSDT",
                 side="long",
                 entry_price=50000.0,
@@ -343,8 +343,8 @@ class TestStrategySelector(unittest.TestCase):
             worst_trade=-0.02,
             consecutive_wins=8,
             consecutive_losses=2,
-            period_start=datetime.now() - timedelta(days=60),
-            period_end=datetime.now(),
+            period_start=datetime.now(UTC) - timedelta(days=60),
+            period_end=datetime.now(UTC),
             period_type=PerformancePeriod.ALL_TIME,
         )
 
@@ -380,8 +380,8 @@ class TestStrategySelector(unittest.TestCase):
             worst_trade=-0.06,
             consecutive_wins=2,
             consecutive_losses=8,
-            period_start=datetime.now() - timedelta(days=60),
-            period_end=datetime.now(),
+            period_start=datetime.now(UTC) - timedelta(days=60),
+            period_end=datetime.now(UTC),
             period_type=PerformancePeriod.ALL_TIME,
         )
 

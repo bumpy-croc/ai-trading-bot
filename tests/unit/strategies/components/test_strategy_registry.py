@@ -5,7 +5,7 @@ This module tests the StrategyRegistry implementation including version manageme
 strategy metadata tracking, serialization/deserialization, and validation.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -87,7 +87,7 @@ class TestStrategyMetadata:
             name="Test Strategy",
             version="1.0.0",
             parent_id=None,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             created_by="test_user",
             description="Test strategy description",
             tags=["test", "experimental"],
@@ -123,7 +123,7 @@ class TestStrategyMetadata:
         )
         regime_config = ComponentConfig("regime_detector", "EnhancedRegimeDetector", {}, "1.0.0")
 
-        created_at = datetime.now()
+        created_at = datetime.now(UTC)
         metadata = StrategyMetadata(
             id="test_strategy_123",
             name="Test Strategy",
@@ -624,7 +624,7 @@ class TestStrategyVersion:
         version = StrategyVersion(
             version="1.0.1",
             strategy_id="test_strategy_123",
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
             changes=["Updated parameters", "Fixed bug"],
             performance_delta={"sharpe_ratio": 0.1, "return": 0.05},
             is_major=False,
@@ -638,7 +638,7 @@ class TestStrategyVersion:
 
     def test_strategy_version_serialization(self):
         """Test StrategyVersion serialization"""
-        created_at = datetime.now()
+        created_at = datetime.now(UTC)
         version = StrategyVersion(
             version="2.0.0",
             strategy_id="test_strategy_456",

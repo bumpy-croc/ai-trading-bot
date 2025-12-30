@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 
@@ -65,7 +65,7 @@ def _generate_version_id(models_dir: Path, symbol: str, model_type: str) -> str:
     Raises:
         RuntimeError: If unable to generate unique version ID after max retries
     """
-    base_timestamp = datetime.utcnow().strftime("%Y-%m-%d_%Hh")
+    base_timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%Hh")
     version_counter = 1
     max_retries = 1000
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from src.data_providers.exchange_interface import OrderSide, OrderType
@@ -281,14 +281,16 @@ class LiveEntryHandler:
                 error=exec_result.error,
             )
 
-        # Create position
+        entry_balance = balance
+        # Create position with actual quantity from execution
         position = LivePosition(
             symbol=symbol,
             side=signal.side,
             size=signal.size_fraction,
             entry_price=exec_result.executed_price,
-            entry_time=datetime.utcnow(),
-            entry_balance=balance,
+            entry_time=datetime.now(UTC),
+            entry_balance=entry_balance,
+            quantity=exec_result.quantity,
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             order_id=exec_result.order_id,

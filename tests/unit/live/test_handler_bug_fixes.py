@@ -54,7 +54,7 @@ class TestExitFeeCalculation:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             entry_balance=1000.0,
             order_id="test-order-123",
         )
@@ -103,7 +103,7 @@ class TestExitFeeCalculation:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             entry_balance=1000.0,
             order_id="test-order-456",
         )
@@ -130,6 +130,7 @@ class TestExitFeeCalculation:
 
 
 
+
 class TestTakeProfitLimitPricing:
     """Test take profit exits use limit price instead of favorable candle extremes."""
 
@@ -147,6 +148,7 @@ class TestTakeProfitLimitPricing:
         exit_handler = LiveExitHandler(
             position_tracker=position_tracker,
             execution_engine=execution_engine,
+
             execution_model=ExecutionModel(default_fill_policy()),
         )
 
@@ -190,6 +192,7 @@ class TestTakeProfitLimitPricing:
         exit_handler = LiveExitHandler(
             position_tracker=position_tracker,
             execution_engine=execution_engine,
+
             execution_model=ExecutionModel(default_fill_policy()),
         )
 
@@ -222,6 +225,7 @@ class TestTakeProfitLimitPricing:
 
 
 
+
 class TestPositionTrackerThreadSafety:
     """Test thread safety of LivePositionTracker."""
 
@@ -242,7 +246,7 @@ class TestPositionTrackerThreadSafety:
                         side=PositionSide.LONG,
                         size=0.1,
                         entry_price=50000.0 + i,
-                        entry_time=datetime.utcnow(),
+                        entry_time=datetime.now(timezone.utc),
                         order_id=f"open-{i}",
                     )
                     tracker.open_position(position)
@@ -299,7 +303,7 @@ class TestPositionTrackerThreadSafety:
             side=PositionSide.LONG,
             size=0.1,
             entry_price=50000.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             order_id="test-1",
         )
         tracker.open_position(position)
@@ -370,6 +374,7 @@ class TestDailyPnLTracking:
 
 
 
+
 class TestEntryBalanceBasis:
     """Test entry balance basis uses pre-fee balance."""
 
@@ -385,6 +390,7 @@ class TestEntryBalanceBasis:
             entry_fee=1.23,
             slippage_cost=0.0,
         )
+
         entry_handler = LiveEntryHandler(
             execution_engine=execution_engine,
             execution_model=ExecutionModel(default_fill_policy()),
@@ -408,6 +414,7 @@ class TestEntryBalanceBasis:
         assert result.executed is True
         assert result.position is not None
         assert result.position.entry_balance == balance
+
 
 
     def test_daily_pnl_resets_on_date_change(self) -> None:

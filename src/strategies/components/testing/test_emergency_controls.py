@@ -6,7 +6,7 @@ emergency detection, conservative mode, approval workflows, and alerting.
 """
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 from src.strategies.components.emergency_controls import (
@@ -92,8 +92,8 @@ class TestEmergencyControls(unittest.TestCase):
             worst_trade=-0.02,
             consecutive_wins=8,
             consecutive_losses=consecutive_losses,
-            period_start=datetime.now() - timedelta(days=60),
-            period_end=datetime.now(),
+            period_start=datetime.now(UTC) - timedelta(days=60),
+            period_end=datetime.now(UTC),
             period_type=PerformancePeriod.ALL_TIME,
         )
 
@@ -278,10 +278,10 @@ class TestEmergencyControls(unittest.TestCase):
             operation_type="strategy_switch",
             strategy_id="test_strategy",
             requested_by="test_user",
-            requested_at=datetime.now() - timedelta(hours=2),
+            requested_at=datetime.now(UTC) - timedelta(hours=2),
             reason="Test",
             priority=1,
-            expires_at=datetime.now() - timedelta(hours=1),  # Expired
+            expires_at=datetime.now(UTC) - timedelta(hours=1),  # Expired
         )
 
         self.emergency_controls.pending_approvals["expired_request"] = approval_request
@@ -574,10 +574,10 @@ class TestEmergencyControls(unittest.TestCase):
             operation_type="strategy_switch",
             strategy_id="test_strategy",
             requested_by="test_user",
-            requested_at=datetime.now() - timedelta(hours=2),
+            requested_at=datetime.now(UTC) - timedelta(hours=2),
             reason="Test",
             priority=1,
-            expires_at=datetime.now() - timedelta(hours=1),  # Expired
+            expires_at=datetime.now(UTC) - timedelta(hours=1),  # Expired
         )
 
         self.emergency_controls.pending_approvals["expired_request"] = expired_request

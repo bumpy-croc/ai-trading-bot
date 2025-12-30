@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
@@ -85,8 +85,8 @@ def create_simple_strategy() -> Strategy:
 def test_backtester_records_mfe_mae(monkeypatch):
     strategy = create_simple_strategy()
     provider = MockDataProvider(interval_seconds=1, num_candles=200)
-    start = datetime.now() - timedelta(hours=200)
-    end = datetime.now()
+    start = datetime.now(UTC) - timedelta(hours=200)
+    end = datetime.now(UTC)
 
     bt = Backtester(strategy=strategy, data_provider=provider, log_to_database=False)
     result = bt.run(symbol="BTCUSDT", timeframe="1h", start=start, end=end)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # Ensure project root and src are in sys.path for absolute imports
@@ -25,7 +25,7 @@ def _handle(ns: argparse.Namespace) -> int:
         from src.optimizer.schemas import ExperimentConfig, ParameterSet
         from src.optimizer.validator import StatisticalValidator, ValidationConfig
 
-        end = datetime.now()
+        end = datetime.now(UTC)
         start = end - timedelta(days=ns.days)
 
         baseline_cfg = ExperimentConfig(
@@ -49,7 +49,7 @@ def _handle(ns: argparse.Namespace) -> int:
         suggestions = analyzer.analyze([baseline_result])
 
         report = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "experiment": {
                 "strategy": ns.strategy,
                 "symbol": ns.symbol,

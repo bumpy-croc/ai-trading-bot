@@ -354,7 +354,7 @@ tracker = PerformanceTracker(initial_balance=10000)
 
 # Record trades
 tracker.record_trade(trade, fee=2.5, slippage=0.5)
-tracker.update_balance(balance=10050, timestamp=datetime.now())
+tracker.update_balance(balance=10050, timestamp=datetime.now(UTC))
 
 # Get comprehensive metrics
 metrics = tracker.get_metrics()

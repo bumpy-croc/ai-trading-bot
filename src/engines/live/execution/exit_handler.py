@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -244,7 +244,7 @@ class LiveExitHandler:
         # Check time-based exit
         if self.time_exit_policy is not None:
             hit_time_exit, time_reason = self.time_exit_policy.check_time_exit_conditions(
-                position.entry_time, datetime.utcnow()
+                position.entry_time, datetime.now(UTC)
             )
             if hit_time_exit:
                 return LiveExitCheck(

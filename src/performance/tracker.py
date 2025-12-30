@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 import pandas as pd
@@ -176,6 +176,21 @@ class PerformanceTracker:
         max_drawdown: Maximum drawdown percentage seen.
     """
 
+    @staticmethod
+    def _normalize_timestamp(timestamp: datetime | pd.Timestamp | None) -> datetime:
+        """Normalize timestamps to timezone-aware UTC datetimes."""
+        if timestamp is None:
+            return datetime.now(UTC)
+        if isinstance(timestamp, pd.Timestamp):
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.tz_localize(UTC)
+            else:
+                timestamp = timestamp.tz_convert(UTC)
+            return timestamp.to_pydatetime()
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=UTC)
+        return timestamp.astimezone(UTC)
+
     def __init__(self, initial_balance: float) -> None:
         """Initialize the performance tracker.
 
@@ -209,7 +224,7 @@ class PerformanceTracker:
 
         # Balance history for drawdown calculation
         self._balance_history: list[tuple[datetime, float]] = [
-            (datetime.now(), initial_balance)
+            (self._normalize_timestamp(None), initial_balance)
         ]
 
         # Thread safety lock for mutable state (reentrant to allow nested calls)
@@ -235,8 +250,12 @@ class PerformanceTracker:
         if pnl == 0.0 and pnl_attr is None:
             logger.warning(f"Trade {getattr(trade, 'symbol', 'unknown')} has None PnL")
 
-        entry_time = getattr(trade, "entry_time", None)
-        exit_time = getattr(trade, "exit_time", None)
+        entry_time_raw = getattr(trade, "entry_time", None)
+        exit_time_raw = getattr(trade, "exit_time", None)
+        entry_time = (
+            self._normalize_timestamp(entry_time_raw) if entry_time_raw is not None else None
+        )
+        exit_time = self._normalize_timestamp(exit_time_raw) if exit_time_raw is not None else None
 
         with self._lock:
             # Update trade counts (explicitly handle zero-PnL case)
@@ -319,7 +338,7 @@ class PerformanceTracker:
                     self.max_drawdown = current_drawdown
 
             # Record in history
-            ts = timestamp or datetime.now()
+            ts = self._normalize_timestamp(timestamp)
             self._balance_history.append((ts, balance))
 
     def get_metrics(self) -> PerformanceMetrics:
@@ -547,7 +566,7 @@ class PerformanceTracker:
             self._current_loss_streak = 0
             self._max_win_streak = 0
             self._max_loss_streak = 0
-            self._balance_history = [(datetime.now(), self.initial_balance)]
+            self._balance_history = [(datetime.now(UTC), self.initial_balance)]
 
 
 __all__ = [

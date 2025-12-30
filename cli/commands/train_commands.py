@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -259,7 +259,7 @@ def train_price_model_main(args) -> int:
     # MAPE calculation (targets are normalized, so MAPE is relative to normalized range)
     mape = float(np.mean(np.abs((y_val - test_predictions.flatten()) / (y_val + 1e-8))) * 100)
 
-    version_id = datetime.utcnow().strftime("%Y-%m-%d_%Hh_v1")
+    version_id = datetime.now(UTC).strftime("%Y-%m-%d_%Hh_v1")
     metadata = {
         "model_id": f"{args.symbol.lower()}_price_v3",
         "symbol": args.symbol,
@@ -268,7 +268,7 @@ def train_price_model_main(args) -> int:
         "version_id": version_id,
         "framework": "onnx",
         "model_file": "model.onnx",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "sequence_length": sequence_length,
         "feature_names": feature_cols,
         "feature_strategy": "price_only_rolling_minmax",

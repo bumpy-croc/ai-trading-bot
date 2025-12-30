@@ -7,7 +7,7 @@ import time
 from collections.abc import Iterable
 from contextlib import redirect_stdout
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -105,7 +105,7 @@ def _write_trade_log(trades: Iterable[Any], path: Path) -> None:
 def _run_backtest(strategy_name: str, timeframe: str, days: int) -> dict[str, Any]:
     strategy = _load_strategy(strategy_name)
     provider = MockDataProvider(interval_seconds=3600, num_candles=days * 24, seed=42)
-    end = datetime.utcnow()
+    end = datetime.now(UTC)
     start = end - timedelta(days=days)
     risk_params = RiskParameters(base_risk_per_trade=0.01, max_risk_per_trade=0.02)
     backtester = Backtester(

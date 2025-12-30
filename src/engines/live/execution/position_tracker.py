@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.config.constants import (
@@ -189,11 +189,13 @@ class LivePositionTracker:
         db_id = None
         if self.db_manager is not None and session_id is not None:
             try:
-                quantity = (
-                    (position.size * (position.entry_balance or 0)) / position.entry_price
-                    if position.entry_price > 0
-                    else 0.0
-                )
+                quantity = position.quantity
+                if quantity is None:
+                    quantity = (
+                        (position.size * (position.entry_balance or 0)) / position.entry_price
+                        if position.entry_price > 0
+                        else 0.0
+                    )
                 db_id = self.db_manager.log_position(
                     symbol=position.symbol,
                     side=position.side.value,
@@ -293,7 +295,7 @@ class LivePositionTracker:
                 logger.warning("No position found with order_id: %s", order_id)
                 return None
 
-        exit_time = datetime.utcnow()
+        exit_time = datetime.now(UTC)
         fraction = float(
             position.current_size if position.current_size is not None else position.size
         )
@@ -378,7 +380,7 @@ class LivePositionTracker:
             current_price: Current market price.
             persist_to_db: Whether to persist to database (throttled).
         """
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         with self._positions_lock:
             positions_snapshot = list(self._positions.items())
@@ -741,13 +743,17 @@ class LivePositionTracker:
         try:
             db_positions = self.db_manager.get_open_positions(session_id)
             for db_pos in db_positions:
+                entry_time = db_pos.entry_time
+                if entry_time is not None and entry_time.tzinfo is None:
+                    entry_time = entry_time.replace(tzinfo=UTC)
                 position = LivePosition(
                     symbol=db_pos.symbol,
                     side=PositionSide(db_pos.side),
                     size=float(db_pos.size),
                     entry_price=float(db_pos.entry_price),
-                    entry_time=db_pos.entry_time,
+                    entry_time=entry_time,
                     entry_balance=float(db_pos.entry_balance) if db_pos.entry_balance else None,
+                    quantity=float(db_pos.quantity) if db_pos.quantity is not None else None,
                     stop_loss=float(db_pos.stop_loss) if db_pos.stop_loss else None,
                     take_profit=float(db_pos.take_profit) if db_pos.take_profit else None,
                     order_id=db_pos.entry_order_id,

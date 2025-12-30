@@ -4,7 +4,7 @@ These tests verify that the dynamic risk handler produces consistent results
 and is used identically by both backtesting and live trading engines.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -52,7 +52,7 @@ class TestApplyDynamicRisk:
         original_size = 0.05
         adjusted = handler.apply_dynamic_risk(
             original_size=original_size,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -72,7 +72,7 @@ class TestApplyDynamicRisk:
         original_size = 0.05
         adjusted = handler.apply_dynamic_risk(
             original_size=original_size,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=10000.0,  # No drawdown
             peak_balance=10000.0,
         )
@@ -94,7 +94,7 @@ class TestApplyDynamicRisk:
         # 5% drawdown - should apply 0.8 factor
         adjusted_5pct = handler.apply_dynamic_risk(
             original_size=original_size,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9500.0,
             peak_balance=10000.0,
         )
@@ -103,7 +103,7 @@ class TestApplyDynamicRisk:
         # 10% drawdown - should apply 0.5 factor
         adjusted_10pct = handler.apply_dynamic_risk(
             original_size=original_size,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -124,7 +124,7 @@ class TestApplyDynamicRisk:
         # 20% drawdown (beyond all thresholds) - should apply lowest factor
         adjusted = handler.apply_dynamic_risk(
             original_size=original_size,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=8000.0,  # 20% drawdown
             peak_balance=10000.0,
         )
@@ -147,7 +147,7 @@ class TestAdjustmentTracking:
 
         handler.apply_dynamic_risk(
             original_size=0.05,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -167,7 +167,7 @@ class TestAdjustmentTracking:
 
         handler.apply_dynamic_risk(
             original_size=0.05,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9400.0,  # 6% drawdown
             peak_balance=10000.0,
         )
@@ -188,7 +188,7 @@ class TestAdjustmentTracking:
 
         handler.apply_dynamic_risk(
             original_size=0.05,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -212,7 +212,7 @@ class TestAdjustmentTracking:
 
         handler.apply_dynamic_risk(
             original_size=0.05,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -232,7 +232,7 @@ class TestAdjustmentTracking:
 
         handler.apply_dynamic_risk(
             original_size=0.05,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -253,7 +253,7 @@ class TestAdjustmentTracking:
 
         handler.apply_dynamic_risk(
             original_size=0.05,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -297,7 +297,7 @@ class TestSetManager:
         # Should return original size now
         adjusted = handler.apply_dynamic_risk(
             original_size=0.05,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -348,7 +348,7 @@ class TestErrorHandling:
         original_size = 0.05
         adjusted = handler.apply_dynamic_risk(
             original_size=original_size,
-            current_time=datetime.now(),
+            current_time=datetime.now(UTC),
             balance=9000.0,
             peak_balance=10000.0,
         )
@@ -378,7 +378,7 @@ class TestThreadSafety:
             try:
                 handler.apply_dynamic_risk(
                     original_size=0.05,
-                    current_time=datetime.now(),
+                    current_time=datetime.now(UTC),
                     balance=9000.0,
                     peak_balance=10000.0,
                 )
