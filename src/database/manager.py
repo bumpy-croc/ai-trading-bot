@@ -277,8 +277,11 @@ class DatabaseManager:
             "echo": False,  # Set to True for SQL debugging
             "connect_args": {
                 "sslmode": ssl_mode,
-                "connect_timeout": 10,
+                "connect_timeout": 10,  # Connection timeout in seconds
                 "application_name": "ai-trading-bot",
+                # Query timeout to prevent slow queries from blocking trading loop
+                # This sets statement_timeout for all queries in this connection
+                "options": "-c statement_timeout=30000",  # 30 seconds in milliseconds
             },
         }
 
