@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
 from src.performance.metrics import Side, pnl_percent
 
 
@@ -28,8 +29,8 @@ class MFEMAETracker:
     def __init__(
         self,
         precision_decimals: int = 8,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ):
         self.precision_decimals = precision_decimals
         self.fee_rate = fee_rate
@@ -44,8 +45,8 @@ class MFEMAETracker:
         side: str | Side,
         position_fraction: float = 1.0,
         as_sized: bool = True,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> tuple[float, float]:
         """Return current excursion (mfe_candidate, mae_candidate) as decimal fractions.
 

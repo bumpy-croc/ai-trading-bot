@@ -13,8 +13,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.config.constants import (
+    DEFAULT_FEE_RATE,
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
+    DEFAULT_SLIPPAGE_RATE,
 )
 from src.engines.shared.models import (
     BasePosition,
@@ -82,8 +84,8 @@ class LivePositionTracker:
         db_manager: DatabaseManager | None = None,
         mfe_mae_precision: int = DEFAULT_MFE_MAE_PRECISION_DECIMALS,
         mfe_mae_update_frequency: float = DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> None:
         """Initialize position tracker.
 
@@ -442,8 +444,8 @@ class LivePositionTracker:
         target_level: int,
         fraction_of_original: float,
         basis_balance: float,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> PartialExitResult | None:
         """Reduce position size via partial exit.
 

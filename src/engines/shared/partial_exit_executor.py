@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
 from src.engines.shared.models import PositionSide
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 
@@ -58,8 +59,8 @@ class PartialExitExecutor:
 
     def __init__(
         self,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> None:
         """Initialize the partial exit executor.
 
