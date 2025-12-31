@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_ATR_PERIOD,
     DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_BREAKEVEN_BUFFER,
     DEFAULT_BREAKEVEN_THRESHOLD,
@@ -17,6 +18,7 @@ from src.config.constants import (
     DEFAULT_MAX_CORRELATED_RISK,
     DEFAULT_MAX_DAILY_RISK,
     DEFAULT_MAX_DRAWDOWN,
+    DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MAX_RISK_PER_TRADE,
     DEFAULT_MAX_SCALE_INS,
     DEFAULT_PARTIAL_EXIT_SIZES,
@@ -37,13 +39,13 @@ class RiskParameters:
 
     base_risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE  # 2% risk per trade
     max_risk_per_trade: float = DEFAULT_MAX_RISK_PER_TRADE  # 3% maximum risk per trade
-    max_position_size: float = 0.25  # 25% maximum position size (fraction of balance)
+    max_position_size: float = DEFAULT_MAX_POSITION_SIZE  # Maximum position size (fraction of balance)
     max_daily_risk: float = DEFAULT_MAX_DAILY_RISK  # 6% maximum daily risk (fraction of balance)
     max_correlated_risk: float = DEFAULT_MAX_CORRELATED_RISK  # 10% maximum risk for correlated positions
     max_drawdown: float = DEFAULT_MAX_DRAWDOWN  # 20% maximum drawdown (fraction)
     position_size_atr_multiplier: float = 1.0
     default_take_profit_pct: float | None = None  # if None, engine/strategy may supply
-    atr_period: int = 14
+    atr_period: int = DEFAULT_ATR_PERIOD
     # Time exit config (optional; strategies may override)
     time_exits: dict | None = None
     # Partial operations (defaults can be overridden by strategies)

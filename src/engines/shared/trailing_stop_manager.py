@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from src.config.constants import DEFAULT_BREAKEVEN_BUFFER
+from src.config.constants import DEFAULT_ATR_PERIOD, DEFAULT_BREAKEVEN_BUFFER
 from src.engines.shared.models import normalize_side
 from src.utils.price_targets import PriceTargetCalculator
 
@@ -274,7 +274,9 @@ class TrailingStopManager:
 
         return None
 
-    def _get_atr(self, df: pd.DataFrame, index: int, period: int = 14) -> float | None:
+    def _get_atr(
+        self, df: pd.DataFrame, index: int, period: int = DEFAULT_ATR_PERIOD
+    ) -> float | None:
         """Get ATR value from DataFrame.
 
         Args:
