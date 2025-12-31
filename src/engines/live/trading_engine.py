@@ -3135,6 +3135,15 @@ class LiveTradingEngine:
 
     def _print_final_stats(self):
         """Print final trading statistics"""
+        # Validate initial_balance before division to prevent crashes
+        if self.initial_balance <= 0:
+            logger.error(
+                "Cannot calculate total return - invalid initial_balance: %.8f. "
+                "Skipping final statistics.",
+                self.initial_balance,
+            )
+            return
+
         total_return = ((self.current_balance - self.initial_balance) / self.initial_balance) * 100
         perf_metrics = self.performance_tracker.get_metrics()
         win_rate = perf_metrics.win_rate * 100
