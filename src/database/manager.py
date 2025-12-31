@@ -270,8 +270,12 @@ class DatabaseManager:
 
         return {
             "poolclass": QueuePool,
-            "pool_size": 5,
-            "max_overflow": 10,
+            # Increased from 5 to 10 for concurrent operations (main loop + OrderTracker + health checks)
+            "pool_size": 10,
+            # Increased from 10 to 20 to handle burst load without exhaustion
+            "max_overflow": 20,
+            # Add timeout to prevent indefinite blocking when pool is exhausted
+            "pool_timeout": 30,  # Wait max 30s for available connection
             "pool_pre_ping": True,
             "pool_recycle": 3600,  # 1 hour
             "echo": False,  # Set to True for SQL debugging
@@ -282,6 +286,11 @@ class DatabaseManager:
                 # Query timeout to prevent slow queries from blocking trading loop
                 # This sets statement_timeout for all queries in this connection
                 "options": "-c statement_timeout=30000",  # 30 seconds in milliseconds
+                # TCP keepalive for long-lived connections to detect stale connections
+                "keepalives": 1,
+                "keepalives_idle": 30,  # Start keepalive after 30s idle
+                "keepalives_interval": 10,  # Send keepalive every 10s
+                "keepalives_count": 5,  # Drop connection after 5 failed keepalives
             },
         }
 
