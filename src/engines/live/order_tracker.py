@@ -115,6 +115,16 @@ class OrderTracker:
         self._running = False
         if self._thread:
             self._thread.join(timeout=10)
+            # Verify thread actually stopped after timeout
+            if self._thread.is_alive():
+                logger.critical(
+                    "OrderTracker thread did not stop after 10s timeout - thread may be stuck! "
+                    "This indicates a blocking call in _poll_loop. "
+                    "Tracker will be marked as stopped but thread continues running."
+                )
+                # Mark as None anyway to prevent double-start, but thread is leaked
+                self._thread = None
+                return
             self._thread = None
         logger.info("OrderTracker stopped")
 
