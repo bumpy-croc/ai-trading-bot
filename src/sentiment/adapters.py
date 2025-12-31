@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def merge_historical_sentiment(
@@ -31,7 +35,13 @@ def merge_historical_sentiment(
         if "sentiment_score" in out.columns:
             out["sentiment_score"] = out["sentiment_score"].fillna(0)
         return out
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "Failed to merge historical sentiment for %s: %s. Returning data without sentiment.",
+            symbol,
+            e,
+            exc_info=True
+        )
         return df
 
 
@@ -53,6 +63,11 @@ def apply_live_sentiment(
             df.loc[recent_mask, feature] = value
         df["sentiment_freshness"] = 0
         df.loc[recent_mask, "sentiment_freshness"] = 1
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "Failed to apply live sentiment: %s. Returning data without recent sentiment updates.",
+            e,
+            exc_info=True
+        )
         return df
     return df
