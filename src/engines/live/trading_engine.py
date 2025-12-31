@@ -478,8 +478,14 @@ class LiveTradingEngine:
                         market_timezone=time_cfg.get("market_timezone", DEFAULT_MARKET_TIMEZONE),
                         time_restrictions=restrictions,
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "Failed to create time exit policy from config: %s. "
+                    "Time-based exits will be disabled.",
+                    e,
+                    exc_info=True
+                )
+                self.time_exit_policy = None
 
         # Threading
         self.main_thread = None
