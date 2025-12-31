@@ -147,12 +147,32 @@ class AccountSynchronizer:
             # Find USDT balance (our primary currency)
             usdt_balance = None
             for balance in exchange_balances:
+                # Validate balance object before accessing attributes
+                if balance is None:
+                    logger.warning("Skipping None balance object from exchange")
+                    continue
+                if not hasattr(balance, "asset") or not hasattr(balance, "total"):
+                    logger.warning("Skipping malformed balance object: %s", balance)
+                    continue
                 if balance.asset == "USDT":
                     usdt_balance = balance
                     break
 
             if usdt_balance:
-                exchange_balance = usdt_balance.total
+                # Validate total is numeric
+                if usdt_balance.total is None or not isinstance(
+                    usdt_balance.total, (int, float)
+                ):
+                    logger.error(
+                        "Invalid USDT balance total: %s (type=%s) - skipping sync",
+                        usdt_balance.total,
+                        type(usdt_balance.total).__name__,
+                    )
+                    return SyncResult(
+                        success=False,
+                        message=f"Invalid balance data from exchange: total={usdt_balance.total}",
+                    )
+                exchange_balance = float(usdt_balance.total)
 
                 # Check for significant discrepancy
                 balance_diff = abs(exchange_balance - current_db_balance)
