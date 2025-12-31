@@ -392,7 +392,13 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         price: float | None = None,
         stop_price: float | None = None,
         time_in_force: str = "GTC",
+        client_order_id: str | None = None,
     ) -> str | None:
+        """
+        Place an order on Coinbase Advanced Trade API.
+
+        Note: Coinbase Advanced Trade API supports client_order_id for idempotency.
+        """
         try:
             cb_type = self._convert_to_cb_type(order_type)
             body: dict[str, Any] = {
@@ -413,6 +419,10 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             if cb_type == "stop":
                 body["stop_price"] = str(stop_price) if stop_price else None
                 body["stop"] = "loss"  # default stop loss
+
+            # Add client_order_id for idempotency if provided
+            if client_order_id:
+                body["client_order_id"] = client_order_id
 
             order = self._request("POST", "/orders", body=body, auth=True)
             return order.get("id")

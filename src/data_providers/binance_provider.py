@@ -727,8 +727,14 @@ class BinanceProvider(DataProvider, ExchangeInterface):
         price: float | None = None,
         stop_price: float | None = None,
         time_in_force: str = "GTC",
+        client_order_id: str | None = None,
     ) -> str | None:
-        """Place a new order and return order ID"""
+        """
+        Place a new order and return order ID.
+
+        Uses client_order_id for idempotency - if provided and an order with the same
+        client ID already exists, Binance will reject the duplicate order.
+        """
         if not BINANCE_AVAILABLE or not self._client:
             logger.warning("Binance not available - cannot place order")
             return None
@@ -763,6 +769,11 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             if time_in_force != "GTC":
                 order_params["timeInForce"] = time_in_force
 
+            # Add client order ID for idempotency if provided
+            if client_order_id:
+                order_params["newClientOrderId"] = client_order_id
+                logger.debug(f"Placing order with client ID: {client_order_id}")
+
             # Place the order
             response = self._client.create_order(**order_params)
 
@@ -777,6 +788,15 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             return order_id
 
         except BinanceOrderException as e:
+            error_msg = str(e)
+            # Check if this is a duplicate client order ID error (idempotency working as expected)
+            if client_order_id and ("Duplicate order sent" in error_msg or "-2010" in error_msg):
+                logger.warning(
+                    f"Duplicate client order ID detected: {client_order_id}. "
+                    "This order may have already been placed. Check order status manually."
+                )
+                # Return None to signal failure, but log as warning since idempotency prevented duplicate
+                return None
             logger.error(f"Binance order error: {e}")
             return None
         except Exception as e:
