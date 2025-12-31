@@ -2,14 +2,14 @@
 
 import argparse
 import json
-import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
-from cli.commands.optimizer import _handle
+from cli.commands.optimizer import _handle, PROJECT_ROOT
 
 
 class TestOptimizerHandle:
@@ -33,6 +33,18 @@ class TestOptimizerHandle:
         )
 
     @pytest.fixture
+    def temp_output_path(self, tmp_path):
+        """Provides a temporary output path within the project directory for testing."""
+        # Create a unique test output path within artifacts directory
+        test_dir = PROJECT_ROOT / "artifacts" / "test_output"
+        test_dir.mkdir(parents=True, exist_ok=True)
+        output_file = test_dir / f"test_report_{uuid.uuid4().hex[:8]}.json"
+        yield str(output_file)
+        # Cleanup
+        if output_file.exists():
+            output_file.unlink()
+
+    @pytest.fixture
     def mock_experiment_result(self):
         """Provides a mock experiment result."""
         mock_result = Mock()
@@ -45,101 +57,103 @@ class TestOptimizerHandle:
         mock_result.final_balance = 11550.0
         return mock_result
 
-    def test_runs_baseline_experiment_successfully(self, default_args, mock_experiment_result):
+    def test_runs_baseline_experiment_successfully(
+        self, default_args, mock_experiment_result, temp_output_path
+    ):
         """Test that baseline experiment runs successfully."""
         # Arrange
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "report.json"
-            default_args.output = str(output_path)
+        default_args.output = temp_output_path
+        output_path = Path(temp_output_path)
 
-            with (
-                patch("src.optimizer.runner.ExperimentRunner") as mock_runner_class,
-                patch("src.optimizer.analyzer.PerformanceAnalyzer") as mock_analyzer_class,
-            ):
+        with (
+            patch("src.optimizer.runner.ExperimentRunner") as mock_runner_class,
+            patch("src.optimizer.analyzer.PerformanceAnalyzer") as mock_analyzer_class,
+        ):
 
-                mock_runner = Mock()
-                mock_runner.run.return_value = mock_experiment_result
-                mock_runner_class.return_value = mock_runner
+            mock_runner = Mock()
+            mock_runner.run.return_value = mock_experiment_result
+            mock_runner_class.return_value = mock_runner
 
-                mock_analyzer = Mock()
-                mock_analyzer.analyze.return_value = []
-                mock_analyzer_class.return_value = mock_analyzer
+            mock_analyzer = Mock()
+            mock_analyzer.analyze.return_value = []
+            mock_analyzer_class.return_value = mock_analyzer
 
-                # Act
-                result = _handle(default_args)
+            # Act
+            result = _handle(default_args)
 
-                # Assert
-                assert result == 0
-                mock_runner.run.assert_called_once()
-                assert output_path.exists()
+            # Assert
+            assert result == 0
+            mock_runner.run.assert_called_once()
+            assert output_path.exists()
 
-    def test_generates_suggestions_from_analyzer(self, default_args, mock_experiment_result):
+    def test_generates_suggestions_from_analyzer(
+        self, default_args, mock_experiment_result, temp_output_path
+    ):
         """Test that suggestions are generated from performance analyzer."""
         # Arrange
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "report.json"
-            default_args.output = str(output_path)
+        default_args.output = temp_output_path
+        output_path = Path(temp_output_path)
 
-            mock_suggestion = Mock()
-            mock_suggestion.target = "risk_per_trade"
-            mock_suggestion.change = {"MlBasic.risk_per_trade": 0.02}
-            mock_suggestion.rationale = "Increase risk for better returns"
-            mock_suggestion.expected_delta = 5.0
-            mock_suggestion.confidence = 0.8
+        mock_suggestion = Mock()
+        mock_suggestion.target = "risk_per_trade"
+        mock_suggestion.change = {"MlBasic.risk_per_trade": 0.02}
+        mock_suggestion.rationale = "Increase risk for better returns"
+        mock_suggestion.expected_delta = 5.0
+        mock_suggestion.confidence = 0.8
 
-            with (
-                patch("src.optimizer.runner.ExperimentRunner") as mock_runner_class,
-                patch("src.optimizer.analyzer.PerformanceAnalyzer") as mock_analyzer_class,
-            ):
+        with (
+            patch("src.optimizer.runner.ExperimentRunner") as mock_runner_class,
+            patch("src.optimizer.analyzer.PerformanceAnalyzer") as mock_analyzer_class,
+        ):
 
-                mock_runner = Mock()
-                mock_runner.run.return_value = mock_experiment_result
-                mock_runner_class.return_value = mock_runner
+            mock_runner = Mock()
+            mock_runner.run.return_value = mock_experiment_result
+            mock_runner_class.return_value = mock_runner
 
-                mock_analyzer = Mock()
-                mock_analyzer.analyze.return_value = [mock_suggestion]
-                mock_analyzer_class.return_value = mock_analyzer
+            mock_analyzer = Mock()
+            mock_analyzer.analyze.return_value = [mock_suggestion]
+            mock_analyzer_class.return_value = mock_analyzer
 
-                # Act
-                result = _handle(default_args)
+            # Act
+            result = _handle(default_args)
 
-                # Assert
-                assert result == 0
-                assert output_path.exists()
+            # Assert
+            assert result == 0
+            assert output_path.exists()
 
-                with open(output_path, "r") as f:
-                    report = json.load(f)
-                    assert len(report["suggestions"]) == 1
-                    assert report["suggestions"][0]["target"] == "risk_per_trade"
+            with open(output_path, "r") as f:
+                report = json.load(f)
+                assert len(report["suggestions"]) == 1
+                assert report["suggestions"][0]["target"] == "risk_per_trade"
 
-    def test_skips_validation_when_no_validate_flag_set(self, default_args, mock_experiment_result):
+    def test_skips_validation_when_no_validate_flag_set(
+        self, default_args, mock_experiment_result, temp_output_path
+    ):
         """Test that validation is skipped when no_validate flag is set."""
         # Arrange
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "report.json"
-            default_args.output = str(output_path)
-            default_args.no_validate = True
+        default_args.output = temp_output_path
+        default_args.no_validate = True
 
-            with (
-                patch("src.optimizer.runner.ExperimentRunner") as mock_runner_class,
-                patch("src.optimizer.analyzer.PerformanceAnalyzer") as mock_analyzer_class,
-            ):
+        with (
+            patch("src.optimizer.runner.ExperimentRunner") as mock_runner_class,
+            patch("src.optimizer.analyzer.PerformanceAnalyzer") as mock_analyzer_class,
+        ):
 
-                mock_runner = Mock()
-                mock_runner.run.return_value = mock_experiment_result
-                mock_runner_class.return_value = mock_runner
+            mock_runner = Mock()
+            mock_runner.run.return_value = mock_experiment_result
+            mock_runner_class.return_value = mock_runner
 
-                mock_analyzer = Mock()
-                mock_analyzer.analyze.return_value = []
-                mock_analyzer_class.return_value = mock_analyzer
+            mock_analyzer = Mock()
+            mock_analyzer.analyze.return_value = []
+            mock_analyzer_class.return_value = mock_analyzer
 
-                # Act
-                result = _handle(default_args)
+            # Act
+            result = _handle(default_args)
 
-                # Assert
-                assert result == 0
-                # Validation should not be called when no_validate is True
-                assert mock_runner.run.call_count == 1  # Only baseline
+            # Assert
+            assert result == 0
+            # Validation should not be called when no_validate is True
+            assert mock_runner.run.call_count == 1  # Only baseline
 
     def test_returns_error_on_exception(self, default_args):
         """Test that error is returned when exception occurs."""

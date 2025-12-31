@@ -491,16 +491,14 @@ class TestStrategyRegistry:
         with pytest.raises(StrategyValidationError):
             registry.register_strategy("not_a_strategy", {})
 
-        # Test strategy with empty name
-        invalid_strategy = Strategy(
-            name="",
-            signal_generator=HoldSignalGenerator(),
-            risk_manager=FixedRiskManager(),
-            position_sizer=FixedFractionSizer(),
-        )
-
-        with pytest.raises(StrategyValidationError):
-            registry.register_strategy(invalid_strategy, {})
+        # Test strategy with empty name raises ValueError during construction
+        with pytest.raises(ValueError, match="Strategy name must be a non-empty string"):
+            Strategy(
+                name="",
+                signal_generator=HoldSignalGenerator(),
+                risk_manager=FixedRiskManager(),
+                position_sizer=FixedFractionSizer(),
+            )
 
         # Test strategy with missing components
         incomplete_strategy = Mock()
