@@ -808,9 +808,23 @@ class Backtester:
         return df
 
     def _calculate_hold_return(self, df: pd.DataFrame) -> float:
-        """Calculate buy-and-hold return for comparison."""
-        start_price = df["close"].iloc[0]
-        end_price = df["close"].iloc[-1]
+        """Calculate buy-and-hold return for comparison with robust validation."""
+        if df.empty or len(df) < 2:
+            logger.warning("Insufficient data for hold return calculation")
+            return 0.0
+
+        start_price = float(df["close"].iloc[0])
+        end_price = float(df["close"].iloc[-1])
+
+        # Guard against zero or invalid prices to prevent division by zero
+        if start_price <= 0 or end_price <= 0:
+            logger.warning(
+                "Invalid prices for hold return: start=%.8f, end=%.8f",
+                start_price,
+                end_price,
+            )
+            return 0.0
+
         return ((end_price / start_price) - 1) * 100
 
     def _run_main_loop(
@@ -845,7 +859,28 @@ class Backtester:
                     balance=self.balance,
                 )
                 if entry_result.executed:
+                    # Validate fee does not exceed balance (safety check for position sizing bugs)
+                    if entry_result.entry_fee > self.balance:
+                        logger.critical(
+                            "Entry fee %.2f exceeds balance %.2f - position sizing error!",
+                            entry_result.entry_fee,
+                            self.balance,
+                        )
+                        raise RuntimeError(
+                            f"Critical error: Entry fee {entry_result.entry_fee:.2f} "
+                            f"exceeds balance {self.balance:.2f}. Aborting to prevent corruption."
+                        )
+
                     self.balance -= entry_result.entry_fee
+
+                    # Final validation: ensure balance is still positive
+                    if self.balance < 0:
+                        logger.critical(
+                            "Balance went negative: %.2f after entry fee %.2f",
+                            self.balance,
+                            entry_result.entry_fee,
+                        )
+                        raise RuntimeError(f"Balance corruption: balance={self.balance:.2f}")
 
             # Get runtime decision
             runtime_decision = self._get_runtime_decision(df, i, current_price, current_time)
@@ -1107,7 +1142,28 @@ class Backtester:
         )
 
         if entry_result.executed:
+            # Validate fee does not exceed balance (safety check for position sizing bugs)
+            if entry_result.entry_fee > self.balance:
+                logger.critical(
+                    "Entry fee %.2f exceeds balance %.2f - position sizing error!",
+                    entry_result.entry_fee,
+                    self.balance,
+                )
+                raise RuntimeError(
+                    f"Critical error: Entry fee {entry_result.entry_fee:.2f} "
+                    f"exceeds balance {self.balance:.2f}. Aborting to prevent corruption."
+                )
+
             self.balance -= entry_result.entry_fee
+
+            # Final validation: ensure balance is still positive
+            if self.balance < 0:
+                logger.critical(
+                    "Balance went negative: %.2f after entry fee %.2f",
+                    self.balance,
+                    entry_result.entry_fee,
+                )
+                raise RuntimeError(f"Balance corruption: balance={self.balance:.2f}")
 
             # Log entry
             indicators = util_extract_indicators(df, index)
