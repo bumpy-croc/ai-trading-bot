@@ -27,6 +27,8 @@ from src.config.constants import (
     DEFAULT_PARTIAL_EXIT_TARGETS,
     DEFAULT_SCALE_IN_SIZES,
     DEFAULT_SCALE_IN_THRESHOLDS,
+    DEFAULT_STRATEGY_BASE_FRACTION,
+    DEFAULT_STRATEGY_MIN_CONFIDENCE,
 )
 from src.strategies.components import (
     ConfidenceWeightedSizer,
@@ -68,10 +70,10 @@ def create_ml_adaptive_strategy(
         base_risk=DEFAULT_BASE_RISK_PER_TRADE,
     )
 
-    # Create position sizer with confidence weighting (20% base)
+    # Create position sizer with confidence weighting
     position_sizer = ConfidenceWeightedSizer(
-        base_fraction=0.2,
-        min_confidence=0.3,
+        base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+        min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
     )
 
     # Create regime detector

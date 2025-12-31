@@ -24,6 +24,8 @@ from __future__ import annotations
 from src.config.constants import (
     DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_STRATEGY_BASE_FRACTION,
+    DEFAULT_STRATEGY_MIN_CONFIDENCE,
     DEFAULT_TAKE_PROFIT_PCT,
 )
 from src.risk.risk_manager import RiskManager as EngineRiskManager
@@ -116,10 +118,10 @@ def create_ml_basic_strategy(
         risk_manager = CoreRiskAdapter(core_risk_manager)
         risk_manager.set_strategy_overrides(risk_overrides)
 
-        # Create position sizer with confidence weighting (20% base)
+        # Create position sizer with confidence weighting
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.2,
-            min_confidence=0.3,
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
         regime_detector = EnhancedRegimeDetector()
 

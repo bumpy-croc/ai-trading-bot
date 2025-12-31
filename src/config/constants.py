@@ -207,3 +207,15 @@ DEFAULT_RETRY_BACKOFF_MULTIPLIER = 2  # Exponential backoff multiplier
 
 # Regime Multiplier Fallback
 DEFAULT_REGIME_UNKNOWN_MULTIPLIER = 0.5  # Conservative multiplier for unknown regimes
+
+# Strategy Confidence Thresholds
+DEFAULT_STRATEGY_MIN_CONFIDENCE = 0.3  # Standard minimum confidence for signal generation
+DEFAULT_STRATEGY_MIN_CONFIDENCE_AGGRESSIVE = 0.2  # Lower threshold for aggressive strategies
+DEFAULT_STRATEGY_MIN_CONFIDENCE_CONSERVATIVE = 0.4  # Higher threshold for conservative sizers
+
+# Strategy Position Sizing Base Fractions
+DEFAULT_STRATEGY_BASE_FRACTION = 0.2  # Default base fraction for ML strategies
+DEFAULT_STRATEGY_BASE_FRACTION_SMALL = 0.04  # Smaller base fraction for conservative strategies
+
+# Confidence Scale Factors
+DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM = 8  # Scale factor for momentum-based confidence
