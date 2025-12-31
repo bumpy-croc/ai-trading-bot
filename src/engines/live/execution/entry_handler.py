@@ -321,6 +321,14 @@ class LiveEntryHandler:
         Returns:
             Tuple of (stop_loss_price, take_profit_price).
         """
+        # Validate current_price to prevent division by zero
+        if current_price <= 0:
+            logger.warning(
+                "Invalid current_price (%.8f) in _calculate_sl_tp - cannot compute SL/TP",
+                current_price,
+            )
+            return None, None
+
         # Default percentages
         default_sl_pct = 0.05  # 5%
         tp_pct = self.default_take_profit_pct or 0.04  # 4%
@@ -339,7 +347,7 @@ class LiveEntryHandler:
                 else:
                     sl_pct = (stop_loss_price - current_price) / current_price
                 sl_pct = max(0.01, min(0.20, sl_pct))  # Clamp 1-20%
-            except (AttributeError, ValueError, TypeError):
+            except (AttributeError, ValueError, TypeError, ZeroDivisionError):
                 pass
 
         # Calculate prices
