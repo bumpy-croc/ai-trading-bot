@@ -19,6 +19,8 @@ from typing import Any, TypeVar
 import pandas as pd
 
 from src.config import get_config
+from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
+from src.infrastructure.timeout import run_with_timeout
 from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
@@ -372,7 +374,18 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             start_ts = int(start.timestamp() * 1000)
             end_ts = int(end.timestamp() * 1000) if end else None
 
-            klines = self._client.get_historical_klines(symbol, interval, start_ts, end_ts)
+            # Wrap API call with timeout to prevent indefinite hangs
+            try:
+                klines = run_with_timeout(
+                    self._client.get_historical_klines,
+                    args=(symbol, interval, start_ts, end_ts),
+                    timeout_seconds=60.0,  # 60s timeout for historical data fetch
+                    operation_name="Binance get_historical_klines",
+                )
+            except InfraTimeoutError as timeout_err:
+                raise TimeoutError(
+                    f"Binance API timeout after 60s fetching {symbol} {timeframe}"
+                ) from timeout_err
 
             df = self._process_klines(klines)
             self.data = df
