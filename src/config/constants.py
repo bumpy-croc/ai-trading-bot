@@ -176,6 +176,38 @@ DEFAULT_LOW_VOLATILITY_THRESHOLD = 0.01  # 1% daily volatility
 DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)  # (high_vol, low_vol)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 
+# Dynamic Risk Performance Adjustment Constants
+DEFAULT_RECOVERY_SCALING_FACTOR = 2.0  # Scale factor for recovery from drawdown
+DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT = 0.2  # Progressive stop loss tightening per threshold
+
+# Performance Score Calculation
+DEFAULT_PERFORMANCE_WIN_RATE_WEIGHT = 0.6  # Weight for win rate in score
+DEFAULT_PERFORMANCE_PROFIT_FACTOR_WEIGHT = 0.4  # Weight for profit factor in score
+DEFAULT_PERFORMANCE_PROFIT_FACTOR_DIVISOR = 2.0  # Normalization for profit factor
+
+# Performance Score Thresholds
+DEFAULT_PERFORMANCE_POOR_THRESHOLD = 0.3  # Below this is poor performance
+DEFAULT_PERFORMANCE_GOOD_THRESHOLD = 0.7  # Above this is good performance
+
+# Poor Performance Adjustments
+DEFAULT_POOR_PERF_POSITION_FACTOR = 0.6
+DEFAULT_POOR_PERF_STOP_TIGHTENING = 1.2
+DEFAULT_POOR_PERF_DAILY_RISK_FACTOR = 0.7
+
+# Good Performance Adjustments
+DEFAULT_GOOD_PERF_POSITION_FACTOR = 1.2
+DEFAULT_GOOD_PERF_STOP_TIGHTENING = 0.9
+DEFAULT_GOOD_PERF_DAILY_RISK_FACTOR = 1.1
+
+# Volatility Adjustment Stop Loss Factors
+DEFAULT_HIGH_VOL_STOP_TIGHTENING = 1.1
+DEFAULT_LOW_VOL_STOP_TIGHTENING = 0.9
+
+# Performance Metric Fallback Values
+DEFAULT_WIN_RATE_FALLBACK = 0.5
+DEFAULT_PROFIT_FACTOR_FALLBACK = 1.0
+DEFAULT_VOLATILITY_FALLBACK = 0.02
+
 # Partial operations defaults (partial exits and scale-ins)
 DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE = 10  # Defense-in-depth limit for partial exits per cycle
 DEFAULT_PARTIAL_EXIT_TARGETS = [0.03, 0.06, 0.10]  # 3%, 6%, 10%

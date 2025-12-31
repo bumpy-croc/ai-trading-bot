@@ -7,15 +7,34 @@ import numpy as np
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT,
     DEFAULT_DRAWDOWN_THRESHOLDS,
+    DEFAULT_GOOD_PERF_DAILY_RISK_FACTOR,
+    DEFAULT_GOOD_PERF_POSITION_FACTOR,
+    DEFAULT_GOOD_PERF_STOP_TIGHTENING,
+    DEFAULT_HIGH_VOL_STOP_TIGHTENING,
     DEFAULT_HIGH_VOLATILITY_THRESHOLD,
+    DEFAULT_LOW_VOL_STOP_TIGHTENING,
     DEFAULT_LOW_VOLATILITY_THRESHOLD,
+    DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT,
+    DEFAULT_PERFORMANCE_GOOD_THRESHOLD,
+    DEFAULT_PERFORMANCE_POOR_THRESHOLD,
+    DEFAULT_PERFORMANCE_PROFIT_FACTOR_DIVISOR,
+    DEFAULT_PERFORMANCE_PROFIT_FACTOR_WEIGHT,
+    DEFAULT_PERFORMANCE_WIN_RATE_WEIGHT,
     DEFAULT_PERFORMANCE_WINDOW_DAYS,
+    DEFAULT_POOR_PERF_DAILY_RISK_FACTOR,
+    DEFAULT_POOR_PERF_POSITION_FACTOR,
+    DEFAULT_POOR_PERF_STOP_TIGHTENING,
+    DEFAULT_PROFIT_FACTOR_FALLBACK,
+    DEFAULT_RECOVERY_SCALING_FACTOR,
     DEFAULT_RECOVERY_THRESHOLDS,
     DEFAULT_RISK_REDUCTION_FACTORS,
     DEFAULT_VOLATILITY_ADJUSTMENT_ENABLED,
+    DEFAULT_VOLATILITY_FALLBACK,
     DEFAULT_VOLATILITY_RISK_MULTIPLIERS,
     DEFAULT_VOLATILITY_WINDOW_DAYS,
+    DEFAULT_WIN_RATE_FALLBACK,
 )
 
 if TYPE_CHECKING:
@@ -301,8 +320,10 @@ class DynamicRiskManager:
                 if recovery_return >= threshold:
                     # Gradual recovery - reduce risk reduction
                     recovery_factor = min(
-                        1.0, 1.0 + (recovery_return - threshold) * 2.0
-                    )  # Scale recovery
+                        1.0,
+                        1.0
+                        + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR,
+                    )
                     return RiskAdjustments(
                         position_size_factor=min(1.0, recovery_factor),
                         stop_loss_tightening=max(1.0, 1.0 / recovery_factor),
@@ -323,7 +344,8 @@ class DynamicRiskManager:
             if current_drawdown >= threshold:
                 position_factor = self.config.risk_reduction_factors[i]
                 daily_risk_factor = self.config.risk_reduction_factors[i]
-                stop_loss_factor = 1.0 + (0.2 * i)  # Tighten stops progressively
+                # Tighten stops progressively based on drawdown level
+                stop_loss_factor = 1.0 + (DEFAULT_DRAWDOWN_STOP_TIGHTENING_INCREMENT * i)
 
         reason = f"drawdown_{current_drawdown:.1%}"
 
@@ -338,29 +360,34 @@ class DynamicRiskManager:
         self, performance_metrics: dict[str, Any]
     ) -> RiskAdjustments:
         """Calculate adjustments based on recent performance"""
-        win_rate = performance_metrics.get("win_rate", 0.5)
-        profit_factor = performance_metrics.get("profit_factor", 1.0)
+        win_rate = performance_metrics.get("win_rate", DEFAULT_WIN_RATE_FALLBACK)
+        profit_factor = performance_metrics.get("profit_factor", DEFAULT_PROFIT_FACTOR_FALLBACK)
         total_trades = performance_metrics.get("total_trades", 0)
 
         # Need minimum trades for reliable adjustment
-        if total_trades < 10:
+        if total_trades < DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT:
             return RiskAdjustments(primary_reason="insufficient_data")
 
-        # Calculate performance score
-        performance_score = (win_rate * 0.6) + (min(profit_factor / 2.0, 1.0) * 0.4)
+        # Calculate performance score using weighted factors
+        normalized_profit = min(
+            profit_factor / DEFAULT_PERFORMANCE_PROFIT_FACTOR_DIVISOR, 1.0
+        )
+        performance_score = (
+            win_rate * DEFAULT_PERFORMANCE_WIN_RATE_WEIGHT
+        ) + (normalized_profit * DEFAULT_PERFORMANCE_PROFIT_FACTOR_WEIGHT)
 
-        if performance_score < 0.3:  # Poor performance
+        if performance_score < DEFAULT_PERFORMANCE_POOR_THRESHOLD:
             return RiskAdjustments(
-                position_size_factor=0.6,
-                stop_loss_tightening=1.2,
-                daily_risk_factor=0.7,
+                position_size_factor=DEFAULT_POOR_PERF_POSITION_FACTOR,
+                stop_loss_tightening=DEFAULT_POOR_PERF_STOP_TIGHTENING,
+                daily_risk_factor=DEFAULT_POOR_PERF_DAILY_RISK_FACTOR,
                 primary_reason="poor_performance",
             )
-        elif performance_score > 0.7:  # Good performance
+        elif performance_score > DEFAULT_PERFORMANCE_GOOD_THRESHOLD:
             return RiskAdjustments(
-                position_size_factor=1.2,
-                stop_loss_tightening=0.9,
-                daily_risk_factor=1.1,
+                position_size_factor=DEFAULT_GOOD_PERF_POSITION_FACTOR,
+                stop_loss_tightening=DEFAULT_GOOD_PERF_STOP_TIGHTENING,
+                daily_risk_factor=DEFAULT_GOOD_PERF_DAILY_RISK_FACTOR,
                 primary_reason="good_performance",
             )
         else:
@@ -374,19 +401,21 @@ class DynamicRiskManager:
             return RiskAdjustments(primary_reason="volatility_disabled")
 
         # Prefer estimated volatility computed from equity history if present
-        estimated_volatility = float(performance_metrics.get("estimated_volatility", 0.02))
+        estimated_volatility = float(
+            performance_metrics.get("estimated_volatility", DEFAULT_VOLATILITY_FALLBACK)
+        )
 
         if estimated_volatility > self.config.high_volatility_threshold:
             return RiskAdjustments(
                 position_size_factor=self.config.volatility_risk_multipliers[0],
-                stop_loss_tightening=1.1,
+                stop_loss_tightening=DEFAULT_HIGH_VOL_STOP_TIGHTENING,
                 daily_risk_factor=self.config.volatility_risk_multipliers[0],
                 primary_reason="high_volatility",
             )
         elif estimated_volatility < self.config.low_volatility_threshold:
             return RiskAdjustments(
                 position_size_factor=self.config.volatility_risk_multipliers[1],
-                stop_loss_tightening=0.9,
+                stop_loss_tightening=DEFAULT_LOW_VOL_STOP_TIGHTENING,
                 daily_risk_factor=self.config.volatility_risk_multipliers[1],
                 primary_reason="low_volatility",
             )
