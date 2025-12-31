@@ -315,7 +315,32 @@ class RiskManager:
         except Exception:
             # Fail-safe: never raise from correlation logic
             logging.exception("Exception in correlation-based size reduction logic")
-        return max(0.0, min(self.params.max_position_size, fraction))
+
+        # Final clamping and validation
+        final_fraction = max(0.0, min(self.params.max_position_size, fraction))
+
+        # Runtime validation: ensure result respects risk limits
+        with self._state_lock:
+            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+
+        if final_fraction > remaining_daily_risk:
+            logging.warning(
+                "Calculated fraction %.4f exceeds remaining daily risk %.4f, clamping to limit",
+                final_fraction,
+                remaining_daily_risk,
+            )
+            final_fraction = remaining_daily_risk
+
+        if final_fraction > self.params.max_position_size:
+            logging.error(
+                "CRITICAL: Calculated fraction %.4f exceeds max_position_size %.4f. "
+                "This indicates a logic error in position sizing.",
+                final_fraction,
+                self.params.max_position_size,
+            )
+            final_fraction = self.params.max_position_size
+
+        return final_fraction
 
     def compute_sl_tp(
         self,
