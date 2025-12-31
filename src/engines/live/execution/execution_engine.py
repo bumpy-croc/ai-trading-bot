@@ -10,6 +10,7 @@ Encapsulates the mechanics of trade execution including:
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -229,6 +230,35 @@ class LiveExecutionEngine:
             EntryExecutionResult with execution details.
         """
         try:
+            # Validate inputs before any calculations to prevent corrupt state
+            if base_price <= 0 or not math.isfinite(base_price):
+                logger.error(
+                    "Invalid base_price %.8f for %s - refusing entry to prevent corrupt state",
+                    base_price,
+                    symbol,
+                )
+                return EntryExecutionResult(
+                    success=False, error=f"Invalid price: {base_price}"
+                )
+
+            if balance <= 0 or not math.isfinite(balance):
+                logger.error(
+                    "Invalid balance %.8f for %s - refusing entry", balance, symbol
+                )
+                return EntryExecutionResult(
+                    success=False, error=f"Invalid balance: {balance}"
+                )
+
+            if size_fraction <= 0 or size_fraction > 1 or not math.isfinite(size_fraction):
+                logger.error(
+                    "Invalid size_fraction %.8f for %s - must be in (0, 1]",
+                    size_fraction,
+                    symbol,
+                )
+                return EntryExecutionResult(
+                    success=False, error=f"Invalid size_fraction: {size_fraction}"
+                )
+
             # Calculate position value and costs using shared cost calculator
             position_value = size_fraction * balance
             side_str = self._position_side_to_str(side)
@@ -242,7 +272,19 @@ class LiveExecutionEngine:
             executed_price = cost_result.executed_price
             entry_fee = cost_result.fee
             slippage_cost = cost_result.slippage_cost
-            quantity = position_value / executed_price if executed_price > 0 else 0.0
+
+            # Validate executed_price before division
+            if executed_price <= 0 or not math.isfinite(executed_price):
+                logger.error(
+                    "Cost calculator returned invalid executed_price %.8f for %s - refusing entry",
+                    executed_price,
+                    symbol,
+                )
+                return EntryExecutionResult(
+                    success=False, error=f"Invalid executed price: {executed_price}"
+                )
+
+            quantity = position_value / executed_price
 
             # Execute real order if enabled
             if self.enable_live_trading:
@@ -294,6 +336,25 @@ class LiveExecutionEngine:
             ExitExecutionResult with execution details.
         """
         try:
+            # Validate inputs before any calculations to prevent corrupt state
+            if base_price <= 0 or not math.isfinite(base_price):
+                logger.error(
+                    "Invalid base_price %.8f for exit on %s - refusing exit to prevent corrupt state",
+                    base_price,
+                    symbol,
+                )
+                return ExitExecutionResult(
+                    success=False, error=f"Invalid exit price: {base_price}"
+                )
+
+            if position_notional <= 0 or not math.isfinite(position_notional):
+                logger.error(
+                    "Invalid position_notional %.8f for exit on %s", position_notional, symbol
+                )
+                return ExitExecutionResult(
+                    success=False, error=f"Invalid position notional: {position_notional}"
+                )
+
             # Calculate costs using shared cost calculator
             side_str = self._position_side_to_str(side)
 
@@ -309,7 +370,8 @@ class LiveExecutionEngine:
 
             # Execute real order if enabled
             if self.enable_live_trading:
-                quantity = position_notional / base_price if base_price > 0 else 0.0
+                # Already validated base_price > 0 above
+                quantity = position_notional / base_price
                 success = self._close_live_order(
                     symbol,
                     side,
@@ -375,8 +437,25 @@ class LiveExecutionEngine:
                 return f"paper_{int(time.time() * 1000)}"
 
         try:
+            # Defensive validation - should already be validated by caller but check anyway
+            if price <= 0 or not math.isfinite(price):
+                logger.error(
+                    "Invalid price %.8f for live order on %s - refusing to place order",
+                    price,
+                    symbol,
+                )
+                return None
+
+            if value <= 0 or not math.isfinite(value):
+                logger.error(
+                    "Invalid value %.8f for live order on %s - refusing to place order",
+                    value,
+                    symbol,
+                )
+                return None
+
             order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
-            quantity = value / price if price > 0 else 0.0
+            quantity = value / price
             quantity = self._normalize_quantity(symbol, quantity, value)
             if quantity <= 0:
                 return None
