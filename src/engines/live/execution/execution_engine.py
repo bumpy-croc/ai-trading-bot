@@ -136,50 +136,6 @@ class LiveExecutionEngine:
         """Reset fee and slippage tracking."""
         self._cost_calculator.reset_totals()
 
-    def apply_entry_slippage(self, price: float, side: PositionSide) -> float:
-        """Apply slippage to entry price (price moves against us).
-
-        Slippage models the cost of market impact and adverse selection that occurs
-        when entering a position, ensuring realistic backtest and live trading results.
-
-        This method is kept for backward compatibility. New code should use
-        the shared CostCalculator via calculate_entry_costs.
-
-        Args:
-            price: Base price before slippage.
-            side: Position side (LONG or SHORT).
-
-        Returns:
-            Price after slippage applied.
-        """
-        # Use simple calculation to preserve backward compatibility
-        if side == PositionSide.LONG:
-            return price * (1 + self.slippage_rate)
-        else:
-            return price * (1 - self.slippage_rate)
-
-    def apply_exit_slippage(self, price: float, side: PositionSide) -> float:
-        """Apply slippage to exit price (price moves against us).
-
-        Exit slippage accounts for market impact costs when closing positions,
-        ensuring P&L calculations reflect realistic execution conditions.
-
-        This method is kept for backward compatibility. New code should use
-        the shared CostCalculator via calculate_exit_costs.
-
-        Args:
-            price: Base price before slippage.
-            side: Position side (LONG or SHORT).
-
-        Returns:
-            Price after slippage applied.
-        """
-        # Use simple calculation to preserve backward compatibility
-        if side == PositionSide.LONG:
-            return price * (1 - self.slippage_rate)
-        else:
-            return price * (1 + self.slippage_rate)
-
     def calculate_entry_fee(self, position_value: float) -> float:
         """Calculate entry fee for a position.
 

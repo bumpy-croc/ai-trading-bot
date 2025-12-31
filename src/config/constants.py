@@ -56,6 +56,12 @@ DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 
 # Error Handling Constants
 DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
+DEFAULT_MAX_CONSECUTIVE_ERRORS = 10  # Maximum errors before shutdown
+
+# Health Monitor Constants (distinct from CPU optimization intervals)
+DEFAULT_HEALTH_BASE_CHECK_INTERVAL = 60  # Base health check interval in seconds
+DEFAULT_HEALTH_MIN_CHECK_INTERVAL = 10  # Minimum health check interval (aggressive recovery)
+DEFAULT_HEALTH_MAX_CHECK_INTERVAL = 300  # Maximum health check interval
 
 # Core Trading Defaults (used across backtest and live engines)
 DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss
@@ -142,6 +148,8 @@ DEFAULT_PERFORMANCE_MONITOR_INTERVAL = 30  # Performance monitoring interval
 DEFAULT_SLEEP_POLL_INTERVAL = 0.5  # Sleep polling interval (reduced from 0.1s)
 DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 1800  # Account snapshot interval (30 minutes)
 DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 2 minutes
+DEFAULT_MARKET_DATA_STALENESS_THRESHOLD = 3600  # Consider market data stale after 1 hour
+DEFAULT_MARKET_DATA_LIMIT = 500  # Default number of candles to fetch
 
 # Account Synchronization Constants
 DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES = 5  # Minimum minutes between account syncs
