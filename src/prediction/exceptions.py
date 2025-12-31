@@ -31,3 +31,9 @@ class PredictionTimeoutError(PredictionEngineError):
     """Raised when prediction takes too long"""
 
     pass
+
+
+class ModelInferenceError(PredictionEngineError):
+    """Raised when model inference fails"""
+
+    pass
