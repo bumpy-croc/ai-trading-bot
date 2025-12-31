@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -109,17 +110,26 @@ class RiskParameters:
 
 
 class RiskManager:
-    """Handles position sizing and risk management"""
+    """Handles position sizing and risk management.
+
+    Thread Safety
+    -------------
+    All operations on shared state (positions dict and daily_risk_used counter)
+    are protected by a reentrant lock to ensure safe concurrent access from
+    multiple threads (e.g., live trading engine + monitoring threads).
+    """
 
     def __init__(self, parameters: RiskParameters | None = None, max_concurrent_positions: int = 3):
         self.params = parameters or RiskParameters()
         self.daily_risk_used = 0.0
         self.positions: dict[str, dict] = {}
         self.max_concurrent_positions = max_concurrent_positions
+        self._state_lock = threading.RLock()  # Protects positions and daily_risk_used
 
     def reset_daily_risk(self):
         """Reset daily risk counter"""
-        self.daily_risk_used = 0.0
+        with self._state_lock:
+            self.daily_risk_used = 0.0
 
     def _ensure_atr(self, df: pd.DataFrame) -> pd.DataFrame:
         if "atr" not in df.columns:
@@ -153,7 +163,8 @@ class RiskManager:
 
         # Ensure we don't exceed maximum risk limits
         risk = min(risk, self.params.max_risk_per_trade)
-        remaining_daily_risk = self.params.max_daily_risk - self.daily_risk_used
+        with self._state_lock:
+            remaining_daily_risk = self.params.max_daily_risk - self.daily_risk_used
         risk = min(risk, remaining_daily_risk)
 
         # If no remaining daily risk, return 0
@@ -234,7 +245,8 @@ class RiskManager:
         max_fraction = min(max_fraction, self.params.max_position_size)
 
         # Respect remaining daily risk
-        remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+        with self._state_lock:
+            remaining_daily_risk = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
         max_fraction = min(max_fraction, remaining_daily_risk)
 
         # Default fraction baseline
@@ -287,7 +299,8 @@ class RiskManager:
                 corr_matrix = correlation_ctx.get("corr_matrix")
                 max_exposure_override = correlation_ctx.get("max_exposure_override")
                 if engine is not None and candidate_symbol:
-                    positions = self.positions
+                    with self._state_lock:
+                        positions = self.positions.copy()
                     factor = float(
                         engine.compute_size_reduction_factor(
                             positions=positions,
@@ -384,20 +397,23 @@ class RiskManager:
         - Daily risk accounting increments `daily_risk_used` by `size` so that
           the sum of concurrently open position fractions respects
           `params.max_daily_risk` across multiple positions.
+        - Thread-safe: protected by internal lock.
         """
-        self.positions[symbol] = {"side": side, "size": size, "entry_price": entry_price}
-
-        # Update daily risk used (approximate: count fraction of balance put at risk)
-        self.daily_risk_used += size  # size here is treated as fraction of balance allocated
+        with self._state_lock:
+            self.positions[symbol] = {"side": side, "size": size, "entry_price": entry_price}
+            # Update daily risk used (approximate: count fraction of balance put at risk)
+            self.daily_risk_used += size  # size here is treated as fraction of balance allocated
 
     def close_position(self, symbol: str):
-        """Close position tracking"""
-        if symbol in self.positions:
-            del self.positions[symbol]
+        """Close position tracking (thread-safe)."""
+        with self._state_lock:
+            if symbol in self.positions:
+                del self.positions[symbol]
 
     def get_total_exposure(self) -> float:
-        """Calculate total position exposure (sum of fractions)"""
-        return float(sum(pos["size"] for pos in self.positions.values()))
+        """Calculate total position exposure (sum of fractions, thread-safe)."""
+        with self._state_lock:
+            return float(sum(pos["size"] for pos in self.positions.values()))
 
     def get_position_correlation_risk(
         self,
@@ -411,15 +427,22 @@ class RiskManager:
         exceeds the threshold (defaults to params.correlation_threshold) and return
         the maximum group exposure among the groups that intersect the input symbols.
         Fallback: sum exposures of provided symbols.
+
+        Thread-safe: takes a snapshot of positions at start.
         """
         if not symbols:
             return 0.0
+
+        # Take snapshot of positions while holding lock
+        with self._state_lock:
+            positions_snapshot = self.positions.copy()
+
         try:
             sym_set = set(map(str, symbols))
             # Fallback: sum exposures for given symbols
             if corr_matrix is None or corr_matrix.empty:
                 exposure = sum(
-                    float(pos.get("size", 0.0)) for s, pos in self.positions.items() if s in sym_set
+                    float(pos.get("size", 0.0)) for s, pos in positions_snapshot.items() if s in sym_set
                 )
                 return round(float(exposure), 8)
 
@@ -465,16 +488,16 @@ class RiskManager:
                     continue
                 total = 0.0
                 for s in g:
-                    total += float(self.positions.get(s, {}).get("size", 0.0))
+                    total += float(positions_snapshot.get(s, {}).get("size", 0.0))
                 max_exposure = max(max_exposure, total)
             # If no groups formed (all singletons), fall back to sum of the specified symbols
             if max_exposure == 0.0 and len(groups) == len(cols):
-                max_exposure = sum(float(self.positions.get(s, {}).get("size", 0.0)) for s in cols)
+                max_exposure = sum(float(positions_snapshot.get(s, {}).get("size", 0.0)) for s in cols)
             return round(max_exposure, 8)
         except Exception:
             # Fail-safe
             exposure = sum(
-                float(pos.get("size", 0.0)) for s, pos in self.positions.items() if s in symbols
+                float(pos.get("size", 0.0)) for s, pos in positions_snapshot.items() if s in symbols
             )
             return round(float(exposure), 8)
 
@@ -488,32 +511,39 @@ class RiskManager:
         """Reduce tracked exposure after a partial exit.
 
         executed_fraction_of_original is the fraction of ORIGINAL size removed.
+
+        Thread-safe: protected by internal lock.
         """
-        pos = self.positions.get(symbol)
-        if not pos:
-            return
-        current = float(pos.get("size", 0.0))
-        new_size = max(0.0, current - float(executed_fraction_of_original))
-        pos["size"] = new_size
-        # Reduce daily risk used proportionally (approximation)
-        self.daily_risk_used = max(0.0, self.daily_risk_used - float(executed_fraction_of_original))
+        with self._state_lock:
+            pos = self.positions.get(symbol)
+            if not pos:
+                return
+            current = float(pos.get("size", 0.0))
+            new_size = max(0.0, current - float(executed_fraction_of_original))
+            pos["size"] = new_size
+            # Reduce daily risk used proportionally (approximation)
+            self.daily_risk_used = max(0.0, self.daily_risk_used - float(executed_fraction_of_original))
 
     def adjust_position_after_scale_in(
         self, symbol: str, added_fraction_of_original: float
     ) -> None:
-        """Increase tracked exposure after a scale-in, enforcing daily and per-position caps."""
-        pos = self.positions.get(symbol)
-        if not pos:
-            return
-        current = float(pos.get("size", 0.0))
-        # Enforce per-position cap and remaining daily risk
-        remaining_daily = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
-        effective_add = min(
-            float(added_fraction_of_original),
-            remaining_daily,
-            max(0.0, self.params.max_position_size - current),
-        )
-        if effective_add <= 0:
-            return
-        pos["size"] = current + effective_add
-        self.daily_risk_used = min(self.params.max_daily_risk, self.daily_risk_used + effective_add)
+        """Increase tracked exposure after a scale-in, enforcing daily and per-position caps.
+
+        Thread-safe: protected by internal lock.
+        """
+        with self._state_lock:
+            pos = self.positions.get(symbol)
+            if not pos:
+                return
+            current = float(pos.get("size", 0.0))
+            # Enforce per-position cap and remaining daily risk
+            remaining_daily = max(0.0, self.params.max_daily_risk - self.daily_risk_used)
+            effective_add = min(
+                float(added_fraction_of_original),
+                remaining_daily,
+                max(0.0, self.params.max_position_size - current),
+            )
+            if effective_add <= 0:
+                return
+            pos["size"] = current + effective_add
+            self.daily_risk_used = min(self.params.max_daily_risk, self.daily_risk_used + effective_add)
