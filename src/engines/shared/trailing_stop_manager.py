@@ -7,6 +7,7 @@ backtesting and live trading engines.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -90,6 +91,22 @@ class TrailingStopManager:
         current_stop = getattr(position, "stop_loss", None) or getattr(
             position, "trailing_stop_price", None
         )
+
+        # Validate entry_price to prevent division by zero
+        if entry_price <= 0 or not math.isfinite(entry_price):
+            logger.error(
+                "Invalid entry_price %.8f for trailing stop calculation - cannot update",
+                entry_price,
+            )
+            return TrailingStopUpdate(updated=False)
+
+        # Validate current_price to prevent corrupt calculations
+        if current_price <= 0 or not math.isfinite(current_price):
+            logger.error(
+                "Invalid current_price %.8f for trailing stop calculation - cannot update",
+                current_price,
+            )
+            return TrailingStopUpdate(updated=False)
 
         # Calculate position-level PnL percentage (not sized by position fraction)
         # This provides consistent risk management regardless of position size
