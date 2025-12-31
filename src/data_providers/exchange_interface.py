@@ -307,13 +307,17 @@ class ExchangeInterface(ABC):
                 return False, f"Symbol {symbol} not found"
 
             # Validate quantity
-            min_qty = symbol_info.get("min_qty", 0)
+            # Extract min_qty with safe type checking to prevent TypeError
+            min_qty_raw = symbol_info.get("min_qty", 0)
+            min_qty = float(min_qty_raw) if isinstance(min_qty_raw, (int, float)) else 0.0
             if quantity < min_qty:
                 return False, f"Quantity {quantity} below minimum {min_qty}"
 
             # Validate price for limit orders
             if order_type == OrderType.LIMIT and price is not None:
-                min_price = symbol_info.get("min_price", 0)
+                # Extract min_price with safe type checking to prevent TypeError
+                min_price_raw = symbol_info.get("min_price", 0)
+                min_price = float(min_price_raw) if isinstance(min_price_raw, (int, float)) else 0.0
                 if price < min_price:
                     return False, f"Price {price} below minimum {min_price}"
 
@@ -337,6 +341,16 @@ class ExchangeInterface(ABC):
             total_equity = 0.0
 
             for balance in balances:
+                # Validate balance.total is numeric before use to prevent TypeError/NaN corruption
+                if not isinstance(balance.total, (int, float)):
+                    logger.warning(
+                        "Skipping balance with non-numeric total: asset=%s, total=%s (type=%s)",
+                        balance.asset,
+                        balance.total,
+                        type(balance.total).__name__,
+                    )
+                    continue
+
                 if balance.asset == base_currency:
                     total_equity += balance.total
                 else:
