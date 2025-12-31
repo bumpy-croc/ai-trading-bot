@@ -120,6 +120,15 @@ class LiveEntryHandler:
         """
         reasons = []
 
+        # Validate critical inputs before processing
+        if balance <= 0:
+            reasons.append(f"invalid_balance_{balance:.2f}")
+            return LiveEntrySignal(should_enter=False, reasons=reasons)
+
+        if current_price <= 0:
+            reasons.append(f"invalid_price_{current_price:.8f}")
+            return LiveEntrySignal(should_enter=False, reasons=reasons)
+
         # Extract entry side and size from decision
         entry_side, size_fraction = self._extract_entry_plan(runtime_decision, balance)
 
