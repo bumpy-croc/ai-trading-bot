@@ -176,6 +176,19 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         except Exception:
             self._decoded_secret = None
 
+    def close(self) -> None:
+        """Close the HTTP session and release resources."""
+        if hasattr(self, "_session") and self._session is not None:
+            try:
+                self._session.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
+            self._session = None
+
+    def __del__(self) -> None:
+        """Destructor to ensure session is closed when provider is garbage collected."""
+        self.close()
+
     # ------------------------------------------------------------
     # The following methods provide implementations for authenticated endpoints of the Coinbase Exchange API.
     # These methods interact with the API to fetch account information and balances.
