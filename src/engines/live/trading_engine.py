@@ -21,12 +21,15 @@ from src.config.constants import (
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_FEE_RATE,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
@@ -168,8 +171,8 @@ class LiveTradingEngine:
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = False,
         # Execution realism parameters (parity with backtest engine)
-        fee_rate: float = 0.001,  # 0.1% per trade (entry + exit)
-        slippage_rate: float = 0.0005,  # 0.05% slippage per trade
+        fee_rate: float = DEFAULT_FEE_RATE,  # 0.1% per trade (entry + exit)
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,  # 0.05% slippage per trade
         use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
         max_filled_price_deviation: float = 0.5,  # Filled-price deviation threshold
         # Handler injection (all optional - defaults created if not provided)
@@ -1534,7 +1537,7 @@ class LiveTradingEngine:
                                     )
                                     if short_take_profit is None:
                                         short_take_profit = current_price * (
-                                            1 - getattr(self.strategy, "take_profit_pct", 0.04)
+                                            1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
                                         )
                                 else:
                                     # All strategies should be component-based
@@ -1545,7 +1548,7 @@ class LiveTradingEngine:
                                         current_price * 1.05
                                     )  # Default 5% stop for short
                                     short_take_profit = current_price * (
-                                        1 - getattr(self.strategy, "take_profit_pct", 0.04)
+                                        1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
                                     )
                                 self._execute_entry(
                                     symbol=symbol,
@@ -2119,14 +2122,14 @@ class LiveTradingEngine:
                     strategy_overrides=overrides,
                 )
                 if take_profit is None:
-                    take_profit = current_price * (1 + overrides.get("take_profit_pct", 0.04))
+                    take_profit = current_price * (1 + overrides.get("take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             else:
                 # All strategies should be component-based
                 self.logger.error(
                     f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                 )
                 stop_loss = current_price * 0.95  # Default 5% stop for long
-                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
+                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             entry_side = PositionSide.LONG
 
         self._execute_entry(
@@ -2148,15 +2151,15 @@ class LiveTradingEngine:
                 try:
                     return float(params.default_take_profit_pct)
                 except (TypeError, ValueError):
-                    return 0.04
+                    return DEFAULT_TAKE_PROFIT_PCT
         except Exception:
-            return 0.04
+            return DEFAULT_TAKE_PROFIT_PCT
 
-        value = getattr(self.strategy, "take_profit_pct", 0.04)
+        value = getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
         try:
             return float(value)
         except (TypeError, ValueError):
-            return 0.04
+            return DEFAULT_TAKE_PROFIT_PCT
 
     def _execute_entry(
         self,

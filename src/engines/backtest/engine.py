@@ -17,6 +17,20 @@ import pandas as pd
 from pandas import DataFrame
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.config.config_manager import get_config
+from src.config.constants import (
+    DEFAULT_DYNAMIC_RISK_ENABLED,
+    DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_FEE_RATE,
+    DEFAULT_INITIAL_BALANCE,
+    DEFAULT_MARKET_TIMEZONE,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
+)
+from src.database.models import TradeSource
 from src.engines.backtest.execution import (
     EntryHandler,
     ExecutionEngine,
@@ -27,29 +41,15 @@ from src.engines.backtest.logging import EventLogger
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.backtest.regime import RegimeHandler
 from src.engines.backtest.risk import CorrelationHandler
-from src.engines.backtest.utils import compute_performance_metrics
 from src.engines.backtest.utils import extract_indicators as util_extract_indicators
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
-    build_time_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
-from src.config.config_manager import get_config
-from src.config.constants import (
-    DEFAULT_DYNAMIC_RISK_ENABLED,
-    DEFAULT_END_OF_DAY_FLAT,
-    DEFAULT_INITIAL_BALANCE,
-    DEFAULT_MARKET_TIMEZONE,
-    DEFAULT_MAX_HOLDING_HOURS,
-    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
-    DEFAULT_TIME_RESTRICTIONS,
-    DEFAULT_WEEKEND_FLAT,
-)
-from src.database.models import TradeSource
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
@@ -146,8 +146,8 @@ class Backtester:
         regime_config: Any | None = None,
         strategy_mapping: Any | None = None,
         switching_config: Any | None = None,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         use_next_bar_execution: bool = False,
         use_high_low_for_stops: bool = True,
         max_position_size: float | None = None,
