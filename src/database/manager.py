@@ -1996,6 +1996,181 @@ class DatabaseManager:
             if session:
                 session.close()
 
+    @contextmanager
+    def atomic_position_reconciliation(
+        self,
+        position_db_id: int,
+        realized_pnl: float,
+        exit_price: float,
+        exit_reason: str,
+        trade_data: dict[str, Any],
+        session_id: int | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
+        """
+        Context manager for atomic position reconciliation with exchange.
+
+        Performs balance update, trade logging, and position closure in a single transaction.
+        Ensures all database operations succeed or fail together, preventing inconsistent state.
+
+        Args:
+            position_db_id: Database ID of position to reconcile
+            realized_pnl: Realized P&L from position closure
+            exit_price: Exit price for the position
+            exit_reason: Reason for position closure (e.g., "stop_loss_offline")
+            trade_data: Dict with trade details (symbol, side, size, entry_price, etc.)
+            session_id: Trading session ID (uses current if not provided)
+
+        Yields:
+            dict with 'new_balance', 'trade_id', 'position_closed' keys
+
+        Raises:
+            ValueError: If validation fails or balance would go negative
+            SQLAlchemyError: If database operation fails
+
+        Example:
+            trade_data = {"symbol": "BTCUSDT", "side": PositionSide.LONG, ...}
+            with db.atomic_position_reconciliation(
+                position_db_id=123,
+                realized_pnl=-50.0,
+                exit_price=45000.0,
+                exit_reason="stop_loss_offline",
+                trade_data=trade_data
+            ) as result:
+                # All DB operations committed atomically
+                # Now safe to update in-memory state
+                position_tracker.remove_position(order_id)
+                risk_manager.close_position(symbol)
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            raise ValueError("No active trading session for position reconciliation")
+
+        db_session = None
+        try:
+            # Use a single session for the entire atomic operation
+            db_session = next(self.get_session_with_timeout(QueryTimeout.WRITE))
+
+            # Begin nested transaction (SAVEPOINT) for atomicity
+            with db_session.begin_nested():
+                # 1. Atomic balance update
+                current_balance = AccountBalance.get_current_balance(session_id, db_session)
+                new_balance = current_balance + realized_pnl
+
+                # Validate balance won't go negative
+                if new_balance < 0:
+                    raise ValueError(
+                        f"Position reconciliation would result in negative balance: "
+                        f"${current_balance:.2f} + ${realized_pnl:.2f} = ${new_balance:.2f}"
+                    )
+
+                # Create balance entry
+                balance_entry = AccountBalance(
+                    session_id=session_id,
+                    total_balance=new_balance,
+                    available_balance=new_balance,
+                    reserved_balance=0.0,
+                    base_currency="USD",
+                    last_updated=datetime.now(UTC),
+                    updated_by="live_engine_reconciliation",
+                    update_reason=f"reconciliation_{trade_data.get('symbol', 'unknown')}",
+                )
+                db_session.add(balance_entry)
+
+                # 2. Log trade
+                side = trade_data["side"]
+                if isinstance(side, str):
+                    side = PositionSide[side.upper()]
+
+                trade = Trade(
+                    symbol=trade_data["symbol"],
+                    side=side,
+                    source=TradeSource.LIVE,
+                    entry_price=trade_data["entry_price"],
+                    exit_price=exit_price,
+                    size=trade_data["size"],
+                    quantity=trade_data.get("quantity"),
+                    entry_time=trade_data["entry_time"],
+                    exit_time=datetime.now(UTC),
+                    pnl=realized_pnl,
+                    pnl_percent=trade_data.get("pnl_percent", 0.0),
+                    commission=trade_data.get("commission", 0.0),
+                    exit_reason=exit_reason,
+                    strategy_name=trade_data.get("strategy_name", "unknown"),
+                    stop_loss=trade_data.get("stop_loss"),
+                    take_profit=trade_data.get("take_profit"),
+                    session_id=session_id,
+                )
+                db_session.add(trade)
+                db_session.flush()  # Get trade ID
+
+                # 3. Close position in database
+                position = db_session.query(Position).filter(Position.id == position_db_id).first()
+                if position:
+                    position.status = PositionStatus.CLOSED
+                    position.exit_price = exit_price
+                    position.exit_time = datetime.now(UTC)
+                    position.pnl = realized_pnl
+                    position.pnl_percent = trade_data.get("pnl_percent", 0.0)
+                    position.exit_reason = exit_reason
+
+                logger.info(
+                    "Atomic reconciliation: Balance %.2f -> %.2f (PnL: %+.2f) | Trade ID: %s | Position: %s",
+                    current_balance,
+                    new_balance,
+                    realized_pnl,
+                    trade.id,
+                    trade_data["symbol"],
+                )
+
+                # Prepare result dict
+                result = {
+                    "old_balance": current_balance,
+                    "new_balance": new_balance,
+                    "trade_id": trade.id,
+                    "position_closed": position is not None,
+                }
+
+                # Yield control back to caller with result
+                # Transaction is still open - caller can check result before commit
+                yield result
+
+            # SAVEPOINT committed successfully - now commit the outer transaction
+            db_session.commit()
+
+        except ValueError as ve:
+            # Validation error - rollback and re-raise
+            if db_session:
+                db_session.rollback()
+            logger.error("Position reconciliation validation failed: %s", ve)
+            raise
+
+        except SQLAlchemyError as se:
+            # Database error - rollback and re-raise
+            if db_session:
+                db_session.rollback()
+            logger.error(
+                "Position reconciliation failed for position %s: %s",
+                position_db_id,
+                se,
+            )
+            raise
+
+        except Exception as e:
+            # Unexpected error - rollback and re-raise
+            if db_session:
+                db_session.rollback()
+            logger.critical(
+                "Unexpected error during position reconciliation: %s",
+                e,
+                exc_info=True,
+            )
+            raise
+
+        finally:
+            # Ensure session is closed
+            if db_session:
+                db_session.close()
+
     # ========== CONNECTION MANAGEMENT ==========
 
     def get_connection_stats(self) -> dict[str, Any]:
