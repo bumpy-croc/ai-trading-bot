@@ -15,6 +15,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.engines.shared.side_utils import is_long, to_side_string
+
 if TYPE_CHECKING:
     from src.position_management.partial_manager import PartialExitPolicy
 
@@ -164,7 +166,7 @@ class PartialOperationsManager:
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
-            if side == "long":
+            if is_long(side):
                 current_pnl_pct = (current_price - entry_price) / entry_price
             else:
                 current_pnl_pct = (entry_price - current_price) / entry_price
@@ -229,7 +231,7 @@ class PartialOperationsManager:
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
-            if side == "long":
+            if is_long(side):
                 current_pnl_pct = (current_price - entry_price) / entry_price
             else:
                 current_pnl_pct = (entry_price - current_price) / entry_price
@@ -273,9 +275,7 @@ class PartialOperationsManager:
         side = getattr(position, "side", None)
         if side is None:
             return "long"
-        if hasattr(side, "value"):
-            return side.value.lower()
-        return str(side).lower()
+        return to_side_string(side)
 
 
 __all__ = [

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.engines.shared.side_utils import is_long, to_side_string
+
 
 @dataclass
 class CostResult:
@@ -88,12 +90,14 @@ class CostCalculator:
         if notional < 0:
             raise ValueError(f"Notional must be non-negative, got {notional}")
 
-        side_lower = side.lower() if isinstance(side, str) else str(side).lower()
-        if side_lower not in ("long", "short"):
+        # Validate and normalize side using shared utility
+        try:
+            side_str = to_side_string(side)
+        except ValueError:
             raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
 
         # Apply slippage adversely for entry
-        if side_lower == "long":
+        if is_long(side_str):
             executed_price = price * (1 + self.slippage_rate)
         else:  # short
             executed_price = price * (1 - self.slippage_rate)
@@ -141,12 +145,14 @@ class CostCalculator:
         if notional < 0:
             raise ValueError(f"Notional must be non-negative, got {notional}")
 
-        side_lower = side.lower() if isinstance(side, str) else str(side).lower()
-        if side_lower not in ("long", "short"):
+        # Validate and normalize side using shared utility
+        try:
+            side_str = to_side_string(side)
+        except ValueError:
             raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
 
         # Apply slippage adversely for exit (opposite of entry)
-        if side_lower == "long":
+        if is_long(side_str):
             executed_price = price * (1 - self.slippage_rate)
         else:  # short
             executed_price = price * (1 + self.slippage_rate)
