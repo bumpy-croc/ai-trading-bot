@@ -371,6 +371,11 @@ class DatabaseManager:
         if self.session_factory is None:
             raise ValueError("Session factory not initialized")
 
+        # Check pool health before acquiring connection for critical operations
+        # This provides early warning if pool is near exhaustion
+        if timeout_ms <= QueryTimeout.CRITICAL_READ:
+            self.check_pool_health()
+
         session = self.session_factory()
         try:
             # Set statement_timeout for this session using SET LOCAL (transaction-scoped)
@@ -383,6 +388,36 @@ class DatabaseManager:
             raise
         finally:
             session.close()
+
+    def check_pool_health(self) -> dict[str, int]:
+        """Check database connection pool health and warn if near exhaustion.
+
+        Returns:
+            Dictionary with pool statistics (size, checked_out, overflow, etc.)
+        """
+        if self.engine is None:
+            return {"error": "Engine not initialized"}
+
+        pool = self.engine.pool
+        stats = {
+            "size": pool.size(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "total_available": pool.size() - pool.checkedout() + (20 - pool.overflow()),
+        }
+
+        # Warn if pool is >80% utilized (high contention risk)
+        utilization_pct = (stats["checked_out"] / (pool.size() + 20)) * 100
+        if utilization_pct > 80:
+            logger.warning(
+                "Database pool near exhaustion: %d/%d connections in use (%.1f%% utilization). "
+                "High contention risk - critical operations may block.",
+                stats["checked_out"],
+                pool.size() + 20,
+                utilization_pct,
+            )
+
+        return stats
 
     def test_connection(self) -> bool:
         """
