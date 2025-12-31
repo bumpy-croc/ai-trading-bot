@@ -7,7 +7,9 @@ from src.strategies.components.risk_adapter import CoreRiskAdapter
 from tests.mocks import MockDatabaseManager
 
 
-class DummyComponent:
+class DummySignalGenerator:
+    """Mock signal generator with required interface for Strategy validation."""
+
     def __init__(self, name: str) -> None:
         self.name = name
         self.warmup_period = 0
@@ -15,9 +17,24 @@ class DummyComponent:
     def get_feature_generators(self):  # pragma: no cover - interface compatibility
         return []
 
+    def generate_signal(self, *args, **kwargs):  # pragma: no cover - required interface
+        return None
 
-class DummySizer(DummyComponent):
+
+class DummySizer:
+    """Mock position sizer with required interface for Strategy validation."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.warmup_period = 0
+
+    def get_feature_generators(self):  # pragma: no cover - interface compatibility
+        return []
+
     def size_position(self, *args, **kwargs):  # pragma: no cover - interface compatibility
+        return 0.0
+
+    def calculate_size(self, *args, **kwargs):  # pragma: no cover - required interface
         return 0.0
 
 
@@ -26,7 +43,7 @@ def _build_component_strategy(risk_params: RiskParameters) -> ComponentStrategy:
     adapter = CoreRiskAdapter(core_manager)
     return ComponentStrategy(
         name="test_component",
-        signal_generator=DummyComponent("signal"),
+        signal_generator=DummySignalGenerator("signal"),
         risk_manager=adapter,
         position_sizer=DummySizer("sizer"),
         regime_detector=None,

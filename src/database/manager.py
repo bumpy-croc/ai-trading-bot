@@ -385,10 +385,11 @@ class DatabaseManager:
 
         session = self.session_factory()
         try:
-            # Set statement_timeout for this session using SET LOCAL (transaction-scoped)
+            # Set statement_timeout for PostgreSQL sessions (not supported by SQLite)
             # This overrides the connection-level default timeout
             # Safe to use f-string here because timeout_ms is validated as positive int above
-            session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            if self.engine and self.engine.dialect.name == "postgresql":
+                session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
             yield session
         except Exception as e:
             session.rollback()
@@ -402,11 +403,21 @@ class DatabaseManager:
 
         Returns:
             Dictionary with pool statistics (size, checked_out, overflow, etc.)
+
+        Note:
+            Only works with QueuePool (PostgreSQL). StaticPool (SQLite) doesn't
+            support pool metrics and will return empty stats.
         """
         if self.engine is None:
             return {"error": "Engine not initialized"}
 
         pool = self.engine.pool
+
+        # StaticPool (used by SQLite) doesn't have size/checkedout/overflow methods
+        # Only perform pool health checks for QueuePool (PostgreSQL)
+        if not hasattr(pool, "size") or not hasattr(pool, "checkedout"):
+            return {"skipped": "Pool type does not support health checks"}
+
         stats = {
             "size": pool.size(),
             "checked_out": pool.checkedout(),

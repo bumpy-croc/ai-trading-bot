@@ -38,11 +38,12 @@ def mock_postgresql_db():
         mock_engine.connect.return_value.__exit__ = Mock(return_value=None)
 
         mock_engine.pool = Mock()
-        mock_engine.pool.size = 5
-        mock_engine.pool.checkedin = 2
-        mock_engine.pool.checkedout = 3
-        mock_engine.pool.overflow = 1
-        mock_engine.pool.invalid = 0
+        # Pool methods are callable in SQLAlchemy, not properties
+        mock_engine.pool.size = Mock(return_value=5)
+        mock_engine.pool.checkedin = Mock(return_value=2)
+        mock_engine.pool.checkedout = Mock(return_value=3)
+        mock_engine.pool.overflow = Mock(return_value=1)
+        mock_engine.pool.invalid = Mock(return_value=0)
         mock_engine.pool.status.return_value = "Pool status"
         mock_engine.pool.dispose = Mock()
 
