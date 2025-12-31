@@ -6,6 +6,7 @@ the trading engine when orders fill, partially fill, or get cancelled.
 """
 
 import logging
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -161,18 +162,28 @@ class OrderTracker:
 
         if status == OrderStatus.FILLED:
             # Validate avg_price for fills to prevent corrupt P&L calculations
-            if not isinstance(avg_price, int | float) or avg_price <= 0:
+            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            if (
+                not isinstance(avg_price, int | float)
+                or math.isnan(float(avg_price))
+                or avg_price <= 0
+            ):
                 logger.error(
-                    f"Invalid average price {avg_price} for filled order {order_id} - "
+                    f"Invalid average price {avg_price} (NaN or <= 0) for filled order {order_id} - "
                     "skipping fill callback to prevent corrupt P&L"
                 )
                 # Don't stop tracking - keep polling until we get valid price
                 return
 
             # Validate filled_qty to prevent division by zero and corrupt position tracking
-            if not isinstance(filled_qty, int | float) or filled_qty <= 0:
+            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            if (
+                not isinstance(filled_qty, int | float)
+                or math.isnan(float(filled_qty))
+                or filled_qty <= 0
+            ):
                 logger.error(
-                    f"Invalid filled quantity {filled_qty} for order {order_id} - "
+                    f"Invalid filled quantity {filled_qty} (NaN or <= 0) for order {order_id} - "
                     "skipping fill callback to prevent corrupt position tracking"
                 )
                 # Don't stop tracking - keep polling until we get valid quantity
@@ -188,17 +199,27 @@ class OrderTracker:
 
         elif status == OrderStatus.PARTIALLY_FILLED:
             # Validate avg_price for partial fills to prevent corrupt P&L calculations
-            if not isinstance(avg_price, int | float) or avg_price <= 0:
+            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            if (
+                not isinstance(avg_price, int | float)
+                or math.isnan(float(avg_price))
+                or avg_price <= 0
+            ):
                 logger.error(
-                    f"Invalid average price {avg_price} for partial fill order {order_id} - "
+                    f"Invalid average price {avg_price} (NaN or <= 0) for partial fill order {order_id} - "
                     "skipping partial fill callback to prevent corrupt P&L"
                 )
                 return
 
             # Validate filled_qty for partial fills to prevent corrupt position tracking
-            if not isinstance(filled_qty, int | float) or filled_qty <= 0:
+            # Check for NaN explicitly since NaN passes isinstance but corrupts calculations
+            if (
+                not isinstance(filled_qty, int | float)
+                or math.isnan(float(filled_qty))
+                or filled_qty <= 0
+            ):
                 logger.error(
-                    f"Invalid filled quantity {filled_qty} for partial fill {order_id} - "
+                    f"Invalid filled quantity {filled_qty} (NaN or <= 0) for partial fill {order_id} - "
                     "skipping partial fill callback"
                 )
                 return
