@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import DEFAULT_MAX_POSITION_SIZE
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import (
     LivePosition,
@@ -86,7 +87,7 @@ class LiveExitHandler:
         time_exit_policy: TimeExitPolicy | None = None,
         partial_manager: PartialOperationsManager | None = None,
         use_high_low_for_stops: bool = True,
-        max_position_size: float = 0.1,
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize exit handler.
