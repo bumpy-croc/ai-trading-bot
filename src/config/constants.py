@@ -62,6 +62,8 @@ DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss
 DEFAULT_TAKE_PROFIT_PCT = 0.04  # 4% take profit
 DEFAULT_MAX_POSITION_SIZE = 0.1  # 10% max position size
 DEFAULT_BASE_RISK_PER_TRADE = 0.02  # 2% risk per trade
+DEFAULT_MAX_RISK_PER_TRADE = 0.03  # 3% maximum risk per trade
+DEFAULT_MAX_DAILY_RISK = 0.06  # 6% maximum daily risk
 DEFAULT_FEE_RATE = 0.001  # 0.1% trading fee
 DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
 
