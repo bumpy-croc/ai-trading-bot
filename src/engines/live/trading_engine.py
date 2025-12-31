@@ -2070,7 +2070,9 @@ class LiveTradingEngine:
             except Exception:
                 if stop_loss is None:
                     stop_loss = float(current_price) * (
-                        0.95 if entry_side == PositionSide.LONG else 1.05
+                        (1 - DEFAULT_STOP_LOSS_PCT)
+                        if entry_side == PositionSide.LONG
+                        else (1 + DEFAULT_STOP_LOSS_PCT)
                     )
             if take_profit is None:
                 tp_pct = self._resolve_take_profit_pct()
@@ -2099,7 +2101,9 @@ class LiveTradingEngine:
             except Exception as e:
                 self.logger.debug(f"Component stop loss calculation failed: {e}")
                 stop_loss = float(current_price) * (
-                    0.95 if entry_side == PositionSide.LONG else 1.05
+                    (1 - DEFAULT_STOP_LOSS_PCT)
+                    if entry_side == PositionSide.LONG
+                    else (1 + DEFAULT_STOP_LOSS_PCT)
                 )
             tp_pct = self._resolve_take_profit_pct()
             take_profit = (
