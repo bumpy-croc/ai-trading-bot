@@ -25,6 +25,7 @@ from .ensemble import SimpleEnsembleAggregator
 from .exceptions import (
     FeatureExtractionError,
     InvalidInputError,
+    ModelInferenceError,
     ModelNotFoundError,
 )
 from .features.pipeline import FeaturePipeline
@@ -448,10 +449,32 @@ class PredictionEngine:
 
         num_windows = windows.shape[0]
         preds_norm = np.empty((num_windows,), dtype=np.float32)
+
+        # Configure timeout for series prediction
+        timeout_seconds = (
+            self.config.max_prediction_latency
+            if hasattr(self.config, "max_prediction_latency")
+            and isinstance(self.config.max_prediction_latency, (int, float))
+            else 30.0
+        )
+
         for start in range(0, num_windows, batch_size):
             end = min(start + batch_size, num_windows)
             batch = windows[start:end]
-            output = session.run(None, {input_name: batch})
+
+            # Wrap session.run with timeout to prevent hanging on large batches
+            try:
+                output = run_with_timeout(
+                    session.run,
+                    args=(None, {input_name: batch}),
+                    timeout_seconds=timeout_seconds,
+                    operation_name=f"Series prediction batch {start}-{end}",
+                )
+            except InfraTimeoutError as timeout_err:
+                raise ModelInferenceError(
+                    f"Series prediction batch timeout after {timeout_seconds}s"
+                ) from timeout_err
+
             out = output[0]
             preds_norm[start:end] = out.reshape(out.shape[0], -1)[:, 0].astype(np.float32)
 
@@ -556,8 +579,24 @@ class PredictionEngine:
                 self._total_feature_extraction_time += feature_time
                 self._feature_extraction_count += 1
 
-                # Make prediction with pre-loaded model
-                prediction = model.predict(prepared_features)
+                # Make prediction with pre-loaded model (with timeout protection)
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else 30.0
+                )
+                try:
+                    prediction = run_with_timeout(
+                        model.predict,
+                        args=(prepared_features,),
+                        timeout_seconds=timeout_seconds,
+                        operation_name=f"Batch prediction {i+1}/{len(data_batches)}",
+                    )
+                except InfraTimeoutError as timeout_err:
+                    raise ModelInferenceError(
+                        f"Batch prediction timeout after {timeout_seconds}s"
+                    ) from timeout_err
 
                 # Apply rolling MinMax denormalization if needed
                 denorm_price = self._apply_rolling_denormalization(prediction.price, bundle, data)
