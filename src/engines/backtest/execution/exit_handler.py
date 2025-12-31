@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 from src.engines.backtest.models import Trade
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
@@ -31,8 +32,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Maximum partial exits to process per candle (defense-in-depth against malformed policies)
-MAX_PARTIAL_EXITS_PER_CYCLE = 10
+# Use centralized constant for partial exits limit
+MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 
 
 @dataclass

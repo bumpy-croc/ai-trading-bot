@@ -16,6 +16,7 @@ import pandas as pd
 
 from src.config.constants import (
     DEFAULT_MAX_FILLED_PRICE_DEVIATION,
+    DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
     DEFAULT_MAX_POSITION_SIZE,
 )
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
@@ -39,9 +40,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Maximum partial exits to process per cycle (defense-in-depth against malformed policies).
-# Ten caps worst-case overhead while still supporting typical multi-target exit ladders.
-MAX_PARTIAL_EXITS_PER_CYCLE = 10
+# Use centralized constant for partial exits limit (defense-in-depth against malformed policies)
+MAX_PARTIAL_EXITS_PER_CYCLE = DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
 
 
 @dataclass

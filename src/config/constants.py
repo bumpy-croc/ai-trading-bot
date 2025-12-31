@@ -139,6 +139,7 @@ DEFAULT_VOLATILITY_RISK_MULTIPLIERS = (0.7, 1.3)  # (high_vol, low_vol)
 DEFAULT_MIN_TRADES_FOR_DYNAMIC_ADJUSTMENT = 10
 
 # Partial operations defaults (partial exits and scale-ins)
+DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE = 10  # Defense-in-depth limit for partial exits per cycle
 DEFAULT_PARTIAL_EXIT_TARGETS = [0.03, 0.06, 0.10]  # 3%, 6%, 10%
 DEFAULT_PARTIAL_EXIT_SIZES = [0.25, 0.25, 0.50]  # 25%, 25%, 50% of original size
 DEFAULT_SCALE_IN_THRESHOLDS = [0.02, 0.05]  # 2%, 5%
