@@ -32,6 +32,7 @@ from src.config.constants import (
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_SLEEP_POLL_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
@@ -1548,7 +1549,7 @@ class LiveTradingEngine:
                                         f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                                     )
                                     short_stop_loss = (
-                                        current_price * 1.05
+                                        current_price * (1 + DEFAULT_STOP_LOSS_PCT)
                                     )  # Default 5% stop for short
                                     short_take_profit = current_price * (
                                         1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
@@ -2131,7 +2132,7 @@ class LiveTradingEngine:
                 self.logger.error(
                     f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                 )
-                stop_loss = current_price * 0.95  # Default 5% stop for long
+                stop_loss = current_price * (1 - DEFAULT_STOP_LOSS_PCT)  # Default 5% stop for long
                 take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             entry_side = PositionSide.LONG
 

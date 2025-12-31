@@ -301,8 +301,8 @@ class EntryHandler:
             current_price=current_price,
             current_time=current_time,
             balance=balance,
-            stop_loss=signal.stop_loss or current_price * 0.95,
-            take_profit=signal.take_profit or current_price * 1.04,
+            stop_loss=signal.stop_loss or current_price * (1 - DEFAULT_STOP_LOSS_PCT),
+            take_profit=signal.take_profit or current_price * (1 + DEFAULT_TAKE_PROFIT_PCT),
             component_notional=signal.component_notional,
         )
 
