@@ -273,6 +273,7 @@ class LiveTradingEngine:
         self.last_data_timestamp = None
         self.initial_balance = initial_balance
         self.current_balance = initial_balance  # Will be updated during startup
+        self._balance_lock = threading.Lock()  # Protect concurrent balance modifications
         self.max_position_size = max_position_size
         self.enable_live_trading = enable_live_trading
         # Execution realism (parity with backtest)
@@ -1209,13 +1210,14 @@ class LiveTradingEngine:
                     balance_sync = sync_result.data.get("balance_sync", {})
                     if balance_sync.get("corrected", False):
                         corrected_balance = balance_sync.get("new_balance", self.current_balance)
-                        self.current_balance = corrected_balance
+                        # Atomic balance update with lock to prevent race conditions
+                        with self._balance_lock:
+                            self.current_balance = corrected_balance
+                            self._pending_balance_correction = True
+                            self._pending_corrected_balance = corrected_balance
                         logger.info(
                             f"💰 Balance corrected from exchange: ${corrected_balance:,.2f}"
                         )
-                        # Defer DB update until session is created
-                        self._pending_balance_correction = True
-                        self._pending_corrected_balance = corrected_balance
                 else:
                     logger.warning(f"⚠️ Account synchronization failed: {sync_result.message}")
 
@@ -1226,24 +1228,26 @@ class LiveTradingEngine:
                 logger.error(f"❌ Account synchronization error: {e}", exc_info=True)
 
         # If a balance correction was pending, log it now (outside session creation conditional)
-        if (
-            getattr(self, "_pending_balance_correction", False)
-            and self.trading_session_id is not None
-        ):
-            corrected_balance = self._pending_corrected_balance
-            self.db_manager.update_balance(
-                corrected_balance, "account_sync", "system", self.trading_session_id
-            )
-            self._pending_balance_correction = False
-            self._pending_corrected_balance = None
-            logger.info(f"💰 Balance corrected in database: ${corrected_balance:,.2f}")
-        elif getattr(self, "_pending_balance_correction", False):
-            # Balance correction was pending but no session ID available
-            logger.warning(
-                "⚠️ Balance correction pending but no trading session ID available - skipping database update"
-            )
-            self._pending_balance_correction = False
-            self._pending_corrected_balance = None
+        # Use lock to ensure atomic check and update
+        with self._balance_lock:
+            if (
+                getattr(self, "_pending_balance_correction", False)
+                and self.trading_session_id is not None
+            ):
+                corrected_balance = self._pending_corrected_balance
+                self.db_manager.update_balance(
+                    corrected_balance, "account_sync", "system", self.trading_session_id
+                )
+                self._pending_balance_correction = False
+                self._pending_corrected_balance = None
+                logger.info(f"💰 Balance corrected in database: ${corrected_balance:,.2f}")
+            elif getattr(self, "_pending_balance_correction", False):
+                # Balance correction was pending but no session ID available
+                logger.warning(
+                    "⚠️ Balance correction pending but no trading session ID available - skipping database update"
+                )
+                self._pending_balance_correction = False
+                self._pending_corrected_balance = None
 
         # Set session ID on strategy for logging
         if hasattr(self.strategy, "session_id"):
