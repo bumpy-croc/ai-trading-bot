@@ -360,9 +360,19 @@ class LiveExecutionEngine:
         Returns:
             Order ID if successful, None otherwise.
         """
+        # CRITICAL VALIDATION: Never allow live trading mode without exchange interface
         if self.exchange_interface is None:
-            logger.warning("No exchange interface configured - using paper order ID")
-            return f"real_{int(time.time() * 1000)}"
+            if self.enable_live_trading:
+                # Fail loudly - this is a configuration error that must be fixed
+                logger.critical(
+                    "CRITICAL: Live trading enabled but no exchange interface configured! "
+                    "This would create fake orders. Aborting order placement."
+                )
+                return None
+            else:
+                # Paper trading mode - this is expected
+                logger.debug("Paper trading mode - generating simulated order ID")
+                return f"paper_{int(time.time() * 1000)}"
 
         try:
             order_side = OrderSide.BUY if side == PositionSide.LONG else OrderSide.SELL
