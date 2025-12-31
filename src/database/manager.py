@@ -1789,7 +1789,8 @@ class DatabaseManager:
         if not session_id:
             return []
 
-        with self.get_session() as session:
+        # Use ANALYTICS timeout - balance history is non-critical read
+        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
             balances = (
                 session.query(AccountBalance)
                 .filter(AccountBalance.session_id == session_id)
@@ -1924,8 +1925,9 @@ class DatabaseManager:
 
         session = None
         try:
-            # Use a single session for the entire atomic operation
-            session = next(self.get_session())
+            # Use a single session for the entire atomic operation with WRITE timeout
+            # Critical balance updates must complete within timeout to prevent deadlocks
+            session = next(self.get_session_with_timeout(QueryTimeout.WRITE))
 
             # Begin nested transaction (SAVEPOINT) for atomicity
             with session.begin_nested():
