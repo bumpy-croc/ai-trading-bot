@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
+from .regime_utils import RegimeMultiplierCalculator, RegimeMultiplierConfig
+
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
     from .runtime import FeatureGeneratorSpec
@@ -202,26 +204,17 @@ class FixedFractionSizer(PositionSizer):
         return self.apply_bounds_checking(final_size, balance)
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
-        """Get position size multiplier based on regime"""
-        multiplier = 1.0
+        """Get position size multiplier based on regime.
 
-        # Reduce size in high volatility
-        if hasattr(regime, "volatility") and regime.volatility.value == "high_vol":
-            multiplier *= 0.8
-
-        # Reduce size in bear markets
-        if hasattr(regime, "trend") and regime.trend.value == "trend_down":
-            multiplier *= 0.7
-
-        # Reduce size in range markets
-        if hasattr(regime, "trend") and regime.trend.value == "range":
-            multiplier *= 0.9
-
-        # Reduce size when regime confidence is low
-        if hasattr(regime, "confidence") and regime.confidence < 0.5:
-            multiplier *= 0.8
-
-        return max(0.1, multiplier)  # Minimum 10% of base size
+        Uses shared RegimeMultiplierCalculator for consistent behavior
+        across all position sizers.
+        """
+        # Use conservative config (no bull boost) for fixed fraction
+        config = RegimeMultiplierConfig(
+            bull_high_conf_multiplier=1.0,  # Don't boost in bull markets
+        )
+        calculator = RegimeMultiplierCalculator(config)
+        return calculator.calculate_conservative(regime)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get fixed fraction sizer parameters"""
@@ -305,32 +298,17 @@ class ConfidenceWeightedSizer(PositionSizer):
         return self.apply_bounds_checking(adjusted_size, balance)
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
-        """Get position size multiplier based on regime"""
-        multiplier = 1.0
+        """Get position size multiplier based on regime.
 
-        # Increase size in bull markets with high confidence
-        if (
-            hasattr(regime, "trend")
-            and regime.trend.value == "trend_up"
-            and hasattr(regime, "confidence")
-            and regime.confidence > 0.7
-        ):
-            multiplier *= 1.2
-
-        # Reduce size in bear markets
-        if hasattr(regime, "trend") and regime.trend.value == "trend_down":
-            multiplier *= 0.6
-
-        # Reduce size in high volatility
-        if hasattr(regime, "volatility") and regime.volatility.value == "high_vol":
-            multiplier *= 0.8
-
-        # Scale by regime confidence
-        if hasattr(regime, "confidence"):
-            regime_conf_mult = max(0.5, regime.confidence)
-            multiplier *= regime_conf_mult
-
-        return max(0.1, multiplier)
+        Uses shared RegimeMultiplierCalculator for consistent behavior.
+        ConfidenceWeightedSizer uses more aggressive config with confidence scaling.
+        """
+        config = RegimeMultiplierConfig(
+            bear_multiplier=0.6,  # More aggressive reduction in bear markets
+            scale_by_confidence=True,  # Scale by regime confidence
+        )
+        calculator = RegimeMultiplierCalculator(config)
+        return calculator.calculate(regime)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get confidence-weighted sizer parameters"""
@@ -487,27 +465,18 @@ class KellySizer(PositionSizer):
             self.avg_loss = np.mean([trade["pnl_pct"] for trade in losses])
 
     def _get_regime_multiplier(self, regime: "RegimeContext") -> float:
-        """Get position size multiplier based on regime"""
-        multiplier = 1.0
+        """Get position size multiplier based on regime.
 
-        # Increase size in strong bull markets
-        if (
-            hasattr(regime, "trend")
-            and regime.trend.value == "trend_up"
-            and hasattr(regime, "confidence")
-            and regime.confidence > 0.8
-        ):
-            multiplier *= 1.1
-
-        # Reduce size in bear markets
-        if hasattr(regime, "trend") and regime.trend.value == "trend_down":
-            multiplier *= 0.7
-
-        # Reduce size in high volatility (Kelly assumes constant volatility)
-        if hasattr(regime, "volatility") and regime.volatility.value == "high_vol":
-            multiplier *= 0.8
-
-        return max(0.2, multiplier)
+        Uses shared RegimeMultiplierCalculator for consistent behavior.
+        Kelly uses conservative settings with higher minimum floor.
+        """
+        config = RegimeMultiplierConfig(
+            bull_high_conf_multiplier=1.1,  # Slight boost in strong bull
+            high_confidence_threshold=0.8,  # Higher threshold for Kelly
+            min_multiplier=0.2,  # Higher floor for Kelly (20%)
+        )
+        calculator = RegimeMultiplierCalculator(config)
+        return calculator.calculate(regime)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get Kelly sizer parameters"""
@@ -622,23 +591,26 @@ class RegimeAdaptiveSizer(PositionSizer):
         return self.apply_bounds_checking(adjusted_size, balance, max_fraction=max_fraction)
 
     def _get_regime_multiplier(self, regime: Optional["RegimeContext"]) -> float:
-        """Get position size multiplier based on current regime"""
+        """Get position size multiplier based on current regime.
+
+        Uses RegimeHelper for safe regime access, with custom multiplier lookup.
+        """
+        from .regime_utils import RegimeHelper
+
         if regime is None:
             return self.regime_multipliers["unknown"]
 
-        # Determine regime key based on trend and volatility
-        trend_key = "unknown"
-        if hasattr(regime, "trend"):
-            if regime.trend.value == "trend_up":
-                trend_key = "bull"
-            elif regime.trend.value == "trend_down":
-                trend_key = "bear"
-            else:
-                trend_key = "range"
+        # Use RegimeHelper for safe trend extraction
+        trend = RegimeHelper.get_trend(regime)
+        trend_key = {
+            "trend_up": "bull",
+            "trend_down": "bear",
+            "range": "range",
+        }.get(trend or "", "unknown")
 
-        vol_key = "high_vol"
-        if hasattr(regime, "volatility"):
-            vol_key = "low_vol" if regime.volatility.value == "low_vol" else "high_vol"
+        # Use RegimeHelper for safe volatility extraction
+        volatility = RegimeHelper.get_volatility(regime)
+        vol_key = "low_vol" if volatility == "low_vol" else "high_vol"
 
         regime_key = f"{trend_key}_{vol_key}"
 
