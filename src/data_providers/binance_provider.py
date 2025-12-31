@@ -915,12 +915,20 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             # Round prices to valid tick size
             symbol_info = self.get_symbol_info(symbol)
             if symbol_info:
-                tick_size = symbol_info.get("tick_size", 0.01)
+                # Validate tick_size is numeric before division to prevent TypeError
+                tick_size_raw = symbol_info.get("tick_size", 0.01)
+                tick_size = (
+                    float(tick_size_raw) if isinstance(tick_size_raw, (int, float)) else 0.01
+                )
                 if tick_size > 0:
                     stop_price = round(stop_price / tick_size) * tick_size
                     limit_price = round(limit_price / tick_size) * tick_size
 
-                step_size = symbol_info.get("step_size", 0.00001)
+                # Validate step_size is numeric before division to prevent TypeError
+                step_size_raw = symbol_info.get("step_size", 0.00001)
+                step_size = (
+                    float(step_size_raw) if isinstance(step_size_raw, (int, float)) else 0.00001
+                )
                 if step_size > 0:
                     quantity = round(quantity / step_size) * step_size
 
