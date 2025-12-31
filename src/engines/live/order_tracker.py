@@ -225,17 +225,45 @@ class OrderTracker:
                 return
 
             new_filled = filled_qty - tracked.last_filled_qty
-            if new_filled > 0:
+
+            # CRITICAL: Always update last_filled_qty, even if delta is non-positive
+            # This prevents infinite loops if exchange reports decreasing fills
+            with self._lock:
+                if order_id not in self._pending_orders:
+                    logger.warning(
+                        "Order %s no longer tracked during partial fill processing", order_id
+                    )
+                    return
+
+                # Detect anomalous fill quantity changes
+                if new_filled < 0:
+                    logger.critical(
+                        "ANOMALY: Filled quantity decreased for order %s: %.8f -> %.8f (delta: %.8f). "
+                        "This indicates exchange API inconsistency. Updating tracker to prevent divergence.",
+                        order_id,
+                        tracked.last_filled_qty,
+                        filled_qty,
+                        new_filled,
+                    )
+                    # Update to prevent infinite loop, but don't trigger callback
+                    self._pending_orders[order_id].last_filled_qty = filled_qty
+                    return
+
+                if new_filled == 0:
+                    logger.debug("Partial fill status with no quantity change for %s", order_id)
+                    return
+
+                # Normal case: positive fill delta
                 logger.info(
-                    f"Partial fill: {order_id} {tracked.symbol} "
-                    f"+{new_filled} @ {avg_price}"
+                    f"Partial fill: {order_id} {tracked.symbol} +{new_filled} @ {avg_price}"
                 )
                 if self.on_partial_fill:
-                    self.on_partial_fill(order_id, tracked.symbol, new_filled, avg_price)
-                # Update tracked quantity
-                with self._lock:
-                    if order_id in self._pending_orders:
-                        self._pending_orders[order_id].last_filled_qty = filled_qty
+                    try:
+                        self.on_partial_fill(order_id, tracked.symbol, new_filled, avg_price)
+                    except Exception as e:
+                        logger.error("Partial fill callback failed for %s: %s", order_id, e)
+
+                self._pending_orders[order_id].last_filled_qty = filled_qty
 
         elif status in (
             OrderStatus.CANCELLED,
