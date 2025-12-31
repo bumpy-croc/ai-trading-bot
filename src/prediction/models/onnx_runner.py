@@ -132,7 +132,16 @@ class OnnxRunner:
 
             def _read_metadata():
                 with open(metadata_path) as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    # Validate metadata is a dictionary
+                    if not isinstance(data, dict):
+                        logging.warning(
+                            "Metadata file %s contains non-dict JSON (type: %s) - using defaults",
+                            metadata_path,
+                            type(data).__name__,
+                        )
+                        return {"sequence_length": 120, "feature_count": 5, "normalization_params": {}}
+                    return data
 
             return run_with_timeout(
                 _read_metadata,
