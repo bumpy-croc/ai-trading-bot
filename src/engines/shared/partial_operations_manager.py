@@ -12,6 +12,7 @@ ARCHITECTURE:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -164,6 +165,14 @@ class PartialOperationsManager:
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
+            # Validate current_price to prevent division errors
+            if current_price <= 0 or not math.isfinite(current_price):
+                logger.error(
+                    "Invalid current_price %.8f for partial exit PnL calculation",
+                    current_price,
+                )
+                return PartialExitDecision()
+
             if side == "long":
                 current_pnl_pct = (current_price - entry_price) / entry_price
             else:
@@ -229,6 +238,14 @@ class PartialOperationsManager:
 
         # Calculate PnL percentage if not provided
         if current_pnl_pct is None:
+            # Validate current_price to prevent division errors
+            if current_price <= 0 or not math.isfinite(current_price):
+                logger.error(
+                    "Invalid current_price %.8f for scale-in PnL calculation",
+                    current_price,
+                )
+                return ScaleInDecision()
+
             if side == "long":
                 current_pnl_pct = (current_price - entry_price) / entry_price
             else:
