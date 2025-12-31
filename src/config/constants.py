@@ -57,6 +57,14 @@ DEFAULT_DRAWDOWN_THRESHOLD = 0.15
 # Error Handling Constants
 DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
 
+# Core Trading Defaults (used across backtest and live engines)
+DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss
+DEFAULT_TAKE_PROFIT_PCT = 0.04  # 4% take profit
+DEFAULT_MAX_POSITION_SIZE = 0.1  # 10% max position size
+DEFAULT_BASE_RISK_PER_TRADE = 0.02  # 2% risk per trade
+DEFAULT_FEE_RATE = 0.001  # 0.1% trading fee
+DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
+
 # Trading Engine Constants
 DEFAULT_MAX_HOLDING_HOURS = 336  # 14 days
 DEFAULT_END_OF_DAY_FLAT = False

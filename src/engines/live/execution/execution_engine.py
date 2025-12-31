@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
@@ -74,8 +75,8 @@ class LiveExecutionEngine:
 
     def __init__(
         self,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         enable_live_trading: bool = False,
         exchange_interface: Any = None,
     ) -> None:

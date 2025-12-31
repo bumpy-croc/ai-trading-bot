@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import (
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
+)
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
@@ -68,7 +73,7 @@ class LiveEntryHandler:
         risk_manager: RiskManager | None = None,
         component_strategy: ComponentStrategy | None = None,
         dynamic_risk_manager: DynamicRiskManager | None = None,
-        max_position_size: float = 0.1,
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         default_take_profit_pct: float | None = None,
     ) -> None:
         """Initialize entry handler.
@@ -317,8 +322,8 @@ class LiveEntryHandler:
             Tuple of (stop_loss_price, take_profit_price).
         """
         # Default percentages
-        default_sl_pct = 0.05  # 5%
-        tp_pct = self.default_take_profit_pct or 0.04  # 4%
+        default_sl_pct = DEFAULT_STOP_LOSS_PCT
+        tp_pct = self.default_take_profit_pct or DEFAULT_TAKE_PROFIT_PCT
 
         # Try to get stop loss from strategy
         sl_pct = default_sl_pct

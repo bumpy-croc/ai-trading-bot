@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
 from src.engines.backtest.models import ActiveTrade
 from src.engines.shared.cost_calculator import CostCalculator
 from src.utils.price_targets import PriceTargetCalculator
@@ -39,8 +40,8 @@ class ExecutionEngine:
 
     def __init__(
         self,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         use_next_bar_execution: bool = False,
     ) -> None:
         """Initialize execution engine with trading costs.
