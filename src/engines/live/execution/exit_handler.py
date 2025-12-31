@@ -126,6 +126,12 @@ class LiveExitHandler:
     ) -> LiveExitCheck:
         """Check all exit conditions for a position.
 
+        Priority order matches backtest engine for parity:
+        1. Stop loss (highest priority - risk management)
+        2. Take profit
+        3. Time limit
+        4. Strategy signal (lowest priority)
+
         Args:
             position: Position to check.
             current_price: Current market price.
@@ -137,19 +143,7 @@ class LiveExitHandler:
         Returns:
             LiveExitCheck with exit decision and reason.
         """
-        # Check strategy exit signal first
-        if runtime_decision is not None and component_strategy is not None:
-            should_exit, reason = self._check_strategy_exit(
-                position, current_price, runtime_decision, component_strategy
-            )
-            if should_exit:
-                return LiveExitCheck(
-                    should_exit=True,
-                    exit_reason=reason,
-                    limit_price=None,
-                )
-
-        # Check stop loss (priority over take profit)
+        # Check stop loss first (highest priority - risk management)
         if position.stop_loss is not None:
             if self._check_stop_loss(position, current_price, candle_high, candle_low):
                 return LiveExitCheck(
@@ -158,7 +152,7 @@ class LiveExitHandler:
                     limit_price=position.stop_loss,
                 )
 
-        # Check take profit
+        # Check take profit (second priority)
         if position.take_profit is not None:
             if self._check_take_profit(position, current_price, candle_high, candle_low):
                 return LiveExitCheck(
@@ -167,7 +161,7 @@ class LiveExitHandler:
                     limit_price=position.take_profit,
                 )
 
-        # Check time-based exit
+        # Check time-based exit (third priority)
         if self.time_exit_policy is not None:
             hit_time_exit, time_reason = self.time_exit_policy.check_time_exit_conditions(
                 position.entry_time, datetime.now(UTC)
@@ -176,6 +170,18 @@ class LiveExitHandler:
                 return LiveExitCheck(
                     should_exit=True,
                     exit_reason=time_reason or "Time exit",
+                    limit_price=None,
+                )
+
+        # Check strategy exit signal last (lowest priority)
+        if runtime_decision is not None and component_strategy is not None:
+            should_exit, reason = self._check_strategy_exit(
+                position, current_price, runtime_decision, component_strategy
+            )
+            if should_exit:
+                return LiveExitCheck(
+                    should_exit=True,
+                    exit_reason=reason,
                     limit_price=None,
                 )
 
