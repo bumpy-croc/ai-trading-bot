@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from src.data_providers.exchange_interface import ExchangeInterface, Order, OrderStatus
+from src.infrastructure.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,9 @@ class OrderTracker:
         self._lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
+        # Circuit breaker to handle exchange API failures gracefully
+        # Prevents resource exhaustion from repeated failing API calls
+        self._circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
 
     def track_order(self, order_id: str, symbol: str) -> None:
         """
@@ -145,7 +149,11 @@ class OrderTracker:
 
         for order_id, tracked in orders_to_check:
             try:
-                order = self.exchange.get_order(order_id, tracked.symbol)
+                # Use circuit breaker to prevent resource exhaustion during exchange outages
+                # If circuit is OPEN (too many failures), skip API call and log warning
+                order = self._circuit_breaker.call(
+                    self.exchange.get_order, order_id, tracked.symbol
+                )
                 if not order:
                     logger.warning(f"Could not fetch order {order_id} - may have expired")
                     continue
