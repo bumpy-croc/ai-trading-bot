@@ -211,8 +211,13 @@ class OrderTracker:
                 f"Order filled: {order_id} {tracked.symbol} "
                 f"qty={filled_qty} @ {avg_price}"
             )
+            # Call callback outside any lock to prevent deadlock
             if self.on_fill:
-                self.on_fill(order_id, tracked.symbol, filled_qty, avg_price)
+                try:
+                    self.on_fill(order_id, tracked.symbol, filled_qty, avg_price)
+                except Exception as e:
+                    logger.error("Fill callback failed for %s: %s", order_id, e)
+            # Stop tracking even if callback fails
             self.stop_tracking(order_id)
 
         elif status == OrderStatus.PARTIALLY_FILLED:
@@ -246,6 +251,8 @@ class OrderTracker:
 
             # CRITICAL: Always update last_filled_qty, even if delta is non-positive
             # This prevents infinite loops if exchange reports decreasing fills
+            # Validate and prepare callback parameters inside lock, but call callback outside
+            should_call_callback = False
             with self._lock:
                 if order_id not in self._pending_orders:
                     logger.warning(
@@ -275,13 +282,19 @@ class OrderTracker:
                 logger.info(
                     f"Partial fill: {order_id} {tracked.symbol} +{new_filled} @ {avg_price}"
                 )
-                if self.on_partial_fill:
-                    try:
-                        self.on_partial_fill(order_id, tracked.symbol, new_filled, avg_price)
-                    except Exception as e:
-                        logger.error("Partial fill callback failed for %s: %s", order_id, e)
+                should_call_callback = True
 
-                self._pending_orders[order_id].last_filled_qty = filled_qty
+            # Call callback OUTSIDE lock to prevent deadlock if callback accesses tracker
+            if should_call_callback and self.on_partial_fill:
+                try:
+                    self.on_partial_fill(order_id, tracked.symbol, new_filled, avg_price)
+                except Exception as e:
+                    logger.error("Partial fill callback failed for %s: %s", order_id, e)
+
+            # Update tracker state in separate lock scope to ensure it happens even if callback fails
+            with self._lock:
+                if order_id in self._pending_orders:
+                    self._pending_orders[order_id].last_filled_qty = filled_qty
 
         elif status in (
             OrderStatus.CANCELLED,
@@ -289,6 +302,11 @@ class OrderTracker:
             OrderStatus.EXPIRED,
         ):
             logger.warning(f"Order {status.value}: {order_id} {tracked.symbol}")
+            # Call callback outside any lock to prevent deadlock
             if self.on_cancel:
-                self.on_cancel(order_id, tracked.symbol)
+                try:
+                    self.on_cancel(order_id, tracked.symbol)
+                except Exception as e:
+                    logger.error("Cancel callback failed for %s: %s", order_id, e)
+            # Stop tracking even if callback fails to prevent memory leaks
             self.stop_tracking(order_id)
