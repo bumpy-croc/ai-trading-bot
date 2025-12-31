@@ -7,6 +7,7 @@ engineering, and model inference.
 """
 
 import hashlib
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -1010,6 +1011,16 @@ class PredictionEngine:
         window_data = input_data[target_feature].tail(window)
         window_min = float(window_data.min())
         window_max = float(window_data.max())
+
+        # Validate min/max are finite to prevent NaN propagation
+        if not math.isfinite(window_min) or not math.isfinite(window_max):
+            logger.error(
+                "Invalid window min/max (min=%.8f, max=%.8f) for denormalization - "
+                "input data contains NaN/inf. Returning raw normalized prediction.",
+                window_min,
+                window_max,
+            )
+            return normalized_price
 
         # Denormalize: real_price = normalized * (max - min) + min
         if window_max == window_min:
