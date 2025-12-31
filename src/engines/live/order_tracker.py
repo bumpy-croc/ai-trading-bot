@@ -64,6 +64,7 @@ class OrderTracker:
         self._pending_orders: dict[str, TrackedOrder] = {}
         self._lock = threading.Lock()
         self._running = False
+        self._stop_event = threading.Event()  # For clean, interruptible shutdown
         self._thread: threading.Thread | None = None
         # Circuit breaker to handle exchange API failures gracefully
         # Prevents resource exhaustion from repeated failing API calls
@@ -110,6 +111,7 @@ class OrderTracker:
             return
 
         self._running = True
+        self._stop_event.clear()  # Clear stop signal for new run
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
         logger.info(f"OrderTracker started (poll interval: {self.poll_interval}s)")
@@ -117,6 +119,7 @@ class OrderTracker:
     def stop(self) -> None:
         """Stop the background polling thread."""
         self._running = False
+        self._stop_event.set()  # Signal thread to wake up and exit
         if self._thread:
             self._thread.join(timeout=10)
             # Verify thread actually stopped after timeout
@@ -139,7 +142,9 @@ class OrderTracker:
                 self._check_orders()
             except Exception as e:
                 logger.error(f"Order tracking error: {e}")
-            time.sleep(self.poll_interval)
+            # Use Event.wait() instead of time.sleep() for interruptible sleep
+            # This allows stop() to immediately wake up the thread
+            self._stop_event.wait(self.poll_interval)
 
     def _check_orders(self) -> None:
         """Check status of all pending orders."""
