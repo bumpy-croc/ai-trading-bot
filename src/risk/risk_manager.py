@@ -14,6 +14,7 @@ from src.config.constants import (
     DEFAULT_CORRELATION_THRESHOLD,
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
+    DEFAULT_EXPOSURE_PRECISION_DECIMALS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
     DEFAULT_MAX_CORRELATED_RISK,
     DEFAULT_MAX_DAILY_RISK,
@@ -430,7 +431,7 @@ class RiskManager:
                 exposure = sum(
                     float(pos.get("size", 0.0)) for s, pos in self.positions.items() if s in sym_set
                 )
-                return round(float(exposure), 8)
+                return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
             thr = float(self.params.correlation_threshold if threshold is None else threshold)
             cols = [c for c in corr_matrix.columns if c in sym_set]
@@ -479,13 +480,13 @@ class RiskManager:
             # If no groups formed (all singletons), fall back to sum of the specified symbols
             if max_exposure == 0.0 and len(groups) == len(cols):
                 max_exposure = sum(float(self.positions.get(s, {}).get("size", 0.0)) for s in cols)
-            return round(max_exposure, 8)
+            return round(max_exposure, DEFAULT_EXPOSURE_PRECISION_DECIMALS)
         except Exception:
             # Fail-safe
             exposure = sum(
                 float(pos.get("size", 0.0)) for s, pos in self.positions.items() if s in symbols
             )
-            return round(float(exposure), 8)
+            return round(float(exposure), DEFAULT_EXPOSURE_PRECISION_DECIMALS)
 
     def get_max_concurrent_positions(self) -> int:
         """Return the maximum number of concurrent positions allowed."""

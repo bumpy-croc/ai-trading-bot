@@ -245,6 +245,7 @@ DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"
 DEFAULT_EPSILON = 1e-9  # Small value for floating point comparisons
 DEFAULT_SYMBOL_STEP_SIZE = 0.00001  # Fallback step size for quantity rounding
 DEFAULT_BASIS_BALANCE_FALLBACK = 10000.0  # Fallback balance when entry_balance unavailable
+DEFAULT_EXPOSURE_PRECISION_DECIMALS = 8  # Decimal places for exposure/position size rounding
 
 # Retry Configuration Constants
 DEFAULT_STOP_LOSS_MAX_RETRIES = 3  # Maximum retry attempts for stop-loss placement
