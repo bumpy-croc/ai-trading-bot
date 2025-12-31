@@ -82,6 +82,23 @@ DEFAULT_REGIME_HYSTERESIS_K: int = 3
 DEFAULT_REGIME_MIN_DWELL: int = 12
 DEFAULT_REGIME_MIN_CONFIDENCE: float = 0.5
 
+# Regime Position Size Multipliers (by market condition)
+DEFAULT_REGIME_MULTIPLIER_BULL_LOW_VOL = 1.0  # Full size in ideal conditions
+DEFAULT_REGIME_MULTIPLIER_BULL_HIGH_VOL = 0.7  # Reduced in volatile bull
+DEFAULT_REGIME_MULTIPLIER_BEAR_LOW_VOL = 0.8  # Reduced in bear market
+DEFAULT_REGIME_MULTIPLIER_BEAR_HIGH_VOL = 0.5  # Much reduced in volatile bear
+DEFAULT_REGIME_MULTIPLIER_RANGE_LOW_VOL = 0.6  # Reduced in range market
+DEFAULT_REGIME_MULTIPLIER_RANGE_HIGH_VOL = 0.3  # Very reduced in volatile range
+
+# Regime Strategy Switching Defaults
+DEFAULT_REGIME_SWITCH_COOLDOWN_MINUTES = 60  # Cooldown between switches
+DEFAULT_REGIME_MIN_DURATION_BARS = 15  # Minimum bars before switching
+DEFAULT_REGIME_TIMEFRAME_AGREEMENT = 0.6  # Require 60% agreement across timeframes
+DEFAULT_REGIME_TRANSITION_SIZE_MULTIPLIER = 0.5  # Size multiplier during transitions
+DEFAULT_REGIME_MAX_DRAWDOWN_SWITCH = 0.15  # Switch to defensive if drawdown > 15%
+DEFAULT_REGIME_TIMEFRAME_WEIGHTS = {"1h": 1.0, "4h": 1.5, "1d": 2.0}  # Higher timeframes weighted more
+DEFAULT_REGIME_TIMEFRAMES = ["1h", "4h", "1d"]  # Timeframes for multi-timeframe analysis
+
 # CPU Optimization Constants
 DEFAULT_CHECK_INTERVAL = 60  # Base check interval in seconds
 DEFAULT_MIN_CHECK_INTERVAL = 30  # Minimum check interval (high activity)
