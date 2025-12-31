@@ -191,11 +191,19 @@ class LivePositionTracker:
             try:
                 quantity = position.quantity
                 if quantity is None:
-                    quantity = (
-                        (position.size * (position.entry_balance or 0)) / position.entry_price
-                        if position.entry_price > 0
-                        else 0.0
-                    )
+                    # Validate entry_balance is available to calculate quantity
+                    if position.entry_balance is None or position.entry_balance <= 0:
+                        logger.error(
+                            "Cannot calculate quantity for position %s: missing or invalid entry_balance (%.2f). "
+                            "Position record will be incomplete.",
+                            order_id,
+                            position.entry_balance or 0.0,
+                        )
+                        quantity = 0.0  # Record with zero quantity as fallback
+                    elif position.entry_price > 0:
+                        quantity = (position.size * position.entry_balance) / position.entry_price
+                    else:
+                        quantity = 0.0
                 db_id = self.db_manager.log_position(
                     symbol=position.symbol,
                     side=position.side.value,
