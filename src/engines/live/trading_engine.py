@@ -25,6 +25,7 @@ from src.config.constants import (
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
@@ -175,7 +176,7 @@ class LiveTradingEngine:
         fee_rate: float = DEFAULT_FEE_RATE,  # 0.1% per trade (entry + exit)
         slippage_rate: float = DEFAULT_SLIPPAGE_RATE,  # 0.05% slippage per trade
         use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
-        max_filled_price_deviation: float = 0.5,  # Filled-price deviation threshold
+        max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,  # Filled-price deviation threshold
         # Handler injection (all optional - defaults created if not provided)
         position_tracker: LivePositionTracker | None = None,
         execution_engine: LiveExecutionEngine | None = None,

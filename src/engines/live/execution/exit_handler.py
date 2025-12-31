@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from src.config.constants import DEFAULT_MAX_POSITION_SIZE
+from src.config.constants import (
+    DEFAULT_MAX_FILLED_PRICE_DEVIATION,
+    DEFAULT_MAX_POSITION_SIZE,
+)
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import (
     LivePosition,
@@ -39,8 +42,6 @@ logger = logging.getLogger(__name__)
 # Maximum partial exits to process per cycle (defense-in-depth against malformed policies).
 # Ten caps worst-case overhead while still supporting typical multi-target exit ladders.
 MAX_PARTIAL_EXITS_PER_CYCLE = 10
-# Maximum acceptable filled-price deviation from entry price before logging a critical warning.
-MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -88,7 +89,7 @@ class LiveExitHandler:
         partial_manager: PartialOperationsManager | None = None,
         use_high_low_for_stops: bool = True,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
-        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
+        max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize exit handler.
 

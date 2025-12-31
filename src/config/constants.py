@@ -73,6 +73,7 @@ DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
 
 # Trading Engine Constants
 DEFAULT_MAX_HOLDING_HOURS = 336  # 14 days
+DEFAULT_MAX_FILLED_PRICE_DEVIATION = 0.5  # 50% max deviation for suspicious fill detection
 DEFAULT_END_OF_DAY_FLAT = False
 DEFAULT_WEEKEND_FLAT = False
 DEFAULT_MARKET_TIMEZONE = "UTC"
