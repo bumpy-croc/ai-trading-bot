@@ -166,3 +166,35 @@ def opposite_side_string(side: SideType) -> str:
         'long'
     """
     return "short" if is_long(side) else "long"
+
+
+def get_position_side(position: object, default: str = "long") -> str:
+    """Extract side from a position-like object as a lowercase string.
+
+    Safely extracts the 'side' attribute from any position object and converts
+    it to a lowercase string. Returns a default value if the position is None
+    or has no side attribute.
+
+    Args:
+        position: Any object with a 'side' attribute (or None).
+        default: Default side to return if position is None or has no side.
+
+    Returns:
+        Side as lowercase string ('long' or 'short').
+
+    Examples:
+        >>> get_position_side(trade)  # trade.side = PositionSide.LONG
+        'long'
+        >>> get_position_side(None)
+        'long'
+        >>> get_position_side(position_without_side)
+        'long'
+    """
+    if position is None:
+        return default
+
+    side = getattr(position, "side", None)
+    if side is None:
+        return default
+
+    return to_side_string(side)

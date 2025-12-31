@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.engines.shared.side_utils import is_long, to_side_string
+from src.engines.shared.side_utils import get_position_side, is_long
 
 if TYPE_CHECKING:
     from src.position_management.partial_manager import PartialExitPolicy
@@ -272,10 +272,7 @@ class PartialOperationsManager:
         Returns:
             Side as lowercase string ('long' or 'short').
         """
-        side = getattr(position, "side", None)
-        if side is None:
-            return "long"
-        return to_side_string(side)
+        return get_position_side(position, default="long")
 
 
 __all__ = [

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from src.engines.shared.side_utils import is_long, to_side_string
+from src.engines.shared.side_utils import get_position_side, is_long
 
 if TYPE_CHECKING:
     from src.engines.shared.models import BasePosition
@@ -118,10 +118,7 @@ class TrailingStopManager:
 
     def _get_side_str(self, position: Any) -> str:
         """Get the side as a lowercase string."""
-        side = getattr(position, "side", None)
-        if side is None:
-            return "long"
-        return to_side_string(side)
+        return get_position_side(position, default="long")
 
     def _check_breakeven(
         self,

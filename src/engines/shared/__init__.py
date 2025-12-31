@@ -53,6 +53,7 @@ from src.engines.shared.trailing_stop_manager import (
     TrailingStopUpdate,
 )
 from src.engines.shared.side_utils import (
+    get_position_side,
     is_long,
     is_short,
     opposite_side,
@@ -116,6 +117,7 @@ __all__ = [
     "is_short",
     "opposite_side",
     "opposite_side_string",
+    "get_position_side",
     # Validation utilities
     "EPSILON",
     "validate_price",

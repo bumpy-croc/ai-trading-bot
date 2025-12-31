@@ -7,6 +7,7 @@ import pytest
 
 from src.engines.shared.models import PositionSide
 from src.engines.shared.side_utils import (
+    get_position_side,
     is_long,
     is_short,
     opposite_side,
@@ -203,3 +204,62 @@ class TestEdgeCases:
             assert is_short(side) is True
             assert opposite_side(side) == PositionSide.LONG
             assert opposite_side_string(side) == "long"
+
+
+class TestGetPositionSide:
+    """Tests for get_position_side function."""
+
+    def test_position_with_enum_side(self):
+        """Extract side from position with PositionSide enum."""
+
+        class MockPosition:
+            side = PositionSide.LONG
+
+        assert get_position_side(MockPosition()) == "long"
+
+    def test_position_with_string_side(self):
+        """Extract side from position with string side."""
+
+        class MockPosition:
+            side = "short"
+
+        assert get_position_side(MockPosition()) == "short"
+
+    def test_position_with_uppercase_string_side(self):
+        """Extract side from position with uppercase string."""
+
+        class MockPosition:
+            side = "LONG"
+
+        assert get_position_side(MockPosition()) == "long"
+
+    def test_none_position_returns_default(self):
+        """None position returns default."""
+        assert get_position_side(None) == "long"
+        assert get_position_side(None, default="short") == "short"
+
+    def test_position_without_side_returns_default(self):
+        """Position without side attribute returns default."""
+
+        class MockPosition:
+            pass
+
+        assert get_position_side(MockPosition()) == "long"
+        assert get_position_side(MockPosition(), default="short") == "short"
+
+    def test_position_with_none_side_returns_default(self):
+        """Position with side=None returns default."""
+
+        class MockPosition:
+            side = None
+
+        assert get_position_side(MockPosition()) == "long"
+
+    def test_custom_default(self):
+        """Custom default is used when appropriate."""
+        assert get_position_side(None, default="short") == "short"
+
+        class MockPosition:
+            pass
+
+        assert get_position_side(MockPosition(), default="short") == "short"
