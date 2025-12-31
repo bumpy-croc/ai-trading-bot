@@ -335,15 +335,24 @@ class LiveExitHandler:
                 error="Invalid filled price",
             )
 
+        # Validate filled price against entry price for flash crash detection
         if position.entry_price > 0:
             price_change = abs(filled_price - position.entry_price) / position.entry_price
             if price_change > self.max_filled_price_deviation:
                 logger.critical(
-                    "Suspicious fill price for %s: entry=%.2f filled=%.2f (%.1f%% move)",
+                    "REJECTED: Suspicious fill price for %s exceeds deviation threshold. "
+                    "Entry=%.2f Filled=%.2f (%.1f%% move, max allowed: %.1f%%). "
+                    "This may indicate a flash crash or data error. MANUAL REVIEW REQUIRED.",
                     position.symbol,
                     position.entry_price,
                     filled_price,
                     price_change * 100,
+                    self.max_filled_price_deviation * 100,
+                )
+                return LiveExitResult(
+                    success=False,
+                    error=f"Fill price rejected: {price_change * 100:.1f}% deviation exceeds "
+                    f"max {self.max_filled_price_deviation * 100:.1f}% threshold",
                 )
 
         # Filled exits use the exchange-reported price; slippage models adverse execution costs.
