@@ -14,7 +14,9 @@ from src.config.constants import (
     DEFAULT_CORRELATION_UPDATE_FREQUENCY_HOURS,
     DEFAULT_CORRELATION_WINDOW_DAYS,
     DEFAULT_MAX_CORRELATED_EXPOSURE,
+    DEFAULT_MAX_CORRELATED_RISK,
     DEFAULT_MAX_DAILY_RISK,
+    DEFAULT_MAX_DRAWDOWN,
     DEFAULT_MAX_RISK_PER_TRADE,
     DEFAULT_MAX_SCALE_INS,
     DEFAULT_PARTIAL_EXIT_SIZES,
@@ -37,8 +39,8 @@ class RiskParameters:
     max_risk_per_trade: float = DEFAULT_MAX_RISK_PER_TRADE  # 3% maximum risk per trade
     max_position_size: float = 0.25  # 25% maximum position size (fraction of balance)
     max_daily_risk: float = DEFAULT_MAX_DAILY_RISK  # 6% maximum daily risk (fraction of balance)
-    max_correlated_risk: float = 0.10  # 10% maximum risk for correlated positions
-    max_drawdown: float = 0.20  # 20% maximum drawdown (fraction)
+    max_correlated_risk: float = DEFAULT_MAX_CORRELATED_RISK  # 10% maximum risk for correlated positions
+    max_drawdown: float = DEFAULT_MAX_DRAWDOWN  # 20% maximum drawdown (fraction)
     position_size_atr_multiplier: float = 1.0
     default_take_profit_pct: float | None = None  # if None, engine/strategy may supply
     atr_period: int = 14

@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from src.config.constants import DEFAULT_MAX_DRAWDOWN
+
 from .performance_tracker import PerformanceMetrics, PerformanceTracker
 from .regime_context import RegimeContext
 
@@ -54,7 +56,7 @@ class PerformanceDegradationConfig:
     long_term_days: int = 90
 
     # Performance thresholds (all must be met for degradation)
-    max_drawdown_threshold: float = 0.20  # 20% max drawdown
+    max_drawdown_threshold: float = DEFAULT_MAX_DRAWDOWN  # 20% max drawdown
     sharpe_ratio_threshold: float = 0.5  # Minimum acceptable Sharpe
     win_rate_threshold: float = 0.35  # Minimum win rate
 

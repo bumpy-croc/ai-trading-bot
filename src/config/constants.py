@@ -64,6 +64,8 @@ DEFAULT_MAX_POSITION_SIZE = 0.1  # 10% max position size
 DEFAULT_BASE_RISK_PER_TRADE = 0.02  # 2% risk per trade
 DEFAULT_MAX_RISK_PER_TRADE = 0.03  # 3% maximum risk per trade
 DEFAULT_MAX_DAILY_RISK = 0.06  # 6% maximum daily risk
+DEFAULT_MAX_CORRELATED_RISK = 0.10  # 10% maximum risk for correlated positions
+DEFAULT_MAX_DRAWDOWN = 0.20  # 20% maximum drawdown (fraction)
 DEFAULT_FEE_RATE = 0.001  # 0.1% trading fee
 DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
 
