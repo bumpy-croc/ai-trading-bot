@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.utils.price_targets import PriceTargetCalculator
+
 if TYPE_CHECKING:
     from src.engines.shared.models import BasePosition
     from src.position_management.trailing_stops import TrailingStopPolicy
@@ -150,11 +152,12 @@ class TrailingStopManager:
             return TrailingStopUpdate(updated=False)
 
         if pnl_pct >= breakeven_threshold:
-            # Calculate breakeven stop price
-            if side == "long":
-                new_stop = entry_price * (1 + breakeven_buffer)
-            else:
-                new_stop = entry_price * (1 - breakeven_buffer)
+            # Calculate breakeven stop price using shared calculator
+            new_stop = PriceTargetCalculator.breakeven(
+                entry_price=entry_price,
+                buffer_pct=breakeven_buffer,
+                side=side,
+            )
 
             # Return result without modifying position - caller is responsible
             # for applying the update via position_tracker

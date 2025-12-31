@@ -23,6 +23,7 @@ from src.config.constants import (
     DEFAULT_TRAILING_DISTANCE_PCT,
 )
 from src.tech.indicators.core import calculate_atr
+from src.utils.price_targets import PriceTargetCalculator
 
 
 @dataclass
@@ -174,13 +175,12 @@ class RiskManager:
 
     def calculate_stop_loss(self, entry_price: float, atr: float, side: str = "long") -> float:
         """Calculate adaptive stop loss level (ATR-based)"""
-        atr_multiple = self.params.position_size_atr_multiplier
-        stop_distance = atr * atr_multiple
-
-        if side == "long":
-            return entry_price - stop_distance
-        else:  # short
-            return entry_price + stop_distance
+        return PriceTargetCalculator.stop_loss_atr(
+            entry_price=entry_price,
+            atr=atr,
+            multiplier=self.params.position_size_atr_multiplier,
+            side=side,
+        )
 
     # NEW HIGHER-LEVEL API (fraction-based + SL/TP policies)
     def calculate_position_fraction(
@@ -329,10 +329,11 @@ class RiskManager:
         tp_price: float | None = None
 
         if stop_loss_pct is not None:
-            if side == "long":
-                sl_price = entry_price * (1 - float(stop_loss_pct))
-            else:
-                sl_price = entry_price * (1 + float(stop_loss_pct))
+            sl_price = PriceTargetCalculator.stop_loss(
+                entry_price=entry_price,
+                pct=float(stop_loss_pct),
+                side=side,
+            )
         else:
             # ATR-based if available
             df = self._ensure_atr(df)
@@ -347,10 +348,11 @@ class RiskManager:
                 )
 
         if take_profit_pct is not None:
-            if side == "long":
-                tp_price = entry_price * (1 + float(take_profit_pct))
-            else:
-                tp_price = entry_price * (1 - float(take_profit_pct))
+            tp_price = PriceTargetCalculator.take_profit(
+                entry_price=entry_price,
+                pct=float(take_profit_pct),
+                side=side,
+            )
         else:
             tp_price = None
 

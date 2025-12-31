@@ -15,6 +15,7 @@ from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.strategies.components import SignalDirection
+from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
     from src.position_management.dynamic_risk import DynamicRiskManager
@@ -335,13 +336,14 @@ class LiveEntryHandler:
             except (AttributeError, ValueError, TypeError):
                 pass
 
-        # Calculate prices
-        if entry_side == PositionSide.LONG:
-            stop_loss = current_price * (1 - sl_pct)
-            take_profit = current_price * (1 + tp_pct)
-        else:
-            stop_loss = current_price * (1 + sl_pct)
-            take_profit = current_price * (1 - tp_pct)
+        # Calculate prices using shared calculator
+        side_str = "long" if entry_side == PositionSide.LONG else "short"
+        stop_loss, take_profit = PriceTargetCalculator.sl_tp(
+            entry_price=current_price,
+            sl_pct=sl_pct,
+            tp_pct=tp_pct,
+            side=side_str,
+        )
 
         return stop_loss, take_profit
 

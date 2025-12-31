@@ -2,6 +2,7 @@
 
 This module provides common utilities used across the codebase:
 - bounds: Value clamping and validation functions
+- price_targets: Stop loss and take profit price calculations
 """
 
 from src.utils.bounds import (
@@ -17,6 +18,10 @@ from src.utils.bounds import (
     validate_non_negative,
     validate_positive,
     validate_range,
+)
+from src.utils.price_targets import (
+    PriceTargetCalculator,
+    PriceTargets,
 )
 
 __all__ = [
@@ -35,4 +40,7 @@ __all__ = [
     "validate_positive",
     "validate_non_negative",
     "validate_range",
+    # Price targets
+    "PriceTargetCalculator",
+    "PriceTargets",
 ]

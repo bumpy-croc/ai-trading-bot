@@ -17,6 +17,7 @@ from src.engines.backtest.models import ActiveTrade
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.strategies.components import SignalDirection
 from src.utils.bounds import clamp_fraction, clamp_stop_loss_pct
+from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -203,13 +204,13 @@ class EntryHandler:
             else size_fraction * balance
         )
 
-        # Calculate SL/TP prices
-        if entry_side == "long":
-            stop_loss = current_price * (1 - sl_pct)
-            take_profit = current_price * (1 + tp_pct)
-        else:
-            stop_loss = current_price * (1 + sl_pct)
-            take_profit = current_price * (1 - tp_pct)
+        # Calculate SL/TP prices using shared calculator
+        stop_loss, take_profit = PriceTargetCalculator.sl_tp(
+            entry_price=current_price,
+            sl_pct=sl_pct,
+            tp_pct=tp_pct,
+            side=entry_side,
+        )
 
         return EntrySignalResult(
             should_enter=True,

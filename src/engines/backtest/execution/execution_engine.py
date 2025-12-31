@@ -13,6 +13,7 @@ from typing import Any
 
 from src.engines.backtest.models import ActiveTrade
 from src.engines.shared.cost_calculator import CostCalculator
+from src.utils.price_targets import PriceTargetCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -157,13 +158,13 @@ class ExecutionEngine:
         entry_fee = cost_result.fee
         slippage_cost = cost_result.slippage_cost
 
-        # Calculate SL/TP based on actual entry price
-        if pending["side"] == "long":
-            stop_loss = entry_price * (1 - pending["sl_pct"])
-            take_profit = entry_price * (1 + pending["tp_pct"])
-        else:
-            stop_loss = entry_price * (1 + pending["sl_pct"])
-            take_profit = entry_price * (1 - pending["tp_pct"])
+        # Calculate SL/TP based on actual entry price using shared calculator
+        stop_loss, take_profit = PriceTargetCalculator.sl_tp(
+            entry_price=entry_price,
+            sl_pct=pending["sl_pct"],
+            tp_pct=pending["tp_pct"],
+            side=pending["side"],
+        )
 
         # Create trade
         trade = ActiveTrade(
