@@ -371,6 +371,13 @@ class DatabaseManager:
         if self.session_factory is None:
             raise ValueError("Session factory not initialized")
 
+        # Validate timeout_ms is a positive integer to prevent SQL injection
+        # All callers use QueryTimeout constants, but this provides defense in depth
+        if not isinstance(timeout_ms, int) or timeout_ms <= 0:
+            raise ValueError(
+                f"timeout_ms must be a positive integer, got {type(timeout_ms).__name__}: {timeout_ms}"
+            )
+
         # Check pool health before acquiring connection for critical operations
         # This provides early warning if pool is near exhaustion
         if timeout_ms <= QueryTimeout.CRITICAL_READ:
@@ -380,6 +387,7 @@ class DatabaseManager:
         try:
             # Set statement_timeout for this session using SET LOCAL (transaction-scoped)
             # This overrides the connection-level default timeout
+            # Safe to use f-string here because timeout_ms is validated as positive int above
             session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
             yield session
         except Exception as e:
