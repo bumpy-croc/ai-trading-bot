@@ -15,6 +15,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
+from src.infrastructure.timeout import run_with_timeout
 from src.regime.detector import RegimeConfig, RegimeDetector
 
 from .config import PredictionConfig
@@ -156,7 +158,27 @@ class PredictionEngine:
 
             # Make prediction (with optional ensemble)
             if self._ensemble_aggregator is None:
-                prediction = model.predict(prepared_features)
+                # Wrap prediction with timeout to prevent hanging on slow/hung models
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else 30.0  # Default 30s timeout
+                )
+                try:
+                    prediction = run_with_timeout(
+                        model.predict,
+                        args=(prepared_features,),
+                        timeout_seconds=timeout_seconds,
+                        operation_name="ML model inference",
+                    )
+                except InfraTimeoutError as timeout_err:
+                    # Prediction exceeded timeout - return error result
+                    inference_time = time.time() - start_time
+                    raise ModelInferenceError(
+                        f"Model inference timeout after {timeout_seconds}s"
+                    ) from timeout_err
+
                 final_price = prediction.price
                 final_conf = prediction.confidence
                 final_dir = prediction.direction
@@ -186,6 +208,14 @@ class PredictionEngine:
                 if not ensemble_bundles:
                     ensemble_bundles = [bundle]
 
+                # Same timeout configuration as single model
+                timeout_seconds = (
+                    self.config.max_prediction_latency
+                    if hasattr(self.config, "max_prediction_latency")
+                    and isinstance(self.config.max_prediction_latency, (int, float))
+                    else 30.0
+                )
+
                 for ensemble_bundle in ensemble_bundles:
                     ensemble_features = self._prepare_features_for_bundle(
                         ensemble_bundle, features, features_df
@@ -193,7 +223,17 @@ class PredictionEngine:
                     if not features_used:
                         features_used = self._count_features_used(ensemble_features)
 
-                    raw_prediction = ensemble_bundle.runner.predict(ensemble_features)
+                    try:
+                        raw_prediction = run_with_timeout(
+                            ensemble_bundle.runner.predict,
+                            args=(ensemble_features,),
+                            timeout_seconds=timeout_seconds,
+                            operation_name=f"Ensemble model {ensemble_bundle.model_name} inference",
+                        )
+                    except InfraTimeoutError as timeout_err:
+                        # Skip this ensemble member if it times out
+                        continue
+
                     denormalized_price = self._apply_rolling_denormalization(
                         raw_prediction.price, ensemble_bundle, data
                     )
