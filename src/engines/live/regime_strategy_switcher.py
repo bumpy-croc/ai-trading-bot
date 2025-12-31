@@ -157,6 +157,14 @@ class RegimeStrategySwitcher:
             detector = self.timeframe_detectors.get(timeframe, self.regime_detector)
             df_with_regime = detector.annotate(df)
 
+            # Validate annotated DataFrame is not empty before iloc access
+            if len(df_with_regime) == 0:
+                logger.warning(
+                    "Regime detector returned empty DataFrame for timeframe %s - skipping",
+                    timeframe,
+                )
+                continue
+
             # Get current regime for this timeframe
             trend_label, vol_label, confidence = detector.current_labels(df_with_regime)
             regime_label = f"{trend_label}:{vol_label}"

@@ -1414,7 +1414,16 @@ class LiveTradingEngine:
                     self.check_interval = self._calculate_adaptive_interval()
                     self._sleep_with_interrupt(self.check_interval)
                     continue
+
+                # Validate DataFrame is not empty before iloc access
                 current_index = len(df) - 1
+                if current_index < 0:
+                    logger.error(
+                        "DataFrame became empty after readiness check - skipping iteration"
+                    )
+                    self._sleep_with_interrupt(self.check_interval)
+                    continue
+
                 current_candle = df.iloc[current_index]
                 current_price = current_candle["close"]
                 current_time = current_candle.name if hasattr(current_candle, "name") else None
