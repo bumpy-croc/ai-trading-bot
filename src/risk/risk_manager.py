@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_BASE_RISK_PER_TRADE,
     DEFAULT_BREAKEVEN_BUFFER,
     DEFAULT_BREAKEVEN_THRESHOLD,
     DEFAULT_CORRELATION_THRESHOLD,
@@ -30,7 +31,7 @@ from src.utils.price_targets import PriceTargetCalculator
 class RiskParameters:
     """Risk management parameters"""
 
-    base_risk_per_trade: float = 0.02  # 2% risk per trade
+    base_risk_per_trade: float = DEFAULT_BASE_RISK_PER_TRADE  # 2% risk per trade
     max_risk_per_trade: float = 0.03  # 3% maximum risk per trade
     max_position_size: float = 0.25  # 25% maximum position size (fraction of balance)
     max_daily_risk: float = 0.06  # 6% maximum daily risk (fraction of balance)
