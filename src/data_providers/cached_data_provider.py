@@ -137,7 +137,13 @@ class CachedDataProvider(DataProvider):
                 return True
 
         # Check if cache is expired
-        file_time = datetime.fromtimestamp(os.path.getmtime(cache_path), tz=UTC)
+        try:
+            file_time = datetime.fromtimestamp(os.path.getmtime(cache_path), tz=UTC)
+        except OSError:
+            # File deleted or inaccessible between existence check and getmtime call (TOCTOU race)
+            # Return False to trigger re-fetch from provider
+            return False
+
         current_time = datetime.now(UTC)
         age_hours = (current_time - file_time).total_seconds() / 3600
 
@@ -525,8 +531,15 @@ class CachedDataProvider(DataProvider):
         if not os.path.exists(self.cache_dir):
             return
 
+        # List cache directory with error handling
+        try:
+            filenames = os.listdir(self.cache_dir)
+        except OSError as e:
+            logger.warning(f"Cannot list cache directory {self.cache_dir}: {e}")
+            return
+
         cleared_count = 0
-        for filename in os.listdir(self.cache_dir):
+        for filename in filenames:
             if filename.endswith(CACHE_FILE_EXTENSION):
                 file_path = os.path.join(self.cache_dir, filename)
                 should_delete = True
@@ -579,8 +592,26 @@ class CachedDataProvider(DataProvider):
                 "years_cached": [],
             }
 
-        files = [f for f in os.listdir(self.cache_dir) if f.endswith(CACHE_FILE_EXTENSION)]
-        total_size = sum(os.path.getsize(os.path.join(self.cache_dir, f)) for f in files)
+        # List cache files with error handling
+        try:
+            files = [f for f in os.listdir(self.cache_dir) if f.endswith(CACHE_FILE_EXTENSION)]
+        except OSError as e:
+            logger.warning(f"Cannot list cache directory: {e}")
+            return {
+                "total_files": 0,
+                "total_size_mb": 0,
+                "oldest_file": None,
+                "newest_file": None,
+                "years_cached": [],
+            }
+
+        # Calculate total size with error handling for inaccessible files
+        total_size = 0
+        for f in files:
+            try:
+                total_size += os.path.getsize(os.path.join(self.cache_dir, f))
+            except OSError:
+                continue  # Skip inaccessible files
 
         if not files:
             return {
@@ -594,9 +625,23 @@ class CachedDataProvider(DataProvider):
         file_times = []
         for f in files:
             file_path = os.path.join(self.cache_dir, f)
-            file_times.append((f, os.path.getmtime(file_path)))
+            try:
+                mtime = os.path.getmtime(file_path)
+                file_times.append((f, mtime))
+            except OSError:
+                continue  # Skip inaccessible files
 
         file_times.sort(key=lambda x: x[1])
+
+        # Handle case where all files were inaccessible
+        if not file_times:
+            return {
+                "total_files": len(files),
+                "total_size_mb": round(total_size / (1024 * 1024), 2),
+                "oldest_file": None,
+                "newest_file": None,
+                "cache_strategy": "year-based",
+            }
 
         return {
             "total_files": len(files),
