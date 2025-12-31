@@ -9,8 +9,10 @@ This module provides unified implementations for common trading engine functiona
 - Risk configuration
 - Partial operations management
 - Performance tracking
+- Correlation-based position sizing
 """
 
+from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.cost_calculator import CostCalculator, CostResult
 from src.engines.shared.dynamic_risk_handler import (
     DynamicRiskAdjustment,
@@ -98,4 +100,6 @@ __all__ = [
     # Performance tracking
     "PerformanceTracker",
     "PerformanceMetrics",
+    # Correlation handling
+    "CorrelationHandler",
 ]

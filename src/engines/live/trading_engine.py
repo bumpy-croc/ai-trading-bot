@@ -68,6 +68,7 @@ from src.engines.live.execution.position_tracker import (
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
 from src.engines.live.strategy_manager import StrategyManager
+from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.models import (
     BaseTrade,
@@ -614,6 +615,17 @@ class LiveTradingEngine:
             exchange_interface=self.exchange_interface,
         )
 
+        # Create correlation handler for backtest-live parity
+        # Uses shared CorrelationHandler implementation
+        self._correlation_handler: CorrelationHandler | None = None
+        if self.correlation_engine is not None and self.data_provider is not None:
+            self._correlation_handler = CorrelationHandler(
+                correlation_engine=self.correlation_engine,
+                risk_manager=self.risk_manager,
+                data_provider=self.data_provider,
+                strategy=self.strategy,
+            )
+
         # Entry handler
         self.live_entry_handler = entry_handler or LiveEntryHandler(
             execution_engine=self.live_execution_engine,
@@ -622,6 +634,7 @@ class LiveTradingEngine:
                 self.strategy if isinstance(self.strategy, ComponentStrategy) else None
             ),
             dynamic_risk_manager=self.dynamic_risk_manager,
+            correlation_handler=self._correlation_handler,
             max_position_size=self.max_position_size,
             default_take_profit_pct=self._resolve_take_profit_pct(),
         )
@@ -1943,6 +1956,10 @@ class LiveTradingEngine:
                 balance=self.current_balance,
                 current_price=float(current_price),
                 current_time=datetime.now(UTC),
+                symbol=symbol,
+                timeframe=self.timeframe,
+                df=df,
+                index=current_index,
                 peak_balance=perf_metrics.peak_balance or self.current_balance,
                 trading_session_id=self.trading_session_id,
             )

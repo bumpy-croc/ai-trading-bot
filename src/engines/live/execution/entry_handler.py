@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import pandas as pd
+
 from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MAX_STOP_LOSS_PCT,
@@ -26,6 +28,7 @@ from src.utils.bounds import clamp_fraction
 from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
+    from src.engines.shared.correlation_handler import CorrelationHandler
     from src.position_management.dynamic_risk import DynamicRiskManager
     from src.risk.risk_manager import RiskManager
     from src.strategies.components import Strategy as ComponentStrategy
@@ -75,6 +78,7 @@ class LiveEntryHandler:
         risk_manager: RiskManager | None = None,
         component_strategy: ComponentStrategy | None = None,
         dynamic_risk_manager: DynamicRiskManager | None = None,
+        correlation_handler: CorrelationHandler | None = None,
         max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
         default_take_profit_pct: float | None = None,
     ) -> None:
@@ -85,6 +89,7 @@ class LiveEntryHandler:
             risk_manager: Risk manager for position sizing.
             component_strategy: Component strategy for signals.
             dynamic_risk_manager: Manager for dynamic risk adjustments.
+            correlation_handler: Handler for correlation-based position sizing.
             max_position_size: Maximum position size as fraction.
             default_take_profit_pct: Default take profit percentage.
         """
@@ -92,6 +97,7 @@ class LiveEntryHandler:
         self.risk_manager = risk_manager
         self.component_strategy = component_strategy
         self.dynamic_risk_manager = dynamic_risk_manager
+        self.correlation_handler = correlation_handler
         self.max_position_size = max_position_size
         self.default_take_profit_pct = default_take_profit_pct
         # Use shared DynamicRiskHandler for consistent risk adjustment logic
@@ -111,6 +117,10 @@ class LiveEntryHandler:
         balance: float,
         current_price: float,
         current_time: datetime,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        df: pd.DataFrame | None = None,
+        index: int | None = None,
         peak_balance: float | None = None,
         trading_session_id: int | None = None,
     ) -> LiveEntrySignal:
@@ -121,6 +131,10 @@ class LiveEntryHandler:
             balance: Current account balance.
             current_price: Current market price.
             current_time: Current timestamp.
+            symbol: Trading symbol (for correlation control).
+            timeframe: Trading timeframe (for correlation control).
+            df: Market data DataFrame (for correlation control).
+            index: Current candle index (for correlation control).
             peak_balance: Peak balance for drawdown calculations.
             trading_session_id: Session ID for logging.
 
@@ -141,7 +155,26 @@ class LiveEntryHandler:
             )
 
         # Enforce maximum position size to prevent over-concentration risk
+        # (matches backtest engine behavior for backtest-live parity)
         size_fraction = min(size_fraction, self.max_position_size)
+
+        # Apply correlation control if available
+        # (matches backtest engine behavior for backtest-live parity)
+        if (
+            self.correlation_handler is not None
+            and size_fraction > 0
+            and symbol is not None
+            and timeframe is not None
+            and df is not None
+            and index is not None
+        ):
+            size_fraction = self.correlation_handler.apply_correlation_control(
+                symbol=symbol,
+                timeframe=timeframe,
+                df=df,
+                index=index,
+                candidate_fraction=size_fraction,
+            )
 
         # Reduce position size during drawdown or adverse market conditions
         if self.dynamic_risk_manager is not None and size_fraction > 0:
