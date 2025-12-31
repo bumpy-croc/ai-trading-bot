@@ -151,6 +151,12 @@ DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 
 DEFAULT_MARKET_DATA_STALENESS_THRESHOLD = 3600  # Consider market data stale after 1 hour
 DEFAULT_MARKET_DATA_LIMIT = 500  # Default number of candles to fetch
 
+# Thread and Request Timeout Constants
+DEFAULT_THREAD_JOIN_TIMEOUT = 30  # Timeout for main thread join in seconds
+DEFAULT_ORDER_TRACKER_TIMEOUT = 10  # Timeout for order tracker thread join
+DEFAULT_REQUEST_TIMEOUT = 10  # Timeout for HTTP requests (webhooks, etc.)
+DEFAULT_ORDER_POLL_INTERVAL = 5  # Seconds between order status checks
+
 # Account Synchronization Constants
 DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES = 5  # Minimum minutes between account syncs
 DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT = 1.0  # Log warning if discrepancy exceeds 1%

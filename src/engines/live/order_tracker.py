@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from src.config.constants import DEFAULT_ORDER_POLL_INTERVAL, DEFAULT_ORDER_TRACKER_TIMEOUT
 from src.data_providers.exchange_interface import ExchangeInterface, Order, OrderStatus
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ class OrderTracker:
     def __init__(
         self,
         exchange: ExchangeInterface,
-        poll_interval: int = 5,
+        poll_interval: int = DEFAULT_ORDER_POLL_INTERVAL,
         on_fill: Callable[[str, str, float, float], None] | None = None,
         on_partial_fill: Callable[[str, str, float, float], None] | None = None,
         on_cancel: Callable[[str, str], None] | None = None,
@@ -48,7 +49,7 @@ class OrderTracker:
 
         Args:
             exchange: Exchange interface for querying order status
-            poll_interval: Seconds between status checks (default 5)
+            poll_interval: Seconds between status checks
             on_fill: Callback(order_id, symbol, filled_qty, avg_price) for filled orders
             on_partial_fill: Callback(order_id, symbol, new_filled_qty, avg_price) for partial fills
             on_cancel: Callback(order_id, symbol) for cancelled/rejected orders
@@ -113,7 +114,7 @@ class OrderTracker:
         """Stop the background polling thread."""
         self._running = False
         if self._thread:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=DEFAULT_ORDER_TRACKER_TIMEOUT)
             self._thread = None
         logger.info("OrderTracker stopped")
 

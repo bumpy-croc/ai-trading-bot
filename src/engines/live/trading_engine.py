@@ -30,7 +30,9 @@ from src.config.constants import (
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
+    DEFAULT_ORDER_POLL_INTERVAL,
     DEFAULT_RECENT_TRADE_LOOKBACK_HOURS,
+    DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_RETRY_BACKOFF_MULTIPLIER,
     DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS,
     DEFAULT_SLEEP_POLL_INTERVAL,
@@ -39,6 +41,7 @@ from src.config.constants import (
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_STOP_LOSS_RETRY_DELAY,
     DEFAULT_TAKE_PROFIT_PCT,
+    DEFAULT_THREAD_JOIN_TIMEOUT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
@@ -379,7 +382,7 @@ class LiveTradingEngine:
                     # Initialize order tracker for monitoring order fills
                     self.order_tracker = OrderTracker(
                         exchange=self.exchange_interface,
-                        poll_interval=5,
+                        poll_interval=DEFAULT_ORDER_POLL_INTERVAL,
                         on_fill=self._handle_order_fill,
                         on_partial_fill=self._handle_partial_fill,
                         on_cancel=self._handle_order_cancel,
@@ -1310,7 +1313,7 @@ class LiveTradingEngine:
             and self.main_thread.is_alive()
             and self.main_thread != threading.current_thread()
         ):
-            self.main_thread.join(timeout=30)
+            self.main_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
 
         # Print final statistics
         self._print_final_stats()
@@ -2979,7 +2982,7 @@ class LiveTradingEngine:
                 "text": f"🤖 Trading Bot: {message}",
                 "timestamp": datetime.now(UTC).isoformat(),
             }
-            requests.post(self.alert_webhook_url, json=payload, timeout=10)
+            requests.post(self.alert_webhook_url, json=payload, timeout=DEFAULT_REQUEST_TIMEOUT)
         except Exception as e:
             logger.error(f"Failed to send alert: {e}", exc_info=True)
 
