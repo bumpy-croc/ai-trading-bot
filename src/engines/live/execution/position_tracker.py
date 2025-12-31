@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Epsilon for floating-point comparisons in financial calculations
+# Use this to handle accumulated rounding errors in partial operations
+EPSILON = 1e-9
+
 
 @dataclass
 class LivePosition(BasePosition):
@@ -487,8 +491,8 @@ class LivePositionTracker:
             if position.current_size is None:
                 position.current_size = position.size
 
-            # Validate delta_fraction does not exceed current size
-            if delta_fraction > position.current_size:
+            # Validate delta_fraction does not exceed current size (with epsilon tolerance)
+            if delta_fraction > position.current_size + EPSILON:
                 logger.error(
                     "Partial exit %.4f exceeds current size %.4f for %s, clamping to current size",
                     delta_fraction,
@@ -506,8 +510,10 @@ class LivePositionTracker:
                 else basis_balance
             )
 
-            # Update position state
+            # Update position state - clamp to exactly zero if very close (accumulated rounding)
             position.current_size = max(0.0, float(position.current_size) - float(delta_fraction))
+            if abs(position.current_size) < EPSILON:
+                position.current_size = 0.0
             position.partial_exits_taken += 1
             position.last_partial_exit_price = price
 
