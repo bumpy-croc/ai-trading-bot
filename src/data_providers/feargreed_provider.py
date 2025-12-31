@@ -64,6 +64,16 @@ class FearGreedProvider(SentimentDataProvider):
             resp = requests.get(self.BASE_URL, params=params, timeout=(5, 20))
             resp.raise_for_status()
             payload = resp.json()
+
+            # Validate JSON response is a dictionary before accessing keys
+            if not isinstance(payload, dict):
+                logger.error(
+                    "FearGreedProvider: API returned non-dict JSON (type: %s). Expected dict with 'data' key.",
+                    type(payload).__name__
+                )
+                self.data = pd.DataFrame()
+                return
+
             records = payload.get("data", [])
             if not records:
                 logger.warning("FearGreedProvider: empty dataset received")
