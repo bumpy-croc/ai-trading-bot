@@ -542,37 +542,72 @@ class LiveExecutionEngine:
             return False
 
     def _normalize_quantity(self, symbol: str, quantity: float, value: float) -> float:
-        """Normalize quantity based on exchange symbol info."""
+        """Normalize quantity based on exchange symbol info with robust error handling."""
         if quantity <= 0 or self.exchange_interface is None:
             return 0.0
 
-        symbol_info = self.exchange_interface.get_symbol_info(symbol)
-        if not symbol_info:
+        try:
+            symbol_info = self.exchange_interface.get_symbol_info(symbol)
+        except (ConnectionError, TimeoutError) as e:
+            logger.error(
+                "Failed to fetch symbol info for %s: %s - using raw quantity", symbol, e
+            )
             return quantity
 
-        step_size = symbol_info.get("step_size", 0.00001)
-        if step_size > 0:
-            quantity = round(quantity / step_size) * step_size
-
-        min_qty = symbol_info.get("min_qty", 0)
-        if quantity < min_qty:
-            logger.error(
-                "Calculated quantity %.8f below minimum %.8f for %s",
-                quantity,
-                min_qty,
+        if not symbol_info or not isinstance(symbol_info, dict):
+            logger.warning(
+                "Missing or invalid symbol info for %s (type=%s) - using raw quantity",
                 symbol,
+                type(symbol_info).__name__ if symbol_info else "None",
             )
-            return 0.0
+            return quantity
 
-        min_notional = symbol_info.get("min_notional", 0)
-        if value < min_notional:
-            logger.error(
-                "Order value %.2f below minimum notional %.2f for %s",
-                value,
-                min_notional,
-                symbol,
+        # Validate and apply step_size
+        step_size = symbol_info.get("step_size")
+        if step_size is None or not isinstance(step_size, (int, float)):
+            logger.warning("Invalid step_size for %s - using raw quantity", symbol)
+            # Continue without step_size normalization
+        elif step_size <= 0 or not math.isfinite(step_size):
+            logger.warning(
+                "Invalid step_size value %.8f for %s - using raw quantity", step_size, symbol
             )
-            return 0.0
+        else:
+            # Apply step_size rounding
+            try:
+                normalized = round(quantity / step_size) * step_size
+                if not math.isfinite(normalized):
+                    logger.error(
+                        "Normalization produced non-finite value for %s - keeping original",
+                        symbol,
+                    )
+                else:
+                    quantity = normalized
+            except (ArithmeticError, ValueError) as e:
+                logger.error("Step_size normalization failed for %s: %s", symbol, e)
+
+        # Validate min_qty constraint
+        min_qty = symbol_info.get("min_qty")
+        if min_qty and isinstance(min_qty, (int, float)) and min_qty > 0:
+            if quantity < min_qty:
+                logger.error(
+                    "Calculated quantity %.8f below minimum %.8f for %s",
+                    quantity,
+                    min_qty,
+                    symbol,
+                )
+                return 0.0
+
+        # Validate min_notional constraint
+        min_notional = symbol_info.get("min_notional")
+        if min_notional and isinstance(min_notional, (int, float)) and min_notional > 0:
+            if value < min_notional:
+                logger.error(
+                    "Order value %.2f below minimum notional %.2f for %s",
+                    value,
+                    min_notional,
+                    symbol,
+                )
+                return 0.0
 
         return quantity
 
