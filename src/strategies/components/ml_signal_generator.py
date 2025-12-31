@@ -122,14 +122,14 @@ class MLSignalGenerator(SignalGenerator):
             # Health check
             health = engine.health_check()
             if health.get("status") != "healthy" and not self._engine_warning_emitted:
-                print(f"[MLSignalGenerator] Prediction engine health degraded: {health}")
+                logger.warning("MLSignalGenerator: Prediction engine health degraded: %s", health)
                 self._engine_warning_emitted = True
 
             self.prediction_engine = engine
 
         except Exception as e:
             if not self._engine_warning_emitted:
-                print(f"[MLSignalGenerator] Prediction engine initialization failed: {e}")
+                logger.error("MLSignalGenerator: Prediction engine initialization failed: %s", e, exc_info=True)
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
@@ -273,7 +273,7 @@ class MLSignalGenerator(SignalGenerator):
             return pred
 
         except Exception as e:
-            print(f"[MLSignalGenerator] Prediction error at index {index}: {e}")
+            logger.error("MLSignalGenerator: Prediction error at index %d: %s", index, e, exc_info=True)
             return None
 
     def _should_generate_short_signal(
@@ -463,7 +463,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             # Health check
             health = engine.health_check()
             if health.get("status") != "healthy" and not self._engine_warning_emitted:
-                print(f"[MLBasicSignalGenerator] Prediction engine health degraded: {health}")
+                logger.warning("MLBasicSignalGenerator: Prediction engine health degraded: %s", health)
                 self._engine_warning_emitted = True
 
             self.prediction_engine = engine
@@ -476,7 +476,7 @@ class MLBasicSignalGenerator(SignalGenerator):
 
         except Exception as e:
             if not self._engine_warning_emitted:
-                print(f"[MLBasicSignalGenerator] Prediction engine initialization failed: {e}")
+                logger.error("MLBasicSignalGenerator: Prediction engine initialization failed: %s", e, exc_info=True)
                 self._engine_warning_emitted = True
             self.prediction_engine = None
 
@@ -600,7 +600,7 @@ class MLBasicSignalGenerator(SignalGenerator):
         try:
             # Get prediction from prediction engine
             if self.prediction_engine is None:
-                print("[MLBasicSignalGenerator] Prediction engine not initialized")
+                logger.warning("MLBasicSignalGenerator: Prediction engine not initialized")
                 return None
 
             # Use prediction engine with registry selection
@@ -638,7 +638,7 @@ class MLBasicSignalGenerator(SignalGenerator):
             return pred
 
         except Exception as e:
-            print(f"[MLBasicSignalGenerator] Prediction error at index {index}: {e}")
+            logger.error("MLBasicSignalGenerator: Prediction error at index %d: %s", index, e, exc_info=True)
             return None
 
     def _calculate_confidence(self, predicted_return: float) -> float:
