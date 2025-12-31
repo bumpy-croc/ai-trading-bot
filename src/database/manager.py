@@ -704,8 +704,15 @@ class DatabaseManager:
             session.add(trade)
             try:
                 session.commit()
-            except IntegrityError:
-                # Handle any integrity errors
+            except IntegrityError as ie:
+                # Rollback on integrity errors (duplicate keys, constraint violations)
+                session.rollback()
+                logger.error(f"IntegrityError logging trade for {symbol}: {ie}. Transaction rolled back.")
+                raise
+            except Exception as e:
+                # Rollback on any other database errors
+                session.rollback()
+                logger.error(f"Failed to log trade for {symbol}: {e}. Transaction rolled back.", exc_info=True)
                 raise
 
             logger.info(
@@ -789,22 +796,15 @@ class DatabaseManager:
             if breakeven_triggered is not None:
                 position.breakeven_triggered = bool(breakeven_triggered)
 
-            # * Phase 1: Create and commit position first
-            session.add(position)
+            # * ATOMIC OPERATION: Create position and entry order in single transaction
+            # Use nested transaction (SAVEPOINT) for atomicity
             try:
-                session.commit()
-            except IntegrityError:
-                # Handle any integrity errors (no order_id constraint to worry about anymore)
-                raise
+                session.add(position)
 
-            logger.info(
-                f"Logged position #{position.id}: {symbol} {side.value} @ ${entry_price:.2f}"
-            )
+                # Flush to get position.id without committing
+                session.flush()
 
-            # * Phase 2: Auto-create ENTRY order for the position within same session
-            try:
-                # Use the entry_order_id as exchange_order_id
-
+                # Create ENTRY order for the position
                 entry_order = Order(
                     position_id=position.id,
                     order_type=OrderType.ENTRY,
@@ -821,21 +821,32 @@ class DatabaseManager:
                     strategy_name=strategy_name,
                     session_id=position.session_id,
                 )
-
                 session.add(entry_order)
-                session.commit()  # Commit the order
+
+                # Single atomic commit for both position and order
+                session.commit()
 
                 logger.info(
-                    f"Auto-created ENTRY order #{entry_order.id} for position #{position.id}"
+                    f"Logged position #{position.id}: {symbol} {side.value} @ ${entry_price:.2f} "
+                    f"with ENTRY order #{entry_order.id}"
                 )
 
-            except Exception as exc:
-                # Don't fail position creation if order creation fails
-                # Position is already committed, so we log the failure but don't rollback
-                logger.warning(
-                    f"Failed to auto-create ENTRY order for position #{position.id}: {exc}"
+            except IntegrityError as ie:
+                # Rollback on integrity errors (duplicate keys, constraint violations)
+                session.rollback()
+                logger.error(
+                    f"IntegrityError creating position/order for {symbol}: {ie}. Transaction rolled back."
                 )
-                # Note: No rollback needed since position was committed separately
+                raise
+
+            except Exception as exc:
+                # Rollback on any other errors
+                session.rollback()
+                logger.error(
+                    f"Failed to create position/order for {symbol}: {exc}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
             return position.id
 
@@ -943,7 +954,15 @@ class DatabaseManager:
             if mae_time is not None:
                 position.mae_time = mae_time
 
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to update position {position_id}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
     def close_position(
         self,
@@ -968,10 +987,17 @@ class DatabaseManager:
             if pnl is not None:
                 position.unrealized_pnl = pnl
 
-            session.commit()
-
-            logger.info(f"Closed position #{position_id}")
-            return True
+            try:
+                session.commit()
+                logger.info(f"Closed position #{position_id}")
+                return True
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to close position {position_id}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                return False
 
     def get_pending_orders(self, session_id: int | None = None) -> list[dict]:
         """Get all pending orders for a session."""
@@ -2417,7 +2443,15 @@ class DatabaseManager:
             position.partial_exits_taken = int((position.partial_exits_taken or 0) + 1)
             position.last_partial_exit_price = Decimal(str(price))
             position.last_update = datetime.now(UTC)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to apply partial exit for position {position_id}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
     def apply_scale_in_update(
         self,
@@ -2449,7 +2483,15 @@ class DatabaseManager:
             position.scale_ins_taken = int((position.scale_ins_taken or 0) + 1)
             position.last_scale_in_price = Decimal(str(price))
             position.last_update = datetime.now(UTC)
-            session.commit()
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"Failed to apply scale-in for position {position_id}: {e}. Transaction rolled back.",
+                    exc_info=True,
+                )
+                raise
 
     # ==========================================
     # Order Management Methods (Phase 2)
