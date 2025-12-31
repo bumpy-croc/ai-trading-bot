@@ -138,6 +138,7 @@ def create_app() -> "Flask":
         request,
         url_for,
     )  # type: ignore
+    from urllib.parse import urljoin, urlparse
     from flask_admin import Admin  # type: ignore
     from flask_admin.contrib.sqla import ModelView  # type: ignore
     from flask_admin.form import SecureForm  # type: ignore
@@ -232,6 +233,20 @@ def create_app() -> "Flask":
             return AdminUser(user_id)
         return None
 
+    def is_safe_redirect_url(target: str | None) -> bool:
+        """
+        Validate that redirect URL is safe (same-origin) to prevent open redirect attacks.
+
+        Returns True only if target is a relative path on the same host.
+        """
+        if not target:
+            return False
+        # Parse the target URL
+        url_parts = urlparse(target)
+        # Reject absolute URLs with scheme or netloc (external redirects)
+        # Only allow relative paths like "/admin" or "/dashboard"
+        return not url_parts.netloc and not url_parts.scheme
+
     @app.route("/login", methods=["GET", "POST"])
     @limiter.limit("5 per minute")  # SEC-009: Rate limit login attempts
     @csrf.exempt
@@ -248,7 +263,13 @@ def create_app() -> "Flask":
                 user = AdminUser(username)
                 login_user(user)
                 logger.info(f"✅ Admin login successful for user: {username}")
-                return redirect(request.args.get("next") or url_for("admin.index"))
+
+                # Validate redirect URL to prevent open redirect attacks (SEC-010)
+                next_url = request.args.get("next")
+                if next_url and is_safe_redirect_url(next_url):
+                    return redirect(next_url)
+                else:
+                    return redirect(url_for("admin.index"))
 
             logger.warning(f"⚠️  Failed admin login attempt for user: {username}")
             return render_template_string(
