@@ -142,9 +142,21 @@ def _handle(ns: argparse.Namespace) -> int:
             except Exception as e:
                 report.setdefault("persistence", {})["error"] = str(e)
 
-        if "../" in ns.output or "..\\" in ns.output:
-            raise Exception("Invalid file path")
+        # Validate output path to prevent path traversal attacks
         out_path = Path(ns.output)
+        if not out_path.is_absolute():
+            out_path = PROJECT_ROOT / out_path
+
+        # Resolve to follow symlinks and normalize, then validate it's within PROJECT_ROOT
+        out_path = out_path.resolve()
+        project_root_resolved = PROJECT_ROOT.resolve()
+
+        if project_root_resolved not in out_path.parents and out_path != project_root_resolved:
+            raise ValueError(
+                f"Output path must be within project directory. "
+                f"Got: {out_path}, Expected within: {project_root_resolved}"
+            )
+
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w") as f:
             json.dump(report, f, indent=2)
