@@ -52,6 +52,26 @@ from src.engines.shared.trailing_stop_manager import (
     TrailingStopManager,
     TrailingStopUpdate,
 )
+from src.engines.shared.side_utils import (
+    is_long,
+    is_short,
+    opposite_side,
+    opposite_side_string,
+    to_position_side,
+    to_side_string,
+)
+from src.engines.shared.validation import (
+    EPSILON,
+    clamp_fraction,
+    is_position_fully_closed,
+    is_valid_fraction,
+    is_valid_price,
+    safe_divide,
+    validate_fraction,
+    validate_notional,
+    validate_parallel_lists,
+    validate_price,
+)
 
 __all__ = [
     # Models
@@ -89,4 +109,22 @@ __all__ = [
     # Performance tracking
     "PerformanceTracker",
     "PerformanceMetrics",
+    # Side utilities
+    "to_side_string",
+    "to_position_side",
+    "is_long",
+    "is_short",
+    "opposite_side",
+    "opposite_side_string",
+    # Validation utilities
+    "EPSILON",
+    "validate_price",
+    "validate_notional",
+    "validate_fraction",
+    "is_valid_price",
+    "is_valid_fraction",
+    "safe_divide",
+    "is_position_fully_closed",
+    "clamp_fraction",
+    "validate_parallel_lists",
 ]
