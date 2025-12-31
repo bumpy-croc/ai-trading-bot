@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.config.constants import DEFAULT_INFERENCE_TIMEOUT
 from src.infrastructure.timeout import TimeoutError as InfraTimeoutError
 from src.infrastructure.timeout import run_with_timeout
 from src.regime.detector import RegimeConfig, RegimeDetector
@@ -165,7 +166,7 @@ class PredictionEngine:
                     self.config.max_prediction_latency
                     if hasattr(self.config, "max_prediction_latency")
                     and isinstance(self.config.max_prediction_latency, (int, float))
-                    else 30.0  # Default 30s timeout
+                    else DEFAULT_INFERENCE_TIMEOUT
                 )
                 try:
                     prediction = run_with_timeout(
@@ -215,7 +216,7 @@ class PredictionEngine:
                     self.config.max_prediction_latency
                     if hasattr(self.config, "max_prediction_latency")
                     and isinstance(self.config.max_prediction_latency, (int, float))
-                    else 30.0
+                    else DEFAULT_INFERENCE_TIMEOUT
                 )
 
                 for ensemble_bundle in ensemble_bundles:
@@ -455,7 +456,7 @@ class PredictionEngine:
             self.config.max_prediction_latency
             if hasattr(self.config, "max_prediction_latency")
             and isinstance(self.config.max_prediction_latency, (int, float))
-            else 30.0
+            else DEFAULT_INFERENCE_TIMEOUT
         )
 
         for start in range(0, num_windows, batch_size):
@@ -584,7 +585,7 @@ class PredictionEngine:
                     self.config.max_prediction_latency
                     if hasattr(self.config, "max_prediction_latency")
                     and isinstance(self.config.max_prediction_latency, (int, float))
-                    else 30.0
+                    else DEFAULT_INFERENCE_TIMEOUT
                 )
                 try:
                     prediction = run_with_timeout(

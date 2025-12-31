@@ -124,3 +124,14 @@ DEFAULT_CORRELATION_SAMPLE_MIN_SIZE = 20
 DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS = 60
 DEFAULT_MFE_MAE_PRECISION_DECIMALS = 8
 DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"
+
+# Timeout Configuration Defaults
+# These values can be overridden via environment variables:
+# - MODEL_LOAD_TIMEOUT_SECONDS
+# - INFERENCE_TIMEOUT_SECONDS
+# - API_REQUEST_TIMEOUT_SECONDS
+# - DATA_FETCH_TIMEOUT_SECONDS
+DEFAULT_MODEL_LOAD_TIMEOUT = 60.0  # Timeout for loading ML models (ONNX, Keras)
+DEFAULT_INFERENCE_TIMEOUT = 30.0  # Timeout for model inference
+DEFAULT_API_REQUEST_TIMEOUT = 30.0  # Timeout for external API requests
+DEFAULT_DATA_FETCH_TIMEOUT = 60.0  # Timeout for historical data fetches

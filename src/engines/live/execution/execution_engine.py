@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -461,10 +462,11 @@ class LiveExecutionEngine:
                 return None
 
             # Generate deterministic client order ID for idempotency
-            # Format: atb_SYMBOL_SIDE_TIMESTAMP_QUANTITY
-            # This ensures same order params generate same ID for retry safety
+            # Format: atb_SYMBOL_SIDE_TIMESTAMP_UUID
+            # UUID prevents collision if multiple orders placed within same millisecond
             timestamp_ms = int(time.time() * 1000)
-            client_order_id = f"atb_{symbol}_{side.value}_{timestamp_ms}_{int(quantity * 1000000)}"
+            unique_suffix = uuid.uuid4().hex[:8]
+            client_order_id = f"atb_{symbol}_{side.value}_{timestamp_ms}_{unique_suffix}"
 
             return self.exchange_interface.place_order(
                 symbol=symbol,
@@ -511,10 +513,11 @@ class LiveExecutionEngine:
                 return False
 
             # Generate deterministic client order ID for exit order idempotency
-            # Use original order_id in the client ID to tie exit to entry
+            # Use UUID to prevent collision, timestamp for ordering
             timestamp_ms = int(time.time() * 1000)
             close_side_str = "SELL" if side == PositionSide.LONG else "BUY"
-            client_order_id = f"atb_close_{symbol}_{close_side_str}_{timestamp_ms}_{int(quantity * 1000000)}"
+            unique_suffix = uuid.uuid4().hex[:8]
+            client_order_id = f"atb_close_{symbol}_{close_side_str}_{timestamp_ms}_{unique_suffix}"
             if order_id:
                 # Include original order ID for traceability
                 client_order_id = f"{client_order_id}_{order_id[:8]}"
