@@ -14,6 +14,9 @@ from typing import Any
 import pandas as pd
 
 from src.config.constants import (
+    DEFAULT_REGIME_CONFIG_1D,
+    DEFAULT_REGIME_CONFIG_1H,
+    DEFAULT_REGIME_CONFIG_4H,
     DEFAULT_REGIME_MAX_DRAWDOWN_SWITCH,
     DEFAULT_REGIME_MIN_CONFIDENCE,
     DEFAULT_REGIME_MIN_DATA_LENGTH,
@@ -133,21 +136,28 @@ class RegimeStrategySwitcher:
         logger.info("RegimeStrategySwitcher initialized")
 
     def _get_timeframe_config(self, timeframe: str) -> RegimeConfig:
-        """Get regime detection config adjusted for timeframe"""
+        """Get regime detection config adjusted for timeframe.
 
-        base_config = RegimeConfig()
+        Uses centralized constants for consistent configuration across engines.
+        """
+        # Map timeframe to centralized config
+        config_map = {
+            "1h": DEFAULT_REGIME_CONFIG_1H,
+            "4h": DEFAULT_REGIME_CONFIG_4H,
+            "1d": DEFAULT_REGIME_CONFIG_1D,
+        }
 
-        # Adjust parameters based on timeframe
-        if timeframe == "1h":
+        if timeframe in config_map:
+            cfg = config_map[timeframe]
             return RegimeConfig(
-                slope_window=30, hysteresis_k=3, min_dwell=10, trend_threshold=0.001
+                slope_window=cfg["slope_window"],
+                hysteresis_k=cfg["hysteresis_k"],
+                min_dwell=cfg["min_dwell"],
+                trend_threshold=cfg["trend_threshold"],
             )
-        elif timeframe == "4h":
-            return RegimeConfig(slope_window=20, hysteresis_k=2, min_dwell=5, trend_threshold=0.002)
-        elif timeframe == "1d":
-            return RegimeConfig(slope_window=15, hysteresis_k=2, min_dwell=3, trend_threshold=0.003)
-        else:
-            return base_config
+
+        # Fallback to default config for unknown timeframes
+        return RegimeConfig()
 
     def analyze_market_regime(self, price_data: dict[str, pd.DataFrame]) -> dict[str, Any]:
         """

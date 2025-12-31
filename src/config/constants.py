@@ -93,6 +93,27 @@ DEFAULT_REGIME_CHECK_FREQUENCY: int = 50  # Check regime every N candles
 DEFAULT_REGIME_WARMUP_CANDLES: int = 60  # Minimum candles before first regime check
 DEFAULT_REGIME_MIN_DATA_LENGTH: int = 60  # Minimum dataframe length for regime analysis
 
+# Timeframe-specific regime detection configurations
+# Each timeframe has tuned parameters for optimal regime detection
+DEFAULT_REGIME_CONFIG_1H = {
+    "slope_window": 30,
+    "hysteresis_k": 3,
+    "min_dwell": 10,
+    "trend_threshold": 0.001,
+}
+DEFAULT_REGIME_CONFIG_4H = {
+    "slope_window": 20,
+    "hysteresis_k": 2,
+    "min_dwell": 5,
+    "trend_threshold": 0.002,
+}
+DEFAULT_REGIME_CONFIG_1D = {
+    "slope_window": 15,
+    "hysteresis_k": 2,
+    "min_dwell": 3,
+    "trend_threshold": 0.003,
+}
+
 # Prediction/Signal Defaults
 DEFAULT_CONFIDENCE_SCORE: float = 0.5  # Default confidence when not provided by strategy
 
