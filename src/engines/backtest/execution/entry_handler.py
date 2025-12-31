@@ -461,6 +461,7 @@ class EntryHandler:
                 symbol,
                 decision.reason,
             )
+            return EntryExecutionResult(executed=False, pending=True)
 
         result = self.execution_engine.execute_pending_entry(
             symbol=symbol,

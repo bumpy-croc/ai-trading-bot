@@ -224,6 +224,96 @@ class TestTakeProfitLimitPricing:
         assert base_price == pytest.approx(80.0)
 
 
+class TestStopLossGapPricing:
+    """Test stop-loss exits use adverse candle extremes on gap-through moves."""
+
+    def test_stop_loss_uses_candle_low_for_long_gap(self) -> None:
+        """Long stop-loss exits should use the candle low when price gaps through."""
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        execution_engine.execute_exit.return_value = MagicMock(
+            success=True,
+            executed_price=80.0,
+            exit_fee=0.0,
+            slippage_cost=0.0,
+        )
+
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.LONG,
+            size=0.5,
+            entry_price=120.0,
+            entry_time=datetime.now(timezone.utc),
+            entry_balance=1000.0,
+            order_id="sl-gap-long",
+            stop_loss=100.0,
+        )
+        position_tracker.open_position(position)
+
+        exit_handler.execute_exit(
+            position=position,
+            exit_reason="Stop loss",
+            current_price=105.0,
+            limit_price=100.0,
+            current_balance=1000.0,
+            candle_high=110.0,
+            candle_low=80.0,
+        )
+
+        execute_exit_call = execution_engine.execute_exit.call_args
+        base_price = execute_exit_call.kwargs["base_price"]
+
+        assert base_price == pytest.approx(80.0)
+
+    def test_stop_loss_uses_candle_high_for_short_gap(self) -> None:
+        """Short stop-loss exits should use the candle high when price gaps through."""
+        position_tracker = LivePositionTracker()
+        execution_engine = MagicMock()
+        execution_engine.execute_exit.return_value = MagicMock(
+            success=True,
+            executed_price=120.0,
+            exit_fee=0.0,
+            slippage_cost=0.0,
+        )
+
+        exit_handler = LiveExitHandler(
+            position_tracker=position_tracker,
+            execution_engine=execution_engine,
+            execution_model=ExecutionModel(default_fill_policy()),
+        )
+
+        position = LivePosition(
+            symbol="ETHUSDT",
+            side=PositionSide.SHORT,
+            size=0.5,
+            entry_price=100.0,
+            entry_time=datetime.now(timezone.utc),
+            entry_balance=1000.0,
+            order_id="sl-gap-short",
+            stop_loss=110.0,
+        )
+        position_tracker.open_position(position)
+
+        exit_handler.execute_exit(
+            position=position,
+            exit_reason="Stop loss",
+            current_price=95.0,
+            limit_price=110.0,
+            current_balance=1000.0,
+            candle_high=120.0,
+            candle_low=90.0,
+        )
+
+        execute_exit_call = execution_engine.execute_exit.call_args
+        base_price = execute_exit_call.kwargs["base_price"]
+
+        assert base_price == pytest.approx(120.0)
 
 
 class TestPositionTrackerThreadSafety:

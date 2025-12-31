@@ -149,6 +149,15 @@ class LiveExitHandler:
             return OrderSide.BUY
         raise ValueError(f"Unsupported position side: {position.side}")
 
+    def _is_stop_loss_reason(self, exit_reason: str) -> bool:
+        """Return True when the exit reason indicates a stop loss."""
+        reason_lower = exit_reason.lower()
+        return (
+            "stop loss" in reason_lower
+            or "stop_loss" in reason_lower
+            or "stop-loss" in reason_lower
+        )
+
     def _build_exit_intent(
         self,
         position: LivePosition,
@@ -161,11 +170,7 @@ class LiveExitHandler:
         stop_price = None
         effective_limit = limit_price
 
-        if (
-            "stop loss" in reason_lower
-            or "stop_loss" in reason_lower
-            or "stop-loss" in reason_lower
-        ):
+        if self._is_stop_loss_reason(exit_reason):
             order_type = OrderType.STOP_LOSS
             stop_price = limit_price if limit_price is not None else position.stop_loss
         elif "take profit" in reason_lower or "take_profit" in reason_lower:
@@ -188,6 +193,37 @@ class LiveExitHandler:
             stop_price=stop_price,
             exit_reason=exit_reason,
         )
+
+    def _apply_stop_loss_gap_pricing(
+        self,
+        position: LivePosition,
+        exit_reason: str,
+        base_exit_price: float,
+        limit_price: float | None,
+        candle_high: float | None,
+        candle_low: float | None,
+    ) -> float:
+        """Adjust stop-loss exit pricing for adverse gap-through moves."""
+        if not self.use_high_low_for_stops:
+            return base_exit_price
+        if not self._is_stop_loss_reason(exit_reason):
+            return base_exit_price
+
+        stop_price = limit_price if limit_price is not None else position.stop_loss
+        if stop_price is None:
+            return base_exit_price
+
+        if position.side == PositionSide.LONG:
+            if candle_low is None:
+                return base_exit_price
+            return min(base_exit_price, candle_low)
+
+        if position.side == PositionSide.SHORT:
+            if candle_high is None:
+                return base_exit_price
+            return max(base_exit_price, candle_high)
+
+        return base_exit_price
 
     def check_exit_conditions(
         self,
@@ -307,6 +343,15 @@ class LiveExitHandler:
                 position.symbol,
                 decision.reason,
             )
+
+        base_exit_price = self._apply_stop_loss_gap_pricing(
+            position=position,
+            exit_reason=exit_reason,
+            base_exit_price=base_exit_price,
+            limit_price=limit_price,
+            candle_high=candle_high,
+            candle_low=candle_low,
+        )
 
         # IMPORTANT: Use exit notional (accounting for price change) for accurate fee calculation.
         # This correctly models real exchange behavior where fees are charged on the actual
@@ -535,9 +580,7 @@ class LiveExitHandler:
     ) -> bool:
         """Check if stop loss should be triggered.
 
-        Uses candle high/low for realistic worst-case execution detection.
-        For long positions, uses max(stop_loss, candle_low) to model realistic fill prices
-        since stop losses typically execute at or worse than the stop level.
+        Uses candle high/low for more realistic stop detection.
 
         Args:
             position: Position to check.

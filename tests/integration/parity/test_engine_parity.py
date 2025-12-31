@@ -626,8 +626,8 @@ class TestStopLossTakeProfitParity:
         assert exit_check.should_exit is True
         assert "Stop loss" in exit_check.exit_reason
 
-    def test_exit_uses_sl_level_not_close(self):
-        """Verify exit price uses SL level, not close price."""
+    def test_exit_uses_worst_case_stop_price_on_gap(self):
+        """Verify exit price uses the worst candle low on stop-loss gaps."""
         strategy = Mock()
         strategy.get_risk_overrides.return_value = None
         data_provider = Mock()
@@ -671,9 +671,9 @@ class TestStopLossTakeProfitParity:
             candle_high=101.0,
         )
 
-        # P&L should be based on SL price (95), not close (98)
-        # (95 - 100) / 100 * 0.1 * 10000 = -$50
-        expected_pnl = -50.0
+        # P&L should be based on candle low (94), not close (98) or stop (95)
+        # (94 - 100) / 100 * 0.1 * 10000 = -$60
+        expected_pnl = -60.0
         assert exit_result.realized_pnl == pytest.approx(expected_pnl)
 
 

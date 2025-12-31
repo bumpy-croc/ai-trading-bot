@@ -442,13 +442,13 @@ class ExitHandler:
             if side_str == "long":
                 hit_stop_loss = candle_low <= stop_loss_val
                 if hit_stop_loss:
-                    # Use max(stop_loss, candle_low) for realistic worst-case execution
-                    sl_exit_price = max(stop_loss_val, candle_low)
+                    # Use candle low for worst-case gap-through execution.
+                    sl_exit_price = candle_low
             else:
                 hit_stop_loss = candle_high >= stop_loss_val
                 if hit_stop_loss:
-                    # Use min(stop_loss, candle_high) for realistic worst-case execution
-                    sl_exit_price = min(stop_loss_val, candle_high)
+                    # Use candle high for worst-case gap-through execution.
+                    sl_exit_price = candle_high
 
         # Check take profit
         hit_take_profit = False
@@ -628,8 +628,9 @@ class ExitHandler:
         base_exit_price = exit_price
         liquidity = None
         if decision.should_fill and decision.fill_price is not None:
-            base_exit_price = decision.fill_price
             liquidity = decision.liquidity
+            if order_intent.order_type != OrderType.STOP_LOSS:
+                base_exit_price = decision.fill_price
         else:
             logger.warning(
                 "Exit fill decision fallback for %s: %s",
