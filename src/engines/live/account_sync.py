@@ -233,11 +233,24 @@ class AccountSynchronizer:
 
                 if db_pos:
                     # Position exists in both - check for updates
-                    if (
-                        abs(exchange_pos.size - db_pos["size"]) > 0.0001
-                    ):  # Significant size difference
+                    # Validate sizes are numeric before comparison to prevent TypeError
+                    exchange_size = exchange_pos.size
+                    db_size = db_pos["size"]
+
+                    if not isinstance(exchange_size, (int, float)) or not isinstance(
+                        db_size, (int, float)
+                    ):
+                        logger.warning(
+                            "Skipping position sync with non-numeric size: "
+                            "exchange_size=%s (type=%s), db_size=%s (type=%s)",
+                            exchange_size,
+                            type(exchange_size).__name__,
+                            db_size,
+                            type(db_size).__name__,
+                        )
+                    elif abs(exchange_size - db_size) > 0.0001:  # Significant size difference
                         logger.info(
-                            f"Position size updated: {exchange_pos.symbol} {exchange_pos.side} - {db_pos['size']} -> {exchange_pos.size}"
+                            f"Position size updated: {exchange_pos.symbol} {exchange_pos.side} - {db_size} -> {exchange_size}"
                         )
                         # Update position in database
                         self.db_manager.update_position(
