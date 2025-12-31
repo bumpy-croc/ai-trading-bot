@@ -620,6 +620,64 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             logger.error(f"Failed to get positions: {e}")
             return []
 
+    def _parse_order_data(self, order_data: dict) -> Order | None:
+        """Safely parse order data from Binance API response.
+
+        Args:
+            order_data: Raw order data dictionary from Binance API
+
+        Returns:
+            Order object or None if data is invalid
+        """
+        try:
+            # Validate required fields exist
+            required_fields = [
+                "orderId", "symbol", "side", "type", "origQty",
+                "status", "executedQty", "time", "updateTime"
+            ]
+            for field in required_fields:
+                if field not in order_data:
+                    logger.error(
+                        "Invalid order data from Binance: missing required field '%s'. Data: %s",
+                        field, order_data
+                    )
+                    return None
+
+            # Safe extraction with type validation
+            order_id_raw = order_data["orderId"]
+            if not isinstance(order_id_raw, (int, str)):
+                logger.error("Invalid orderId type: %s", type(order_id_raw))
+                return None
+
+            return Order(
+                order_id=str(order_id_raw),
+                symbol=str(order_data["symbol"]),
+                side=OrderSide.BUY if order_data["side"] == SIDE_BUY else OrderSide.SELL,
+                order_type=self._convert_order_type(order_data["type"]),
+                quantity=float(order_data["origQty"]),
+                price=float(order_data.get("price", 0)) if order_data.get("price") != "0" else None,
+                status=self._convert_order_status(order_data["status"]),
+                filled_quantity=float(order_data.get("executedQty", 0)),
+                average_price=(
+                    float(order_data.get("avgPrice", 0))
+                    if order_data.get("avgPrice") and order_data.get("avgPrice") != "0"
+                    else None
+                ),
+                commission=0.0,  # Will be updated from trade history
+                commission_asset="",
+                create_time=datetime.fromtimestamp(int(order_data["time"]) / 1000),
+                update_time=datetime.fromtimestamp(int(order_data["updateTime"]) / 1000),
+                stop_price=(
+                    float(order_data["stopPrice"])
+                    if order_data.get("stopPrice") and order_data["stopPrice"] != "0"
+                    else None
+                ),
+                time_in_force=order_data.get("timeInForce", "GTC"),
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error("Failed to parse order data: %s. Data: %s", e, order_data)
+            return None
+
     def get_open_orders(self, symbol: str | None = None) -> list[Order]:
         """Get all open orders"""
         if not BINANCE_AVAILABLE or not self._client:
@@ -634,28 +692,9 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             orders = []
             for order_data in orders_data:
-                order = Order(
-                    order_id=str(order_data["orderId"]),
-                    symbol=order_data["symbol"],
-                    side=OrderSide.BUY if order_data["side"] == SIDE_BUY else OrderSide.SELL,
-                    order_type=self._convert_order_type(order_data["type"]),
-                    quantity=float(order_data["origQty"]),
-                    price=float(order_data["price"]) if order_data["price"] != "0" else None,
-                    status=self._convert_order_status(order_data["status"]),
-                    filled_quantity=float(order_data["executedQty"]),
-                    average_price=(
-                        float(order_data["avgPrice"]) if order_data["avgPrice"] != "0" else None
-                    ),
-                    commission=0.0,  # Will be updated from trade history
-                    commission_asset="",
-                    create_time=datetime.fromtimestamp(order_data["time"] / 1000),
-                    update_time=datetime.fromtimestamp(order_data["updateTime"] / 1000),
-                    stop_price=(
-                        float(order_data["stopPrice"]) if order_data.get("stopPrice") else None
-                    ),
-                    time_in_force=order_data.get("timeInForce", "GTC"),
-                )
-                orders.append(order)
+                order = self._parse_order_data(order_data)
+                if order is not None:
+                    orders.append(order)
 
             return orders
 
@@ -671,30 +710,7 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
         try:
             order_data = self._client.get_order(symbol=symbol, orderId=order_id)
-
-            order = Order(
-                order_id=str(order_data["orderId"]),
-                symbol=order_data["symbol"],
-                side=OrderSide.BUY if order_data["side"] == SIDE_BUY else OrderSide.SELL,
-                order_type=self._convert_order_type(order_data["type"]),
-                quantity=float(order_data["origQty"]),
-                price=float(order_data["price"]) if order_data["price"] != "0" else None,
-                status=self._convert_order_status(order_data["status"]),
-                filled_quantity=float(order_data["executedQty"]),
-                average_price=(
-                    float(order_data["avgPrice"]) if order_data["avgPrice"] != "0" else None
-                ),
-                commission=0.0,
-                commission_asset="",
-                create_time=datetime.fromtimestamp(order_data["time"] / 1000),
-                update_time=datetime.fromtimestamp(order_data["updateTime"] / 1000),
-                stop_price=(
-                    float(order_data.get("stopPrice")) if order_data.get("stopPrice") else None
-                ),
-                time_in_force=order_data.get("timeInForce", "GTC"),
-            )
-
-            return order
+            return self._parse_order_data(order_data)
 
         except Exception as e:
             logger.error(f"Failed to get order {order_id}: {e}")
