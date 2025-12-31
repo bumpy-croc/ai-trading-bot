@@ -173,7 +173,10 @@ class CachedDataProvider(DataProvider):
 
     def _save_to_cache(self, cache_path: str | None, data: pd.DataFrame):
         """
-        Save data to cache file.
+        Save data to cache file using atomic write operation.
+
+        Uses temp file + atomic rename to prevent cache corruption from
+        process crashes during write (OOM, SIGKILL, disk full).
 
         Args:
             cache_path: Path to the cache file (None if caching is disabled)
@@ -182,11 +185,24 @@ class CachedDataProvider(DataProvider):
         if cache_path is None:
             return
 
+        temp_path = None
         try:
-            data.to_parquet(cache_path, index=True)
+            # Write to temporary file first (atomic operation pattern)
+            temp_path = f"{cache_path}.tmp.{os.getpid()}"
+            data.to_parquet(temp_path, index=True)
+
+            # Atomic rename (POSIX guarantee: old file replaced atomically)
+            os.replace(temp_path, cache_path)
+
             logger.debug(f"Saved data to cache: {cache_path}")
         except Exception as e:
             logger.warning(f"Failed to save cache to {cache_path}: {e}")
+            # Clean up temporary file on error
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass  # Best effort cleanup
 
     def _get_year_ranges(
         self, start: datetime, end: datetime
