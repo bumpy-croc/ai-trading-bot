@@ -14,12 +14,18 @@ from typing import Any
 import numpy as np
 import onnxruntime as ort
 
+from src.infrastructure.timeout import TimeoutError, run_with_timeout
+
 from ..config import PredictionConfig
 from ..utils.caching import PredictionCacheManager
 from .execution_providers import get_preferred_providers
 
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
+
+# Model loading timeout protection (seconds)
+MODEL_LOAD_TIMEOUT = 60.0  # 60 seconds for model loading
+METADATA_LOAD_TIMEOUT = 10.0  # 10 seconds for metadata file read
 
 
 @dataclass
@@ -58,27 +64,68 @@ class OnnxRunner:
         self._load_model()
 
     def _load_model(self) -> None:
-        """Load ONNX model and metadata"""
-        try:
-            # Load ONNX session with the best available execution providers
-            providers = get_preferred_providers()
-            self.session = ort.InferenceSession(self.model_path, providers=providers)
+        """Load ONNX model and metadata with timeout protection.
 
-            # Load model metadata
+        Raises:
+            TimeoutError: If model loading exceeds timeout.
+            RuntimeError: If model loading fails for other reasons.
+        """
+        try:
+            # Load ONNX session with timeout protection (guards against corrupted files or slow I/O)
+            providers = get_preferred_providers()
+
+            def _create_session():
+                return ort.InferenceSession(self.model_path, providers=providers)
+
+            self.session = run_with_timeout(
+                _create_session,
+                timeout_seconds=MODEL_LOAD_TIMEOUT,
+                operation_name=f"ONNX model loading ({os.path.basename(self.model_path)})",
+            )
+
+            # Load model metadata with timeout protection
             self.model_metadata = self._load_metadata()
 
+        except TimeoutError as e:
+            raise RuntimeError(
+                f"Model loading timed out after {MODEL_LOAD_TIMEOUT}s for {self.model_path}. "
+                f"The model file may be corrupted or the disk is slow."
+            ) from e
         except Exception as e:
             raise RuntimeError(f"Failed to load model {self.model_path}: {e}") from e
 
     def _load_metadata(self) -> dict[str, Any]:
-        """Load model metadata from JSON file"""
+        """Load model metadata from JSON file with timeout protection.
+
+        Returns:
+            Metadata dict or defaults if file not found.
+
+        Raises:
+            TimeoutError: If metadata loading exceeds timeout.
+        """
         metadata_path = self.model_path.replace(".onnx", "_metadata.json")
         try:
-            with open(metadata_path) as f:
-                return json.load(f)
+
+            def _read_metadata():
+                with open(metadata_path) as f:
+                    return json.load(f)
+
+            return run_with_timeout(
+                _read_metadata,
+                timeout_seconds=METADATA_LOAD_TIMEOUT,
+                operation_name=f"metadata loading ({os.path.basename(metadata_path)})",
+            )
         except FileNotFoundError:
             # Return default metadata if file doesn't exist
+            logging.info("No metadata file found for %s, using defaults", self.model_path)
             return {"sequence_length": 120, "feature_count": 5, "normalization_params": {}}
+        except TimeoutError as e:
+            logging.error(
+                "Metadata loading timed out after %.1fs for %s",
+                METADATA_LOAD_TIMEOUT,
+                metadata_path,
+            )
+            raise
 
     def predict(self, features: np.ndarray) -> ModelPrediction:
         """Run prediction on features with optional caching"""
