@@ -115,10 +115,11 @@ def with_network_retry(
 
                 except requests.exceptions.HTTPError as e:
                     # HTTP-level errors - check if retryable by status code
-                    status_code = e.response.status_code if e.response else None
+                    # Safely access status_code with validation to prevent AttributeError
+                    status_code = getattr(e.response, "status_code", None) if e.response else None
                     last_exception = e
 
-                    if status_code in retryable_status_codes:
+                    if status_code is not None and status_code in retryable_status_codes:
                         if attempt < max_retries:
                             delay = _calculate_delay(
                                 attempt, base_delay, max_delay, exponential_base, jitter
