@@ -22,6 +22,11 @@ Ideal for:
 
 from __future__ import annotations
 
+from src.config.constants import (
+    DEFAULT_BASE_RISK_PER_TRADE,
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_TAKE_PROFIT_PCT,
+)
 from src.risk.risk_manager import RiskManager as EngineRiskManager
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import (
@@ -64,17 +69,17 @@ def create_ml_sentiment_strategy(
     )
 
     risk_parameters = RiskParameters(
-        base_risk_per_trade=0.02,
-        default_take_profit_pct=0.04,
-        max_position_size=0.1,
+        base_risk_per_trade=DEFAULT_BASE_RISK_PER_TRADE,
+        default_take_profit_pct=DEFAULT_TAKE_PROFIT_PCT,
+        max_position_size=DEFAULT_MAX_POSITION_SIZE,
     )
     core_risk_manager = EngineRiskManager(risk_parameters)
     risk_overrides = {
         "position_sizer": "fixed_fraction",
-        "base_fraction": 0.02,
-        "max_fraction": 0.1,
-        "stop_loss_pct": 0.02,
-        "take_profit_pct": 0.04,
+        "base_fraction": DEFAULT_BASE_RISK_PER_TRADE,
+        "max_fraction": DEFAULT_MAX_POSITION_SIZE,
+        "stop_loss_pct": DEFAULT_BASE_RISK_PER_TRADE,  # Tight stop matching risk
+        "take_profit_pct": DEFAULT_TAKE_PROFIT_PCT,
     }
     risk_manager = CoreRiskAdapter(core_risk_manager)
     risk_manager.set_strategy_overrides(risk_overrides)
@@ -95,8 +100,8 @@ def create_ml_sentiment_strategy(
         position_sizer=position_sizer,
         regime_detector=regime_detector,
     )
-    strategy.stop_loss_pct = 0.02
-    strategy.take_profit_pct = 0.04
-    strategy.risk_per_trade = 0.02
+    strategy.stop_loss_pct = DEFAULT_BASE_RISK_PER_TRADE  # Tight stop matching risk
+    strategy.take_profit_pct = DEFAULT_TAKE_PROFIT_PCT
+    strategy.risk_per_trade = DEFAULT_BASE_RISK_PER_TRADE
     strategy._risk_overrides = risk_overrides
     return strategy

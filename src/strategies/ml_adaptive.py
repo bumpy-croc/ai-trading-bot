@@ -20,6 +20,14 @@ Ideal for:
 - Simple deployment scenarios
 """
 
+from src.config.constants import (
+    DEFAULT_BASE_RISK_PER_TRADE,
+    DEFAULT_MAX_SCALE_INS,
+    DEFAULT_PARTIAL_EXIT_SIZES,
+    DEFAULT_PARTIAL_EXIT_TARGETS,
+    DEFAULT_SCALE_IN_SIZES,
+    DEFAULT_SCALE_IN_THRESHOLDS,
+)
 from src.strategies.components import (
     ConfidenceWeightedSizer,
     EnhancedRegimeDetector,
@@ -57,7 +65,7 @@ def create_ml_adaptive_strategy(
 
     # Create regime-adaptive risk manager
     risk_manager = RegimeAdaptiveRiskManager(
-        base_risk=0.02,  # 2% base risk
+        base_risk=DEFAULT_BASE_RISK_PER_TRADE,
     )
 
     # Create position sizer with confidence weighting (20% base)
@@ -79,11 +87,11 @@ def create_ml_adaptive_strategy(
 
     strategy._risk_overrides = {
         "partial_operations": {
-            "exit_targets": [0.03, 0.06, 0.10],
-            "exit_sizes": [0.25, 0.25, 0.50],
-            "scale_in_thresholds": [0.02, 0.05],
-            "scale_in_sizes": [0.25, 0.25],
-            "max_scale_ins": 2,
+            "exit_targets": list(DEFAULT_PARTIAL_EXIT_TARGETS),
+            "exit_sizes": list(DEFAULT_PARTIAL_EXIT_SIZES),
+            "scale_in_thresholds": list(DEFAULT_SCALE_IN_THRESHOLDS),
+            "scale_in_sizes": list(DEFAULT_SCALE_IN_SIZES),
+            "max_scale_ins": DEFAULT_MAX_SCALE_INS,
         }
     }
 
