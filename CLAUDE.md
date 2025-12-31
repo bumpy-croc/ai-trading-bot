@@ -498,6 +498,122 @@ When Claude makes a mistake or you discover a best practice during development, 
 - Check for existing branches before creating new ones to avoid duplicates
 - Verify database connection before running integration tests
 
+### Common PR Review Issues
+
+The following patterns have been identified from PR reviews as recurring mistakes. **Avoid these proactively:**
+
+#### 1. Timezone Handling (Naive/Aware DateTime Mixing)
+- **Problem**: Mixing `datetime.now(UTC)` with timezone-naive timestamps from pandas causes `TypeError`
+- **Prevention**: Use consistent timezone handling - either all UTC-aware OR all naive
+- **Example**: When comparing `datetime.now(UTC)` with `df.index[-1]`, ensure the index is also UTC-aware
+```python
+# ❌ Bad: Mixing aware and naive
+if datetime.now(UTC) - df.index[-1] > timedelta(hours=1):  # TypeError!
+
+# ✅ Good: Consistent timezone handling
+if datetime.now(UTC) - df.index[-1].tz_localize('UTC') > timedelta(hours=1):
+```
+
+#### 2. Missing Input Validation
+- **Problem**: Division by zero, NaN/Infinity propagation, negative values, invalid enum values
+- **Prevention**: Validate ALL inputs at API boundaries BEFORE calculations
+- **Critical areas**: Price (must be positive), notional (must be non-negative), side (must be valid enum)
+```python
+# ✅ Good: Validate before calculating
+if price <= 0:
+    raise ValueError(f"Price must be positive, got {price}")
+if not math.isfinite(price):
+    raise ValueError(f"Price must be finite, got {price}")
+```
+
+#### 3. Financial Calculation Consistency (Backtest vs Live Parity)
+- **Problem**: Fees/slippage applied differently between engines, causing backtest results to not match live
+- **Prevention**: Use shared calculation modules in `src/engines/shared/` - NEVER duplicate financial logic
+- **Verification**: Write parity tests that run BOTH engines with identical inputs and assert identical outputs
+```python
+# ✅ Good: True parity test
+backtest_result = backtester.run(data)
+live_result = simulate_live(data)
+assert backtest_result.final_balance == pytest.approx(live_result.final_balance)
+```
+
+#### 4. Race Conditions / Thread Safety
+- **Problem**: Time-of-check-time-of-use (TOCTOU) vulnerabilities in position management
+- **Prevention**: Re-verify position existence immediately before mutations; use locks consistently
+- **Pattern**: Check → Action should be atomic or re-check before action
+```python
+# ❌ Bad: TOCTOU race - position may be closed between check and action
+if position_tracker.has_position(order_id):
+    # Another thread could close position here!
+    position_tracker.close_position(order_id)
+
+# ✅ Good: Re-verify inside critical section
+with positions_lock:
+    if position_tracker.has_position(order_id):
+        position_tracker.close_position(order_id)
+```
+
+#### 5. Error Handling Gaps
+- **Problem**: Broad `except Exception` with silent logging at DEBUG level hides production bugs
+- **Prevention**: Catch specific exceptions, log at WARNING for unexpected failures
+```python
+# ❌ Bad: Hides all errors
+except Exception as e:
+    logger.debug("Failed: %s", e)
+
+# ✅ Good: Specific exceptions, visible logging
+except (ValueError, KeyError, ZeroDivisionError) as e:
+    logger.warning("Expected error in calculation: %s", e)
+except Exception as e:
+    logger.warning("Unexpected error: %s", e, exc_info=True)
+```
+
+#### 6. Data Structure Validation
+- **Problem**: Parallel lists with mismatched lengths (e.g., `exit_targets` and `exit_sizes`) cause IndexError
+- **Prevention**: Validate configuration invariants at initialization, fail fast
+```python
+# ✅ Good: Validate at init
+if len(exit_targets) != len(exit_sizes):
+    raise ValueError(f"exit_targets ({len(exit_targets)}) must match exit_sizes ({len(exit_sizes)})")
+```
+
+#### 7. Division by Zero in Loops
+- **Problem**: Iterating over positions that become fully closed during the loop
+- **Prevention**: Check divisor before dividing; add epsilon protection
+```python
+# ✅ Good: Protect against division by zero
+current_fraction = position.current_size / position.original_size
+if abs(current_fraction) < 1e-9:  # Position fully closed
+    break
+exit_of_current = exit_of_original / current_fraction
+```
+
+#### 8. Loop Safety in Partial Operations
+- **Problem**: Malformed configurations could cause infinite loops
+- **Prevention**: Add maximum iteration guards as defense-in-depth
+```python
+MAX_ITERATIONS = 10
+iteration = 0
+while iteration < MAX_ITERATIONS:
+    # ... loop body ...
+    iteration += 1
+```
+
+#### 9. Property vs Private Attribute Confusion
+- **Problem**: Using `self._total_fees_paid` when `self.total_fees_paid` property exists
+- **Prevention**: When delegating to sub-components, always use properties; avoid direct private attribute access
+```python
+# ❌ Bad: References non-existent private attribute
+return {"total_fees": self._total_fees_paid}  # AttributeError!
+
+# ✅ Good: Use property that delegates to component
+return {"total_fees": self.total_fees_paid}  # Works
+```
+
+#### 10. Missing Tests for New Components
+- **Problem**: New shared modules added without corresponding unit tests
+- **Prevention**: Every new module needs tests BEFORE merge; add parity tests for shared engine components
+
 ---
 
 ## Automated Documentation
