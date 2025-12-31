@@ -740,18 +740,28 @@ class BinanceProvider(DataProvider, ExchangeInterface):
 
             trades = []
             for trade_data in trades_data:
-                trade = Trade(
-                    trade_id=str(trade_data["id"]),
-                    order_id=str(trade_data["orderId"]),
-                    symbol=trade_data["symbol"],
-                    side=OrderSide.BUY if trade_data["isBuyer"] else OrderSide.SELL,
-                    quantity=float(trade_data["qty"]),
-                    price=float(trade_data["price"]),
-                    commission=float(trade_data["commission"]),
-                    commission_asset=trade_data["commissionAsset"],
-                    time=datetime.fromtimestamp(trade_data["time"] / 1000),
-                )
-                trades.append(trade)
+                # Validate critical fields to prevent KeyError/TypeError from malformed API response
+                try:
+                    trade_time_ms = trade_data.get("time")
+                    if trade_time_ms is None or not isinstance(trade_time_ms, (int, float)):
+                        logger.warning("Skipping trade with invalid timestamp: %s", trade_data)
+                        continue
+
+                    trade = Trade(
+                        trade_id=str(trade_data["id"]),
+                        order_id=str(trade_data["orderId"]),
+                        symbol=trade_data["symbol"],
+                        side=OrderSide.BUY if trade_data["isBuyer"] else OrderSide.SELL,
+                        quantity=float(trade_data["qty"]),
+                        price=float(trade_data["price"]),
+                        commission=float(trade_data["commission"]),
+                        commission_asset=trade_data["commissionAsset"],
+                        time=datetime.fromtimestamp(trade_time_ms / 1000),
+                    )
+                    trades.append(trade)
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.warning("Skipping malformed trade record: %s. Error: %s", trade_data, e)
+                    continue
 
             return trades
 
