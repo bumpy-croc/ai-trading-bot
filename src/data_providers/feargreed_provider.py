@@ -59,7 +59,9 @@ class FearGreedProvider(SentimentDataProvider):
     def _load_data(self) -> None:
         try:
             params = {"limit": 0, "format": "json"}
-            resp = requests.get(self.BASE_URL, params=params, timeout=20)
+            # Use tuple timeout: (connect_timeout, read_timeout)
+            # Prevents indefinite hangs on DNS failures or TCP handshake issues
+            resp = requests.get(self.BASE_URL, params=params, timeout=(5, 20))
             resp.raise_for_status()
             payload = resp.json()
             records = payload.get("data", [])
