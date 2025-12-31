@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.engines.shared.models import normalize_side
 from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
@@ -88,7 +89,7 @@ class TrailingStopManager:
 
         # Get position details
         entry_price = position.entry_price
-        side = self._get_side_str(position)
+        side = normalize_side(getattr(position, "side", None))
         current_stop = getattr(position, "stop_loss", None) or getattr(
             position, "trailing_stop_price", None
         )
@@ -115,15 +116,6 @@ class TrailingStopManager:
         )
 
         return trailing_result
-
-    def _get_side_str(self, position: Any) -> str:
-        """Get the side as a lowercase string."""
-        side = getattr(position, "side", None)
-        if side is None:
-            return "long"
-        if hasattr(side, "value"):
-            return side.value.lower()
-        return str(side).lower()
 
     def _check_breakeven(
         self,

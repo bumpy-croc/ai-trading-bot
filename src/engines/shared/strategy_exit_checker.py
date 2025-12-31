@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from src.engines.shared.models import normalize_side
+
 if TYPE_CHECKING:
     from src.engines.shared.models import BasePosition
     from src.strategies.components import Strategy as ComponentStrategy
@@ -113,7 +115,7 @@ class StrategyExitChecker:
         try:
             from src.strategies.components import SignalDirection
 
-            side_str = self._get_side_str(position)
+            side_str = normalize_side(getattr(position, "side", None))
 
             if (
                 side_str == "long"
@@ -168,7 +170,7 @@ class StrategyExitChecker:
             entry_balance = getattr(position, "entry_balance", None) or 0.0
             notional = current_size * float(entry_balance)
 
-            side_str = self._get_side_str(position)
+            side_str = normalize_side(getattr(position, "side", None))
 
             component_position = ComponentPosition(
                 symbol=position.symbol,
@@ -200,22 +202,6 @@ class StrategyExitChecker:
             logger.debug("Component exit check failed: %s", e)
 
         return StrategyExitResult(should_exit=False)
-
-    def _get_side_str(self, position: Any) -> str:
-        """Get position side as lowercase string.
-
-        Args:
-            position: Position with side attribute.
-
-        Returns:
-            'long' or 'short'.
-        """
-        side = getattr(position, "side", None)
-        if side is None:
-            return "long"
-        if hasattr(side, "value"):
-            return side.value.lower()
-        return str(side).lower()
 
     def _get_current_size(self, position: Any) -> float:
         """Get current position size (accounting for partial exits).
