@@ -97,7 +97,17 @@ def max_drawdown(balance_series: pd.Series) -> float:
         return 0.0
 
     running_max = balance_series.cummax()
-    drawdowns = (running_max - balance_series) / running_max
+
+    # Prevent division by zero when balance reaches zero
+    # Only calculate drawdowns where running_max > 0 to avoid inf/NaN
+    mask = running_max > 0
+    if not mask.any():
+        # All balances are zero or negative - return 100% drawdown
+        return 100.0
+
+    drawdowns = pd.Series(0.0, index=balance_series.index)
+    drawdowns[mask] = (running_max[mask] - balance_series[mask]) / running_max[mask]
+
     return drawdowns.max() * 100.0
 
 
