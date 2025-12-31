@@ -228,16 +228,23 @@ class LiveTradingEngine:
                 try:
                     component_risk.bind_core_manager(self.risk_manager)
                 except Exception as bind_error:
-                    logger.debug("Failed to bind core risk manager to component: %s", bind_error)
+                    logger.warning(
+                        "Failed to bind core risk manager to component strategy: %s. "
+                        "Component risk limits may not be enforced.",
+                        bind_error,
+                        exc_info=True
+                    )
             if hasattr(component_risk, "set_strategy_overrides"):
                 overrides = getattr(self.strategy, "_risk_overrides", None)
                 if overrides:
                     try:
                         component_risk.set_strategy_overrides(overrides)
                     except Exception as override_error:
-                        logger.debug(
-                            "Failed to propagate risk overrides to component manager: %s",
+                        logger.warning(
+                            "Failed to propagate risk overrides to component manager: %s. "
+                            "Strategy-specific risk parameters may not apply.",
                             override_error,
+                            exc_info=True
                         )
 
         # Trailing stop policy
