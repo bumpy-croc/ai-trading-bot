@@ -168,6 +168,16 @@ class OrderTracker:
                 )
                 # Don't stop tracking - keep polling until we get valid price
                 return
+
+            # Validate filled_qty to prevent division by zero and corrupt position tracking
+            if not isinstance(filled_qty, int | float) or filled_qty <= 0:
+                logger.error(
+                    f"Invalid filled quantity {filled_qty} for order {order_id} - "
+                    "skipping fill callback to prevent corrupt position tracking"
+                )
+                # Don't stop tracking - keep polling until we get valid quantity
+                return
+
             logger.info(
                 f"Order filled: {order_id} {tracked.symbol} "
                 f"qty={filled_qty} @ {avg_price}"
@@ -184,6 +194,15 @@ class OrderTracker:
                     "skipping partial fill callback to prevent corrupt P&L"
                 )
                 return
+
+            # Validate filled_qty for partial fills to prevent corrupt position tracking
+            if not isinstance(filled_qty, int | float) or filled_qty <= 0:
+                logger.error(
+                    f"Invalid filled quantity {filled_qty} for partial fill {order_id} - "
+                    "skipping partial fill callback"
+                )
+                return
+
             new_filled = filled_qty - tracked.last_filled_qty
             if new_filled > 0:
                 logger.info(
