@@ -85,7 +85,12 @@ class OhlcFillModel:
         order_intent: OrderIntent,
         snapshot: MarketSnapshot,
     ) -> ExecutionDecision:
-        """Fill a stop-loss style order when the stop price is triggered."""
+        """Fill a stop-loss style order when the stop price is triggered.
+
+        Stop orders fill at adverse prices to model gap-through scenarios:
+        - SELL stop (long exit): fills at candle low (worst case for longs)
+        - BUY stop (short cover): fills at candle high (worst case for shorts)
+        """
         if order_intent.stop_price is None:
             return ExecutionDecision.no_fill("stop price missing")
 
@@ -95,9 +100,12 @@ class OhlcFillModel:
         if not self._stop_triggered(order_intent, snapshot, order_intent.stop_price):
             return ExecutionDecision.no_fill("stop price not triggered")
 
+        # Use adverse fill price for gap-through scenarios.
+        fill_price = self._stop_adverse_fill_price(order_intent, snapshot)
+
         return ExecutionDecision(
             should_fill=True,
-            fill_price=order_intent.stop_price,
+            fill_price=fill_price,
             filled_quantity=order_intent.quantity,
             liquidity="taker",
             reason="stop order triggered",
@@ -130,6 +138,23 @@ class OhlcFillModel:
         if order_intent.side == OrderSide.BUY:
             return snapshot.high >= stop_price
         return snapshot.low <= stop_price
+
+    def _stop_adverse_fill_price(
+        self,
+        order_intent: OrderIntent,
+        snapshot: MarketSnapshot,
+    ) -> float:
+        """Return the adverse fill price for a triggered stop order.
+
+        Models gap-through scenarios where market moves past the stop price:
+        - SELL stop (long exit): fills at candle low (worst case for longs)
+        - BUY stop (short cover): fills at candle high (worst case for shorts)
+        """
+        if order_intent.side == OrderSide.BUY:
+            # Short cover - worst case is buying at the high
+            return snapshot.high
+        # Long exit - worst case is selling at the low
+        return snapshot.low
 
     def _limit_fill_price(
         self,

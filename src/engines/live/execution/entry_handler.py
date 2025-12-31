@@ -113,7 +113,7 @@ class LiveEntryHandler:
         """Build a MarketSnapshot from the current price."""
         return MarketSnapshot(
             symbol=symbol,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             last_price=current_price,
             high=current_price,
             low=current_price,

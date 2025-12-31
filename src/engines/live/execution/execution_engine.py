@@ -359,6 +359,7 @@ class LiveExecutionEngine:
         base_price: float,
         position_notional: float,
         liquidity: str | None = None,
+        apply_slippage: bool = True,
     ) -> ExitExecutionResult:
         """Execute an exit order with fees and slippage.
 
@@ -369,6 +370,7 @@ class LiveExecutionEngine:
             base_price: Exit price before slippage.
             position_notional: Notional value of position.
             liquidity: Liquidity classification for fee and slippage handling.
+            apply_slippage: When False, slippage is suppressed.
 
         Returns:
             ExitExecutionResult with execution details.
@@ -382,6 +384,7 @@ class LiveExecutionEngine:
                 notional=position_notional,
                 side=side_str,
                 liquidity=liquidity,
+                apply_slippage=apply_slippage,
             )
 
             executed_price = cost_result.executed_price

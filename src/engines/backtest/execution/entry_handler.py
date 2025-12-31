@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_VOLUME = 0.0
+# Maximum age (in seconds) before a pending entry is considered stale and discarded.
+# Default of 1 hour prevents very old signals from executing in changed conditions.
+MAX_PENDING_ENTRY_AGE_SECONDS = 3600
 
 
 @dataclass
@@ -436,10 +439,25 @@ class EntryHandler:
         if pending is None:
             return EntryExecutionResult(executed=False)
 
+        # Check for stale pending entries to prevent indefinite retries.
+        signal_time = pending.get("signal_time")
+        if signal_time is not None:
+            age = (current_time - signal_time).total_seconds()
+            if age > MAX_PENDING_ENTRY_AGE_SECONDS:
+                logger.warning(
+                    "Pending entry for %s is stale (age=%.0fs > %ds), discarding",
+                    symbol,
+                    age,
+                    MAX_PENDING_ENTRY_AGE_SECONDS,
+                )
+                self.execution_engine.clear_pending_entry()
+                return EntryExecutionResult(executed=False, pending=False)
+
         try:
             order_side = self._map_order_side(pending["side"])
         except ValueError as exc:
             logger.warning("Pending entry side invalid for %s: %s", symbol, exc)
+            self.execution_engine.clear_pending_entry()
             return EntryExecutionResult(executed=False)
 
         snapshot = self._build_snapshot(

@@ -267,9 +267,12 @@ class TestStopLossGapPricing:
         )
 
         execute_exit_call = execution_engine.execute_exit.call_args
-        base_price = execute_exit_call.kwargs["base_price"]
+        call_kwargs = execute_exit_call.kwargs
+        base_price = call_kwargs["base_price"]
+        apply_slippage = call_kwargs["apply_slippage"]
 
         assert base_price == pytest.approx(80.0)
+        assert apply_slippage is False
 
     def test_stop_loss_uses_candle_high_for_short_gap(self) -> None:
         """Short stop-loss exits should use the candle high when price gaps through."""
@@ -311,9 +314,12 @@ class TestStopLossGapPricing:
         )
 
         execute_exit_call = execution_engine.execute_exit.call_args
-        base_price = execute_exit_call.kwargs["base_price"]
+        call_kwargs = execute_exit_call.kwargs
+        base_price = call_kwargs["base_price"]
+        apply_slippage = call_kwargs["apply_slippage"]
 
         assert base_price == pytest.approx(120.0)
+        assert apply_slippage is False
 
 
 class TestPositionTrackerThreadSafety:

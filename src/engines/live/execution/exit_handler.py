@@ -133,7 +133,7 @@ class LiveExitHandler:
         low = candle_low if candle_low is not None else current_price
         return MarketSnapshot(
             symbol=symbol,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             last_price=current_price,
             high=float(high),
             low=float(low),
@@ -353,6 +353,21 @@ class LiveExitHandler:
             candle_low=candle_low,
         )
 
+        apply_slippage = True
+        if self.use_high_low_for_stops and self._is_stop_loss_reason(exit_reason):
+            if (
+                position.side == PositionSide.LONG
+                and candle_low is not None
+                and base_exit_price <= candle_low
+            ):
+                apply_slippage = False
+            elif (
+                position.side == PositionSide.SHORT
+                and candle_high is not None
+                and base_exit_price >= candle_high
+            ):
+                apply_slippage = False
+
         # IMPORTANT: Use exit notional (accounting for price change) for accurate fee calculation.
         # This correctly models real exchange behavior where fees are charged on the actual
         # value at trade time:
@@ -373,6 +388,7 @@ class LiveExitHandler:
             base_price=base_exit_price,
             position_notional=position_notional,
             liquidity=liquidity,
+            apply_slippage=apply_slippage,
         )
 
         if not execution_result.success:

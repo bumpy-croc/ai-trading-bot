@@ -153,5 +153,8 @@ def test_execute_exit_preserves_gap_price_for_stop_loss() -> None:
         candle=candle,
     )
 
-    base_price = execution_engine.calculate_exit_costs.call_args.kwargs["base_price"]
+    call_kwargs = execution_engine.calculate_exit_costs.call_args.kwargs
+    base_price = call_kwargs["base_price"]
+    apply_slippage = call_kwargs["apply_slippage"]
     assert base_price == pytest.approx(94.0)
+    assert apply_slippage is False

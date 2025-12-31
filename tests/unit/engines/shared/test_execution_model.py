@@ -85,8 +85,9 @@ def test_limit_order_no_price_improvement_under_conservative_policy() -> None:
 
 
 def test_stop_order_fills_with_taker_liquidity() -> None:
-    """Stop orders fill at the stop price with taker liquidity."""
+    """Stop orders fill at the adverse price (candle low for sells) with taker liquidity."""
     model = ExecutionModel(default_fill_policy())
+    # Stop at 95, but candle gaps down to low=90, so fill is at 90 (worst case for long)
     snapshot = _snapshot(high=105.0, low=90.0)
     order_intent = OrderIntent(
         symbol="BTCUSDT",
@@ -99,5 +100,6 @@ def test_stop_order_fills_with_taker_liquidity() -> None:
     decision = model.decide_fill(order_intent, snapshot)
 
     assert decision.should_fill is True
-    assert decision.fill_price == pytest.approx(95.0)
+    # Adverse fill price: candle low for SELL stop (long exit)
+    assert decision.fill_price == pytest.approx(90.0)
     assert decision.liquidity == "taker"

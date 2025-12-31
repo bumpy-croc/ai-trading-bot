@@ -141,6 +141,7 @@ class CostCalculator:
         notional: float,
         side: str,
         liquidity: str | None = None,
+        apply_slippage: bool = True,
     ) -> CostResult:
         """Calculate exit costs including slippage and fees.
 
@@ -153,6 +154,7 @@ class CostCalculator:
             notional: The notional value of the trade (at exit).
             side: Trade side ('long' or 'short').
             liquidity: Liquidity type ('maker' or 'taker').
+            apply_slippage: When False, slippage is suppressed.
 
         Returns:
             CostResult with executed price, fee, and slippage cost.
@@ -171,7 +173,7 @@ class CostCalculator:
             raise ValueError(f"Side must be 'long' or 'short', got '{side}'")
 
         # Apply slippage adversely for exit unless maker liquidity is specified
-        if liquidity == LIQUIDITY_MAKER:
+        if not apply_slippage or liquidity == LIQUIDITY_MAKER:
             executed_price = price
             slippage_cost = ZERO_VALUE
         else:

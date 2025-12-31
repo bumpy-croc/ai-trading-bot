@@ -656,14 +656,29 @@ class ExitHandler:
         # Scale by price change to get exit notional (this is intentional and correct)
         position_notional = entry_notional * (base_exit_price / trade.entry_price)
 
-        # Calculate exit costs
         # Convert PositionSide enum to string for cost calculation
         side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        apply_slippage = True
+        if (
+            order_intent.order_type == OrderType.STOP_LOSS
+            and self.use_high_low_for_stops
+            and candle is not None
+            and hasattr(candle, "get")
+        ):
+            candle_low = self._coerce_float(candle.get("low"), base_exit_price)
+            candle_high = self._coerce_float(candle.get("high"), base_exit_price)
+            if side_str == "long" and base_exit_price <= candle_low:
+                apply_slippage = False
+            elif side_str == "short" and base_exit_price >= candle_high:
+                apply_slippage = False
+
+        # Calculate exit costs
         final_exit_price, exit_fee, slippage_cost = self.execution_engine.calculate_exit_costs(
             base_price=base_exit_price,
             side=side_str,
             position_notional=position_notional,
             liquidity=liquidity,
+            apply_slippage=apply_slippage,
         )
 
         # Close position and get completed trade

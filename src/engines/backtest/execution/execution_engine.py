@@ -273,6 +273,7 @@ class ExecutionEngine:
         side: str,
         position_notional: float,
         liquidity: str | None = None,
+        apply_slippage: bool = True,
     ) -> tuple[float, float, float]:
         """Calculate exit price and costs with slippage applied.
 
@@ -281,6 +282,7 @@ class ExecutionEngine:
             side: 'long' or 'short' (the position side).
             position_notional: Notional value of the position.
             liquidity: Liquidity classification for fee and slippage handling.
+            apply_slippage: When False, slippage is suppressed.
 
         Returns:
             Tuple of (exit_price, exit_fee, slippage_cost).
@@ -291,6 +293,7 @@ class ExecutionEngine:
             notional=position_notional,
             side=side,
             liquidity=liquidity,
+            apply_slippage=apply_slippage,
         )
 
         return cost_result.executed_price, cost_result.fee, cost_result.slippage_cost

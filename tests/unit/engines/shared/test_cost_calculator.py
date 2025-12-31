@@ -139,6 +139,20 @@ class TestExitCosts:
         expected_fee = 1100.0 * 0.001
         assert result.fee == pytest.approx(expected_fee)
 
+    def test_exit_slippage_can_be_suppressed(self) -> None:
+        """Exit slippage should be zero when suppressed."""
+        calc = CostCalculator(fee_rate=0.001, slippage_rate=0.01)
+        result = calc.calculate_exit_costs(
+            price=100.0,
+            notional=1000.0,
+            side="long",
+            liquidity=LIQUIDITY_TAKER,
+            apply_slippage=False,
+        )
+
+        assert result.executed_price == pytest.approx(100.0)
+        assert result.slippage_cost == pytest.approx(0.0)
+
 
 class TestCostAccumulation:
     """Test cost accumulation tracking."""
