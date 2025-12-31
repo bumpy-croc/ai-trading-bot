@@ -32,6 +32,7 @@ from src.config.constants import (
     DEFAULT_REGIME_TIMEFRAME_WEIGHTS,
     DEFAULT_REGIME_TIMEFRAMES,
     DEFAULT_REGIME_TRANSITION_SIZE_MULTIPLIER,
+    DEFAULT_REGIME_UNKNOWN_MULTIPLIER,
 )
 from src.engines.live.strategy_manager import StrategyManager
 from src.regime.detector import RegimeConfig, RegimeDetector, TrendLabel, VolLabel
@@ -380,7 +381,7 @@ class RegimeStrategySwitcher:
         """Get position size multiplier for regime"""
 
         if ":" not in regime_label:
-            return 0.5  # Conservative default
+            return DEFAULT_REGIME_UNKNOWN_MULTIPLIER
 
         trend_label, vol_label = regime_label.split(":")
 

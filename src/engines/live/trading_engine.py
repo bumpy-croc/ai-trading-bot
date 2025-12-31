@@ -31,10 +31,13 @@ from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
     DEFAULT_RECENT_TRADE_LOOKBACK_HOURS,
+    DEFAULT_RETRY_BACKOFF_MULTIPLIER,
     DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS,
     DEFAULT_SLEEP_POLL_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STOP_LOSS_MAX_RETRIES,
     DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_STOP_LOSS_RETRY_DELAY,
     DEFAULT_TAKE_PROFIT_PCT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
@@ -1882,7 +1885,7 @@ class LiveTradingEngine:
                     signal_type="exit",
                     action_taken="closed_position" if should_exit else "hold_position",
                     price=current_price,
-                    timeframe="1m",
+                    timeframe=self.timeframe,
                     signal_strength=1.0 if should_exit else 0.0,
                     confidence_score=confidence_score,
                     indicators=indicators,
@@ -2043,7 +2046,7 @@ class LiveTradingEngine:
                     )
                 ),
                 price=current_price,
-                timeframe="1m",
+                timeframe=self.timeframe,
                 signal_strength=runtime_strength if use_runtime else (1.0 if entry_signal else 0.0),
                 confidence_score=(
                     runtime_confidence
@@ -2345,8 +2348,8 @@ class LiveTradingEngine:
             if self.enable_live_trading and stop_loss and self.exchange_interface:
                 sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
                 sl_order_id = None
-                max_retries = 3
-                retry_delay = 1.0
+                max_retries = DEFAULT_STOP_LOSS_MAX_RETRIES
+                retry_delay = DEFAULT_STOP_LOSS_RETRY_DELAY
                 # Use stored quantity directly to ensure stop-loss covers exact position size
                 if position.quantity is not None and position.quantity > 0:
                     quantity = position.quantity
@@ -2380,7 +2383,7 @@ class LiveTradingEngine:
 
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
-                        retry_delay *= 2
+                        retry_delay *= DEFAULT_RETRY_BACKOFF_MULTIPLIER
 
                 if sl_order_id:
                     logger.info(
