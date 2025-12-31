@@ -190,6 +190,11 @@ class FearGreedProvider(SentimentDataProvider):
         idx = self.data.index.get_indexer([date], method="ffill")
         if idx.size == 0 or idx[0] < 0:
             return self._neutral()
+
+        # Validate index is within DataFrame bounds to prevent wrong data from circular indexing
+        if idx[0] >= len(self.data):
+            return self._neutral()
+
         row = self.data.iloc[idx[0]]
         return {c: float(row[c]) for c in self.data.columns if c.startswith("sentiment_")}
 
