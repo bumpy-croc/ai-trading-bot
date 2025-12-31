@@ -19,6 +19,7 @@ from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
 )
+from src.engines.shared.side_utils import is_long, to_side_string
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 
 if TYPE_CHECKING:
@@ -347,15 +348,14 @@ class ExitHandler:
             candle_high = current_price
             candle_low = current_price
 
-        # Convert PositionSide enum to string for comparisons
-        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        side_str = to_side_string(trade.side)
 
         # Check stop loss
         hit_stop_loss = False
         sl_exit_price = current_price
         if self.enable_engine_risk_exits and trade.stop_loss is not None:
             stop_loss_val = float(trade.stop_loss)
-            if side_str == "long":
+            if is_long(side_str):
                 hit_stop_loss = candle_low <= stop_loss_val
                 if hit_stop_loss:
                     # Use max(stop_loss, candle_low) for realistic worst-case execution
@@ -371,7 +371,7 @@ class ExitHandler:
         tp_exit_price = current_price
         if self.enable_engine_risk_exits and trade.take_profit is not None:
             take_profit_val = float(trade.take_profit)
-            if side_str == "long":
+            if is_long(side_str):
                 hit_take_profit = candle_high >= take_profit_val
             else:
                 hit_take_profit = candle_low <= take_profit_val
@@ -448,12 +448,11 @@ class ExitHandler:
         try:
             from src.strategies.components import SignalDirection
 
-            # Convert PositionSide enum to string for comparison
-            side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+            side_str = to_side_string(trade.side)
 
-            if side_str == "long" and decision.signal.direction == SignalDirection.SELL:
+            if is_long(side_str) and decision.signal.direction == SignalDirection.SELL:
                 return True, "Signal reversal"
-            if side_str == "short" and decision.signal.direction == SignalDirection.BUY:
+            if not is_long(side_str) and decision.signal.direction == SignalDirection.BUY:
                 return True, "Signal reversal"
         except Exception:
             pass
@@ -468,8 +467,7 @@ class ExitHandler:
                 # (component_notional field was removed - compute on-demand)
                 notional = float(trade.current_size) * float(trade.entry_balance or 0.0)
 
-                # Convert PositionSide enum to string for component Position validator
-                side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+                side_str = to_side_string(trade.side)
 
                 position = ComponentPosition(
                     symbol=trade.symbol,
@@ -546,8 +544,7 @@ class ExitHandler:
         position_notional = entry_notional * (exit_price / trade.entry_price)
 
         # Calculate exit costs
-        # Convert PositionSide enum to string for cost calculation
-        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        side_str = to_side_string(trade.side)
         final_exit_price, exit_fee, slippage_cost = self.execution_engine.calculate_exit_costs(
             base_price=exit_price,
             side=side_str,
