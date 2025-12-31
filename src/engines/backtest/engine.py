@@ -27,6 +27,7 @@ from src.config.constants import (
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_REGIME_LOOKBACK_BUFFER,
     DEFAULT_SLIPPAGE_RATE,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
@@ -73,8 +74,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Regime lookback buffer for data fetching
-REGIME_LOOKBACK_BUFFER = 5
+# Use centralized constant for regime lookback buffer
+REGIME_LOOKBACK_BUFFER = DEFAULT_REGIME_LOOKBACK_BUFFER
 
 
 def _compute_regime_lookback(regime_switcher: Any) -> int:

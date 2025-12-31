@@ -16,6 +16,7 @@ import pandas as pd
 from src.config.constants import (
     DEFAULT_REGIME_MAX_DRAWDOWN_SWITCH,
     DEFAULT_REGIME_MIN_CONFIDENCE,
+    DEFAULT_REGIME_MIN_DATA_LENGTH,
     DEFAULT_REGIME_MIN_DURATION_BARS,
     DEFAULT_REGIME_MULTIPLIER_BEAR_HIGH_VOL,
     DEFAULT_REGIME_MULTIPLIER_BEAR_LOW_VOL,
@@ -167,7 +168,7 @@ class RegimeStrategySwitcher:
                 continue
 
             df = price_data[timeframe]
-            if len(df) < 60:  # Need sufficient data
+            if len(df) < DEFAULT_REGIME_MIN_DATA_LENGTH:  # Need sufficient data
                 continue
 
             detector = self.timeframe_detectors.get(timeframe, self.regime_detector)

@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import DEFAULT_BREAKEVEN_BUFFER, DEFAULT_BREAKEVEN_THRESHOLD
+
 if TYPE_CHECKING:
     from src.position_management.dynamic_risk import DynamicRiskConfig
     from src.position_management.time_exits import TimeExitPolicy
@@ -155,10 +157,10 @@ def build_trailing_stop_policy(
                 ),
                 atr_multiplier=float(atr_mult) if atr_mult is not None else None,
                 breakeven_threshold=(
-                    float(breakeven_threshold) if breakeven_threshold is not None else 0.02
+                    float(breakeven_threshold) if breakeven_threshold is not None else DEFAULT_BREAKEVEN_THRESHOLD
                 ),
                 breakeven_buffer=(
-                    float(breakeven_buffer) if breakeven_buffer is not None else 0.001
+                    float(breakeven_buffer) if breakeven_buffer is not None else DEFAULT_BREAKEVEN_BUFFER
                 ),
             )
 
