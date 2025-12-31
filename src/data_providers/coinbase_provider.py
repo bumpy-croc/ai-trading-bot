@@ -603,16 +603,30 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             raise
 
     def get_current_price(self, symbol: str) -> float:
+        """Get latest price for a symbol.
+
+        Raises:
+            RuntimeError: If price cannot be fetched from exchange.
+                         Caller must handle this to prevent trading with invalid prices.
+        """
         try:
             product_id = SymbolFactory.to_exchange_symbol(symbol, "coinbase")
             url = f"{self.BASE_URL}/products/{product_id}/ticker"
             r = self._session.get(url, timeout=10)
             r.raise_for_status()
             data = r.json()
-            return float(data["price"])
+            price = float(data["price"])
+            # Validate price is positive to prevent downstream calculation errors
+            if price <= 0:
+                raise ValueError(f"Invalid price {price} <= 0 for {symbol}")
+            return price
         except Exception as e:
             logger.error(f"Error fetching current price for {symbol} from Coinbase: {e}")
-            return 0.0
+            # Don't return 0.0 - that could cause division by zero or infinite position sizes
+            # Force caller to handle price fetch failures explicitly
+            raise RuntimeError(
+                f"Failed to fetch current price for {symbol} from Coinbase: {e}"
+            ) from e
 
     # --------------------------- DataProvider --------------------------
 
