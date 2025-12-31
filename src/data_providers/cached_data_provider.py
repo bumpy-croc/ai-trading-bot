@@ -191,6 +191,21 @@ class CachedDataProvider(DataProvider):
             temp_path = f"{cache_path}.tmp.{os.getpid()}"
             data.to_parquet(temp_path, index=True)
 
+            # Verify temp file is readable before atomic rename
+            # This catches corrupted writes early, preventing corrupt cache
+            try:
+                pd.read_parquet(temp_path)
+            except Exception as verify_error:
+                logger.error(
+                    "Cache file verification failed after write - file corrupted: %s. "
+                    "Discarding corrupt cache to prevent infinite crash loop.",
+                    verify_error,
+                )
+                # Remove corrupt temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return  # Don't rename corrupt file
+
             # Atomic rename (POSIX guarantee: old file replaced atomically)
             os.replace(temp_path, cache_path)
 
