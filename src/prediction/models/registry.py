@@ -141,8 +141,16 @@ class PredictionModelRegistry:
             with open(metadata_path, encoding="utf-8") as f:
                 try:
                     md = json.load(f)
+                    # Validate metadata is a dictionary before using
+                    if not isinstance(md, dict):
+                        raise ModelLoadError(
+                            f"Invalid metadata.json: expected dict, got {type(md).__name__}. "
+                            f"File may be corrupted."
+                        )
                     metadata.update(md)
                     timeframe = str(md.get("timeframe", timeframe))
+                except json.JSONDecodeError as e:
+                    raise ModelLoadError(f"Malformed metadata.json: {e}") from e
                 except Exception as e:
                     raise ModelLoadError(f"Invalid metadata.json: {e}") from e
         else:
@@ -158,7 +166,18 @@ class PredictionModelRegistry:
             import json
 
             with open(p, encoding="utf-8") as f:
-                return json.load(f)
+                try:
+                    data = json.load(f)
+                    # Validate is dictionary - silently skip if corrupted
+                    if not isinstance(data, dict):
+                        logger.warning(
+                            "Skipping %s: expected dict, got %s", p.name, type(data).__name__
+                        )
+                        return None
+                    return data
+                except json.JSONDecodeError as e:
+                    logger.warning("Skipping %s: malformed JSON - %s", p.name, e)
+                    return None
 
         feature_schema = _load_json(feature_schema_path)
         metrics = _load_json(metrics_path)
