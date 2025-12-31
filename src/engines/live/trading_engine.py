@@ -711,10 +711,15 @@ class LiveTradingEngine:
 
             if self.db_manager and self.trading_session_id:
                 try:
+                    # Extract adjustment type from primary_reason (e.g., "drawdown_reduction" -> "drawdown")
+                    # Use safe extraction to handle edge cases where reason doesn't contain "_"
+                    reason = adjustment.primary_reason or "unknown"
+                    adjustment_type = reason.split("_")[0] if "_" in reason else reason
+
                     # Log factor values (not position sizes) for backward compatibility
                     self.db_manager.log_risk_adjustment(
                         session_id=self.trading_session_id,
-                        adjustment_type=adjustment.primary_reason.split("_")[0],
+                        adjustment_type=adjustment_type,
                         trigger_reason=adjustment.primary_reason,
                         parameter_name="position_size_factor",
                         original_value=1.0,
