@@ -117,6 +117,11 @@ class ConfigManager:
         if value is None:
             return default
 
+        # Validate value is string to prevent AttributeError from custom providers
+        if not isinstance(value, str):
+            # Convert to string first for robustness
+            value = str(value)
+
         # Handle common boolean representations
         return value.lower() in ("true", "1", "yes", "on", "enabled")
 
@@ -127,6 +132,11 @@ class ConfigManager:
         value = self.get(key)
         if value is None:
             return default or []
+
+        # Validate value is string to prevent AttributeError from custom providers
+        if not isinstance(value, str):
+            # Convert to string first for robustness
+            value = str(value)
 
         return [item.strip() for item in value.split(delimiter) if item.strip()]
 
