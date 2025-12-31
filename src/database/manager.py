@@ -1756,6 +1756,153 @@ class DatabaseManager:
 
         return success
 
+    @contextmanager
+    def atomic_balance_update(
+        self,
+        balance_change: float,
+        reason: str,
+        updated_by: str = "system",
+        session_id: int | None = None,
+        correlation_id: str | None = None,
+    ) -> Generator[dict[str, float], None, None]:
+        """
+        Context manager for atomic balance updates with full audit trail.
+
+        Ensures balance changes are committed atomically with proper logging.
+        Records both old and new balances in AccountHistory for audit trail.
+
+        Args:
+            balance_change: Amount to add/subtract from balance (can be negative)
+            reason: Description of why balance is changing
+            updated_by: Who/what is making the change
+            session_id: Trading session ID (uses current if not provided)
+            correlation_id: Optional ID to correlate balance change with trade/order
+
+        Yields:
+            dict with 'old_balance', 'new_balance', 'change' keys
+
+        Raises:
+            ValueError: If session not found or balance would go negative
+            SQLAlchemyError: If database operation fails
+
+        Example:
+            with db.atomic_balance_update(-100.0, "entry_fee", "trading_engine") as result:
+                # Balance has been updated atomically
+                logger.info(f"Balance: ${result['old_balance']:.2f} -> ${result['new_balance']:.2f}")
+        """
+        session_id = session_id or self._current_session_id
+        if not session_id:
+            raise ValueError("No active trading session for balance update")
+
+        session = None
+        try:
+            # Use a single session for the entire atomic operation
+            session = next(self.get_session())
+
+            # Begin nested transaction (SAVEPOINT) for atomicity
+            with session.begin_nested():
+                # Get current balance with row-level lock to prevent concurrent updates
+                current_balance = AccountBalance.get_current_balance(session_id, session)
+
+                new_balance = current_balance + balance_change
+
+                # Validate balance won't go negative
+                if new_balance < 0:
+                    raise ValueError(
+                        f"Balance update would result in negative balance: "
+                        f"${current_balance:.2f} + ${balance_change:.2f} = ${new_balance:.2f}"
+                    )
+
+                # Create new AccountBalance entry
+                balance_entry = AccountBalance(
+                    session_id=session_id,
+                    total_balance=new_balance,
+                    available_balance=new_balance,  # Simplified - could subtract reserved
+                    reserved_balance=0.0,
+                    base_currency="USD",
+                    last_updated=datetime.now(UTC),
+                    updated_by=updated_by,
+                    update_reason=reason,
+                )
+                session.add(balance_entry)
+
+                # Create AccountHistory entry for audit trail
+                # Get latest equity (balance + unrealized P&L) - simplified as balance for now
+                history_entry = AccountHistory(
+                    timestamp=datetime.now(UTC),
+                    balance=Decimal(str(new_balance)),
+                    equity=Decimal(str(new_balance)),
+                    margin_used=Decimal("0.0"),
+                    margin_available=Decimal(str(new_balance)),
+                    total_pnl=Decimal("0.0"),  # Would be calculated from session
+                    daily_pnl=Decimal(str(balance_change)) if balance_change != 0 else Decimal("0.0"),
+                    drawdown=Decimal("0.0"),
+                )
+                session.add(history_entry)
+
+                # Log with comprehensive details for audit
+                logger.info(
+                    "💰 BALANCE UPDATE [%s]: $%.2f -> $%.2f (change: %+.2f) | Reason: %s | By: %s%s",
+                    session_id,
+                    current_balance,
+                    new_balance,
+                    balance_change,
+                    reason,
+                    updated_by,
+                    f" | Correlation: {correlation_id}" if correlation_id else "",
+                )
+
+                # Prepare result dict
+                result = {
+                    "old_balance": current_balance,
+                    "new_balance": new_balance,
+                    "change": balance_change,
+                }
+
+                # Yield control back to caller with result
+                # Transaction is still open - caller can perform additional operations
+                yield result
+
+            # SAVEPOINT committed successfully - now commit the outer transaction
+            session.commit()
+
+        except ValueError as ve:
+            # Validation error - rollback and re-raise
+            if session:
+                session.rollback()
+            logger.error("Balance update validation failed: %s", ve)
+            raise
+
+        except SQLAlchemyError as se:
+            # Database error - rollback and re-raise
+            if session:
+                session.rollback()
+            logger.error(
+                "Balance update failed for session %s: %s | Change: %+.2f | Reason: %s",
+                session_id,
+                se,
+                balance_change,
+                reason,
+            )
+            raise
+
+        except Exception as e:
+            # Unexpected error - rollback and re-raise
+            if session:
+                session.rollback()
+            logger.critical(
+                "Unexpected error during balance update for session %s: %s",
+                session_id,
+                e,
+                exc_info=True,
+            )
+            raise
+
+        finally:
+            # Ensure session is closed
+            if session:
+                session.close()
+
     # ========== CONNECTION MANAGEMENT ==========
 
     def get_connection_stats(self) -> dict[str, Any]:

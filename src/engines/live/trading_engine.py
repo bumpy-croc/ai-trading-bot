@@ -2215,7 +2215,43 @@ class LiveTradingEngine:
             position = result.position
             entry_fee = result.entry_fee
             entry_slippage_cost = result.slippage_cost
-            self.current_balance -= entry_fee
+
+            # Atomic balance update with full audit trail
+            try:
+                with self.db_manager.atomic_balance_update(
+                    balance_change=-entry_fee,
+                    reason=f"entry_fee_{symbol}",
+                    updated_by="live_engine",
+                    correlation_id=position.order_id,
+                ) as balance_result:
+                    self.current_balance = balance_result["new_balance"]
+            except (ValueError, Exception) as balance_err:
+                logger.error(
+                    "Failed to update balance for entry fee %s: %s. Aborting entry.",
+                    symbol,
+                    balance_err,
+                )
+                # Critical: Entry executed but balance update failed
+                # Attempt emergency close to maintain consistency
+                if self.enable_live_trading and self.exchange_interface:
+                    try:
+                        close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
+                        self.exchange_interface.place_market_order(
+                            symbol=symbol,
+                            side=close_side,
+                            quantity=position.size * result.position_value / position.entry_price,
+                        )
+                        logger.warning(
+                            "Emergency close placed for %s due to balance update failure", symbol
+                        )
+                    except Exception as close_err:
+                        logger.critical(
+                            "CRITICAL: Emergency close FAILED after balance update failure for %s. "
+                            "MANUAL INTERVENTION REQUIRED. Error: %s",
+                            symbol,
+                            close_err,
+                        )
+                return
 
             position.metadata["entry_fee"] = entry_fee
             position.metadata["entry_slippage_cost"] = entry_slippage_cost
@@ -2254,8 +2290,22 @@ class LiveTradingEngine:
                             symbol,
                             close_err,
                         )
-                # Restore balance since position tracking failed
-                self.current_balance += entry_fee
+                # Restore balance since position tracking failed (atomic refund)
+                try:
+                    with self.db_manager.atomic_balance_update(
+                        balance_change=entry_fee,
+                        reason=f"refund_entry_fee_{symbol}_tracking_failed",
+                        updated_by="live_engine",
+                        correlation_id=position.order_id,
+                    ) as balance_result:
+                        self.current_balance = balance_result["new_balance"]
+                except Exception as refund_err:
+                    logger.critical(
+                        "CRITICAL: Failed to refund entry fee after position tracking failure for %s. "
+                        "Balance state inconsistent. Error: %s",
+                        symbol,
+                        refund_err,
+                    )
                 return
 
             # Update risk manager tracking for new position.
@@ -2607,7 +2657,25 @@ class LiveTradingEngine:
                 return
 
             realized_pnl = exit_result.realized_pnl - exit_result.exit_fee
-            self.current_balance += realized_pnl
+
+            # Atomic balance update with full audit trail for realized P&L
+            try:
+                with self.db_manager.atomic_balance_update(
+                    balance_change=realized_pnl,
+                    reason=f"realized_pnl_{position.symbol}_{reason}",
+                    updated_by="live_engine",
+                    correlation_id=position.order_id,
+                ) as balance_result:
+                    self.current_balance = balance_result["new_balance"]
+            except Exception as balance_err:
+                logger.error(
+                    "Failed to update balance for realized P&L %s: %s. Trade will be logged but balance inconsistent.",
+                    position.symbol,
+                    balance_err,
+                )
+                # Continue processing to log the trade even if balance update fails
+                # This allows for manual reconciliation
+
             exit_price = float(exit_result.exit_price)
             exit_fee = exit_result.exit_fee
             exit_slippage_cost = exit_result.slippage_cost
@@ -3303,11 +3371,27 @@ class LiveTradingEngine:
                         exit_position_notional
                     )
                     realized_pnl = pnl_pct * fraction * basis_balance - exit_fee
-                    self.current_balance += realized_pnl
-                    logger.info(
-                        f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
-                        f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
-                    )
+
+                    # Atomic balance update for offline stop-loss reconciliation
+                    try:
+                        with self.db_manager.atomic_balance_update(
+                            balance_change=realized_pnl,
+                            reason=f"offline_stop_loss_{position.symbol}",
+                            updated_by="live_engine_reconciliation",
+                            correlation_id=position.order_id,
+                        ) as balance_result:
+                            self.current_balance = balance_result["new_balance"]
+                            logger.info(
+                                f"💰 Adjusted balance for offline stop-loss: ${realized_pnl:+,.2f} "
+                                f"(fee: ${exit_fee:.2f}) -> ${self.current_balance:,.2f}"
+                            )
+                    except Exception as balance_err:
+                        logger.error(
+                            "Failed to update balance for offline stop-loss %s: %s. Skipping reconciliation.",
+                            position.symbol,
+                            balance_err,
+                        )
+                        continue
                     trade = Trade(
                         symbol=position.symbol,
                         side=position.side,
