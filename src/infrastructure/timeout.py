@@ -7,6 +7,7 @@ block indefinitely (file I/O, model loading, network calls).
 import logging
 import signal
 import threading
+import time
 from contextlib import contextmanager
 from functools import wraps
 from typing import Any, Callable, TypeVar
@@ -111,6 +112,13 @@ def run_with_timeout(
     This is a cross-platform alternative to signal-based timeouts.
     Works on Windows and Unix-like systems.
 
+    Limitations
+    -----------
+    The threading-based timeout cannot cancel a running thread. If the
+    operation times out, the daemon thread continues executing in the
+    background until completion. For truly blocking operations, consider
+    using process-based isolation or async I/O with proper cancellation.
+
     Args:
         func: Function to run.
         args: Positional arguments for func.
@@ -136,16 +144,18 @@ def run_with_timeout(
     if kwargs is None:
         kwargs = {}
     op_name = operation_name or func.__name__
+    start_time = time.time()
 
-    result = []
-    exception = []
+    # Use mutable container for thread result/exception
+    # These are local to each call and garbage collected after return
+    result: list[T] = []
+    exception: list[BaseException] = []
 
     def target():
         try:
             result.append(func(*args, **kwargs))
         except BaseException as e:
             # Catch BaseException to handle SystemExit, KeyboardInterrupt, etc.
-            # This ensures exception list is always populated if func fails
             exception.append(e)
 
     thread = threading.Thread(target=target, daemon=True)
@@ -153,13 +163,26 @@ def run_with_timeout(
     thread.join(timeout=timeout_seconds)
 
     if thread.is_alive():
-        logger.error("%s exceeded timeout of %.1fs", op_name, timeout_seconds)
+        elapsed = time.time() - start_time
+        logger.error(
+            "%s exceeded timeout of %.1fs (ran for %.2fs before timeout)",
+            op_name,
+            timeout_seconds,
+            elapsed,
+        )
+        # Clear references to prevent holding onto large objects
+        result.clear()
+        exception.clear()
         raise TimeoutError(f"{op_name} exceeded timeout of {timeout_seconds}s")
 
     if exception:
-        raise exception[0]
+        exc = exception[0]
+        exception.clear()
+        raise exc
 
     if result:
-        return result[0]
+        res = result[0]
+        result.clear()
+        return res
 
     raise RuntimeError(f"{op_name} completed but returned no result")

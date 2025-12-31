@@ -14,6 +14,11 @@ from typing import Any
 import numpy as np
 import onnxruntime as ort
 
+from src.config.config_manager import get_config
+from src.config.constants import (
+    DEFAULT_INFERENCE_TIMEOUT,
+    DEFAULT_MODEL_LOAD_TIMEOUT,
+)
 from src.infrastructure.timeout import TimeoutError, run_with_timeout
 
 from ..config import PredictionConfig
@@ -23,12 +28,19 @@ from .execution_providers import get_preferred_providers
 # Constants for numerical stability
 EPSILON = 1e-8  # Small value to prevent division by zero
 
-# Model loading timeout protection (seconds)
-MODEL_LOAD_TIMEOUT = 60.0  # 60 seconds for model loading
-METADATA_LOAD_TIMEOUT = 10.0  # 10 seconds for metadata file read
 
-# Inference timeout protection (seconds)
-INFERENCE_TIMEOUT = 5.0  # 5 seconds for a single inference call
+def _get_model_load_timeout() -> float:
+    """Get model load timeout from config or default."""
+    return get_config().get_float("MODEL_LOAD_TIMEOUT_SECONDS", DEFAULT_MODEL_LOAD_TIMEOUT)
+
+
+def _get_inference_timeout() -> float:
+    """Get inference timeout from config or default."""
+    return get_config().get_float("INFERENCE_TIMEOUT_SECONDS", DEFAULT_INFERENCE_TIMEOUT)
+
+
+# Metadata load timeout (fixed, not configurable - metadata files are small)
+METADATA_LOAD_TIMEOUT = 10.0
 
 
 @dataclass
@@ -81,9 +93,10 @@ class OnnxRunner:
             def _create_session():
                 return ort.InferenceSession(self.model_path, providers=providers)
 
+            timeout = _get_model_load_timeout()
             session = run_with_timeout(
                 _create_session,
-                timeout_seconds=MODEL_LOAD_TIMEOUT,
+                timeout_seconds=timeout,
                 operation_name=f"ONNX model loading ({os.path.basename(self.model_path)})",
             )
 
@@ -97,8 +110,9 @@ class OnnxRunner:
             # Clean up partially initialized session
             if session is not None:
                 del session
+            timeout = _get_model_load_timeout()
             raise RuntimeError(
-                f"Model loading timed out after {MODEL_LOAD_TIMEOUT}s for {self.model_path}. "
+                f"Model loading timed out after {timeout}s for {self.model_path}. "
                 f"The model file may be corrupted or the disk is slow."
             ) from e
         except Exception as e:
@@ -107,16 +121,26 @@ class OnnxRunner:
                 del session
             raise RuntimeError(f"Failed to load model {self.model_path}: {e}") from e
 
-    def __del__(self):
-        """Ensure ONNX session cleanup on garbage collection.
+    def close(self) -> None:
+        """Explicitly release ONNX session resources.
 
-        Prevents file descriptor leaks from repeated model loading failures.
+        Call this method when done with the runner to ensure timely cleanup
+        of file descriptors and memory. Preferred over relying on __del__.
         """
         if hasattr(self, "session") and self.session is not None:
             try:
                 del self.session
+                self.session = None
             except Exception:
                 pass  # Best effort cleanup
+
+    def __del__(self):
+        """Ensure ONNX session cleanup on garbage collection.
+
+        Prevents file descriptor leaks from repeated model loading failures.
+        Note: Prefer calling close() explicitly for predictable cleanup.
+        """
+        self.close()
 
     def _load_metadata(self) -> dict[str, Any]:
         """Load model metadata from JSON file with timeout protection.
@@ -195,15 +219,16 @@ class OnnxRunner:
             def _run_inference():
                 return self.session.run(None, {input_name: input_data})
 
+            inference_timeout = _get_inference_timeout()
             try:
                 output = run_with_timeout(
                     _run_inference,
-                    timeout_seconds=INFERENCE_TIMEOUT,
+                    timeout_seconds=inference_timeout,
                     operation_name=f"ONNX inference ({os.path.basename(self.model_path)})",
                 )
             except TimeoutError as e:
                 raise RuntimeError(
-                    f"Inference timed out after {INFERENCE_TIMEOUT}s for {self.model_path}. "
+                    f"Inference timed out after {inference_timeout}s for {self.model_path}. "
                     f"The model may be stuck or the input triggered pathological behavior."
                 ) from e
 
