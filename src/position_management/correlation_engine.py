@@ -68,8 +68,11 @@ class CorrelationEngine:
         # Align and restrict to window
         end_time = None
         for s in price_series_by_symbol.values():
-            if not s.empty:
-                end_time = max(end_time or s.index.max(), s.index.max())
+            # Check both that series is not empty and index is not empty before calling .max()
+            # Empty index raises ValueError on .max() call
+            if not s.empty and len(s.index) > 0:
+                series_max = s.index.max()
+                end_time = max(end_time or series_max, series_max)
         if end_time is None:
             return pd.DataFrame()
         start_time = end_time - timedelta(days=self.config.correlation_window_days)
@@ -107,6 +110,11 @@ class CorrelationEngine:
 
         # Use returns for correlation robustness
         returns = prices.pct_change().dropna(how="any")
+        # Replace inf/-inf values from pct_change (when price goes to/from zero)
+        # Inf values corrupt correlation calculations
+        returns = returns.replace([np.inf, -np.inf], np.nan).dropna(how="any")
+        if returns.empty or returns.shape[0] < self.config.sample_min_size:
+            return pd.DataFrame()
         corr = returns.corr()
         self._last_matrix = corr
         self._last_update_at = now or datetime.now(UTC)

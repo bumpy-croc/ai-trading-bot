@@ -121,7 +121,12 @@ class DynamicRiskManager:
 
         # Check for recovery if we have previous peak data
         recovery_return = 0.0
-        if previous_peak_balance and previous_peak_balance > 0:
+        # Validate previous_peak_balance is numeric and positive before division
+        if (
+            previous_peak_balance
+            and isinstance(previous_peak_balance, (int, float))
+            and previous_peak_balance > 0
+        ):
             recovery_return = (current_balance - previous_peak_balance) / previous_peak_balance
 
         # Get performance metrics
@@ -264,9 +269,13 @@ class DynamicRiskManager:
                                 continue
                         if len(closes) >= 2:
                             series = pd.Series(closes)
-                            log_returns = np.log(series).diff().dropna()
-                            vol = float(log_returns.std())
-                            metrics["estimated_volatility"] = vol
+                            # Filter out non-positive values before log to prevent NaN/inf
+                            # Log of non-positive values produces NaN which corrupts volatility calculations
+                            series_positive = series[series > 0]
+                            if len(series_positive) >= 2:
+                                log_returns = np.log(series_positive).diff().dropna()
+                                vol = float(log_returns.std())
+                                metrics["estimated_volatility"] = vol
                 except Exception as vol_err:
                     logger.debug(f"Volatility estimation failed: {vol_err}")
 
