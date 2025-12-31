@@ -194,3 +194,8 @@ DEFAULT_CORRELATION_SAMPLE_MIN_SIZE = 20
 DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS = 60
 DEFAULT_MFE_MAE_PRECISION_DECIMALS = 8
 DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"
+
+# Numeric Precision Constants
+DEFAULT_EPSILON = 1e-9  # Small value for floating point comparisons
+DEFAULT_SYMBOL_STEP_SIZE = 0.00001  # Fallback step size for quantity rounding
+DEFAULT_BASIS_BALANCE_FALLBACK = 10000.0  # Fallback balance when entry_balance unavailable

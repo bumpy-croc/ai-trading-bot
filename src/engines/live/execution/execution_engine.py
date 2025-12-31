@@ -14,7 +14,11 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
+from src.config.constants import (
+    DEFAULT_FEE_RATE,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_SYMBOL_STEP_SIZE,
+)
 from src.data_providers.exchange_interface import OrderSide, OrderType
 from src.engines.shared.cost_calculator import CostCalculator
 from src.engines.shared.models import PositionSide
@@ -442,7 +446,7 @@ class LiveExecutionEngine:
         if not symbol_info:
             return quantity
 
-        step_size = symbol_info.get("step_size", 0.00001)
+        step_size = symbol_info.get("step_size", DEFAULT_SYMBOL_STEP_SIZE)
         if step_size > 0:
             quantity = round(quantity / step_size) * step_size
 

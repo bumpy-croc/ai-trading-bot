@@ -14,10 +14,12 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
+from src.config.constants import DEFAULT_EPSILON
+
 logger = logging.getLogger(__name__)
 
-# Epsilon for floating-point comparisons in financial calculations
-EPSILON = 1e-9
+# Use centralized epsilon for floating-point comparisons
+EPSILON = DEFAULT_EPSILON
 
 
 class PositionSide(Enum):

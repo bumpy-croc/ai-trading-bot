@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from src.config.constants import DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE
+from src.config.constants import (
+    DEFAULT_BASIS_BALANCE_FALLBACK,
+    DEFAULT_MAX_PARTIAL_EXITS_PER_CYCLE,
+)
 from src.engines.backtest.models import Trade
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
@@ -229,7 +232,7 @@ class ExitHandler:
                 basis_balance = (
                     float(entry_balance)
                     if entry_balance is not None and entry_balance > 0
-                    else 10000.0  # Fallback
+                    else DEFAULT_BASIS_BALANCE_FALLBACK
                 )
 
                 # Execute partial exit via position tracker

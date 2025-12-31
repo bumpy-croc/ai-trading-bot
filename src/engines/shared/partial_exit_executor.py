@@ -14,14 +14,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
+from src.config.constants import DEFAULT_EPSILON, DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
 from src.engines.shared.models import PositionSide
 from src.performance.metrics import Side, cash_pnl, pnl_percent
 
 logger = logging.getLogger(__name__)
 
-# Epsilon for floating-point comparisons in financial calculations
-EPSILON = 1e-9
+# Use centralized epsilon for floating-point comparisons
+EPSILON = DEFAULT_EPSILON
 
 
 @dataclass

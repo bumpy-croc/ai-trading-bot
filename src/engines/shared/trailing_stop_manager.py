@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import DEFAULT_BREAKEVEN_BUFFER
 from src.engines.shared.models import normalize_side
 from src.utils.price_targets import PriceTargetCalculator
 
@@ -138,7 +139,7 @@ class TrailingStopManager:
             TrailingStopUpdate with result (does NOT modify position).
         """
         breakeven_threshold = getattr(self.policy, "breakeven_threshold", None)
-        breakeven_buffer = getattr(self.policy, "breakeven_buffer", 0.001)
+        breakeven_buffer = getattr(self.policy, "breakeven_buffer", DEFAULT_BREAKEVEN_BUFFER)
 
         if breakeven_threshold is None or breakeven_threshold <= 0:
             return TrailingStopUpdate(updated=False)

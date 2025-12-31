@@ -726,7 +726,7 @@ class LiveExitHandler:
                     logger.debug("Risk manager partial-exit accounting failed: %s", e)
 
             # If fully closed by partials, close position
-            if result.new_current_size <= 1e-9:
+            if result.new_current_size <= EPSILON:
                 self.execute_exit(
                     position=position,
                     exit_reason=f"Partial exits complete @ level {target_level}",

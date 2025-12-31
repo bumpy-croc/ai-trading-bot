@@ -15,6 +15,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import DEFAULT_EPSILON
 from src.engines.shared.models import normalize_side
 
 if TYPE_CHECKING:
@@ -22,8 +23,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Epsilon for floating-point comparisons in financial calculations
-EPSILON = 1e-9
+# Use centralized epsilon for floating-point comparisons
+EPSILON = DEFAULT_EPSILON
 
 
 @dataclass
