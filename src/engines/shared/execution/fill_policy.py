@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 FidelityLevel = Literal["ohlc", "quote", "order_book"]
 
@@ -46,9 +49,26 @@ def default_fill_policy() -> FillPolicy:
 
 
 def resolve_fill_policy(name: str | None) -> FillPolicy:
-    """Resolve a fill policy by name, defaulting when unknown."""
+    """Resolve a fill policy by name, defaulting when unknown.
+
+    Args:
+        name: Policy name to resolve (case-insensitive).
+
+    Returns:
+        The matching FillPolicy, or DEFAULT_FILL_POLICY if not found.
+    """
     if not name:
         return DEFAULT_FILL_POLICY
 
     normalized = name.strip().lower()
-    return FILL_POLICIES.get(normalized, DEFAULT_FILL_POLICY)
+    if normalized not in FILL_POLICIES:
+        logger.warning(
+            "Unknown fill policy '%s'; using default '%s'. "
+            "Available policies: %s",
+            name,
+            DEFAULT_FILL_POLICY_NAME,
+            list(FILL_POLICIES.keys()),
+        )
+        return DEFAULT_FILL_POLICY
+
+    return FILL_POLICIES[normalized]
