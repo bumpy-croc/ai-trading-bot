@@ -17,6 +17,7 @@ from src.config import get_config
 from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
+    DEFAULT_CONFIDENCE_SCORE,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
@@ -1862,7 +1863,7 @@ class LiveTradingEngine:
                             log_reasons.append(f"risk_{key}_{value:.4f}")
 
                 # Extract signal confidence from TradingDecision if available
-                confidence_score = indicators.get("prediction_confidence", 0.5)
+                confidence_score = indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE)
                 if (
                     decision_for_exit
                     and hasattr(decision_for_exit, "signal")
@@ -2042,7 +2043,7 @@ class LiveTradingEngine:
                 confidence_score=(
                     runtime_confidence
                     if use_runtime
-                    else indicators.get("prediction_confidence", 0.5)
+                    else indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE)
                 ),
                 indicators=indicators,
                 sentiment_data=sentiment_data if sentiment_data else None,

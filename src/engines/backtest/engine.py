@@ -19,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.config.config_manager import get_config
 from src.config.constants import (
+    DEFAULT_CONFIDENCE_SCORE,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_FEE_RATE,
@@ -1000,7 +1001,7 @@ class Backtester:
                 timeframe=timeframe,
                 action_taken="closed_position" if exit_check.should_exit else "hold_position",
                 signal_strength=1.0 if exit_check.should_exit else 0.0,
-                confidence_score=indicators.get("prediction_confidence", 0.5),
+                confidence_score=indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE),
                 position_size=(
                     self.position_tracker.current_trade.size
                     if self.position_tracker.current_trade
@@ -1307,7 +1308,7 @@ class Backtester:
                     ).astype(
                         float
                     ) * (
-                        1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(0.5)
+                        1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(DEFAULT_CONFIDENCE_SCORE)
                     )
                     actual_up = (actual_series.diff() > 0).astype(float)
                     brier = brier_score_direction(p_up.fillna(0.5), actual_up.fillna(0.0))

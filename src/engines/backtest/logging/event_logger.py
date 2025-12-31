@@ -10,6 +10,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from src.config.constants import DEFAULT_CONFIDENCE_SCORE
+
 if TYPE_CHECKING:
     from src.engines.backtest.models import Trade
     from src.database.manager import DatabaseManager
@@ -68,7 +70,7 @@ class EventLogger:
         timeframe: str,
         action_taken: str,
         signal_strength: float = 0.0,
-        confidence_score: float = 0.5,
+        confidence_score: float = DEFAULT_CONFIDENCE_SCORE,
         position_size: float | None = None,
         indicators: dict | None = None,
         sentiment_data: dict | None = None,
@@ -124,7 +126,7 @@ class EventLogger:
         timeframe: str,
         action_taken: str,
         signal_strength: float = 0.0,
-        confidence_score: float = 0.5,
+        confidence_score: float = DEFAULT_CONFIDENCE_SCORE,
         position_size: float | None = None,
         indicators: dict | None = None,
         sentiment_data: dict | None = None,
