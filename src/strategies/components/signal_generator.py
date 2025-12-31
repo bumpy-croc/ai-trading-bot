@@ -349,7 +349,7 @@ class WeightedVotingSignalGenerator(SignalGenerator):
                     signals.append((signal, weight))
             except Exception as e:
                 # Log error but continue with other generators
-                print(f"Warning: Generator {generator.name} failed: {e}")
+                logger.warning("Generator %s failed: %s", generator.name, e, exc_info=False)
                 continue
 
         if not signals:
