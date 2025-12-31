@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.config.constants import DEFAULT_MFE_MAE_PRECISION_DECIMALS
 from src.engines.shared.partial_exit_executor import PartialExitExecutor
+from src.engines.shared.side_utils import is_long, to_side_string
 from src.performance.metrics import cash_pnl
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
 
@@ -115,8 +116,7 @@ class PositionTracker:
             return
 
         try:
-            # Convert PositionSide enum to string for metrics tracker compatibility
-            side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+            side_str = to_side_string(self.current_trade.side)
 
             self.mfe_mae_tracker.update_position_metrics(
                 position_key=self.POSITION_KEY,
@@ -218,9 +218,7 @@ class PositionTracker:
 
         # Only update if new stop is better
         current_sl = self.current_trade.stop_loss
-        # Convert PositionSide enum to string for comparison
-        side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
-        if side_str == "long":
+        if is_long(self.current_trade.side):
             should_update = current_sl is None or new_stop_loss > float(current_sl)
         else:
             should_update = current_sl is None or new_stop_loss < float(current_sl)
@@ -268,9 +266,7 @@ class PositionTracker:
         fraction = float(getattr(trade, "current_size", trade.size))
 
         # Calculate PnL
-        # Convert PositionSide enum to string for comparison
-        side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
-        if side_str == "long":
+        if is_long(trade.side):
             trade_pnl_pct = (
                 (exit_price - trade.entry_price) / trade.entry_price
             ) * fraction

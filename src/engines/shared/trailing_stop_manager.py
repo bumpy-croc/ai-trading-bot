@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.engines.shared.side_utils import is_long, to_side_string
+
 if TYPE_CHECKING:
     from src.engines.shared.models import BasePosition
     from src.position_management.trailing_stops import TrailingStopPolicy
@@ -93,7 +95,7 @@ class TrailingStopManager:
 
         # Calculate position-level PnL percentage (not sized by position fraction)
         # This provides consistent risk management regardless of position size
-        if side == "long":
+        if is_long(side):
             pnl_pct = (current_price - entry_price) / entry_price
         else:
             pnl_pct = (entry_price - current_price) / entry_price
@@ -119,9 +121,7 @@ class TrailingStopManager:
         side = getattr(position, "side", None)
         if side is None:
             return "long"
-        if hasattr(side, "value"):
-            return side.value.lower()
-        return str(side).lower()
+        return to_side_string(side)
 
     def _check_breakeven(
         self,
@@ -151,7 +151,7 @@ class TrailingStopManager:
 
         if pnl_pct >= breakeven_threshold:
             # Calculate breakeven stop price
-            if side == "long":
+            if is_long(side):
                 new_stop = entry_price * (1 + breakeven_buffer)
             else:
                 new_stop = entry_price * (1 - breakeven_buffer)
@@ -224,7 +224,7 @@ class TrailingStopManager:
             )
 
         # Calculate new stop price
-        if side == "long":
+        if is_long(side):
             new_stop = current_price - trailing_distance
             should_update = current_stop is None or new_stop > current_stop
         else:
