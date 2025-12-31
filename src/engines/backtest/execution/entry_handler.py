@@ -16,6 +16,7 @@ import pandas as pd
 from src.engines.backtest.models import ActiveTrade
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.strategies.components import SignalDirection
+from src.utils.bounds import clamp_fraction, clamp_stop_loss_pct
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -419,7 +420,7 @@ class EntryHandler:
 
         # Calculate size fraction
         size_fraction = float(decision.position_size) / float(balance)
-        size_fraction = max(0.0, min(1.0, size_fraction))
+        size_fraction = clamp_fraction(size_fraction)
 
         return side, size_fraction
 
@@ -452,7 +453,7 @@ class EntryHandler:
                     sl_pct = (current_price - stop_loss_price) / current_price
                 else:
                     sl_pct = (stop_loss_price - current_price) / current_price
-                sl_pct = max(0.01, min(0.20, sl_pct))  # Clamp 1-20%
+                sl_pct = clamp_stop_loss_pct(sl_pct)  # Clamp 1-20%
             except Exception:
                 pass
 

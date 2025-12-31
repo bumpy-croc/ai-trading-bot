@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
+from src.utils.bounds import clamp_position_size, validate_non_negative, validate_positive
+
 from .regime_utils import RegimeMultiplierCalculator, RegimeMultiplierConfig
 
 if TYPE_CHECKING:
@@ -64,8 +66,9 @@ class PositionSizer(ABC):
         pass
 
     def validate_inputs(self, balance: float, risk_amount: float) -> None:
-        """
-        Validate common input parameters
+        """Validate common input parameters.
+
+        Uses shared validation utilities for consistent error handling.
 
         Args:
             balance: Account balance to validate
@@ -74,11 +77,8 @@ class PositionSizer(ABC):
         Raises:
             ValueError: If parameters are invalid
         """
-        if balance <= 0:
-            raise ValueError(f"balance must be positive, got {balance}")
-
-        if risk_amount < 0:
-            raise ValueError(f"risk_amount must be non-negative, got {risk_amount}")
+        validate_positive(balance, "balance")
+        validate_non_negative(risk_amount, "risk_amount")
 
         if risk_amount > balance:
             raise ValueError(f"risk_amount ({risk_amount}) cannot exceed balance ({balance})")
@@ -86,8 +86,9 @@ class PositionSizer(ABC):
     def apply_bounds_checking(
         self, size: float, balance: float, min_fraction: float = 0.001, max_fraction: float = 0.2
     ) -> float:
-        """
-        Apply bounds checking to position size
+        """Apply bounds checking to position size.
+
+        Uses shared clamp_position_size for consistent bounds enforcement.
 
         Args:
             size: Calculated position size
@@ -98,10 +99,7 @@ class PositionSizer(ABC):
         Returns:
             Position size within bounds
         """
-        min_size = balance * min_fraction
-        max_size = balance * max_fraction
-
-        return max(min_size, min(max_size, size))
+        return clamp_position_size(size, balance, min_fraction, max_fraction)
 
     def get_parameters(self) -> dict[str, Any]:
         """
