@@ -356,10 +356,10 @@ class LiveExitHandler:
                     price_change * 100,
                 )
 
-        # Filled exits use the exchange-reported price; slippage models adverse execution costs.
-        executed_price = self.execution_engine.apply_exit_slippage(
-            filled_price, position.side
-        )
+        # For filled orders, use the exchange-reported price directly.
+        # Slippage already occurred on the exchange - we don't apply additional slippage
+        # to avoid double-counting. This matches backtest behavior for parity.
+        executed_price = filled_price
 
         position_notional = self._calculate_position_notional(
             position=position,
@@ -368,7 +368,8 @@ class LiveExitHandler:
         )
 
         exit_fee = self.execution_engine.calculate_exit_fee(position_notional)
-        slippage_cost = self.execution_engine.calculate_slippage_cost(position_notional)
+        # No slippage cost reported for filled orders - slippage already occurred
+        slippage_cost = 0.0
 
         close_result = self.position_tracker.close_position(
             order_id=position.order_id,
