@@ -47,6 +47,17 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+
+# Query timeout categories for differentiated timeout handling
+class QueryTimeout:
+    """Query timeout values (in milliseconds) for different operation types."""
+
+    CRITICAL_READ = 5000  # 5s - Balance, positions, active session (trading loop critical path)
+    WRITE = 15000  # 15s - Trades, positions, orders (needs durability)
+    ANALYTICS = 60000  # 60s - Performance metrics, reports (non-critical)
+    DEFAULT = 30000  # 30s - Fallback for uncategorized queries
+
+
 if TYPE_CHECKING:  # pragma: no cover
     # SQLAlchemy provides stub packages (sqlalchemy-stubs / sqlalchemy2-stubs).
     # Import only for static analysis; guarded to avoid hard runtime dependency.
@@ -332,6 +343,43 @@ class DatabaseManager:
         except Exception as e:
             session.rollback()
             logger.error(f"Database session error: {e}")
+            raise
+        finally:
+            session.close()
+
+    @contextmanager
+    def get_session_with_timeout(
+        self, timeout_ms: int = QueryTimeout.DEFAULT
+    ) -> Generator[Session, None, None]:
+        """
+        Get a database session with query-specific timeout.
+
+        Sets statement_timeout for this session to prevent long-running queries
+        from blocking critical operations. Timeout is automatically reset after session.
+
+        Args:
+            timeout_ms: Statement timeout in milliseconds.
+                       Use QueryTimeout constants for standard categories.
+
+        Yields:
+            SQLAlchemy session with configured timeout
+
+        Example:
+            with db.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
+                balance = session.query(AccountBalance).first()
+        """
+        if self.session_factory is None:
+            raise ValueError("Session factory not initialized")
+
+        session = self.session_factory()
+        try:
+            # Set statement_timeout for this session using SET LOCAL (transaction-scoped)
+            # This overrides the connection-level default timeout
+            session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            yield session
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Database session error (timeout={timeout_ms}ms): {e}")
             raise
         finally:
             session.close()
@@ -667,7 +715,8 @@ class DatabaseManager:
         Returns:
             Trade ID
         """
-        with self.get_session() as session:
+        # Use WRITE timeout - trade logging requires durability guarantees
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             # Convert string enums if necessary
             if isinstance(side, str):
                 side = PositionSide[side.upper()]
@@ -772,7 +821,8 @@ class DatabaseManager:
         Returns:
             Position ID
         """
-        with self.get_session() as session:
+        # Use WRITE timeout - position logging requires durability guarantees
+        with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
             # Convert string enum if necessary
             if isinstance(side, str):
                 side = PositionSide[side.upper()]
@@ -1304,7 +1354,8 @@ class DatabaseManager:
 
     def get_active_positions(self, session_id: int | None = None) -> list[dict]:
         """Get all active positions with their associated orders."""
-        with self.get_session() as session:
+        # Use CRITICAL_READ timeout - position queries are in trading loop critical path
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
             # Use string comparison for robustness against enum issues
             query = session.query(Position).filter(Position.status == "OPEN")
 
@@ -1437,7 +1488,8 @@ class DatabaseManager:
         session_id: int | None = None,
     ) -> dict:
         """Get performance metrics for a specific period."""
-        with self.get_session() as session:
+        # Use ANALYTICS timeout - performance metrics are not time-critical
+        with self.get_session_with_timeout(QueryTimeout.ANALYTICS) as session:
             # Query trades within the period
             query = session.query(Trade)
 
@@ -1667,7 +1719,8 @@ class DatabaseManager:
         if not session_id:
             return 0.0
 
-        with self.get_session() as session:
+        # Use CRITICAL_READ timeout - balance queries are in trading loop critical path
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
             return AccountBalance.get_current_balance(session_id, session)
 
     def update_balance(
@@ -1684,7 +1737,8 @@ class DatabaseManager:
             return False
 
         try:
-            with self.get_session() as session:
+            # Use WRITE timeout - balance updates need durability guarantees
+            with self.get_session_with_timeout(QueryTimeout.WRITE) as session:
                 AccountBalance.update_balance(
                     session_id, new_balance, update_reason, updated_by, session
                 )
@@ -1757,7 +1811,8 @@ class DatabaseManager:
 
     def get_active_session_id(self) -> int | None:
         """Get the current active session ID"""
-        with self.get_session() as session:
+        # Use CRITICAL_READ timeout - session lookup is critical for engine startup
+        with self.get_session_with_timeout(QueryTimeout.CRITICAL_READ) as session:
             active_session = (
                 session.query(TradingSession)
                 .filter(TradingSession.is_active)
