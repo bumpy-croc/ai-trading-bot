@@ -1294,11 +1294,22 @@ class LiveTradingEngine:
             logger.info("Closing %s open positions...", len(positions_snapshot))
             for position in list(positions_snapshot.values()):
                 try:
+                    # Get current price for position closure - MUST be valid
+                    current_price = self.data_provider.get_current_price(position.symbol)
+                    if current_price is None or current_price <= 0:
+                        logger.critical(
+                            "Cannot close position %s during shutdown - invalid price %s. "
+                            "Position will remain open! Manual intervention required.",
+                            position.symbol,
+                            current_price,
+                        )
+                        continue
+
                     self._execute_exit(
                         position,
                         "Engine shutdown",
                         None,
-                        float(self.data_provider.get_current_price(position.symbol) or 0.0),
+                        float(current_price),
                         None,
                         None,
                         None,
@@ -3512,11 +3523,22 @@ class LiveTradingEngine:
         if swap_data.get("close_positions", False):
             logger.info("🚪 Closing all positions before strategy swap")
             for position in list(self.live_position_tracker.positions.values()):
+                # Validate price before closing to prevent data corruption
+                current_price = self.data_provider.get_current_price(position.symbol)
+                if current_price is None or current_price <= 0:
+                    logger.error(
+                        "Cannot close position %s during strategy change - invalid price %s. "
+                        "Position will remain open.",
+                        position.symbol,
+                        current_price,
+                    )
+                    continue
+
                 self._execute_exit(
                     position,
                     "Strategy change - close requested",
                     None,
-                    float(self.data_provider.get_current_price(position.symbol) or 0.0),
+                    float(current_price),
                     None,
                     None,
                     None,
