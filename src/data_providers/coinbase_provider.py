@@ -405,16 +405,24 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             fills = self._request("GET", "/fills", params=params, auth=True)
             trades: list[Trade] = []
             for fl in fills:
+                # Extract commission asset safely from product_id (e.g., "BTC-USD" -> "USD")
+                product_id = fl.get("product_id")
+                if product_id and "-" in product_id:
+                    parts = product_id.split("-")
+                    commission_asset = parts[1] if len(parts) >= 2 else "USD"
+                else:
+                    commission_asset = "USD"  # Default fallback
+
                 trades.append(
                     Trade(
                         trade_id=fl.get("trade_id"),
                         order_id=fl.get("order_id"),
-                        symbol=fl.get("product_id"),
+                        symbol=product_id,
                         side=OrderSide.BUY if fl.get("side") == "buy" else OrderSide.SELL,
                         quantity=float(fl.get("size")),
                         price=float(fl.get("price")),
                         commission=float(fl.get("fee")),
-                        commission_asset=fl.get("product_id").split("-")[1],
+                        commission_asset=commission_asset,
                         time=datetime.fromisoformat(fl.get("created_at")),
                     )
                 )
