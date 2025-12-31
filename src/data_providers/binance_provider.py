@@ -451,14 +451,27 @@ class BinanceProvider(DataProvider, ExchangeInterface):
             raise
 
     def get_current_price(self, symbol: str) -> float:
-        """Get latest price for a symbol"""
+        """Get latest price for a symbol.
+
+        Raises:
+            RuntimeError: If price cannot be fetched from exchange.
+                         Caller must handle this to prevent trading with invalid prices.
+        """
         try:
             ticker = self._client.get_symbol_ticker(symbol=symbol)
-            return float(ticker["price"])
+            price = float(ticker["price"])
+            # Validate price is positive to prevent downstream calculation errors
+            if price <= 0:
+                raise ValueError(f"Invalid price {price} <= 0 for {symbol}")
+            return price
         except Exception as e:
             error_type = type(e).__name__
             logger.error(f"Error fetching current price for {symbol}: {error_type}: {str(e)}")
-            return 0.0
+            # Don't return 0.0 - that could cause division by zero or infinite position sizes
+            # Force caller to handle price fetch failures explicitly
+            raise RuntimeError(
+                f"Failed to fetch current price for {symbol}: {error_type}: {str(e)}"
+            ) from e
 
     # ========================================
     # ExchangeInterface Implementation
