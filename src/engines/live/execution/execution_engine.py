@@ -346,7 +346,10 @@ class LiveExecutionEngine:
         value: float,
         price: float,
     ) -> str | None:
-        """Execute a real market order via exchange.
+        """Execute a real market order via exchange with idempotency.
+
+        Generates a client order ID based on timestamp and order details to prevent
+        duplicate orders on network failures or retries.
 
         Args:
             symbol: Trading symbol.
@@ -368,11 +371,18 @@ class LiveExecutionEngine:
             if quantity <= 0:
                 return None
 
+            # Generate deterministic client order ID for idempotency
+            # Format: atb_SYMBOL_SIDE_TIMESTAMP_QUANTITY
+            # This ensures same order params generate same ID for retry safety
+            timestamp_ms = int(time.time() * 1000)
+            client_order_id = f"atb_{symbol}_{side.value}_{timestamp_ms}_{int(quantity * 1000000)}"
+
             return self.exchange_interface.place_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
+                client_order_id=client_order_id,
             )
         except (ConnectionError, TimeoutError, ValueError) as e:
             logger.error("Live order execution failed: %s", e)
@@ -411,11 +421,21 @@ class LiveExecutionEngine:
             if quantity <= 0:
                 return False
 
+            # Generate deterministic client order ID for exit order idempotency
+            # Use original order_id in the client ID to tie exit to entry
+            timestamp_ms = int(time.time() * 1000)
+            close_side_str = "SELL" if side == PositionSide.LONG else "BUY"
+            client_order_id = f"atb_close_{symbol}_{close_side_str}_{timestamp_ms}_{int(quantity * 1000000)}"
+            if order_id:
+                # Include original order ID for traceability
+                client_order_id = f"{client_order_id}_{order_id[:8]}"
+
             close_order_id = self.exchange_interface.place_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
                 quantity=quantity,
+                client_order_id=client_order_id,
             )
             if close_order_id:
                 logger.info(

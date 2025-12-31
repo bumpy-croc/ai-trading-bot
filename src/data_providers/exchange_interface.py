@@ -180,8 +180,24 @@ class ExchangeInterface(ABC):
         price: float | None = None,
         stop_price: float | None = None,
         time_in_force: str = "GTC",
+        client_order_id: str | None = None,
     ) -> str | None:
-        """Place a new order and return order ID"""
+        """
+        Place a new order and return order ID.
+
+        Args:
+            symbol: Trading pair symbol
+            side: Order side (BUY or SELL)
+            order_type: Order type (MARKET, LIMIT, etc.)
+            quantity: Order quantity
+            price: Limit price (required for LIMIT orders)
+            stop_price: Stop price (required for STOP orders)
+            time_in_force: Time in force (GTC, IOC, FOK)
+            client_order_id: Optional client-generated order ID for idempotency
+
+        Returns:
+            Exchange order ID if successful, None otherwise
+        """
         pass
 
     @abstractmethod
