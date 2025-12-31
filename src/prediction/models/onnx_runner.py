@@ -73,6 +73,7 @@ class OnnxRunner:
             TimeoutError: If model loading exceeds timeout.
             RuntimeError: If model loading fails for other reasons.
         """
+        session = None
         try:
             # Load ONNX session with timeout protection (guards against corrupted files or slow I/O)
             providers = get_preferred_providers()
@@ -80,7 +81,7 @@ class OnnxRunner:
             def _create_session():
                 return ort.InferenceSession(self.model_path, providers=providers)
 
-            self.session = run_with_timeout(
+            session = run_with_timeout(
                 _create_session,
                 timeout_seconds=MODEL_LOAD_TIMEOUT,
                 operation_name=f"ONNX model loading ({os.path.basename(self.model_path)})",
@@ -89,13 +90,33 @@ class OnnxRunner:
             # Load model metadata with timeout protection
             self.model_metadata = self._load_metadata()
 
+            # Only assign session on full success to prevent partial initialization
+            self.session = session
+
         except TimeoutError as e:
+            # Clean up partially initialized session
+            if session is not None:
+                del session
             raise RuntimeError(
                 f"Model loading timed out after {MODEL_LOAD_TIMEOUT}s for {self.model_path}. "
                 f"The model file may be corrupted or the disk is slow."
             ) from e
         except Exception as e:
+            # Clean up partially initialized session
+            if session is not None:
+                del session
             raise RuntimeError(f"Failed to load model {self.model_path}: {e}") from e
+
+    def __del__(self):
+        """Ensure ONNX session cleanup on garbage collection.
+
+        Prevents file descriptor leaks from repeated model loading failures.
+        """
+        if hasattr(self, "session") and self.session is not None:
+            try:
+                del self.session
+            except Exception:
+                pass  # Best effort cleanup
 
     def _load_metadata(self) -> dict[str, Any]:
         """Load model metadata from JSON file with timeout protection.
