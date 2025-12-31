@@ -1386,20 +1386,25 @@ class LiveTradingEngine:
                 # Add sentiment data if available
                 if self.sentiment_provider:
                     df = self._add_sentiment_data(df, symbol)
-                # Check for pending strategy/model updates
-                if self.strategy_manager and self.strategy_manager.has_pending_update():
-                    logger.info("🔄 Applying pending strategy/model update...")
-                    success = self.strategy_manager.apply_pending_update()
-                    if success:
-                        self._finalize_runtime()
-                        updated_strategy = self.strategy_manager.current_strategy
-                        self._configure_strategy(updated_strategy)
-                        self._runtime_dataset = None
-                        self._runtime_warmup = 0
-                        logger.info("✅ Strategy/model update applied successfully")
-                        self._send_alert("Strategy/Model updated in live trading")
-                    else:
-                        logger.error("❌ Failed to apply strategy/model update")
+                # Check for pending strategy/model updates (wrap in try-except to prevent loop crash)
+                try:
+                    if self.strategy_manager and self.strategy_manager.has_pending_update():
+                        logger.info("🔄 Applying pending strategy/model update...")
+                        success = self.strategy_manager.apply_pending_update()
+                        if success:
+                            self._finalize_runtime()
+                            updated_strategy = self.strategy_manager.current_strategy
+                            self._configure_strategy(updated_strategy)
+                            self._runtime_dataset = None
+                            self._runtime_warmup = 0
+                            logger.info("✅ Strategy/model update applied successfully")
+                            self._send_alert("Strategy/Model updated in live trading")
+                        else:
+                            logger.error("❌ Failed to apply strategy/model update")
+                except Exception as e:
+                    logger.error(
+                        "❌ Exception during strategy update check/application: %s", e, exc_info=True
+                    )
                 # Proceed to indicator calculation
 
                 # Calculate indicators or prepare runtime dataset
