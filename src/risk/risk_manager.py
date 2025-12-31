@@ -301,15 +301,28 @@ class RiskManager:
                 if engine is not None and candidate_symbol:
                     with self._state_lock:
                         positions = self.positions.copy()
-                    factor = float(
-                        engine.compute_size_reduction_factor(
-                            positions=positions,
-                            corr_matrix=corr_matrix,
-                            candidate_symbol=str(candidate_symbol),
-                            candidate_fraction=float(fraction),
-                            max_exposure_override=max_exposure_override,
-                        )
+                    raw_factor = engine.compute_size_reduction_factor(
+                        positions=positions,
+                        corr_matrix=corr_matrix,
+                        candidate_symbol=str(candidate_symbol),
+                        candidate_fraction=float(fraction),
+                        max_exposure_override=max_exposure_override,
                     )
+                    # Validate factor is numeric and not None/NaN before using
+                    try:
+                        factor = float(raw_factor)
+                        if pd.isna(factor):
+                            logging.warning(
+                                "Correlation engine returned NaN reduction factor - ignoring correlation adjustment"
+                            )
+                            factor = 1.0
+                    except (TypeError, ValueError):
+                        logging.warning(
+                            "Correlation engine returned non-numeric factor (%s: %s) - ignoring correlation adjustment",
+                            type(raw_factor).__name__,
+                            raw_factor,
+                        )
+                        factor = 1.0
                     if factor < 1.0:
                         fraction = max(0.0, fraction * factor)
         except Exception:
@@ -367,10 +380,21 @@ class RiskManager:
         tp_price: float | None = None
 
         if stop_loss_pct is not None:
-            if side == "long":
-                sl_price = entry_price * (1 - float(stop_loss_pct))
-            else:
-                sl_price = entry_price * (1 + float(stop_loss_pct))
+            try:
+                stop_loss_pct_float = float(stop_loss_pct)
+                if side == "long":
+                    sl_price = entry_price * (1 - stop_loss_pct_float)
+                else:
+                    sl_price = entry_price * (1 + stop_loss_pct_float)
+            except (TypeError, ValueError) as e:
+                logging.warning(
+                    "Invalid stop_loss_pct value '%s' (type: %s) - cannot convert to float: %s. "
+                    "Falling back to ATR-based stop loss.",
+                    stop_loss_pct,
+                    type(stop_loss_pct).__name__,
+                    e,
+                )
+                sl_price = None
         else:
             # ATR-based if available
             df = self._ensure_atr(df)
@@ -385,10 +409,21 @@ class RiskManager:
                 )
 
         if take_profit_pct is not None:
-            if side == "long":
-                tp_price = entry_price * (1 + float(take_profit_pct))
-            else:
-                tp_price = entry_price * (1 - float(take_profit_pct))
+            try:
+                take_profit_pct_float = float(take_profit_pct)
+                if side == "long":
+                    tp_price = entry_price * (1 + take_profit_pct_float)
+                else:
+                    tp_price = entry_price * (1 - take_profit_pct_float)
+            except (TypeError, ValueError) as e:
+                logging.warning(
+                    "Invalid take_profit_pct value '%s' (type: %s) - cannot convert to float: %s. "
+                    "Setting take profit to None.",
+                    take_profit_pct,
+                    type(take_profit_pct).__name__,
+                    e,
+                )
+                tp_price = None
         else:
             tp_price = None
 
