@@ -1827,7 +1827,14 @@ class LiveTradingEngine:
             # Log exit decision for each position
             if self.db_manager:
                 # Calculate current P&L for context
-                if position.side == PositionSide.LONG:
+                # Validate entry_price to prevent division by zero from corrupted position data
+                if position.entry_price <= 0:
+                    logger.error(
+                        f"Invalid entry_price {position.entry_price} for position {position.symbol} - "
+                        "skipping P&L calculation for logging"
+                    )
+                    current_pnl = 0.0  # Fallback value for logging
+                elif position.side == PositionSide.LONG:
                     current_pnl = (float(current_price) - float(position.entry_price)) / float(
                         position.entry_price
                     )
@@ -2249,11 +2256,18 @@ class LiveTradingEngine:
                 if self.enable_live_trading and self.exchange_interface:
                     try:
                         close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-                        self.exchange_interface.place_market_order(
-                            symbol=symbol,
-                            side=close_side,
-                            quantity=position.size * result.position_value / position.entry_price,
-                        )
+                        # Validate entry_price to prevent division by zero
+                        if position.entry_price <= 0:
+                            logger.error(
+                                f"Cannot calculate emergency close quantity - invalid entry_price "
+                                f"{position.entry_price} for {symbol}"
+                            )
+                        else:
+                            self.exchange_interface.place_market_order(
+                                symbol=symbol,
+                                side=close_side,
+                                quantity=position.size * result.position_value / position.entry_price,
+                            )
                         logger.warning(
                             "Emergency close placed for %s due to balance update failure", symbol
                         )
@@ -2290,12 +2304,22 @@ class LiveTradingEngine:
                 if self.enable_live_trading and self.exchange_interface:
                     try:
                         close_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
-                        self.exchange_interface.place_market_order(
-                            symbol=symbol,
-                            side=close_side,
-                            quantity=position.size * self.current_balance / position.entry_price,
-                        )
-                        logger.info("Emergency close order placed for orphaned position %s", symbol)
+
+                        # Validate entry_price before division to prevent crashes
+                        if position.entry_price <= 0:
+                            logger.critical(
+                                "CRITICAL: Cannot calculate emergency close quantity for %s - "
+                                "invalid entry_price %.8f. MANUAL INTERVENTION REQUIRED.",
+                                symbol,
+                                position.entry_price,
+                            )
+                        else:
+                            self.exchange_interface.place_market_order(
+                                symbol=symbol,
+                                side=close_side,
+                                quantity=position.size * self.current_balance / position.entry_price,
+                            )
+                            logger.info("Emergency close order placed for orphaned position %s", symbol)
                     except Exception as close_err:
                         logger.critical(
                             "CRITICAL: Emergency close FAILED for %s. "
