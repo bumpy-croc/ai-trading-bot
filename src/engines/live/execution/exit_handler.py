@@ -616,11 +616,11 @@ class LiveExitHandler:
         Uses unified PartialOperationsManager for consistent logic.
 
         Threading Safety:
-        - Uses list() to create defensive snapshot of positions for iteration
-        - This prevents modification-during-iteration errors from concurrent callbacks
-        - Individual position_tracker methods should be atomic at Python level (GIL)
-        - Note: position_tracker does not have internal locking; assumes main-loop-only access
-        - If OrderTracker callbacks modify positions concurrently, consider adding lock
+        - position_tracker.positions property returns a copy with internal locking
+        - All position_tracker methods are protected by _positions_lock
+        - Safe for concurrent access from OrderTracker callbacks and main trading loop
+        - list() creates snapshot of the copy for iteration safety
+        - No additional locking needed at this level
 
         Args:
             df: DataFrame with market data.
