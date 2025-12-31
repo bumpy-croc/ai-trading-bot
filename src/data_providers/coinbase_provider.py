@@ -189,6 +189,27 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
         """Destructor to ensure session is closed when provider is garbage collected."""
         self.close()
 
+    @staticmethod
+    def _safe_calculate_average_price(executed_value: Any, filled_size: Any) -> float | None:
+        """Safely calculate average price with validation to prevent NaN/inf propagation."""
+        import math
+
+        try:
+            exec_val = float(executed_value)
+            fill_sz = float(filled_size)
+
+            # Validate both values are finite before division
+            if not math.isfinite(exec_val) or not math.isfinite(fill_sz):
+                return None
+
+            if fill_sz > 0:
+                avg_price = exec_val / fill_sz
+                # Validate result is finite
+                return avg_price if math.isfinite(avg_price) else None
+            return None
+        except (TypeError, ValueError):
+            return None
+
     # ------------------------------------------------------------
     # The following methods provide implementations for authenticated endpoints of the Coinbase Exchange API.
     # These methods interact with the API to fetch account information and balances.
@@ -322,9 +343,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                         status=self._convert_order_status(od.get("status"), od.get("done_reason")),
                         filled_quantity=float(od.get("filled_size", 0)),
                         average_price=(
-                            (float(od.get("executed_value", 0)) / float(od.get("filled_size", 0)))
-                            if float(od.get("filled_size", 0)) > 0
-                            else None
+                            self._safe_calculate_average_price(
+                                od.get("executed_value", 0), od.get("filled_size", 0)
+                            )
                         ),
                         commission=0.0,
                         commission_asset="",
