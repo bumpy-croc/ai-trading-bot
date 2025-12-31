@@ -24,7 +24,10 @@ def calculate_rsi(data, period: int = 14):
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
+
+    # Prevent division by zero by adding epsilon to loss
+    # When loss is 0, RS approaches infinity and RSI approaches 100
+    rs = gain / (loss + 1e-10)
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
