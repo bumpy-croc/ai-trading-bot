@@ -629,6 +629,75 @@ fraction = manager.calculate_position_fraction(..., correlation_ctx=None)  # Ski
 fraction, factor = apply_correlation_adjustment(fraction, ctx)  # Apply once
 ```
 
+#### 14. Missing Retry Logic for External APIs
+- **Problem**: Network calls to exchanges fail without retry, causing position management issues
+- **Prevention**: Add retry with exponential backoff for transient failures
+```python
+# ✅ Good: Retry with backoff
+for attempt in range(3):
+    try:
+        result = exchange.get_order(order_id)
+        break
+    except (ConnectionError, TimeoutError) as e:
+        if attempt == 2:
+            logger.error("Failed after 3 attempts: %s", e)
+            return None
+        time.sleep(2 ** attempt)  # 1s, 2s, 4s
+```
+
+#### 15. Database/In-Memory State Divergence
+- **Problem**: In-memory state updated but DB update fails, causing inconsistency
+- **Prevention**: Either rollback in-memory on DB failure OR log critical warning for manual reconciliation
+```python
+# ✅ Good: Fail-fast or rollback
+try:
+    db_manager.update_position(position)
+except Exception as e:
+    # Option 1: Rollback in-memory state
+    position.current_size = previous_size
+    logger.error("DB update failed, rolled back: %s", e)
+    # Option 2: Log critical for manual fix
+    logger.critical("DB/memory state diverged for %s: %s", position.symbol, e)
+```
+
+#### 16. Magic Numbers Without Justification
+- **Problem**: Constants like `MAX_PARTIAL_EXITS_PER_CYCLE = 10` lack explanation
+- **Prevention**: Add comments explaining why the value was chosen
+```python
+# ✅ Good: Explain the reasoning
+# Maximum partial exits per cycle - limits to 10 to prevent infinite loops
+# from malformed policies while allowing legitimate multi-level exits (typically 2-3)
+MAX_PARTIAL_EXITS_PER_CYCLE = 10
+```
+
+#### 17. Weak Test Assertions
+- **Problem**: Using `or` instead of `and` in assertions makes tests too permissive
+- **Prevention**: Assert each condition independently
+```python
+# ❌ Bad: Passes if either is true
+assert result.updated is False or result.new_stop_price is None
+
+# ✅ Good: Assert both conditions
+assert result.updated is False
+assert result.new_stop_price is None
+```
+
+#### 18. Runtime Validation Instead of Init Validation
+- **Problem**: Checking for required dependencies at runtime instead of initialization
+- **Prevention**: Validate required dependencies in `__init__`, fail fast
+```python
+# ❌ Bad: Fails at order execution time
+def execute_order(self):
+    if self.exchange_interface is None:  # Too late!
+        logger.error("Exchange not initialized")
+        return None
+
+# ✅ Good: Fail at init
+def __init__(self, exchange_interface, enable_live_trading):
+    if enable_live_trading and exchange_interface is None:
+        raise ValueError("Cannot enable live trading without exchange interface")
+```
+
 ---
 
 ## Automated Documentation
