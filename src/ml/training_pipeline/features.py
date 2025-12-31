@@ -218,6 +218,30 @@ def create_robust_features(
                 f"need at least {min_required_rows} for training with SMA windows {SMA_WINDOWS}"
             )
 
+        # Validate data for inf values and other corruption that would break MinMaxScaler
+        inf_counts = np.isinf(data.select_dtypes(include=[np.number])).sum()
+        if inf_counts.sum() > 0:
+            logger.error(
+                "Found infinite values in training data. Columns with inf: %s",
+                {col: int(count) for col, count in inf_counts[inf_counts > 0].items()},
+            )
+            raise ValueError(
+                f"Training data contains infinite values in {inf_counts[inf_counts > 0].to_dict()} - "
+                "cannot proceed with scaling. Check data provider for corrupt price data."
+            )
+
+        # Validate data is numeric where expected
+        numeric_cols = ["close", "open", "high", "low", "volume", "rsi"] + [
+            f"sma_{w}" for w in SMA_WINDOWS
+        ]
+        for col in numeric_cols:
+            if col in data.columns:
+                if not np.issubdtype(data[col].dtype, np.number):
+                    raise ValueError(
+                        f"Column '{col}' is not numeric (dtype={data[col].dtype}) - "
+                        "cannot proceed with feature engineering"
+                    )
+
         # Now scale the technical indicators (NaN-free data)
         for window in SMA_WINDOWS:
             col = f"sma_{window}"
