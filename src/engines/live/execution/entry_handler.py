@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_VOLUME = 0.0
+# Maximum acceptable filled-price deviation from signal price before logging a critical warning.
+MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -75,6 +77,7 @@ class LiveEntryHandler:
         dynamic_risk_manager: DynamicRiskManager | None = None,
         max_position_size: float = 0.1,
         default_take_profit_pct: float | None = None,
+        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize entry handler.
 
@@ -86,6 +89,7 @@ class LiveEntryHandler:
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             max_position_size: Maximum position size as fraction.
             default_take_profit_pct: Default take profit percentage.
+            max_filled_price_deviation: Threshold for logging suspicious fill prices.
         """
         self.execution_engine = execution_engine
         self.execution_model = execution_model
@@ -94,6 +98,7 @@ class LiveEntryHandler:
         self.dynamic_risk_manager = dynamic_risk_manager
         self.max_position_size = max_position_size
         self.default_take_profit_pct = default_take_profit_pct
+        self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared DynamicRiskHandler for consistent risk adjustment logic
         self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
 
@@ -280,6 +285,18 @@ class LiveEntryHandler:
                 reasons=signal.reasons,
                 error=exec_result.error,
             )
+
+        # Validate filled price is within reasonable bounds of signal price.
+        if current_price > 0:
+            price_change = abs(exec_result.executed_price - current_price) / current_price
+            if price_change > self.max_filled_price_deviation:
+                logger.critical(
+                    "Suspicious entry fill price for %s: signal=%.2f filled=%.2f (%.1f%% move)",
+                    symbol,
+                    current_price,
+                    exec_result.executed_price,
+                    price_change * 100,
+                )
 
         entry_balance = balance
         # Create position with actual quantity from execution

@@ -34,6 +34,8 @@ DEFAULT_VOLUME = 0.0
 # Maximum age (in seconds) before a pending entry is considered stale and discarded.
 # Default of 1 hour prevents very old signals from executing in changed conditions.
 MAX_PENDING_ENTRY_AGE_SECONDS = 3600
+# Maximum acceptable filled-price deviation from signal price before logging a critical warning.
+MAX_FILLED_PRICE_DEVIATION = 0.5
 
 
 @dataclass
@@ -82,6 +84,7 @@ class EntryHandler:
         dynamic_risk_manager: DynamicRiskManager | None = None,
         correlation_handler: Any | None = None,
         default_take_profit_pct: float | None = None,
+        max_filled_price_deviation: float = MAX_FILLED_PRICE_DEVIATION,
     ) -> None:
         """Initialize entry handler.
 
@@ -94,6 +97,7 @@ class EntryHandler:
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             correlation_handler: Handler for correlation-based sizing.
             default_take_profit_pct: Default take profit percentage.
+            max_filled_price_deviation: Threshold for logging suspicious fill prices.
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -103,6 +107,7 @@ class EntryHandler:
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
         self.default_take_profit_pct = default_take_profit_pct
+        self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared DynamicRiskHandler for consistent risk adjustment logic
         self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
 
@@ -370,6 +375,18 @@ class EntryHandler:
 
         base_price = decision.fill_price
 
+        # Validate filled price is within reasonable bounds of signal price.
+        if current_price > 0:
+            price_change = abs(base_price - current_price) / current_price
+            if price_change > self.max_filled_price_deviation:
+                logger.critical(
+                    "Suspicious entry fill price for %s: signal=%.2f filled=%.2f (%.1f%% move)",
+                    symbol,
+                    current_price,
+                    base_price,
+                    price_change * 100,
+                )
+
         # Immediate execution
         result = self.execution_engine.execute_immediate_entry(
             symbol=symbol,
@@ -480,6 +497,18 @@ class EntryHandler:
                 decision.reason,
             )
             return EntryExecutionResult(executed=False, pending=True)
+
+        # Validate filled price is within reasonable bounds of open price.
+        if open_price > 0 and decision.fill_price is not None:
+            price_change = abs(decision.fill_price - open_price) / open_price
+            if price_change > self.max_filled_price_deviation:
+                logger.critical(
+                    "Suspicious pending entry fill price for %s: open=%.2f filled=%.2f (%.1f%% move)",
+                    symbol,
+                    open_price,
+                    decision.fill_price,
+                    price_change * 100,
+                )
 
         result = self.execution_engine.execute_pending_entry(
             symbol=symbol,
