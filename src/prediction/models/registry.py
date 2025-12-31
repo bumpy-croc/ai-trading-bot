@@ -118,6 +118,19 @@ class PredictionModelRegistry:
         """Load a single bundle directory into a ModelBundle."""
         # Resolve real directory in case of symlink
         real_dir = vdir.resolve()
+
+        # Validate resolved path is still within registry to prevent path traversal
+        # This prevents malicious symlinks from escaping the model registry directory
+        registry_base = Path(self.config.model_registry_path).resolve()
+        try:
+            # Raises ValueError if real_dir is not relative to registry_base
+            real_dir.relative_to(registry_base)
+        except ValueError as e:
+            raise ModelLoadError(
+                f"Path traversal detected: Model path {real_dir} is outside registry {registry_base}. "
+                f"Symlinks must point to locations within the model registry."
+            ) from e
+
         version_id = real_dir.name
         # Require metadata.json and a model file
         metadata_path = real_dir / "metadata.json"
