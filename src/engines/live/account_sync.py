@@ -20,6 +20,7 @@ from src.data_providers.exchange_interface import (
 from src.data_providers.exchange_interface import OrderStatus as ExchangeOrderStatus
 from src.database.manager import DatabaseManager
 from src.database.models import PositionSide, TradeSource
+from src.engines.shared.side_utils import to_side_string
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +374,7 @@ class AccountSynchronizer:
                         {
                             "order_id": exchange_order.order_id,
                             "symbol": exchange_order.symbol,
-                            "side": exchange_order.side.value,
+                            "side": to_side_string(exchange_order.side),
                             "quantity": exchange_order.quantity,
                             "price": exchange_order.price,
                         }
@@ -462,11 +463,7 @@ class AccountSynchronizer:
                     try:
                         _trade_id = self.db_manager.log_trade(
                             symbol=trade.symbol,
-                            side=(
-                                trade.side.value
-                                if hasattr(trade.side, "value")
-                                else str(trade.side)
-                            ),
+                            side=to_side_string(trade.side),
                             entry_price=trade.price,  # Simplified - we don't have entry/exit prices
                             exit_price=trade.price,
                             size=trade.quantity,
@@ -484,7 +481,7 @@ class AccountSynchronizer:
                             {
                                 "trade_id": trade.trade_id,
                                 "symbol": trade.symbol,
-                                "side": trade.side.value,
+                                "side": to_side_string(trade.side),
                                 "quantity": trade.quantity,
                                 "price": trade.price,
                                 "time": trade.time.isoformat(),
