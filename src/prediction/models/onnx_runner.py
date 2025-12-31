@@ -27,6 +27,9 @@ EPSILON = 1e-8  # Small value to prevent division by zero
 MODEL_LOAD_TIMEOUT = 60.0  # 60 seconds for model loading
 METADATA_LOAD_TIMEOUT = 10.0  # 10 seconds for metadata file read
 
+# Inference timeout protection (seconds)
+INFERENCE_TIMEOUT = 5.0  # 5 seconds for a single inference call
+
 
 @dataclass
 class ModelPrediction:
@@ -152,8 +155,21 @@ class OnnxRunner:
             # Get input name dynamically from ONNX session
             input_name = self.session.get_inputs()[0].name
 
-            # Run inference
-            output = self.session.run(None, {input_name: input_data})
+            # Run inference with timeout protection (guards against model hangs)
+            def _run_inference():
+                return self.session.run(None, {input_name: input_data})
+
+            try:
+                output = run_with_timeout(
+                    _run_inference,
+                    timeout_seconds=INFERENCE_TIMEOUT,
+                    operation_name=f"ONNX inference ({os.path.basename(self.model_path)})",
+                )
+            except TimeoutError as e:
+                raise RuntimeError(
+                    f"Inference timed out after {INFERENCE_TIMEOUT}s for {self.model_path}. "
+                    f"The model may be stuck or the input triggered pathological behavior."
+                ) from e
 
             # Process output
             prediction = self._process_output(output[0])
