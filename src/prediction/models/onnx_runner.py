@@ -183,7 +183,13 @@ class OnnxRunner:
             input_data = self._prepare_input(features)
 
             # Get input name dynamically from ONNX session
-            input_name = self.session.get_inputs()[0].name
+            # Validate model has at least one input to prevent IndexError
+            inputs = self.session.get_inputs()
+            if not inputs:
+                raise RuntimeError(
+                    f"Model {self.model_path} has no inputs defined. Cannot run inference."
+                )
+            input_name = inputs[0].name
 
             # Run inference with timeout protection (guards against model hangs)
             def _run_inference():
@@ -202,6 +208,11 @@ class OnnxRunner:
                 ) from e
 
             # Process output
+            # Validate model returned at least one output to prevent IndexError
+            if not output or len(output) == 0:
+                raise RuntimeError(
+                    f"Model {self.model_path} returned empty output. Expected at least one output tensor."
+                )
             prediction = self._process_output(output[0])
 
             inference_time = time.time() - start_time
@@ -327,13 +338,20 @@ class OnnxRunner:
 
     def _process_output(self, output: np.ndarray) -> dict[str, Any]:
         """Process model output into prediction"""
+        # Validate output is not empty before indexing
+        if output.size == 0:
+            raise ValueError("Model output tensor is empty - cannot extract prediction")
+
         # Extract scalar prediction
         if output.shape == (1, 1, 1):
             pred = output[0][0][0]
         elif output.shape == (1, 1):
             pred = output[0][0]
         else:
-            pred = output.flatten()[0]
+            flattened = output.flatten()
+            if len(flattened) == 0:
+                raise ValueError("Flattened model output is empty - cannot extract prediction")
+            pred = flattened[0]
 
         # Denormalize prediction if needed
         if self.model_metadata and self.model_metadata.get("price_normalization"):
@@ -348,6 +366,12 @@ class OnnxRunner:
     def _denormalize_price(self, pred: float) -> float:
         """Denormalize price prediction"""
         price_params = self.model_metadata["price_normalization"]
+        # Validate required normalization parameters exist
+        if "std" not in price_params or "mean" not in price_params:
+            logging.warning(
+                "Price normalization params missing 'std' or 'mean' - returning raw prediction"
+            )
+            return pred
         return pred * price_params["std"] + price_params["mean"]
 
     def _calculate_confidence(self, pred: float) -> float:
