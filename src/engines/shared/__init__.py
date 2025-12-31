@@ -48,6 +48,10 @@ from src.engines.shared.risk_configuration import (
     get_risk_parameters,
     merge_dynamic_risk_config,
 )
+from src.engines.shared.strategy_exit_checker import (
+    StrategyExitChecker,
+    StrategyExitResult,
+)
 from src.engines.shared.trailing_stop_manager import (
     TrailingStopManager,
     TrailingStopUpdate,
@@ -67,6 +71,9 @@ __all__ = [
     # Trailing stop management
     "TrailingStopManager",
     "TrailingStopUpdate",
+    # Strategy exit checking
+    "StrategyExitChecker",
+    "StrategyExitResult",
     # Dynamic risk handling
     "DynamicRiskHandler",
     "DynamicRiskAdjustment",

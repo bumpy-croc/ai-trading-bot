@@ -225,7 +225,9 @@ class LiveEntryHandler:
                 error=exec_result.error,
             )
 
-        entry_balance = balance
+        # CRITICAL: Subtract entry fee from entry_balance to match backtest behavior.
+        # This ensures P&L calculations use the same basis in both engines.
+        entry_balance = balance - exec_result.entry_fee
         # Create position with actual quantity from execution
         position = LivePosition(
             symbol=symbol,

@@ -19,6 +19,7 @@ from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
 )
+from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 
 if TYPE_CHECKING:
@@ -100,6 +101,7 @@ class ExitHandler:
         self.use_high_low_for_stops = use_high_low_for_stops
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
+        self._strategy_exit_checker = StrategyExitChecker()
 
     def update_trailing_stop(
         self,
@@ -430,6 +432,8 @@ class ExitHandler:
     ) -> tuple[bool, str]:
         """Check if runtime decision indicates exit.
 
+        Uses shared StrategyExitChecker for consistent logic across engines.
+
         Args:
             decision: Runtime decision from strategy.
             symbol: Trading symbol.
@@ -444,60 +448,21 @@ class ExitHandler:
         if decision is None or trade is None:
             return False, "Hold"
 
-        # Check for signal reversal
-        try:
-            from src.strategies.components import SignalDirection
+        # Extract volume and timestamp from candle for the shared checker
+        volume = float(candle.get("volume", 0.0) if hasattr(candle, "get") else 0.0)
+        timestamp = candle.name if hasattr(candle, "name") else None
 
-            # Convert PositionSide enum to string for comparison
-            side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
+        # Use shared strategy exit checker for consistent logic
+        result = self._strategy_exit_checker.check_exit(
+            position=trade,
+            current_price=current_price,
+            runtime_decision=decision,
+            component_strategy=component_strategy,
+            volume=volume,
+            timestamp=timestamp,
+        )
 
-            if side_str == "long" and decision.signal.direction == SignalDirection.SELL:
-                return True, "Signal reversal"
-            if side_str == "short" and decision.signal.direction == SignalDirection.BUY:
-                return True, "Signal reversal"
-        except Exception:
-            pass
-
-        # Check strategy's should_exit_position
-        if component_strategy is not None:
-            try:
-                from src.strategies.components import MarketData as ComponentMarketData
-                from src.strategies.components import Position as ComponentPosition
-
-                # Compute notional value from current position size and entry balance
-                # (component_notional field was removed - compute on-demand)
-                notional = float(trade.current_size) * float(trade.entry_balance or 0.0)
-
-                # Convert PositionSide enum to string for component Position validator
-                side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
-
-                position = ComponentPosition(
-                    symbol=trade.symbol,
-                    side=side_str,
-                    size=notional,
-                    entry_price=float(trade.entry_price),
-                    current_price=float(current_price),
-                    entry_time=trade.entry_time,
-                )
-
-                market_data = ComponentMarketData(
-                    symbol=symbol,
-                    price=float(current_price),
-                    volume=float(candle.get("volume", 0.0) if hasattr(candle, "get") else 0.0),
-                    timestamp=candle.name if hasattr(candle, "name") else None,
-                )
-
-                should_exit = component_strategy.should_exit_position(
-                    position,
-                    market_data,
-                    decision.regime,
-                )
-                if should_exit:
-                    return True, "Strategy signal"
-            except Exception as e:
-                logger.debug("Runtime exit evaluation failed: %s", e)
-
-        return False, "Hold"
+        return result.should_exit, result.exit_reason
 
     def execute_exit(
         self,

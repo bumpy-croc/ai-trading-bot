@@ -72,6 +72,7 @@ class EntryHandler:
         dynamic_risk_manager: DynamicRiskManager | None = None,
         correlation_handler: Any | None = None,
         default_take_profit_pct: float | None = None,
+        max_position_size: float = 1.0,
     ) -> None:
         """Initialize entry handler.
 
@@ -83,6 +84,7 @@ class EntryHandler:
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             correlation_handler: Handler for correlation-based sizing.
             default_take_profit_pct: Default take profit percentage.
+            max_position_size: Maximum position size as fraction (for parity with live).
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -91,6 +93,7 @@ class EntryHandler:
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
         self.default_take_profit_pct = default_take_profit_pct
+        self.max_position_size = max_position_size
         # Use shared DynamicRiskHandler for consistent risk adjustment logic
         self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
 
@@ -144,6 +147,10 @@ class EntryHandler:
                 should_enter=False,
                 reasons=reasons,
             )
+
+        # Enforce maximum position size to prevent over-concentration risk
+        # (matches live engine behavior for backtest-live parity)
+        size_fraction = min(size_fraction, self.max_position_size)
 
         # Apply correlation control if available
         if self.correlation_handler is not None and size_fraction > 0:

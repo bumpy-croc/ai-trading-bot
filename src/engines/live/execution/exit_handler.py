@@ -24,6 +24,7 @@ from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
 )
+from src.engines.shared.strategy_exit_checker import StrategyExitChecker
 from src.engines.shared.trailing_stop_manager import TrailingStopManager
 
 if TYPE_CHECKING:
@@ -112,6 +113,7 @@ class LiveExitHandler:
         self.max_filled_price_deviation = max_filled_price_deviation
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
+        self._strategy_exit_checker = StrategyExitChecker()
 
     def check_exit_conditions(
         self,
@@ -401,6 +403,8 @@ class LiveExitHandler:
     ) -> tuple[bool, str]:
         """Check if strategy signals an exit.
 
+        Uses shared StrategyExitChecker for consistent logic across engines.
+
         Args:
             position: Position to check.
             current_price: Current market price.
@@ -410,47 +414,14 @@ class LiveExitHandler:
         Returns:
             Tuple of (should_exit, reason).
         """
-        from src.strategies.components import MarketData as ComponentMarketData
-        from src.strategies.components import Position as ComponentPosition
-        from src.strategies.components import SignalDirection
+        result = self._strategy_exit_checker.check_exit(
+            position=position,
+            current_price=current_price,
+            runtime_decision=runtime_decision,
+            component_strategy=component_strategy,
+        )
 
-        # Check for signal reversal
-        if (
-            position.side == PositionSide.LONG
-            and runtime_decision.signal.direction == SignalDirection.SELL
-        ):
-            return True, "Signal reversal"
-        if (
-            position.side == PositionSide.SHORT
-            and runtime_decision.signal.direction == SignalDirection.BUY
-        ):
-            return True, "Signal reversal"
-
-        # Check component strategy exit
-        try:
-            component_position = ComponentPosition(
-                symbol=position.symbol,
-                side=position.side.value,
-                size=float(position.size),
-                entry_price=float(position.entry_price),
-                current_price=float(current_price),
-                entry_time=position.entry_time,
-            )
-            market_data = ComponentMarketData(
-                symbol=position.symbol,
-                price=float(current_price),
-                volume=0.0,
-            )
-            regime = runtime_decision.regime if runtime_decision else None
-
-            if component_strategy.should_exit_position(
-                component_position, market_data, regime
-            ):
-                return True, "Strategy signal"
-        except (AttributeError, ValueError, TypeError) as e:
-            logger.debug("Component exit check failed: %s", e)
-
-        return False, "Hold"
+        return result.should_exit, result.exit_reason
 
     def _check_stop_loss(
         self,
