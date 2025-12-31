@@ -19,6 +19,11 @@ from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
+from src.engines.shared.execution.snapshot_builder import (
+    build_snapshot_from_candle,
+    coerce_float,
+    map_entry_order_side_from_string,
+)
 from src.strategies.components import SignalDirection
 
 if TYPE_CHECKING:
@@ -119,15 +124,6 @@ class EntryHandler:
         """
         self.component_strategy = strategy
 
-    def _coerce_float(self, value: Any, fallback: float) -> float:
-        """Coerce a value to float or return fallback on failure."""
-        if value is None:
-            return fallback
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return fallback
-
     def _build_snapshot(
         self,
         symbol: str,
@@ -136,36 +132,17 @@ class EntryHandler:
         candle: pd.Series | None,
     ) -> MarketSnapshot:
         """Build a MarketSnapshot from the available candle data."""
-        if candle is not None and hasattr(candle, "get"):
-            high = self._coerce_float(candle.get("high"), current_price)
-            low = self._coerce_float(candle.get("low"), current_price)
-            close = self._coerce_float(candle.get("close"), current_price)
-            volume = self._coerce_float(candle.get("volume"), DEFAULT_VOLUME)
-        else:
-            high = current_price
-            low = current_price
-            close = current_price
-            volume = DEFAULT_VOLUME
-
-        return MarketSnapshot(
+        return build_snapshot_from_candle(
             symbol=symbol,
-            timestamp=current_time,
-            last_price=current_price,
-            high=high,
-            low=low,
-            close=close,
-            volume=volume,
+            current_time=current_time,
+            current_price=current_price,
+            candle=candle,
+            default_volume=DEFAULT_VOLUME,
         )
 
     def _map_order_side(self, side: str) -> OrderSide:
         """Map a position side string to an order side."""
-        side_lower = side.lower()
-        if side_lower == "long":
-            return OrderSide.BUY
-        if side_lower == "short":
-            return OrderSide.SELL
-
-        raise ValueError(f"Unsupported entry side: {side}")
+        return map_entry_order_side_from_string(side)
 
     def process_runtime_decision(
         self,

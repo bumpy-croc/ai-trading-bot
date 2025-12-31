@@ -18,6 +18,10 @@ from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
+from src.engines.shared.execution.snapshot_builder import (
+    build_snapshot_from_price,
+    map_entry_order_side_from_enum,
+)
 from src.strategies.components import SignalDirection
 
 if TYPE_CHECKING:
@@ -116,23 +120,15 @@ class LiveEntryHandler:
         current_price: float,
     ) -> MarketSnapshot:
         """Build a MarketSnapshot from the current price."""
-        return MarketSnapshot(
+        return build_snapshot_from_price(
             symbol=symbol,
-            timestamp=datetime.now(UTC),
-            last_price=current_price,
-            high=current_price,
-            low=current_price,
-            close=current_price,
+            current_price=current_price,
             volume=DEFAULT_VOLUME,
         )
 
     def _map_order_side(self, side: PositionSide) -> OrderSide:
         """Map a position side to an order side."""
-        if side == PositionSide.LONG:
-            return OrderSide.BUY
-        if side == PositionSide.SHORT:
-            return OrderSide.SELL
-        raise ValueError(f"Unsupported entry side: {side}")
+        return map_entry_order_side_from_enum(side)
 
     def process_runtime_decision(
         self,

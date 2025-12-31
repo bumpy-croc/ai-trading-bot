@@ -24,6 +24,10 @@ from src.engines.live.execution.position_tracker import (
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
+from src.engines.shared.execution.snapshot_builder import (
+    build_snapshot_from_ohlc,
+    map_exit_order_side_from_position,
+)
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -129,25 +133,17 @@ class LiveExitHandler:
         candle_low: float | None,
     ) -> MarketSnapshot:
         """Build a MarketSnapshot from current price and candle extremes."""
-        high = candle_high if candle_high is not None else current_price
-        low = candle_low if candle_low is not None else current_price
-        return MarketSnapshot(
+        return build_snapshot_from_ohlc(
             symbol=symbol,
-            timestamp=datetime.now(UTC),
-            last_price=current_price,
-            high=float(high),
-            low=float(low),
-            close=current_price,
+            current_price=current_price,
+            candle_high=candle_high,
+            candle_low=candle_low,
             volume=ZERO_VALUE,
         )
 
     def _map_exit_order_side(self, position: LivePosition) -> OrderSide:
         """Map a position side to the exit order side."""
-        if position.side == PositionSide.LONG:
-            return OrderSide.SELL
-        if position.side == PositionSide.SHORT:
-            return OrderSide.BUY
-        raise ValueError(f"Unsupported position side: {position.side}")
+        return map_exit_order_side_from_position(position)
 
     def _is_stop_loss_reason(self, exit_reason: str) -> bool:
         """Return True when the exit reason indicates a stop loss."""

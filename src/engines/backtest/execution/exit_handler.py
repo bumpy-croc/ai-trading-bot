@@ -19,6 +19,11 @@ from src.engines.backtest.models import Trade
 from src.engines.shared.execution.execution_model import ExecutionModel
 from src.engines.shared.execution.market_snapshot import MarketSnapshot
 from src.engines.shared.execution.order_intent import OrderIntent
+from src.engines.shared.execution.snapshot_builder import (
+    build_snapshot_from_candle,
+    coerce_float,
+    map_exit_order_side_from_trade,
+)
 from src.engines.shared.partial_operations_manager import (
     EPSILON,
     PartialOperationsManager,
@@ -109,15 +114,6 @@ class ExitHandler:
         # Use shared managers for consistent logic across engines
         self._trailing_stop_manager = TrailingStopManager(trailing_stop_policy)
 
-    def _coerce_float(self, value: Any, fallback: float) -> float:
-        """Coerce a value to float or return fallback on failure."""
-        if value is None:
-            return fallback
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return fallback
-
     def _build_snapshot(
         self,
         symbol: str,
@@ -126,35 +122,17 @@ class ExitHandler:
         candle: pd.Series | None,
     ) -> MarketSnapshot:
         """Build a MarketSnapshot from the available candle data."""
-        if candle is not None and hasattr(candle, "get"):
-            high = self._coerce_float(candle.get("high"), current_price)
-            low = self._coerce_float(candle.get("low"), current_price)
-            close = self._coerce_float(candle.get("close"), current_price)
-            volume = self._coerce_float(candle.get("volume"), ZERO_VALUE)
-        else:
-            high = current_price
-            low = current_price
-            close = current_price
-            volume = ZERO_VALUE
-
-        return MarketSnapshot(
+        return build_snapshot_from_candle(
             symbol=symbol,
-            timestamp=current_time,
-            last_price=current_price,
-            high=high,
-            low=low,
-            close=close,
-            volume=volume,
+            current_time=current_time,
+            current_price=current_price,
+            candle=candle,
+            default_volume=ZERO_VALUE,
         )
 
     def _map_exit_order_side(self, trade: Trade) -> OrderSide:
         """Map a position side to an exit order side."""
-        side_str = trade.side.value if hasattr(trade.side, "value") else str(trade.side)
-        if side_str == "long":
-            return OrderSide.SELL
-        if side_str == "short":
-            return OrderSide.BUY
-        raise ValueError(f"Unsupported trade side: {side_str}")
+        return map_exit_order_side_from_trade(trade)
 
     def _build_exit_intent(
         self,
@@ -665,8 +643,8 @@ class ExitHandler:
             and candle is not None
             and hasattr(candle, "get")
         ):
-            candle_low = self._coerce_float(candle.get("low"), base_exit_price)
-            candle_high = self._coerce_float(candle.get("high"), base_exit_price)
+            candle_low = coerce_float(candle.get("low"), base_exit_price)
+            candle_high = coerce_float(candle.get("high"), base_exit_price)
             if side_str == "long" and base_exit_price <= candle_low:
                 apply_slippage = False
             elif side_str == "short" and base_exit_price >= candle_high:
