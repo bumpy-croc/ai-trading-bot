@@ -6,6 +6,18 @@ from typing import TYPE_CHECKING, Any, Optional
 import numpy as np
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_DRAWDOWN_THRESHOLDS,
+    DEFAULT_HIGH_VOLATILITY_THRESHOLD,
+    DEFAULT_LOW_VOLATILITY_THRESHOLD,
+    DEFAULT_PERFORMANCE_WINDOW_DAYS,
+    DEFAULT_RECOVERY_THRESHOLDS,
+    DEFAULT_RISK_REDUCTION_FACTORS,
+    DEFAULT_VOLATILITY_ADJUSTMENT_ENABLED,
+    DEFAULT_VOLATILITY_RISK_MULTIPLIERS,
+    DEFAULT_VOLATILITY_WINDOW_DAYS,
+)
+
 if TYPE_CHECKING:
     from database.manager import DatabaseManager
 
@@ -20,30 +32,30 @@ class DynamicRiskConfig:
 
     # Core settings
     enabled: bool = True
-    performance_window_days: int = 30
+    performance_window_days: int = DEFAULT_PERFORMANCE_WINDOW_DAYS
 
-    # Drawdown thresholds and adjustments
-    drawdown_thresholds: list[float] = None  # [0.05, 0.10, 0.15] = [5%, 10%, 15%]
-    risk_reduction_factors: list[float] = None  # [0.8, 0.6, 0.4] = reduction at each threshold
+    # Drawdown thresholds and adjustments (use centralized constants)
+    drawdown_thresholds: list[float] = None
+    risk_reduction_factors: list[float] = None
 
     # Recovery thresholds
-    recovery_thresholds: list[float] = None  # [0.02, 0.05] = [2%, 5%] positive returns
+    recovery_thresholds: list[float] = None
 
-    # Volatility adjustments
-    volatility_adjustment_enabled: bool = True
-    volatility_window_days: int = 30
-    high_volatility_threshold: float = 0.03  # 3% daily volatility threshold
-    low_volatility_threshold: float = 0.01  # 1% daily volatility threshold
-    volatility_risk_multipliers: tuple[float, float] = (0.7, 1.3)  # (high_vol, low_vol)
+    # Volatility adjustments (use centralized constants)
+    volatility_adjustment_enabled: bool = DEFAULT_VOLATILITY_ADJUSTMENT_ENABLED
+    volatility_window_days: int = DEFAULT_VOLATILITY_WINDOW_DAYS
+    high_volatility_threshold: float = DEFAULT_HIGH_VOLATILITY_THRESHOLD
+    low_volatility_threshold: float = DEFAULT_LOW_VOLATILITY_THRESHOLD
+    volatility_risk_multipliers: tuple[float, float] = DEFAULT_VOLATILITY_RISK_MULTIPLIERS
 
     def __post_init__(self):
         """Set defaults and validate configuration"""
         if self.drawdown_thresholds is None:
-            self.drawdown_thresholds = [0.05, 0.10, 0.15]
+            self.drawdown_thresholds = list(DEFAULT_DRAWDOWN_THRESHOLDS)
         if self.risk_reduction_factors is None:
-            self.risk_reduction_factors = [0.8, 0.6, 0.4]
+            self.risk_reduction_factors = list(DEFAULT_RISK_REDUCTION_FACTORS)
         if self.recovery_thresholds is None:
-            self.recovery_thresholds = [0.02, 0.05]
+            self.recovery_thresholds = list(DEFAULT_RECOVERY_THRESHOLDS)
 
         # Validation
         if len(self.drawdown_thresholds) != len(self.risk_reduction_factors):
