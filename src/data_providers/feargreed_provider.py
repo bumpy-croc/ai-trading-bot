@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from src.infrastructure.network_retry import with_network_retry
+
 from .sentiment_provider import SentimentDataProvider
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,7 @@ class FearGreedProvider(SentimentDataProvider):
             return 0.0
         return float(np.mean(values))
 
+    @with_network_retry(max_retries=3, base_delay=2.0, max_delay=30.0)
     def _load_data(self) -> None:
         try:
             params = {"limit": 0, "format": "json"}

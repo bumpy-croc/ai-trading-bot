@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 
 from src.config import get_config
+from src.infrastructure.network_retry import with_network_retry
 from src.trading.symbols.factory import SymbolFactory
 
 from .data_provider import DataProvider
@@ -214,7 +215,9 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
                     "Content-Type": "application/json",
                 }
             )
-        try:
+        # Use retry decorator for network resilience
+        @with_network_retry(max_retries=3, base_delay=1.0, max_delay=30.0)
+        def _make_request() -> dict[str, Any]:
             response = self._session.request(
                 method,
                 url,
@@ -227,8 +230,11 @@ class CoinbaseProvider(DataProvider, ExchangeInterface):
             if response.text:
                 return response.json()
             return {}
+
+        try:
+            return _make_request()
         except Exception as e:
-            logger.error(f"Coinbase API request error {method} {path}: {e}")
+            logger.error(f"Coinbase API request error {method} {path} after retries: {e}")
             raise
 
     def test_connection(self) -> bool:
