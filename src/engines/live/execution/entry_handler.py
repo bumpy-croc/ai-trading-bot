@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 from src.config.constants import (
     DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_MAX_STOP_LOSS_PCT,
+    DEFAULT_MIN_STOP_LOSS_PCT,
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
 )
@@ -338,7 +340,7 @@ class LiveEntryHandler:
                     sl_pct = (current_price - stop_loss_price) / current_price
                 else:
                     sl_pct = (stop_loss_price - current_price) / current_price
-                sl_pct = max(0.01, min(0.20, sl_pct))  # Clamp 1-20%
+                sl_pct = max(DEFAULT_MIN_STOP_LOSS_PCT, min(DEFAULT_MAX_STOP_LOSS_PCT, sl_pct))  # Clamp 1-20%
             except (AttributeError, ValueError, TypeError):
                 pass
 

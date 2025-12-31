@@ -59,6 +59,8 @@ DEFAULT_ERROR_COOLDOWN = 30  # seconds to wait after consecutive errors
 
 # Core Trading Defaults (used across backtest and live engines)
 DEFAULT_STOP_LOSS_PCT = 0.05  # 5% stop loss
+DEFAULT_MIN_STOP_LOSS_PCT = 0.01  # 1% minimum stop loss
+DEFAULT_MAX_STOP_LOSS_PCT = 0.20  # 20% maximum stop loss
 DEFAULT_TAKE_PROFIT_PCT = 0.04  # 4% take profit
 DEFAULT_MAX_POSITION_SIZE = 0.1  # 10% max position size
 DEFAULT_BASE_RISK_PER_TRADE = 0.02  # 2% risk per trade

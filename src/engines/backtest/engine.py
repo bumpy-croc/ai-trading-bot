@@ -25,6 +25,7 @@ from src.config.constants import (
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MFE_MAE_PRECISION_DECIMALS,
     DEFAULT_SLIPPAGE_RATE,
     DEFAULT_TIME_RESTRICTIONS,
@@ -386,7 +387,7 @@ class Backtester:
     def max_position_size(self) -> float:
         """Get max position size (backward compatibility)."""
         if self.risk_parameters is None:
-            return 0.1  # Default 10% for backward compatibility
+            return DEFAULT_MAX_POSITION_SIZE  # Default for backward compatibility
         return self.risk_manager.params.max_position_size
 
     def _init_regime_switching(
