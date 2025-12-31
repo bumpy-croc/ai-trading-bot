@@ -607,7 +607,28 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                                 f"{balance.asset}-USD", "binance"
                             )
                         )
+
+                        # Validate ticker response before accessing price
+                        if not isinstance(ticker, dict) or "price" not in ticker:
+                            logger.warning(
+                                "Invalid ticker response for %s: %s. Position not loaded.",
+                                balance.asset,
+                                ticker,
+                            )
+                            continue
+
                         current_price = float(ticker["price"])
+
+                        # Validate price is finite to prevent inf/nan in positions
+                        import math
+
+                        if not math.isfinite(current_price) or current_price <= 0:
+                            logger.warning(
+                                "Invalid price %.8f for %s. Position not loaded.",
+                                current_price,
+                                balance.asset,
+                            )
+                            continue
 
                         position = Position(
                             symbol=f"{balance.asset}USDT",
@@ -625,7 +646,12 @@ class BinanceProvider(DataProvider, ExchangeInterface):
                         positions.append(position)
 
                     except Exception as e:
-                        logger.debug(f"Could not get price for {balance.asset}: {e}")
+                        logger.warning(
+                            "Failed to load position for %s (balance %.8f): %s",
+                            balance.asset,
+                            balance.total,
+                            e,
+                        )
 
             return positions
 
