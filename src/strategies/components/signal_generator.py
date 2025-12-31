@@ -5,6 +5,7 @@ This module defines the abstract SignalGenerator interface and related data mode
 for generating trading signals in the component-based strategy architecture.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,6 +13,10 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional
 
 import pandas as pd
+
+from src.infrastructure.circuit_breaker import CircuitBreaker, CircuitBreakerError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .regime_context import RegimeContext
@@ -828,3 +833,141 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
             }
         )
         return params
+
+
+class CircuitBreakerSignalGenerator(SignalGenerator):
+    """
+    Signal generator wrapper with circuit breaker protection.
+
+    Protects against repeated failures in signal generation by implementing
+    the circuit breaker pattern. After N consecutive failures, the circuit
+    opens and returns safe fallback signals until recovery timeout.
+
+    This prevents cascading failures and ensures the trading loop remains
+    responsive even when a signal generator is experiencing persistent issues.
+    """
+
+    def __init__(
+        self,
+        wrapped_generator: SignalGenerator,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        fallback_generator: SignalGenerator | None = None,
+    ):
+        """Initialize circuit breaker wrapper.
+
+        Args:
+            wrapped_generator: Signal generator to protect.
+            failure_threshold: Failures before opening circuit (default: 5).
+            recovery_timeout: Seconds before testing recovery (default: 60s).
+            fallback_generator: Optional fallback when circuit is open
+                               (defaults to HoldSignalGenerator).
+        """
+        super().__init__(f"circuit_breaker_{wrapped_generator.name}")
+
+        if wrapped_generator is None:
+            raise ValueError("wrapped_generator cannot be None")
+
+        self.wrapped_generator = wrapped_generator
+        self.fallback_generator = fallback_generator or HoldSignalGenerator()
+
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=failure_threshold,
+            recovery_timeout=recovery_timeout,
+            expected_exception=Exception,  # Catch all exceptions
+            name=f"signal_gen_{wrapped_generator.name}",
+        )
+
+    def generate_signal(
+        self, df: pd.DataFrame, index: int, regime: Optional["RegimeContext"] = None
+    ) -> Signal:
+        """Generate signal with circuit breaker protection.
+
+        Returns:
+            Signal from wrapped generator if circuit is closed,
+            or fallback signal if circuit is open.
+        """
+        self.validate_inputs(df, index)
+
+        try:
+            # Try to call wrapped generator through circuit breaker
+            return self.circuit_breaker.call(
+                self.wrapped_generator.generate_signal, df, index, regime
+            )
+        except CircuitBreakerError as e:
+            # Circuit is open, use fallback
+            logger.warning(
+                "Circuit breaker open for %s, using fallback: %s",
+                self.wrapped_generator.name,
+                str(e),
+            )
+            fallback_signal = self.fallback_generator.generate_signal(df, index, regime)
+            fallback_signal.metadata.update(
+                {
+                    "circuit_breaker": "open",
+                    "wrapped_generator": self.wrapped_generator.name,
+                    "circuit_stats": self.circuit_breaker.get_stats(),
+                }
+            )
+            return fallback_signal
+        except Exception as e:
+            # Unexpected error in fallback path
+            logger.error(
+                "Error in circuit breaker signal generation for %s: %s",
+                self.wrapped_generator.name,
+                e,
+                exc_info=True,
+            )
+            # Return safe HOLD signal
+            return Signal(
+                direction=SignalDirection.HOLD,
+                strength=0.0,
+                confidence=0.0,
+                metadata={
+                    "generator": self.name,
+                    "index": index,
+                    "error": str(e),
+                    "reason": "circuit_breaker_fallback_failed",
+                },
+            )
+
+    def get_confidence(self, df: pd.DataFrame, index: int) -> float:
+        """Get confidence with circuit breaker protection."""
+        self.validate_inputs(df, index)
+
+        try:
+            return self.circuit_breaker.call(self.wrapped_generator.get_confidence, df, index)
+        except CircuitBreakerError:
+            # Circuit is open, use fallback confidence
+            return self.fallback_generator.get_confidence(df, index)
+        except Exception:
+            return 0.0
+
+    def reset_circuit(self) -> None:
+        """Manually reset the circuit breaker to CLOSED state."""
+        self.circuit_breaker.reset()
+
+    def get_circuit_stats(self) -> dict[str, Any]:
+        """Get current circuit breaker statistics."""
+        return self.circuit_breaker.get_stats()
+
+    def get_parameters(self) -> dict[str, Any]:
+        """Get circuit breaker signal generator parameters."""
+        params = super().get_parameters()
+        params.update(
+            {
+                "wrapped_generator": self.wrapped_generator.name,
+                "fallback_generator": self.fallback_generator.name,
+                "circuit_breaker_stats": self.circuit_breaker.get_stats(),
+            }
+        )
+        return params
+
+    @property
+    def warmup_period(self) -> int:
+        """Return warmup period from wrapped generator."""
+        return self.wrapped_generator.warmup_period
+
+    def get_feature_generators(self) -> Sequence["FeatureGeneratorSpec"]:
+        """Return feature generators from wrapped generator."""
+        return self.wrapped_generator.get_feature_generators()
