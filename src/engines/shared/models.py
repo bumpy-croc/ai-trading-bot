@@ -52,6 +52,35 @@ class PositionSide(Enum):
             raise ValueError(f"Invalid position side: {value}")
 
 
+def normalize_side(side: Any) -> str:
+    """Normalize a position side to a lowercase string.
+
+    Handles PositionSide enum, string, or any object with a .value attribute.
+    This utility ensures consistent side representation across engines.
+
+    Args:
+        side: Position side as PositionSide enum, string, or object with value.
+
+    Returns:
+        Lowercase string 'long' or 'short'.
+
+    Examples:
+        >>> normalize_side(PositionSide.LONG)
+        'long'
+        >>> normalize_side("SHORT")
+        'short'
+        >>> normalize_side("long")
+        'long'
+    """
+    if side is None:
+        return "long"
+    if isinstance(side, PositionSide):
+        return side.value
+    if hasattr(side, "value"):
+        return str(side.value).lower()
+    return str(side).lower()
+
+
 class OrderStatus(Enum):
     """Status of an order."""
 
@@ -325,6 +354,7 @@ Trade = BaseTrade
 __all__ = [
     "PositionSide",
     "OrderStatus",
+    "normalize_side",
     "BasePosition",
     "BaseTrade",
     "Position",

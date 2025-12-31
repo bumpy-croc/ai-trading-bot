@@ -25,6 +25,7 @@ from src.engines.shared.models import (
     PositionSide,
     ScaleInResult,
     Trade,
+    normalize_side,
 )
 from src.engines.shared.partial_operations_manager import (
     PartialExitDecision,
@@ -61,6 +62,7 @@ __all__ = [
     # Models
     "PositionSide",
     "OrderStatus",
+    "normalize_side",
     "BasePosition",
     "BaseTrade",
     "Position",

@@ -74,7 +74,7 @@ class EntryHandler:
         dynamic_risk_manager: DynamicRiskManager | None = None,
         correlation_handler: Any | None = None,
         default_take_profit_pct: float | None = None,
-        max_position_size: float = 1.0,
+        max_position_size: float = 0.1,
     ) -> None:
         """Initialize entry handler.
 
@@ -86,7 +86,7 @@ class EntryHandler:
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             correlation_handler: Handler for correlation-based sizing.
             default_take_profit_pct: Default take profit percentage.
-            max_position_size: Maximum position size as fraction (for parity with live).
+            max_position_size: Maximum position size as fraction (default 10% for parity with live).
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker

@@ -15,6 +15,7 @@ from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import LivePosition, PositionSide
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.strategies.components import SignalDirection
+from src.utils.bounds import clamp_fraction
 from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
@@ -293,9 +294,9 @@ class LiveEntryHandler:
         else:
             side = PositionSide.SHORT
 
-        # Calculate size fraction
+        # Calculate size fraction using shared utility for parity with backtest
         size_fraction = float(decision.position_size) / float(balance)
-        size_fraction = max(0.0, min(1.0, size_fraction))
+        size_fraction = clamp_fraction(size_fraction)
 
         return side, size_fraction
 

@@ -313,6 +313,7 @@ class Backtester:
             dynamic_risk_manager=self.dynamic_risk_manager,
             correlation_handler=self.correlation_handler,
             default_take_profit_pct=default_take_profit_pct,
+            max_position_size=self.risk_manager.params.max_position_size,
         )
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager
