@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from src.config.constants import (
+    DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES,
+    DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT,
+    DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE,
+)
 from src.data_providers.exchange_interface import (
     AccountBalance,
     ExchangeInterface,
@@ -75,7 +80,7 @@ class AccountSynchronizer:
             # Check if we should sync (avoid too frequent syncs)
             if not force and self.last_sync_time:
                 time_since_last_sync = datetime.now(UTC) - self.last_sync_time
-                if time_since_last_sync < timedelta(minutes=5):  # Minimum 5 minutes between syncs
+                if time_since_last_sync < timedelta(minutes=DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES):
                     logger.info("Skipping sync - too recent")
                     return SyncResult(
                         success=True,
@@ -159,7 +164,7 @@ class AccountSynchronizer:
                     (balance_diff / current_db_balance * 100) if current_db_balance > 0 else 0
                 )
 
-                if balance_diff_pct > 1.0:  # More than 1% difference
+                if balance_diff_pct > DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT:
                     logger.warning(
                         f"Balance discrepancy detected: DB=${current_db_balance:.2f} vs Exchange=${exchange_balance:.2f} (diff: {balance_diff_pct:.2f}%)"
                     )
@@ -214,8 +219,9 @@ class AccountSynchronizer:
                 if db_pos:
                     # Position exists in both - check for updates
                     if (
-                        abs(exchange_pos.size - db_pos["size"]) > 0.0001
-                    ):  # Significant size difference
+                        abs(exchange_pos.size - db_pos["size"])
+                        > DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE
+                    ):
                         logger.info(
                             f"Position size updated: {exchange_pos.symbol} {exchange_pos.side} - {db_pos['size']} -> {exchange_pos.size}"
                         )

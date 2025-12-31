@@ -143,6 +143,15 @@ DEFAULT_SLEEP_POLL_INTERVAL = 0.5  # Sleep polling interval (reduced from 0.1s)
 DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL = 1800  # Account snapshot interval (30 minutes)
 DEFAULT_DATA_FRESHNESS_THRESHOLD = 120  # Skip processing if data is older than 2 minutes
 
+# Account Synchronization Constants
+DEFAULT_ACCOUNT_SYNC_MIN_INTERVAL_MINUTES = 5  # Minimum minutes between account syncs
+DEFAULT_BALANCE_DISCREPANCY_THRESHOLD_PCT = 1.0  # Log warning if discrepancy exceeds 1%
+DEFAULT_POSITION_SIZE_COMPARISON_TOLERANCE = 0.0001  # Tolerance for position size changes
+
+# Time Window Constants
+DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS = 4  # Apply live sentiment to last N hours of candles
+DEFAULT_RECENT_TRADE_LOOKBACK_HOURS = 1  # Consider trades as "recent" for activity checks
+
 # Trailing stop fallback (used in safety mode when ATR is unavailable)
 DEFAULT_FALLBACK_TRAILING_PCT = 0.01  # 1% trailing distance as conservative fallback
 

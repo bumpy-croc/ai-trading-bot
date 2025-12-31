@@ -30,6 +30,8 @@ from src.config.constants import (
     DEFAULT_MAX_HOLDING_HOURS,
     DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
+    DEFAULT_RECENT_TRADE_LOOKBACK_HOURS,
+    DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS,
     DEFAULT_SLEEP_POLL_INTERVAL,
     DEFAULT_SLIPPAGE_RATE,
     DEFAULT_STOP_LOSS_PCT,
@@ -1693,8 +1695,10 @@ class LiveTradingEngine:
                 # Get live sentiment for recent data
                 live_sentiment = self.sentiment_provider.get_live_sentiment()
 
-                # Apply to recent candles (last 4 hours)
-                recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
+                # Apply to recent candles
+                recent_mask = df.index >= (
+                    df.index.max() - pd.Timedelta(hours=DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS)
+                )
                 for feature, value in live_sentiment.items():
                     if feature not in df.columns:
                         df[feature] = 0.0
@@ -2995,7 +2999,8 @@ class LiveTradingEngine:
             [
                 p
                 for p in self.live_position_tracker.positions.values()
-                if p.entry_time > datetime.now(UTC) - timedelta(hours=1)
+                if p.entry_time
+                > datetime.now(UTC) - timedelta(hours=DEFAULT_RECENT_TRADE_LOOKBACK_HOURS)
             ]
         )
         if recent_trades > 0:

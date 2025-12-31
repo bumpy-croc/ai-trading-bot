@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import DEFAULT_RECENT_TRADE_LOOKBACK_HOURS
+
 if TYPE_CHECKING:
     from src.engines.live.execution.position_tracker import LivePosition
 
@@ -142,7 +144,9 @@ class HealthMonitor:
             now = datetime.now(UTC)
             for pos in positions.values():
                 entry_time = getattr(pos, "entry_time", None)
-                if entry_time and entry_time > now - timedelta(hours=1):
+                if entry_time and entry_time > now - timedelta(
+                    hours=DEFAULT_RECENT_TRADE_LOOKBACK_HOURS
+                ):
                     recent_trades += 1
 
         if recent_trades > 0:
