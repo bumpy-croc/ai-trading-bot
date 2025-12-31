@@ -127,7 +127,20 @@ class RegimeDetector:
         # Set R² to 0 for cases where var_y is effectively zero (constant y values)
         r2_vals[near_zero_var_y] = 0.0
 
+        # Validate array bounds before assignment to prevent index out of bounds errors
         start_idx = window - 1
+        expected_length = n - start_idx  # Length of slopes[start_idx:]
+        actual_length = len(slope_vals)
+
+        if actual_length != expected_length:
+            raise RuntimeError(
+                f"Array length mismatch in OLS calculation: "
+                f"expected {expected_length} values for slopes[{start_idx}:], "
+                f"but computed {actual_length} slope values. "
+                f"n={n}, window={window}. This indicates a bug in rolling window calculation."
+            )
+
+        # Safe assignment after validation
         slopes[start_idx:] = slope_vals
         r2s[start_idx:] = r2_vals
 
