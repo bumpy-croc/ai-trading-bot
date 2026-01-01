@@ -7,12 +7,11 @@ and edge case behavior to ensure robust market data operations.
 Test Categories:
 1. API Error Handling - Network failures, timeouts, rate limits
 2. Data Validation - Malformed responses, missing fields, invalid data
-3. Caching Behavior - Cache hits/misses, stale data, invalidation
-4. Rate Limiting - Backoff strategies, retry logic
-5. Symbol Validation - Invalid symbols, unsupported pairs
-6. Timeframe Handling - Invalid timeframes, edge cases
-7. Historical Data Edge Cases - Empty ranges, future dates, gaps
-8. Real-time Data - WebSocket errors, reconnection
+3. Symbol Validation - Invalid symbols, unsupported pairs, conversion
+4. Timeframe Handling - Invalid timeframes, edge cases
+5. Historical Data Edge Cases - Empty ranges, future dates, gaps
+6. Caching Behavior - Cache hits/misses, stale data, TTL expiration
+7. Rate Limiting - Backoff strategies, retry logic
 """
 
 from datetime import UTC, datetime, timedelta
@@ -27,6 +26,7 @@ import requests
 from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
+from src.trading.symbols import SymbolFactory
 
 
 # ============================================================================
@@ -326,14 +326,17 @@ class TestSymbolValidation:
 
     def test_symbol_conversion_binance_to_coinbase(self):
         """Symbol conversion between exchanges (BTCUSDT -> BTC-USD)"""
-        # This tests symbol conversion utilities
-        binance_symbol = "BTCUSDT"
-        expected_coinbase = "BTC-USD"
+        # Test Binance to Coinbase conversion
+        assert SymbolFactory.to_exchange_symbol("BTCUSDT", "coinbase") == "BTC-USD"
+        assert SymbolFactory.to_exchange_symbol("ETHUSDT", "coinbase") == "ETH-USD"
 
-        # Would test actual conversion function
-        # from src.trading.symbols import convert_symbol
-        # assert convert_symbol(binance_symbol, "coinbase") == expected_coinbase
-        pass
+        # Test Coinbase to Binance conversion
+        assert SymbolFactory.to_exchange_symbol("BTC-USD", "binance") == "BTCUSDT"
+        assert SymbolFactory.to_exchange_symbol("ETH-USD", "binance") == "ETHUSDT"
+
+        # Test unsupported exchange raises ValueError
+        with pytest.raises(ValueError):
+            SymbolFactory.to_exchange_symbol("BTCUSDT", "unsupported_exchange")
 
 
 # ============================================================================
@@ -505,10 +508,45 @@ class TestCachingBehavior:
         assert isinstance(result2, pd.DataFrame)
 
     def test_cache_stale_data_handling(self, mock_binance_provider):
-        """Stale cached data should be refreshed"""
-        # Test TTL-based cache expiration
-        # This would test actual cache implementation
-        pass
+        """Stale cached data should be refreshed based on TTL"""
+        import os
+        import tempfile
+
+        # Skip if parquet support is not available
+        try:
+            import pyarrow  # noqa: F401
+        except ImportError:
+            pytest.skip("pyarrow not available for parquet support")
+
+        from src.data_providers.cached_data_provider import CachedDataProvider
+
+        # Create a cached provider with very short TTL (0.001 hours = 3.6 seconds)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cached_provider = CachedDataProvider(
+                data_provider=mock_binance_provider,
+                cache_dir=temp_dir,
+                cache_ttl_hours=0.001,  # Very short TTL for testing
+            )
+
+            # Create a cache file and backdate it to make it stale
+            cache_key = cached_provider._generate_year_cache_key("BTCUSDT", "1h", 2026)
+            cache_path = cached_provider._get_cache_path(cache_key)
+
+            # Create cache file
+            test_data = pd.DataFrame(
+                {"open": [100], "high": [101], "low": [99], "close": [100], "volume": [1000]}
+            )
+            test_data.to_parquet(cache_path)
+
+            # Backdate the file to make it stale (1 hour old)
+            old_time = datetime.now(UTC) - timedelta(hours=1)
+            os.utime(cache_path, (old_time.timestamp(), old_time.timestamp()))
+
+            # Cache should be invalid for current year due to staleness
+            assert cached_provider._is_cache_valid(cache_path, year=2026) is False
+
+            # But for a historical year (e.g., 2020), cache is always valid
+            assert cached_provider._is_cache_valid(cache_path, year=2020) is True
 
 
 # ============================================================================
@@ -560,25 +598,3 @@ class TestRateLimitingRetry:
             # Should fail immediately without retries
             mock_binance_provider.get_historical_data("BTCUSDT", "1h")
 
-
-# ============================================================================
-# Category 8: Real-time Data (WebSocket)
-# ============================================================================
-
-
-class TestRealTimeData:
-    """Test real-time WebSocket data handling"""
-
-    def test_websocket_connection_failure(self):
-        """WebSocket connection failure should be handled"""
-        # Would test WebSocket-specific functionality
-        # Most providers use REST, but if WebSocket supported:
-        pass
-
-    def test_websocket_reconnection(self):
-        """WebSocket disconnection should trigger reconnection"""
-        pass
-
-    def test_websocket_data_validation(self):
-        """Real-time data should be validated same as historical"""
-        pass
