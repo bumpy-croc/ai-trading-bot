@@ -78,6 +78,11 @@ class CorrelationHandler:
         if candidate_fraction <= 0 or self.correlation_engine is None:
             return candidate_fraction
 
+        # Take a thread-safe snapshot of positions to avoid race conditions
+        # when used by the live trading engine
+        with self.risk_manager._state_lock:
+            positions_snapshot = dict(self.risk_manager.positions)
+
         # Get strategy overrides
         overrides = self._get_strategy_overrides()
         max_exposure_override = None
@@ -89,7 +94,7 @@ class CorrelationHandler:
                 pass
 
         # Build price series for correlation calculation
-        price_series = self._build_price_series(symbol, timeframe, df, index)
+        price_series = self._build_price_series(symbol, timeframe, df, index, positions_snapshot)
         if not price_series:
             return candidate_fraction
 
@@ -100,14 +105,19 @@ class CorrelationHandler:
 
         # Compute size reduction factor
         factor = self._compute_reduction_factor(
-            symbol, candidate_fraction, corr_matrix, max_exposure_override
+            symbol, candidate_fraction, corr_matrix, max_exposure_override, positions_snapshot
         )
 
         adjusted = candidate_fraction * factor
 
-        # Apply maximum exposure limits
+        # Apply maximum exposure limits using thread-safe snapshot
         adjusted = self._apply_exposure_limits(
-            symbol, adjusted, corr_matrix, max_exposure_override, overrides
+            symbol,
+            adjusted,
+            corr_matrix,
+            max_exposure_override,
+            overrides,
+            positions_snapshot,
         )
 
         return max(0.0, adjusted)
@@ -131,6 +141,7 @@ class CorrelationHandler:
         timeframe: str,
         df: pd.DataFrame,
         index: int,
+        positions_snapshot: dict,
     ) -> dict[str, pd.Series]:
         """Build price series dictionary for correlation calculation.
 
@@ -139,6 +150,7 @@ class CorrelationHandler:
             timeframe: Candle timeframe.
             df: DataFrame with market data.
             index: Current candle index.
+            positions_snapshot: Thread-safe snapshot of current positions.
 
         Returns:
             Dictionary mapping symbols to close price series.
@@ -173,11 +185,11 @@ class CorrelationHandler:
             except Exception:
                 pass
 
-        # Get currently open positions
+        # Get currently open positions from snapshot (thread-safe)
         open_symbols = set()
         try:
-            if self.risk_manager.positions:
-                open_symbols = set(map(str, self.risk_manager.positions.keys()))
+            if positions_snapshot:
+                open_symbols = set(map(str, positions_snapshot.keys()))
         except Exception:
             pass
 
@@ -235,6 +247,7 @@ class CorrelationHandler:
         candidate_fraction: float,
         corr_matrix: pd.DataFrame,
         max_exposure_override: float | None,
+        positions_snapshot: dict,
     ) -> float:
         """Compute position size reduction factor based on correlations.
 
@@ -243,6 +256,7 @@ class CorrelationHandler:
             candidate_fraction: Proposed position size.
             corr_matrix: Correlation matrix.
             max_exposure_override: Override for max exposure.
+            positions_snapshot: Thread-safe snapshot of current positions.
 
         Returns:
             Reduction factor (0.0 to 1.0).
@@ -250,7 +264,7 @@ class CorrelationHandler:
         try:
             return float(
                 self.correlation_engine.compute_size_reduction_factor(
-                    positions=self.risk_manager.positions,
+                    positions=positions_snapshot,
                     corr_matrix=corr_matrix,
                     candidate_symbol=str(symbol),
                     candidate_fraction=float(candidate_fraction),
@@ -268,6 +282,7 @@ class CorrelationHandler:
         corr_matrix: pd.DataFrame,
         max_exposure_override: float | None,
         overrides: dict | None,
+        positions_snapshot: dict,
     ) -> float:
         """Apply maximum exposure limits based on correlation groups.
 
@@ -277,6 +292,7 @@ class CorrelationHandler:
             corr_matrix: Correlation matrix.
             max_exposure_override: Override for max exposure.
             overrides: Strategy overrides.
+            positions_snapshot: Thread-safe snapshot of current positions.
 
         Returns:
             Position size respecting exposure limits.
@@ -301,14 +317,14 @@ class CorrelationHandler:
             logger.debug("Failed to derive correlation groups for %s: %s", symbol, e)
             return adjusted
 
-        # Find current group exposure
+        # Find current group exposure using thread-safe snapshot
         candidate_group_exposure = None
         for group in groups:
             if str(symbol) in group:
                 current = 0.0
                 for sym in group:
                     current += float(
-                        self.risk_manager.positions.get(sym, {}).get("size", 0.0)
+                        positions_snapshot.get(sym, {}).get("size", 0.0)
                     )
                 candidate_group_exposure = current
                 break
