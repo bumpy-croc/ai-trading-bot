@@ -1207,10 +1207,6 @@ class Backtester:
         hold_return: float,
     ) -> dict:
         """Build final backtest results dictionary."""
-        total_trades = len(self.trades)
-        winning_trades = sum(1 for t in self.trades if t.pnl > 0)
-        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-
         # Calculate prediction metrics
         pred_metrics = self._calculate_prediction_metrics(df)
 
