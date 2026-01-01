@@ -11,8 +11,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from src.config.constants import (
+    DEFAULT_FEE_RATE,
+    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_SLIPPAGE_RATE,
+)
 from src.engines.backtest.models import ActiveTrade, Trade
-from src.config.constants import DEFAULT_MFE_MAE_PRECISION_DECIMALS
 from src.engines.shared.partial_exit_executor import PartialExitExecutor
 from src.performance.metrics import cash_pnl
 from src.position_management.mfe_mae_tracker import MFEMAETracker, MFEMetrics
@@ -46,8 +50,8 @@ class PositionTracker:
     def __init__(
         self,
         mfe_mae_precision: int = DEFAULT_MFE_MAE_PRECISION_DECIMALS,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> None:
         """Initialize position tracker.
 

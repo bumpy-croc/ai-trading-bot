@@ -17,16 +17,31 @@ from src.config import get_config
 from src.config.constants import (
     DEFAULT_ACCOUNT_SNAPSHOT_INTERVAL,
     DEFAULT_CHECK_INTERVAL,
+    DEFAULT_CONFIDENCE_SCORE,
     DEFAULT_DATA_FRESHNESS_THRESHOLD,
     DEFAULT_DYNAMIC_RISK_ENABLED,
     DEFAULT_END_OF_DAY_FLAT,
     DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_FEE_RATE,
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_MARKET_TIMEZONE,
     DEFAULT_MAX_CHECK_INTERVAL,
+    DEFAULT_MAX_FILLED_PRICE_DEVIATION,
     DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MAX_POSITION_SIZE,
     DEFAULT_MIN_CHECK_INTERVAL,
+    DEFAULT_ORDER_POLL_INTERVAL,
+    DEFAULT_RECENT_TRADE_LOOKBACK_HOURS,
+    DEFAULT_REQUEST_TIMEOUT,
+    DEFAULT_RETRY_BACKOFF_MULTIPLIER,
+    DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS,
     DEFAULT_SLEEP_POLL_INTERVAL,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_STOP_LOSS_MAX_RETRIES,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_STOP_LOSS_RETRY_DELAY,
+    DEFAULT_TAKE_PROFIT_PCT,
+    DEFAULT_THREAD_JOIN_TIMEOUT,
     DEFAULT_TIME_RESTRICTIONS,
     DEFAULT_WEEKEND_FLAT,
 )
@@ -53,6 +68,7 @@ from src.engines.live.execution.position_tracker import (
 from src.engines.live.health.health_monitor import HealthMonitor
 from src.engines.live.logging.event_logger import LiveEventLogger
 from src.engines.live.strategy_manager import StrategyManager
+from src.engines.shared.correlation_handler import CorrelationHandler
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.engines.shared.models import (
     BaseTrade,
@@ -149,7 +165,7 @@ class LiveTradingEngine:
         risk_parameters: RiskParameters | None = None,
         check_interval: int = DEFAULT_CHECK_INTERVAL,  # seconds
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
-        max_position_size: float = 0.1,  # 10% of balance per position
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,  # 10% of balance per position
         enable_live_trading: bool = False,  # Safety flag - must be explicitly enabled
         log_trades: bool = True,
         alert_webhook_url: str | None = None,
@@ -168,10 +184,10 @@ class LiveTradingEngine:
         partial_manager: PartialExitPolicy | None = None,
         enable_partial_operations: bool = False,
         # Execution realism parameters (parity with backtest engine)
-        fee_rate: float = 0.001,  # 0.1% per trade (entry + exit)
-        slippage_rate: float = 0.0005,  # 0.05% slippage per trade
+        fee_rate: float = DEFAULT_FEE_RATE,  # 0.1% per trade (entry + exit)
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,  # 0.05% slippage per trade
         use_high_low_for_stops: bool = True,  # Check candle high/low for SL/TP detection
-        max_filled_price_deviation: float = 0.5,  # Filled-price deviation threshold
+        max_filled_price_deviation: float = DEFAULT_MAX_FILLED_PRICE_DEVIATION,  # Filled-price deviation threshold
         # Handler injection (all optional - defaults created if not provided)
         position_tracker: LivePositionTracker | None = None,
         execution_engine: LiveExecutionEngine | None = None,
@@ -375,7 +391,7 @@ class LiveTradingEngine:
                     # Initialize order tracker for monitoring order fills
                     self.order_tracker = OrderTracker(
                         exchange=self.exchange_interface,
-                        poll_interval=5,
+                        poll_interval=DEFAULT_ORDER_POLL_INTERVAL,
                         on_fill=self._handle_order_fill,
                         on_partial_fill=self._handle_partial_fill,
                         on_cancel=self._handle_order_cancel,
@@ -613,6 +629,17 @@ class LiveTradingEngine:
             exchange_interface=self.exchange_interface,
         )
 
+        # Create correlation handler for backtest-live parity
+        # Uses shared CorrelationHandler implementation
+        self._correlation_handler: CorrelationHandler | None = None
+        if self.correlation_engine is not None and self.data_provider is not None:
+            self._correlation_handler = CorrelationHandler(
+                correlation_engine=self.correlation_engine,
+                risk_manager=self.risk_manager,
+                data_provider=self.data_provider,
+                strategy=self.strategy,
+            )
+
         # Entry handler
         self.live_entry_handler = entry_handler or LiveEntryHandler(
             execution_engine=self.live_execution_engine,
@@ -621,6 +648,7 @@ class LiveTradingEngine:
                 self.strategy if isinstance(self.strategy, ComponentStrategy) else None
             ),
             dynamic_risk_manager=self.dynamic_risk_manager,
+            correlation_handler=self._correlation_handler,
             max_position_size=self.max_position_size,
             default_take_profit_pct=self._resolve_take_profit_pct(),
         )
@@ -1331,7 +1359,7 @@ class LiveTradingEngine:
             and self.main_thread.is_alive()
             and self.main_thread != threading.current_thread()
         ):
-            self.main_thread.join(timeout=30)
+            self.main_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
 
         # Print final statistics
         self._print_final_stats()
@@ -1581,7 +1609,7 @@ class LiveTradingEngine:
                                     )
                                     if short_take_profit is None:
                                         short_take_profit = current_price * (
-                                            1 - getattr(self.strategy, "take_profit_pct", 0.04)
+                                            1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
                                         )
                                 else:
                                     # All strategies should be component-based
@@ -1589,10 +1617,10 @@ class LiveTradingEngine:
                                         f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                                     )
                                     short_stop_loss = (
-                                        current_price * 1.05
+                                        current_price * (1 + DEFAULT_STOP_LOSS_PCT)
                                     )  # Default 5% stop for short
                                     short_take_profit = current_price * (
-                                        1 - getattr(self.strategy, "take_profit_pct", 0.04)
+                                        1 - getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
                                     )
                                 self._execute_entry(
                                     symbol=symbol,
@@ -1733,8 +1761,10 @@ class LiveTradingEngine:
                 # Get live sentiment for recent data
                 live_sentiment = self.sentiment_provider.get_live_sentiment()
 
-                # Apply to recent candles (last 4 hours)
-                recent_mask = df.index >= (df.index.max() - pd.Timedelta(hours=4))
+                # Apply to recent candles
+                recent_mask = df.index >= (
+                    df.index.max() - pd.Timedelta(hours=DEFAULT_SENTIMENT_RECENT_WINDOW_HOURS)
+                )
                 for feature, value in live_sentiment.items():
                     if feature not in df.columns:
                         df[feature] = 0.0
@@ -1911,7 +1941,7 @@ class LiveTradingEngine:
                             log_reasons.append(f"risk_{key}_{value:.4f}")
 
                 # Extract signal confidence from TradingDecision if available
-                confidence_score = indicators.get("prediction_confidence", 0.5)
+                confidence_score = indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE)
                 if (
                     decision_for_exit
                     and hasattr(decision_for_exit, "signal")
@@ -1925,7 +1955,7 @@ class LiveTradingEngine:
                     signal_type="exit",
                     action_taken="closed_position" if should_exit else "hold_position",
                     price=current_price,
-                    timeframe="1m",
+                    timeframe=self.timeframe,
                     signal_strength=1.0 if should_exit else 0.0,
                     confidence_score=confidence_score,
                     indicators=indicators,
@@ -1980,6 +2010,10 @@ class LiveTradingEngine:
                 balance=self.current_balance,
                 current_price=float(current_price),
                 current_time=datetime.now(UTC),
+                symbol=symbol,
+                timeframe=self.timeframe,
+                df=df,
+                index=current_index,
                 peak_balance=perf_metrics.peak_balance or self.current_balance,
                 trading_session_id=self.trading_session_id,
             )
@@ -2086,12 +2120,12 @@ class LiveTradingEngine:
                     )
                 ),
                 price=current_price,
-                timeframe="1m",
+                timeframe=self.timeframe,
                 signal_strength=runtime_strength if use_runtime else (1.0 if entry_signal else 0.0),
                 confidence_score=(
                     runtime_confidence
                     if use_runtime
-                    else indicators.get("prediction_confidence", 0.5)
+                    else indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE)
                 ),
                 indicators=indicators,
                 sentiment_data=sentiment_data if sentiment_data else None,
@@ -2117,7 +2151,9 @@ class LiveTradingEngine:
             except Exception:
                 if stop_loss is None:
                     stop_loss = float(current_price) * (
-                        0.95 if entry_side == PositionSide.LONG else 1.05
+                        (1 - DEFAULT_STOP_LOSS_PCT)
+                        if entry_side == PositionSide.LONG
+                        else (1 + DEFAULT_STOP_LOSS_PCT)
                     )
             if take_profit is None:
                 tp_pct = self._resolve_take_profit_pct()
@@ -2146,7 +2182,9 @@ class LiveTradingEngine:
             except Exception as e:
                 self.logger.debug(f"Component stop loss calculation failed: {e}")
                 stop_loss = float(current_price) * (
-                    0.95 if entry_side == PositionSide.LONG else 1.05
+                    (1 - DEFAULT_STOP_LOSS_PCT)
+                    if entry_side == PositionSide.LONG
+                    else (1 + DEFAULT_STOP_LOSS_PCT)
                 )
             tp_pct = self._resolve_take_profit_pct()
             take_profit = (
@@ -2173,14 +2211,14 @@ class LiveTradingEngine:
                     strategy_overrides=overrides,
                 )
                 if take_profit is None:
-                    take_profit = current_price * (1 + overrides.get("take_profit_pct", 0.04))
+                    take_profit = current_price * (1 + overrides.get("take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             else:
                 # All strategies should be component-based
                 self.logger.error(
                     f"Strategy {self.strategy.name} does not support component-based stop loss calculation"
                 )
-                stop_loss = current_price * 0.95  # Default 5% stop for long
-                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", 0.04))
+                stop_loss = current_price * (1 - DEFAULT_STOP_LOSS_PCT)  # Default 5% stop for long
+                take_profit = current_price * (1 + getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT))
             entry_side = PositionSide.LONG
 
         self._execute_entry(
@@ -2202,15 +2240,15 @@ class LiveTradingEngine:
                 try:
                     return float(params.default_take_profit_pct)
                 except (TypeError, ValueError):
-                    return 0.04
+                    return DEFAULT_TAKE_PROFIT_PCT
         except Exception:
-            return 0.04
+            return DEFAULT_TAKE_PROFIT_PCT
 
-        value = getattr(self.strategy, "take_profit_pct", 0.04)
+        value = getattr(self.strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
         try:
             return float(value)
         except (TypeError, ValueError):
-            return 0.04
+            return DEFAULT_TAKE_PROFIT_PCT
 
     def _execute_entry(
         self,
@@ -2451,8 +2489,8 @@ class LiveTradingEngine:
             if self.enable_live_trading and stop_loss and self.exchange_interface:
                 sl_side = OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY
                 sl_order_id = None
-                max_retries = 3
-                retry_delay = 1.0
+                max_retries = DEFAULT_STOP_LOSS_MAX_RETRIES
+                retry_delay = DEFAULT_STOP_LOSS_RETRY_DELAY
                 # Use stored quantity directly to ensure stop-loss covers exact position size
                 if position.quantity is not None and position.quantity > 0:
                     quantity = position.quantity
@@ -2486,7 +2524,7 @@ class LiveTradingEngine:
 
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
-                        retry_delay *= 2
+                        retry_delay *= DEFAULT_RETRY_BACKOFF_MULTIPLIER
 
                 if sl_order_id:
                     logger.info(
@@ -3100,7 +3138,7 @@ class LiveTradingEngine:
                 "text": f"🤖 Trading Bot: {message}",
                 "timestamp": datetime.now(UTC).isoformat(),
             }
-            requests.post(self.alert_webhook_url, json=payload, timeout=10)
+            requests.post(self.alert_webhook_url, json=payload, timeout=DEFAULT_REQUEST_TIMEOUT)
         except Exception as e:
             logger.error(f"Failed to send alert: {e}", exc_info=True)
 
@@ -3123,7 +3161,8 @@ class LiveTradingEngine:
             [
                 p
                 for p in self.live_position_tracker.positions.values()
-                if p.entry_time > datetime.now(UTC) - timedelta(hours=1)
+                if p.entry_time
+                > datetime.now(UTC) - timedelta(hours=DEFAULT_RECENT_TRADE_LOOKBACK_HOURS)
             ]
         )
         if recent_trades > 0:

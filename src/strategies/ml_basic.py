@@ -21,6 +21,13 @@ Ideal for:
 
 from __future__ import annotations
 
+from src.config.constants import (
+    DEFAULT_BASE_RISK_PER_TRADE,
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_STRATEGY_BASE_FRACTION,
+    DEFAULT_STRATEGY_MIN_CONFIDENCE,
+    DEFAULT_TAKE_PROFIT_PCT,
+)
 from src.risk.risk_manager import RiskManager as EngineRiskManager
 from src.risk.risk_manager import RiskParameters
 from src.strategies.components import (
@@ -60,17 +67,17 @@ def create_ml_basic_strategy(
         Configured Strategy instance
     """
     risk_parameters = RiskParameters(
-        base_risk_per_trade=0.02,
-        default_take_profit_pct=0.04,
-        max_position_size=0.1,
+        base_risk_per_trade=DEFAULT_BASE_RISK_PER_TRADE,
+        default_take_profit_pct=DEFAULT_TAKE_PROFIT_PCT,
+        max_position_size=DEFAULT_MAX_POSITION_SIZE,
     )
     core_risk_manager = EngineRiskManager(risk_parameters)
     risk_overrides = {
         "position_sizer": "fixed_fraction",
-        "base_fraction": 0.02,
-        "max_fraction": 0.1,
-        "stop_loss_pct": 0.02,
-        "take_profit_pct": 0.04,
+        "base_fraction": DEFAULT_BASE_RISK_PER_TRADE,
+        "max_fraction": DEFAULT_MAX_POSITION_SIZE,
+        "stop_loss_pct": DEFAULT_BASE_RISK_PER_TRADE,  # Tight stop matching risk
+        "take_profit_pct": DEFAULT_TAKE_PROFIT_PCT,
     }
 
     if fast_mode:
@@ -111,10 +118,10 @@ def create_ml_basic_strategy(
         risk_manager = CoreRiskAdapter(core_risk_manager)
         risk_manager.set_strategy_overrides(risk_overrides)
 
-        # Create position sizer with confidence weighting (20% base)
+        # Create position sizer with confidence weighting
         position_sizer = ConfidenceWeightedSizer(
-            base_fraction=0.2,
-            min_confidence=0.3,
+            base_fraction=DEFAULT_STRATEGY_BASE_FRACTION,
+            min_confidence=DEFAULT_STRATEGY_MIN_CONFIDENCE,
         )
         regime_detector = EnhancedRegimeDetector()
 

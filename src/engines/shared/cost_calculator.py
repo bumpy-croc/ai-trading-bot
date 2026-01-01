@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.config.constants import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
+
 
 @dataclass
 class CostResult:
@@ -45,8 +47,8 @@ class CostCalculator:
 
     def __init__(
         self,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     ) -> None:
         """Initialize the cost calculator.
 

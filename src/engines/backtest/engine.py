@@ -17,6 +17,23 @@ import pandas as pd
 from pandas import DataFrame
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.config.config_manager import get_config
+from src.config.constants import (
+    DEFAULT_CONFIDENCE_SCORE,
+    DEFAULT_DYNAMIC_RISK_ENABLED,
+    DEFAULT_END_OF_DAY_FLAT,
+    DEFAULT_FEE_RATE,
+    DEFAULT_INITIAL_BALANCE,
+    DEFAULT_MARKET_TIMEZONE,
+    DEFAULT_MAX_HOLDING_HOURS,
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
+    DEFAULT_REGIME_LOOKBACK_BUFFER,
+    DEFAULT_SLIPPAGE_RATE,
+    DEFAULT_TIME_RESTRICTIONS,
+    DEFAULT_WEEKEND_FLAT,
+)
+from src.database.models import TradeSource
 from src.engines.backtest.execution import (
     EntryHandler,
     ExecutionEngine,
@@ -27,29 +44,15 @@ from src.engines.backtest.logging import EventLogger
 from src.engines.backtest.models import ActiveTrade, Trade
 from src.engines.backtest.regime import RegimeHandler
 from src.engines.backtest.risk import CorrelationHandler
-from src.engines.backtest.utils import compute_performance_metrics
 from src.engines.backtest.utils import extract_indicators as util_extract_indicators
 from src.engines.backtest.utils import extract_ml_predictions as util_extract_ml
 from src.engines.backtest.utils import extract_sentiment_data as util_extract_sentiment
 from src.engines.shared.partial_operations_manager import PartialOperationsManager
 from src.engines.shared.policy_hydration import apply_policies_to_engine
 from src.engines.shared.risk_configuration import (
-    build_time_exit_policy,
     build_trailing_stop_policy,
     merge_dynamic_risk_config,
 )
-from src.config.config_manager import get_config
-from src.config.constants import (
-    DEFAULT_DYNAMIC_RISK_ENABLED,
-    DEFAULT_END_OF_DAY_FLAT,
-    DEFAULT_INITIAL_BALANCE,
-    DEFAULT_MARKET_TIMEZONE,
-    DEFAULT_MAX_HOLDING_HOURS,
-    DEFAULT_MFE_MAE_PRECISION_DECIMALS,
-    DEFAULT_TIME_RESTRICTIONS,
-    DEFAULT_WEEKEND_FLAT,
-)
-from src.database.models import TradeSource
 from src.infrastructure.logging.context import set_context, update_context
 from src.infrastructure.logging.events import log_engine_event
 from src.position_management.correlation_engine import CorrelationConfig, CorrelationEngine
@@ -72,8 +75,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Regime lookback buffer for data fetching
-REGIME_LOOKBACK_BUFFER = 5
+# Use centralized constant for regime lookback buffer
+REGIME_LOOKBACK_BUFFER = DEFAULT_REGIME_LOOKBACK_BUFFER
 
 
 def _compute_regime_lookback(regime_switcher: Any) -> int:
@@ -146,8 +149,8 @@ class Backtester:
         regime_config: Any | None = None,
         strategy_mapping: Any | None = None,
         switching_config: Any | None = None,
-        fee_rate: float = 0.001,
-        slippage_rate: float = 0.0005,
+        fee_rate: float = DEFAULT_FEE_RATE,
+        slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
         use_next_bar_execution: bool = False,
         use_high_low_for_stops: bool = True,
         max_position_size: float | None = None,
@@ -313,6 +316,7 @@ class Backtester:
             dynamic_risk_manager=self.dynamic_risk_manager,
             correlation_handler=self.correlation_handler,
             default_take_profit_pct=default_take_profit_pct,
+            max_position_size=self.risk_manager.params.max_position_size,
         )
 
         # Wrap PartialExitPolicy in unified PartialOperationsManager
@@ -385,7 +389,7 @@ class Backtester:
     def max_position_size(self) -> float:
         """Get max position size (backward compatibility)."""
         if self.risk_parameters is None:
-            return 0.1  # Default 10% for backward compatibility
+            return DEFAULT_MAX_POSITION_SIZE  # Default for backward compatibility
         return self.risk_manager.params.max_position_size
 
     def _init_regime_switching(
@@ -1011,7 +1015,7 @@ class Backtester:
                 timeframe=timeframe,
                 action_taken="closed_position" if exit_check.should_exit else "hold_position",
                 signal_strength=1.0 if exit_check.should_exit else 0.0,
-                confidence_score=indicators.get("prediction_confidence", 0.5),
+                confidence_score=indicators.get("prediction_confidence", DEFAULT_CONFIDENCE_SCORE),
                 position_size=(
                     self.position_tracker.current_trade.size
                     if self.position_tracker.current_trade
@@ -1318,7 +1322,7 @@ class Backtester:
                     ).astype(
                         float
                     ) * (
-                        1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(0.5)
+                        1.0 - df["prediction_confidence"].reindex(pred_series.index).fillna(DEFAULT_CONFIDENCE_SCORE)
                     )
                     actual_up = (actual_series.diff() > 0).astype(float)
                     brier = brier_score_direction(p_up.fillna(0.5), actual_up.fillna(0.0))

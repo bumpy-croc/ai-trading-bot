@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from src.config.constants import DEFAULT_ATR_PERIOD
+
 
 def calculate_moving_averages(df: pd.DataFrame, periods: list) -> pd.DataFrame:
     """Calculate simple moving averages for multiple periods"""
@@ -32,7 +34,7 @@ def calculate_rsi(data, period: int = 14):
     return rsi
 
 
-def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+def calculate_atr(df: pd.DataFrame, period: int = DEFAULT_ATR_PERIOD) -> pd.DataFrame:
     """Calculate Average True Range"""
     df = df.copy()
     high_low = df["high"] - df["low"]

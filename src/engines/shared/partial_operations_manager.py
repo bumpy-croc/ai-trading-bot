@@ -16,13 +16,16 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.config.constants import DEFAULT_EPSILON
+from src.engines.shared.models import normalize_side
+
 if TYPE_CHECKING:
     from src.position_management.partial_manager import PartialExitPolicy
 
 logger = logging.getLogger(__name__)
 
-# Epsilon for floating-point comparisons in financial calculations
-EPSILON = 1e-9
+# Use centralized epsilon for floating-point comparisons
+EPSILON = DEFAULT_EPSILON
 
 
 @dataclass
@@ -160,7 +163,7 @@ class PartialOperationsManager:
         if entry_price is None or entry_price <= 0:
             return PartialExitDecision()
 
-        side = self._get_side_str(position)
+        side = normalize_side(getattr(position, "side", None))
         partial_exits_taken = getattr(position, "partial_exits_taken", 0)
 
         # Calculate PnL percentage if not provided
@@ -233,7 +236,7 @@ class PartialOperationsManager:
         if entry_price is None or entry_price <= 0:
             return ScaleInDecision()
 
-        side = self._get_side_str(position)
+        side = normalize_side(getattr(position, "side", None))
         scale_ins_taken = getattr(position, "scale_ins_taken", 0)
 
         # Calculate PnL percentage if not provided
@@ -277,22 +280,6 @@ class PartialOperationsManager:
                 )
 
         return ScaleInDecision()
-
-    def _get_side_str(self, position: Any) -> str:
-        """Get the side as a lowercase string.
-
-        Args:
-            position: Position object with a 'side' attribute.
-
-        Returns:
-            Side as lowercase string ('long' or 'short').
-        """
-        side = getattr(position, "side", None)
-        if side is None:
-            return "long"
-        if hasattr(side, "value"):
-            return side.value.lower()
-        return str(side).lower()
 
 
 __all__ = [

@@ -10,7 +10,13 @@ import argparse
 import logging
 import sys
 
-from src.config.constants import DEFAULT_INITIAL_BALANCE
+from src.config.constants import (
+    DEFAULT_BASE_RISK_PER_TRADE,
+    DEFAULT_INITIAL_BALANCE,
+    DEFAULT_MAX_DRAWDOWN,
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_MAX_RISK_PER_TRADE,
+)
 from src.data_providers.mock_data_provider import MockDataProvider
 from src.infrastructure.logging.config import configure_logging
 from src.engines.live.trading_engine import LiveTradingEngine
@@ -68,7 +74,7 @@ def parse_args():
         "--balance", type=float, default=DEFAULT_INITIAL_BALANCE, help="Initial balance"
     )
     parser.add_argument(
-        "--max-position", type=float, default=0.1, help="Max position size (0.1 = 10% of balance)"
+        "--max-position", type=float, default=DEFAULT_MAX_POSITION_SIZE, help="Max position size (0.1 = 10% of balance)"
     )
     parser.add_argument("--check-interval", type=int, default=60, help="Check interval in seconds")
 
@@ -106,19 +112,19 @@ def parse_args():
     parser.add_argument(
         "--risk-per-trade",
         type=float,
-        default=0.02,
+        default=DEFAULT_BASE_RISK_PER_TRADE,
         help="Base risk per trade (0.02 = 2% of balance)",
     )
     parser.add_argument(
         "--max-risk-per-trade",
         type=float,
-        default=0.05,
-        help="Maximum risk per trade (0.05 = 5% of balance)",
+        default=DEFAULT_MAX_RISK_PER_TRADE,
+        help="Maximum risk per trade (0.03 = 3% of balance)",
     )
     parser.add_argument(
         "--max-drawdown",
         type=float,
-        default=0.20,
+        default=DEFAULT_MAX_DRAWDOWN,
         help="Maximum drawdown before stopping (0.20 = 20%)",
     )
 

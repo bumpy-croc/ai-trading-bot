@@ -9,6 +9,11 @@ from typing import Any
 
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_CONFIDENCE_SCALE_FACTOR,
+    DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM,
+)
+
 from .regime_context import RegimeContext
 from .signal_generator import Signal, SignalDirection, SignalGenerator
 
@@ -92,8 +97,8 @@ class MomentumSignalGenerator(SignalGenerator):
         if decision_buy:
             # Strength scaled by fast momentum, clipped
             fast = abs(momentum_3 or 0.0)
-            strength = float(max(0.0, min(1.0, fast * 10)))
-            confidence = float(max(0.0, min(1.0, (fast * 8))))
+            strength = float(max(0.0, min(1.0, fast * DEFAULT_CONFIDENCE_SCALE_FACTOR)))
+            confidence = float(max(0.0, min(1.0, fast * DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM)))
             return Signal(
                 direction=SignalDirection.BUY,
                 strength=strength,
@@ -126,7 +131,7 @@ class MomentumSignalGenerator(SignalGenerator):
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
         self.validate_inputs(df, index)
         momentum_3 = self._pct_change(df, "close", self.momentum_fast_window, index) or 0.0
-        return float(max(0.0, min(1.0, abs(momentum_3) * 8)))
+        return float(max(0.0, min(1.0, abs(momentum_3) * DEFAULT_CONFIDENCE_SCALE_FACTOR_MOMENTUM)))
 
     @staticmethod
     def _ema(df: pd.DataFrame, col: str, span: int, index: int) -> float | None:

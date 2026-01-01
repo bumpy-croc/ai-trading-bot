@@ -13,9 +13,16 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from src.config.constants import (
+    DEFAULT_MAX_POSITION_SIZE,
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_TAKE_PROFIT_PCT,
+)
 from src.engines.backtest.models import ActiveTrade
 from src.engines.shared.dynamic_risk_handler import DynamicRiskHandler
 from src.strategies.components import SignalDirection
+from src.utils.bounds import clamp_fraction, clamp_stop_loss_pct
+from src.utils.price_targets import PriceTargetCalculator
 
 if TYPE_CHECKING:
     from src.engines.backtest.execution.execution_engine import ExecutionEngine
@@ -72,6 +79,7 @@ class EntryHandler:
         dynamic_risk_manager: DynamicRiskManager | None = None,
         correlation_handler: Any | None = None,
         default_take_profit_pct: float | None = None,
+        max_position_size: float = DEFAULT_MAX_POSITION_SIZE,
     ) -> None:
         """Initialize entry handler.
 
@@ -83,6 +91,7 @@ class EntryHandler:
             dynamic_risk_manager: Manager for dynamic risk adjustments.
             correlation_handler: Handler for correlation-based sizing.
             default_take_profit_pct: Default take profit percentage.
+            max_position_size: Maximum position size as fraction (default 10% for parity with live).
         """
         self.execution_engine = execution_engine
         self.position_tracker = position_tracker
@@ -91,6 +100,7 @@ class EntryHandler:
         self.dynamic_risk_manager = dynamic_risk_manager
         self.correlation_handler = correlation_handler
         self.default_take_profit_pct = default_take_profit_pct
+        self.max_position_size = max_position_size
         # Use shared DynamicRiskHandler for consistent risk adjustment logic
         self._dynamic_risk_handler = DynamicRiskHandler(dynamic_risk_manager)
 
@@ -145,6 +155,10 @@ class EntryHandler:
                 reasons=reasons,
             )
 
+        # Enforce maximum position size to prevent over-concentration risk
+        # (matches live engine behavior for backtest-live parity)
+        size_fraction = min(size_fraction, self.max_position_size)
+
         # Apply correlation control if available
         if self.correlation_handler is not None and size_fraction > 0:
             size_fraction = self.correlation_handler.apply_correlation_control(
@@ -195,13 +209,13 @@ class EntryHandler:
             else size_fraction * balance
         )
 
-        # Calculate SL/TP prices
-        if entry_side == "long":
-            stop_loss = current_price * (1 - sl_pct)
-            take_profit = current_price * (1 + tp_pct)
-        else:
-            stop_loss = current_price * (1 + sl_pct)
-            take_profit = current_price * (1 - tp_pct)
+        # Calculate SL/TP prices using shared calculator
+        stop_loss, take_profit = PriceTargetCalculator.sl_tp(
+            entry_price=current_price,
+            sl_pct=sl_pct,
+            tp_pct=tp_pct,
+            side=entry_side,
+        )
 
         return EntrySignalResult(
             should_enter=True,
@@ -240,29 +254,27 @@ class EntryHandler:
             )
 
         # Calculate SL/TP percentages for pending order
-        default_sl_pct = 0.05
-        default_tp_pct = 0.04
         if signal.side == "long":
             sl_pct = (
                 (current_price - signal.stop_loss) / current_price
                 if signal.stop_loss
-                else default_sl_pct
+                else DEFAULT_STOP_LOSS_PCT
             )
             tp_pct = (
                 (signal.take_profit - current_price) / current_price
                 if signal.take_profit
-                else default_tp_pct
+                else DEFAULT_TAKE_PROFIT_PCT
             )
         else:
             sl_pct = (
                 (signal.stop_loss - current_price) / current_price
                 if signal.stop_loss
-                else default_sl_pct
+                else DEFAULT_STOP_LOSS_PCT
             )
             tp_pct = (
                 (current_price - signal.take_profit) / current_price
                 if signal.take_profit
-                else default_tp_pct
+                else DEFAULT_TAKE_PROFIT_PCT
             )
 
         # Use next-bar execution if enabled
@@ -289,8 +301,8 @@ class EntryHandler:
             current_price=current_price,
             current_time=current_time,
             balance=balance,
-            stop_loss=signal.stop_loss or current_price * 0.95,
-            take_profit=signal.take_profit or current_price * 1.04,
+            stop_loss=signal.stop_loss or current_price * (1 - DEFAULT_STOP_LOSS_PCT),
+            take_profit=signal.take_profit or current_price * (1 + DEFAULT_TAKE_PROFIT_PCT),
             component_notional=signal.component_notional,
         )
 
@@ -412,7 +424,7 @@ class EntryHandler:
 
         # Calculate size fraction
         size_fraction = float(decision.position_size) / float(balance)
-        size_fraction = max(0.0, min(1.0, size_fraction))
+        size_fraction = clamp_fraction(size_fraction)
 
         return side, size_fraction
 
@@ -433,7 +445,7 @@ class EntryHandler:
             Tuple of (sl_pct, tp_pct).
         """
         # Try to get stop loss from strategy
-        sl_pct = 0.05  # Default 5%
+        sl_pct = DEFAULT_STOP_LOSS_PCT
         if self.component_strategy is not None:
             try:
                 stop_loss_price = self.component_strategy.get_stop_loss_price(
@@ -445,16 +457,18 @@ class EntryHandler:
                     sl_pct = (current_price - stop_loss_price) / current_price
                 else:
                     sl_pct = (stop_loss_price - current_price) / current_price
-                sl_pct = max(0.01, min(0.20, sl_pct))  # Clamp 1-20%
+                sl_pct = clamp_stop_loss_pct(sl_pct)  # Clamp 1-20%
             except Exception:
                 pass
 
         # Get take profit
         tp_pct = self.default_take_profit_pct
         if tp_pct is None and self.component_strategy is not None:
-            tp_pct = getattr(self.component_strategy, "take_profit_pct", 0.04)
+            tp_pct = getattr(
+                self.component_strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT
+            )
         if tp_pct is None:
-            tp_pct = 0.04
+            tp_pct = DEFAULT_TAKE_PROFIT_PCT
 
         return sl_pct, tp_pct
 

@@ -362,18 +362,19 @@ class TestDailyPnLTracking:
 
 
 class TestEntryBalanceBasis:
-    """Test entry balance basis uses pre-fee balance."""
+    """Test entry balance basis uses post-fee balance for parity with backtest."""
 
-    def test_entry_balance_does_not_net_entry_fee(self) -> None:
-        """Entry balance should remain the pre-fee balance."""
+    def test_entry_balance_subtracts_entry_fee(self) -> None:
+        """Entry balance should be balance minus entry fee for backtest parity."""
         # Arrange
         execution_engine = MagicMock()
+        entry_fee = 1.23
         execution_engine.execute_entry.return_value = MagicMock(
             success=True,
             executed_price=100.0,
             order_id="entry-1",
             quantity=0.1,
-            entry_fee=1.23,
+            entry_fee=entry_fee,
             slippage_cost=0.0,
         )
         entry_handler = LiveEntryHandler(execution_engine=execution_engine)
@@ -392,10 +393,10 @@ class TestEntryBalanceBasis:
             balance=balance,
         )
 
-        # Assert
+        # Assert: entry_balance = balance - entry_fee (matches backtest behavior)
         assert result.executed is True
         assert result.position is not None
-        assert result.position.entry_balance == balance
+        assert result.position.entry_balance == balance - entry_fee
 
     def test_daily_pnl_resets_on_date_change(self) -> None:
         """Daily P&L should reset when the trading date changes."""
