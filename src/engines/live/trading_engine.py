@@ -3533,26 +3533,34 @@ class LiveTradingEngine:
         if swap_data.get("close_positions", False):
             logger.info("🚪 Closing all positions before strategy swap")
             for position in list(self.live_position_tracker.positions.values()):
-                # Validate price before closing to prevent data corruption
-                current_price = self.data_provider.get_current_price(position.symbol)
-                if current_price is None or current_price <= 0:
-                    logger.error(
-                        "Cannot close position %s during strategy change - invalid price %s. "
-                        "Position will remain open.",
-                        position.symbol,
-                        current_price,
-                    )
-                    continue
+                try:
+                    # Validate price before closing to prevent data corruption
+                    current_price = self.data_provider.get_current_price(position.symbol)
+                    if current_price is None or current_price <= 0:
+                        logger.error(
+                            "Cannot close position %s during strategy change - invalid price %s. "
+                            "Position will remain open.",
+                            position.symbol,
+                            current_price,
+                        )
+                        continue
 
-                self._execute_exit(
-                    position,
-                    "Strategy change - close requested",
-                    None,
-                    float(current_price),
-                    None,
-                    None,
-                    None,
-                )
+                    self._execute_exit(
+                        position,
+                        "Strategy change - close requested",
+                        None,
+                        float(current_price),
+                        None,
+                        None,
+                        None,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to close position %s during strategy change: %s",
+                        position.symbol,
+                        e,
+                        exc_info=True,
+                    )
         else:
             logger.info("📊 Keeping existing positions during strategy swap")
 

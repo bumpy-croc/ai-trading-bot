@@ -859,28 +859,7 @@ class Backtester:
                     balance=self.balance,
                 )
                 if entry_result.executed:
-                    # Validate fee does not exceed balance (safety check for position sizing bugs)
-                    if entry_result.entry_fee > self.balance:
-                        logger.critical(
-                            "Entry fee %.2f exceeds balance %.2f - position sizing error!",
-                            entry_result.entry_fee,
-                            self.balance,
-                        )
-                        raise RuntimeError(
-                            f"Critical error: Entry fee {entry_result.entry_fee:.2f} "
-                            f"exceeds balance {self.balance:.2f}. Aborting to prevent corruption."
-                        )
-
-                    self.balance -= entry_result.entry_fee
-
-                    # Final validation: ensure balance is still positive
-                    if self.balance < 0:
-                        logger.critical(
-                            "Balance went negative: %.2f after entry fee %.2f",
-                            self.balance,
-                            entry_result.entry_fee,
-                        )
-                        raise RuntimeError(f"Balance corruption: balance={self.balance:.2f}")
+                    self._deduct_entry_fee(entry_result.entry_fee)
 
             # Get runtime decision
             runtime_decision = self._get_runtime_decision(df, i, current_price, current_time)
@@ -1142,28 +1121,7 @@ class Backtester:
         )
 
         if entry_result.executed:
-            # Validate fee does not exceed balance (safety check for position sizing bugs)
-            if entry_result.entry_fee > self.balance:
-                logger.critical(
-                    "Entry fee %.2f exceeds balance %.2f - position sizing error!",
-                    entry_result.entry_fee,
-                    self.balance,
-                )
-                raise RuntimeError(
-                    f"Critical error: Entry fee {entry_result.entry_fee:.2f} "
-                    f"exceeds balance {self.balance:.2f}. Aborting to prevent corruption."
-                )
-
-            self.balance -= entry_result.entry_fee
-
-            # Final validation: ensure balance is still positive
-            if self.balance < 0:
-                logger.critical(
-                    "Balance went negative: %.2f after entry fee %.2f",
-                    self.balance,
-                    entry_result.entry_fee,
-                )
-                raise RuntimeError(f"Balance corruption: balance={self.balance:.2f}")
+            self._deduct_entry_fee(entry_result.entry_fee)
 
             # Log entry
             indicators = util_extract_indicators(df, index)
@@ -1447,6 +1405,50 @@ class Backtester:
         """
         if self.balance > self.peak_balance:
             self.peak_balance = self.balance
+
+    def _deduct_entry_fee(self, entry_fee: float) -> None:
+        """Deduct entry fee from balance with validation.
+
+        Validates that entry fee is non-negative, does not exceed balance,
+        and that balance remains non-negative after deduction. Raises
+        RuntimeError on validation failure to prevent balance corruption.
+
+        Args:
+            entry_fee: The fee to deduct from balance (must be >= 0).
+
+        Raises:
+            RuntimeError: If entry fee is negative, exceeds balance,
+                or balance goes negative after deduction.
+        """
+        if entry_fee < 0:
+            logger.critical(
+                "Entry fee %.8f is negative - fee calculation error!",
+                entry_fee,
+            )
+            raise RuntimeError(
+                f"Invalid entry fee {entry_fee:.8f}: fees cannot be negative"
+            )
+
+        if entry_fee > self.balance:
+            logger.critical(
+                "Entry fee %.2f exceeds balance %.2f - position sizing error!",
+                entry_fee,
+                self.balance,
+            )
+            raise RuntimeError(
+                f"Critical error: Entry fee {entry_fee:.2f} "
+                f"exceeds balance {self.balance:.2f}. Aborting to prevent corruption."
+            )
+
+        self.balance -= entry_fee
+
+        if self.balance < 0:
+            logger.critical(
+                "Balance went negative: %.2f after entry fee %.2f",
+                self.balance,
+                entry_fee,
+            )
+            raise RuntimeError(f"Balance corruption: balance={self.balance:.2f}")
 
     def _apply_correlation_control(
         self,

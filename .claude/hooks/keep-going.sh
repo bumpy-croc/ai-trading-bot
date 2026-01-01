@@ -224,50 +224,27 @@ def is_work_complete(content: str) -> bool:
 
 
 def main():
-    # Debug logging to verify hook is being invoked
-    import datetime
-
-    def log(msg):
-        with open("/tmp/hook-debug.log", "a") as f:
-            f.write(f"{datetime.datetime.now()}: {msg}\n")
-
-    log("Stop hook invoked")
-
     # Read input from stdin
     try:
         input_data = json.load(sys.stdin)
-        log(f"Input keys: {list(input_data.keys())}")
     except json.JSONDecodeError:
         input_data = {}
-        log("Failed to parse JSON input")
 
     transcript_path = input_data.get("transcript_path")
-    log(f"Transcript path: {transcript_path}")
-
     initial_prompt, last_message = parse_transcript(transcript_path)
-    log(f"Initial prompt (first 100 chars): {initial_prompt[:100] if initial_prompt else 'None'}")
-    log(f"Last message (first 100 chars): {last_message[:100] if last_message else 'None'}")
 
     # Only apply loop logic if the initial prompt enables it
-    loop_enabled = is_loop_enabled_task(initial_prompt)
-    log(f"is_loop_enabled_task: {loop_enabled}")
-    if not loop_enabled:
+    if not is_loop_enabled_task(initial_prompt):
         # Normal task - don't interfere, let Claude stop naturally
-        log("Exiting: not a loop-enabled task")
         sys.exit(0)
 
     # We're in loop mode - check if work is complete
-    work_complete = is_work_complete(last_message)
-    log(f"is_work_complete: {work_complete}")
-    if work_complete:
+    if is_work_complete(last_message):
         # Work complete - let Claude stop
-        log("Exiting: work is complete")
         sys.exit(0)
 
     # Determine appropriate continuation message
-    code_review = is_code_review(last_message)
-    log(f"is_code_review: {code_review}")
-    if code_review:
+    if is_code_review(last_message):
         reason = (
             "You just completed a code review. Now fix all the issues you identified, "
             "then run another review of the same code to verify the fixes. "
@@ -281,7 +258,6 @@ def main():
         )
 
     output = {"decision": "block", "reason": reason}
-    log(f"Blocking with reason: {reason[:50]}...")
     print(json.dumps(output))
     sys.exit(0)
 
