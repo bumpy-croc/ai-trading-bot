@@ -160,9 +160,7 @@ class AccountSynchronizer:
 
             if usdt_balance:
                 # Validate total is numeric
-                if usdt_balance.total is None or not isinstance(
-                    usdt_balance.total, (int, float)
-                ):
+                if usdt_balance.total is None or not isinstance(usdt_balance.total, (int, float)):
                     logger.error(
                         "Invalid USDT balance total: %s (type=%s) - skipping sync",
                         usdt_balance.total,

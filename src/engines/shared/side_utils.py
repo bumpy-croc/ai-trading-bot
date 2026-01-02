@@ -64,7 +64,15 @@ def to_side_string(side: SideType) -> str:
         side_lower = side.lower()
         if side_lower in ("long", "short"):
             return side_lower
-        raise ValueError(f"Invalid side string: '{side}'. Expected 'long' or 'short'.")
+        # Map order sides (BUY/SELL) to position sides (long/short)
+        # BUY typically opens a long, SELL typically opens a short
+        if side_lower == "buy":
+            return "long"
+        if side_lower == "sell":
+            return "short"
+        raise ValueError(
+            f"Invalid side string: '{side}'. Expected 'long', 'short', 'buy', or 'sell'."
+        )
 
     raise ValueError(f"Cannot convert {type(side).__name__} to side string: {side}")
 
