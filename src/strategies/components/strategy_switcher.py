@@ -31,7 +31,6 @@ class ExecutionTimeoutError(Exception):
     Named to avoid shadowing the Python builtin TimeoutError.
     """
 
-    pass
 
 
 def execute_with_timeout(func: Callable, timeout_seconds: int, *args, **kwargs):

@@ -193,7 +193,6 @@ class RiskManager(ABC):
         Raises:
             ValueError: If input parameters are invalid
         """
-        pass
 
     @abstractmethod
     def should_exit(
@@ -214,7 +213,6 @@ class RiskManager(ABC):
         Returns:
             True if position should be exited, False otherwise
         """
-        pass
 
     @abstractmethod
     def get_stop_loss(
@@ -238,7 +236,6 @@ class RiskManager(ABC):
         Raises:
             ValueError: If input parameters are invalid
         """
-        pass
 
     def validate_inputs(self, balance: float) -> None:
         """

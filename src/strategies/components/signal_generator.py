@@ -106,7 +106,6 @@ class SignalGenerator(ABC):
             ValueError: If input parameters are invalid
             IndexError: If index is out of bounds
         """
-        pass
 
     @abstractmethod
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
@@ -124,7 +123,6 @@ class SignalGenerator(ABC):
             ValueError: If input parameters are invalid
             IndexError: If index is out of bounds
         """
-        pass
 
     def validate_inputs(self, df: pd.DataFrame, index: int) -> None:
         """

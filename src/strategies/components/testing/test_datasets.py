@@ -766,7 +766,6 @@ class SyntheticDataGenerator:
 
     def __init__(self):
         """Initialize synthetic data generator"""
-        pass
 
     def generate_scenario_data(
         self, scenario: MarketScenario, seed: int | None = None

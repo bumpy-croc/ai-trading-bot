@@ -140,7 +140,6 @@ class StrategyVersion:
 class StrategyValidationError(Exception):
     """Exception raised when strategy validation fails"""
 
-    pass
 
 
 class StrategyRegistry:

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class ValidationResult(str, Enum):
     """Performance validation result status."""
 
-    PASS = "pass"  # noqa: S105 - Not a password, validation status enum
+    PASS = "pass"
     FAIL = "fail"
     WARNING = "warning"
     INCONCLUSIVE = "inconclusive"

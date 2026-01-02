@@ -63,7 +63,6 @@ class PositionSizer(ABC):
         Raises:
             ValueError: If input parameters are invalid
         """
-        pass
 
     def validate_inputs(self, balance: float, risk_amount: float) -> None:
         """Validate common input parameters.
