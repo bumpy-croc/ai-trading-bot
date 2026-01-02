@@ -10,6 +10,7 @@ This module provides unified implementations for common trading engine functiona
 - Partial operations management
 - Performance tracking
 - Correlation-based position sizing
+- Entry utilities (shared entry plan handling)
 - Side utilities (consistent side handling across engines)
 - Validation utilities (input validation for financial calculations)
 """
@@ -19,6 +20,11 @@ from src.engines.shared.cost_calculator import CostCalculator, CostResult
 from src.engines.shared.dynamic_risk_handler import (
     DynamicRiskAdjustment,
     DynamicRiskHandler,
+)
+from src.engines.shared.entry_utils import (
+    EntryPlan,
+    extract_entry_plan,
+    resolve_stop_loss_take_profit_pct,
 )
 from src.engines.shared.models import (
     BasePosition,
@@ -69,6 +75,7 @@ from src.engines.shared.trailing_stop_manager import (
 from src.engines.shared.validation import (
     EPSILON,
     clamp_fraction,
+    convert_exit_fraction_to_current,
     is_position_fully_closed,
     is_valid_fraction,
     is_valid_price,
@@ -127,6 +134,10 @@ __all__ = [
     "PerformanceMetrics",
     # Correlation handling
     "CorrelationHandler",
+    # Entry utilities
+    "EntryPlan",
+    "extract_entry_plan",
+    "resolve_stop_loss_take_profit_pct",
     # Side utilities
     "HasSide",
     "to_side_string",
@@ -145,6 +156,7 @@ __all__ = [
     "is_valid_fraction",
     "safe_divide",
     "is_position_fully_closed",
+    "convert_exit_fraction_to_current",
     "clamp_fraction",
     "validate_parallel_lists",
 ]

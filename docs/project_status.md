@@ -1,13 +1,13 @@
 # Project Status
 
-> **Last Updated**: 2026-01-01
+> **Last Updated**: 2026-01-02
 > **Maintainer Note**: This is a living document. Update at the start and end of each development session. Use the `/update-docs` command to keep this in sync.
 
 ---
 
 ## Current Focus
 
-Implementing PSB (Plan, Setup, Build) system improvements for better development workflows and documentation maintenance.
+Reducing backtest/live engine duplication by centralizing shared entry and exit logic.
 
 ---
 
@@ -73,18 +73,18 @@ Implementing PSB (Plan, Setup, Build) system improvements for better development
 
 ## Last Session Summary
 
-**Date**: 2026-01-01
+**Date**: 2026-01-02
 
 **Work Completed**:
-- Aligned live exit-condition evaluation order with backtest parity
-- Ensured filled live exits always close positions despite large price deviations
-- Added unit coverage for filled-exit deviation handling and exit ordering
+- Added shared entry and validation helpers under `src/engines/shared/`
+- Wired backtest/live entry handlers and partial-exit loops to shared helpers
+- Added unit coverage for shared entry and validation utilities
 
 **Ended At**:
-- Live exit handler parity fixes and regression tests
+- Shared entry/exit helper wiring and targeted unit tests
 
 **Next Steps**:
-- Run unit tests for live engine changes
+- Run full unit test suite for shared helper changes
 
 ---
 
