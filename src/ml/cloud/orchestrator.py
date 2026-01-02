@@ -82,6 +82,27 @@ class CloudTrainingOrchestrator:
             bucket_name=config.storage_config.s3_bucket,
         )
 
+    def _create_failure_result(self, error_message: str, start_time: float) -> CloudTrainingResult:
+        """Create a failure result with consistent structure.
+
+        Avoids duplication of error result creation (CODE.md line 62).
+
+        Args:
+            error_message: Error description
+            start_time: Training start time from perf_counter()
+
+        Returns:
+            CloudTrainingResult indicating failure
+        """
+        return CloudTrainingResult(
+            success=False,
+            job_id=None,
+            job_status="Failed",
+            provider=self.provider.provider_name,
+            error=error_message,
+            duration_seconds=perf_counter() - start_time,
+        )
+
     def run_training(self, wait: bool = True) -> CloudTrainingResult:
         """Execute complete cloud training workflow.
 
@@ -142,24 +163,10 @@ class CloudTrainingOrchestrator:
 
         except CloudTrainingError as exc:
             logger.error(f"Cloud training failed: {exc}")
-            return CloudTrainingResult(
-                success=False,
-                job_id=None,
-                job_status="Failed",
-                provider=self.provider.provider_name,
-                error=str(exc),
-                duration_seconds=perf_counter() - start_time,
-            )
+            return self._create_failure_result(str(exc), start_time)
         except Exception as exc:
             logger.exception("Unexpected error during cloud training")
-            return CloudTrainingResult(
-                success=False,
-                job_id=None,
-                job_status="Failed",
-                provider=self.provider.provider_name,
-                error=f"Unexpected error: {exc}",
-                duration_seconds=perf_counter() - start_time,
-            )
+            return self._create_failure_result(f"Unexpected error: {exc}", start_time)
 
     def submit_job(self) -> str:
         """Submit training job without waiting.
