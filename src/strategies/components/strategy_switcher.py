@@ -765,14 +765,19 @@ class StrategySwitcher:
                 return ValidationResult.REJECTED_INSUFFICIENT_DATA
 
         # Check improvement threshold
-        if request.switch_decision and request.alternative_scores:
-            if not self._meets_improvement_threshold(request):
-                return ValidationResult.REJECTED_NO_BETTER_ALTERNATIVE
+        if (
+            request.switch_decision
+            and request.alternative_scores
+            and not self._meets_improvement_threshold(request)
+        ):
+            return ValidationResult.REJECTED_NO_BETTER_ALTERNATIVE
 
         # Check risk increase
-        if self._exceeds_risk_threshold(request):
-            if self.config.require_manual_approval_for_high_risk:
-                return ValidationResult.REJECTED_HIGH_RISK
+        if (
+            self._exceeds_risk_threshold(request)
+            and self.config.require_manual_approval_for_high_risk
+        ):
+            return ValidationResult.REJECTED_HIGH_RISK
 
         return ValidationResult.APPROVED
 
