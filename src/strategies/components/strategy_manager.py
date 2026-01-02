@@ -349,14 +349,14 @@ class ComponentStrategyManager:
 
         try:
             row = df.iloc[index]
-        except Exception:
+        except (IndexError, KeyError):
             return {}
 
         snapshot: dict[str, Any] = {}
         for column in df.columns:
             try:
                 snapshot[column] = row[column]
-            except Exception:
+            except (KeyError, TypeError):
                 continue
 
         metadata = getattr(signal, "metadata", None) or {}

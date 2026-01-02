@@ -645,7 +645,7 @@ class VolatilityRiskManager(RiskManager):
         elif context and "volatility" in context:
             try:
                 distance = float(context["volatility"]) * entry_price
-            except Exception:
+            except (ValueError, TypeError):
                 distance = None
 
         if distance is None:

@@ -704,14 +704,14 @@ class Strategy:
 
         try:
             row = df.iloc[index]
-        except Exception:
+        except (IndexError, KeyError):
             return {}
 
         snapshot: dict[str, Any] = {}
         for column in df.columns:
             try:
                 snapshot[column] = row[column]
-            except Exception:
+            except (KeyError, TypeError):
                 continue
 
         # Propagate signal metadata keys when present for adapters that rely on them.

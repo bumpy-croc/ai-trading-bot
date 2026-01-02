@@ -143,14 +143,16 @@ class MomentumSignalGenerator(SignalGenerator):
 
     @staticmethod
     def _ema(df: pd.DataFrame, col: str, span: int, index: int) -> float | None:
+        """Calculate EMA value at index, returning None on failure."""
         try:
             series = df[col].ewm(span=span).mean()
             return float(series.iloc[index])
-        except Exception:
+        except (KeyError, IndexError, ValueError, TypeError):
             return None
 
     @staticmethod
     def _pct_change(df: pd.DataFrame, col: str, periods: int, index: int) -> float | None:
+        """Calculate percent change, returning None on failure."""
         if index < periods:
             return None
         try:
@@ -158,26 +160,28 @@ class MomentumSignalGenerator(SignalGenerator):
                 (df[col].iloc[index] - df[col].iloc[index - periods])
                 / max(df[col].iloc[index - periods], 1e-12)
             )
-        except Exception:
+        except (KeyError, IndexError, ValueError, TypeError, ZeroDivisionError):
             return None
 
     @staticmethod
     def _is_breakout(df: pd.DataFrame, index: int, lookback: int) -> bool:
+        """Check if current close is a breakout above prior high."""
         if index < lookback:
             return False
         try:
             prior_high = float(df["high"].iloc[index - lookback : index].max())
             return float(df["close"].iloc[index]) > prior_high
-        except Exception:
+        except (KeyError, IndexError, ValueError, TypeError):
             return False
 
     @staticmethod
     def _safe_div(a: float | None, b: float | None) -> float | None:
+        """Perform safe division, returning None on failure."""
         try:
             if a is None or b is None or b == 0:
                 return None
             return float(a / b)
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return None
 
     def get_parameters(self) -> dict[str, Any]:
