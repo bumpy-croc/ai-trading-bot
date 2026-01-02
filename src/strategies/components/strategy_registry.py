@@ -677,7 +677,7 @@ class StrategyRegistry:
             self._validate_component_config(metadata.risk_manager_config, "risk_manager")
             self._validate_component_config(metadata.position_sizer_config, "position_sizer")
             self._validate_component_config(metadata.regime_detector_config, "regime_detector")
-        except Exception as e:
+        except (ValueError, KeyError, TypeError) as e:
             errors.append(f"Component validation failed: {e}")
 
         # Validate lineage consistency
@@ -867,5 +867,5 @@ class StrategyRegistry:
         if self.storage_backend:
             try:
                 self.storage_backend.save_strategy(metadata)
-            except Exception as e:
-                self.logger.error(f"Failed to persist strategy {metadata.id}: {e}")
+            except (OSError, ValueError, KeyError) as e:
+                self.logger.exception("Failed to persist strategy %s: %s", metadata.id, e)

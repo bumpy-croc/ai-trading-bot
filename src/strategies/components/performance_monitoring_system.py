@@ -222,8 +222,8 @@ class PerformanceMonitoringSystem:
 
             self.last_monitoring_update = datetime.now(UTC)
 
-        except Exception as e:
-            self.logger.error(f"Monitoring update failed: {e}")
+        except (ValueError, KeyError, AttributeError) as e:
+            self.logger.exception("Monitoring update failed: %s", e)
             results["error"] = str(e)
 
         return results

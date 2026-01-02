@@ -471,8 +471,8 @@ class PerformanceMonitor:
             else:
                 return 0.0  # Not underperforming
 
-        except Exception as e:
-            self.logger.warning(f"Statistical significance calculation failed: {e}")
+        except (ValueError, ZeroDivisionError, statistics.StatisticsError) as e:
+            self.logger.warning("Statistical significance calculation failed: %s", e)
             return 0.0
 
     def _calculate_confidence_interval(
@@ -496,8 +496,8 @@ class PerformanceMonitor:
 
             return (mean_return - margin_of_error, mean_return + margin_of_error)
 
-        except Exception as e:
-            self.logger.warning(f"Confidence interval calculation failed: {e}")
+        except (ValueError, ZeroDivisionError, statistics.StatisticsError) as e:
+            self.logger.warning("Confidence interval calculation failed: %s", e)
             return (0.0, 0.0)
 
     def _determine_timeframe_severity(

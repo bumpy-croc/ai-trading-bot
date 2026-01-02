@@ -238,8 +238,8 @@ class StrategyLineageTracker:
                 self.storage_backend.save_strategy_lineage(
                     strategy_id, self.strategies[strategy_id]
                 )
-            except Exception as e:
-                self.logger.error(f"Failed to persist strategy lineage: {e}")
+            except (OSError, ValueError, KeyError) as e:
+                self.logger.exception("Failed to persist strategy lineage: %s", e)
 
         self.logger.info(f"Registered strategy {strategy_id} with parent {parent_id}")
 
@@ -300,8 +300,8 @@ class StrategyLineageTracker:
         if self.storage_backend:
             try:
                 self.storage_backend.save_change_record(change_record)
-            except Exception as e:
-                self.logger.error(f"Failed to persist change record: {e}")
+            except (OSError, ValueError, KeyError) as e:
+                self.logger.exception("Failed to persist change record: %s", e)
 
         self.logger.info(f"Recorded {change_type.value} change for strategy {strategy_id}")
         return change_id
