@@ -417,6 +417,36 @@ class TestErrorHandlingRecovery:
             # Verify error cooldown is configured
             assert engine.error_cooldown > 0
 
+    def test_strategy_change_handles_price_fetch_failure(
+        self, mock_data_provider, minimal_strategy
+    ):
+        """Strategy change should tolerate price fetch failures"""
+        mock_data_provider.get_current_price.side_effect = RuntimeError("Price fetch failed")
+
+        with patch("src.engines.live.trading_engine.DatabaseManager"):
+            engine = LiveTradingEngine(
+                strategy=minimal_strategy,
+                data_provider=mock_data_provider,
+                enable_live_trading=False,
+            )
+
+            position = Position(
+                symbol="BTCUSDT",
+                side=PositionSide.LONG,
+                size=0.05,
+                entry_price=50000.0,
+                entry_time=datetime.now(UTC),
+                order_id="order-1",
+            )
+            engine.live_position_tracker.open_position(position, session_id=None)
+
+            engine._execute_exit = Mock()
+
+            engine._handle_strategy_change({"close_positions": True})
+
+            engine._execute_exit.assert_not_called()
+            assert engine.live_position_tracker.has_position("order-1")
+
 
 # ============================================================================
 # Category 4: Position Management

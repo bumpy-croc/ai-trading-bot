@@ -3554,7 +3554,16 @@ class LiveTradingEngine:
             logger.info("🚪 Closing all positions before strategy swap")
             for position in list(self.live_position_tracker.positions.values()):
                 # Validate price before closing to prevent data corruption
-                current_price = self.data_provider.get_current_price(position.symbol)
+                try:
+                    current_price = self.data_provider.get_current_price(position.symbol)
+                except Exception as exc:
+                    logger.error(
+                        "Cannot close position %s during strategy change - price fetch failed: %s. "
+                        "Position will remain open.",
+                        position.symbol,
+                        exc,
+                    )
+                    continue
                 if current_price is None or current_price <= 0:
                     logger.error(
                         "Cannot close position %s during strategy change - invalid price %s. "
