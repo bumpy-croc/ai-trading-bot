@@ -20,10 +20,23 @@ Usage:
 
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
+
 from src.engines.shared.models import PositionSide
 
 # Type alias for any acceptable side representation
 SideType = PositionSide | str
+
+
+@runtime_checkable
+class HasSide(Protocol):
+    """Protocol for objects that have a side attribute.
+
+    This protocol defines the interface for position-like objects
+    that contain a 'side' attribute representing their direction.
+    """
+
+    side: SideType | None
 
 
 def to_side_string(side: SideType) -> str:
@@ -173,7 +186,7 @@ def opposite_side_string(side: SideType) -> str:
     return "short" if is_long(side) else "long"
 
 
-def get_position_side(position: object, default: str = "long") -> str:
+def get_position_side(position: HasSide | None, default: str = "long") -> str:
     """Extract side from a position-like object as a lowercase string.
 
     Safely extracts the 'side' attribute from any position object and converts
@@ -181,7 +194,8 @@ def get_position_side(position: object, default: str = "long") -> str:
     or has no side attribute.
 
     Args:
-        position: Any object with a 'side' attribute (or None).
+        position: Object with a 'side' attribute (or None). Accepts any object
+            conforming to the HasSide protocol.
         default: Default side to return if position is None or has no side.
 
     Returns:

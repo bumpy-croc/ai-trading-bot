@@ -210,6 +210,15 @@ def is_position_fully_closed(
 ) -> bool:
     """Check if a position is fully closed (current_size near zero).
 
+    A position is considered fully closed if:
+    1. The absolute current_size is less than epsilon, OR
+    2. The ratio (current_size / original_size) is less than epsilon
+
+    Edge cases:
+    - If original_size <= epsilon, only the absolute size check applies.
+      This means a non-zero current_size with zero original_size returns False.
+    - Zero current_size always returns True regardless of original_size.
+
     Args:
         current_size: Current position size.
         original_size: Original position size (for ratio calculation).
@@ -225,12 +234,17 @@ def is_position_fully_closed(
         True
         >>> is_position_fully_closed(0.5, 1.0)
         False
+        >>> is_position_fully_closed(0.0, 0.0)  # Zero original, zero current
+        True
+        >>> is_position_fully_closed(0.5, 0.0)  # Zero original, non-zero current
+        False
     """
-    # Check absolute size
+    # Check absolute size first - handles zero current_size regardless of original
     if abs(current_size) < epsilon:
         return True
 
-    # Check ratio (handles both small and large original sizes)
+    # Check ratio only if original_size is meaningful (avoids division by zero)
+    # If original_size <= epsilon, we skip ratio check and return False
     if original_size > epsilon:
         ratio = current_size / original_size
         if abs(ratio) < epsilon:

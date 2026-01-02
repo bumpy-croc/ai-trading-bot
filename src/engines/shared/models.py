@@ -57,6 +57,11 @@ class PositionSide(Enum):
 def normalize_side(side: Any) -> str:
     """Normalize a position side to a lowercase string.
 
+    Note:
+        This function is maintained for backward compatibility.
+        Prefer using `to_side_string` from `src.engines.shared.side_utils`
+        for new code, as it provides additional features like BUY/SELL mapping.
+
     Handles PositionSide enum, string, or any object with a .value attribute.
     This utility ensures consistent side representation across engines.
 
@@ -74,13 +79,21 @@ def normalize_side(side: Any) -> str:
         >>> normalize_side("long")
         'long'
     """
+    # Handle None case (not supported by to_side_string)
     if side is None:
         return "long"
-    if isinstance(side, PositionSide):
-        return side.value
-    if hasattr(side, "value"):
-        return str(side.value).lower()
-    return str(side).lower()
+
+    # Delegate to the canonical implementation
+    # Late import to avoid circular dependency
+    from src.engines.shared.side_utils import to_side_string
+
+    try:
+        return to_side_string(side)
+    except ValueError:
+        # Fallback for edge cases: convert to string
+        if hasattr(side, "value"):
+            return str(side.value).lower()
+        return str(side).lower()
 
 
 class OrderStatus(Enum):

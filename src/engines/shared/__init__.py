@@ -48,15 +48,8 @@ from src.engines.shared.risk_configuration import (
     get_risk_parameters,
     merge_dynamic_risk_config,
 )
-from src.engines.shared.strategy_exit_checker import (
-    StrategyExitChecker,
-    StrategyExitResult,
-)
-from src.engines.shared.trailing_stop_manager import (
-    TrailingStopManager,
-    TrailingStopUpdate,
-)
 from src.engines.shared.side_utils import (
+    HasSide,
     get_position_side,
     is_long,
     is_short,
@@ -64,6 +57,14 @@ from src.engines.shared.side_utils import (
     opposite_side_string,
     to_position_side,
     to_side_string,
+)
+from src.engines.shared.strategy_exit_checker import (
+    StrategyExitChecker,
+    StrategyExitResult,
+)
+from src.engines.shared.trailing_stop_manager import (
+    TrailingStopManager,
+    TrailingStopUpdate,
 )
 from src.engines.shared.validation import (
     EPSILON,
@@ -127,6 +128,7 @@ __all__ = [
     # Correlation handling
     "CorrelationHandler",
     # Side utilities
+    "HasSide",
     "to_side_string",
     "to_position_side",
     "is_long",
