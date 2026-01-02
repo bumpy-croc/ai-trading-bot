@@ -444,7 +444,8 @@ class WeightedVotingSignalGenerator(SignalGenerator):
                 if confidence >= self.min_confidence:
                     confidences.append(confidence * weight)
                     total_weight += weight
-            except Exception:
+            except (ValueError, IndexError, KeyError):
+                # Generator failed - skip and continue with others
                 continue
 
         if not confidences or total_weight == 0:
@@ -561,7 +562,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
                     }
                 )
                 return secondary_signal
-            except Exception:
+            except (ValueError, IndexError, KeyError):
                 # Secondary failed, return low-confidence primary
                 primary_signal.metadata.update(
                     {
@@ -583,7 +584,7 @@ class HierarchicalSignalGenerator(SignalGenerator):
         # Confirmation mode: get secondary signal for confirmation
         try:
             secondary_signal = self.secondary_generator.generate_signal(df, index, regime)
-        except Exception:
+        except (ValueError, IndexError, KeyError):
             # Secondary failed, return primary anyway
             primary_signal.metadata.update(
                 {
@@ -657,13 +658,15 @@ class HierarchicalSignalGenerator(SignalGenerator):
             primary_confidence = self.primary_generator.get_confidence(df, index)
             if primary_confidence >= self.min_primary_confidence:
                 return primary_confidence
-        except Exception:
+        except (ValueError, IndexError, KeyError):
+            # Primary generator failed - fall through to secondary generator
             pass
 
         # Primary failed or low confidence, try secondary
         try:
             return self.secondary_generator.get_confidence(df, index)
-        except Exception:
+        except (ValueError, IndexError, KeyError):
+            # Both generators failed - return zero confidence
             return 0.0
 
     @property
@@ -782,7 +785,8 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
         # Without regime context, use default generator
         try:
             return self.default_generator.get_confidence(df, index)
-        except Exception:
+        except (ValueError, IndexError, KeyError):
+            # Generator failed - return zero confidence
             return 0.0
 
     def _select_generator(self, regime: Optional["RegimeContext"]) -> SignalGenerator:
@@ -958,7 +962,8 @@ class CircuitBreakerSignalGenerator(SignalGenerator):
         except CircuitBreakerError:
             # Circuit is open, use fallback confidence
             return self.fallback_generator.get_confidence(df, index)
-        except Exception:
+        except (ValueError, IndexError, KeyError):
+            # Generator calculation failed - return zero confidence
             return 0.0
 
     def reset_circuit(self) -> None:
