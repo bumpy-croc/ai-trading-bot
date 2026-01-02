@@ -324,12 +324,13 @@ class PerformanceComparisonEngine:
         # Start with parity validation result
         parity_result = result.parity_report.overall_result
 
-        # Check statistical test results
-        statistical_failures = []
-        for category, tests in result.statistical_tests.items():
-            for test in tests:
-                if test.reject_null and "equality" in test.test_name.lower():
-                    statistical_failures.append(f"{category}: {test.test_name}")
+        # Check statistical test results using list comprehension
+        statistical_failures = [
+            f"{category}: {test.test_name}"
+            for category, tests in result.statistical_tests.items()
+            for test in tests
+            if test.reject_null and "equality" in test.test_name.lower()
+        ]
 
         # Check equivalence test results
         # TOST (Two One-Sided Test) tests for equivalence, so we check if reject_null is True

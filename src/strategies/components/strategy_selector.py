@@ -503,7 +503,7 @@ class StrategySelector:
         processed_pairs = set()  # Track which pairs we've already processed
 
         for (sid1, sid2), correlation in correlation_matrix.items():
-            if sid1 == strategy_id or sid2 == strategy_id:
+            if strategy_id in (sid1, sid2):
                 if sid1 != sid2:  # Don't include self-correlation
                     # Create a canonical pair representation to avoid double-counting
                     # Use lexicographic ordering to ensure consistent pair representation

@@ -656,9 +656,9 @@ class StrategySwitcher:
             if record.request.requested_at < cutoff_date:
                 continue
 
-            if strategy_id and (
-                record.request.from_strategy != strategy_id
-                and record.request.to_strategy != strategy_id
+            if strategy_id and strategy_id not in (
+                record.request.from_strategy,
+                record.request.to_strategy,
             ):
                 continue
 

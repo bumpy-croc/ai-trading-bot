@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class ValidationResult(str, Enum):
     """Performance validation result status."""
 
-    PASS = "pass"
+    PASS = "pass"  # noqa: S105 - Not a password, validation status enum
     FAIL = "fail"
     WARNING = "warning"
     INCONCLUSIVE = "inconclusive"
@@ -730,22 +730,21 @@ class PerformanceParityReporter:
     def export_to_csv(report: PerformanceComparisonReport, filepath: str) -> None:
         """Export metric comparisons to CSV format."""
 
-        data = []
-        for comparison in report.metric_comparisons:
-            data.append(
-                {
-                    "metric_name": comparison.metric_name,
-                    "metric_type": comparison.metric_type.value,
-                    "legacy_value": comparison.legacy_value,
-                    "new_value": comparison.new_value,
-                    "difference": comparison.difference,
-                    "relative_difference": comparison.relative_difference,
-                    "tolerance": comparison.tolerance,
-                    "result": comparison.result.value,
-                    "p_value": comparison.p_value,
-                    "notes": comparison.notes,
-                }
-            )
+        data = [
+            {
+                "metric_name": comparison.metric_name,
+                "metric_type": comparison.metric_type.value,
+                "legacy_value": comparison.legacy_value,
+                "new_value": comparison.new_value,
+                "difference": comparison.difference,
+                "relative_difference": comparison.relative_difference,
+                "tolerance": comparison.tolerance,
+                "result": comparison.result.value,
+                "p_value": comparison.p_value,
+                "notes": comparison.notes,
+            }
+            for comparison in report.metric_comparisons
+        ]
 
         df = pd.DataFrame(data)
         df.to_csv(filepath, index=False)

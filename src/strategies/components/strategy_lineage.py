@@ -784,18 +784,17 @@ class StrategyLineageTracker:
     def _get_lineage_nodes(self, strategy_id: str) -> list[dict[str, Any]]:
         """Get nodes for lineage visualization"""
         lineage = self.get_lineage(strategy_id)
-        nodes = []
 
-        # Add ancestors
-        for ancestor in lineage["ancestors"]:
-            nodes.append(
-                {
-                    "id": ancestor["id"],
-                    "type": "ancestor",
-                    "generation": ancestor["generation"],
-                    "created_at": ancestor["created_at"],
-                }
-            )
+        # Add ancestors using list comprehension
+        nodes = [
+            {
+                "id": ancestor["id"],
+                "type": "ancestor",
+                "generation": ancestor["generation"],
+                "created_at": ancestor["created_at"],
+            }
+            for ancestor in lineage["ancestors"]
+        ]
 
         # Add current strategy
         nodes.append(
@@ -807,16 +806,16 @@ class StrategyLineageTracker:
             }
         )
 
-        # Add descendants
-        for descendant in lineage["descendants"]:
-            nodes.append(
-                {
-                    "id": descendant["id"],
-                    "type": "descendant",
-                    "generation": descendant["generation"],
-                    "created_at": descendant["created_at"],
-                }
-            )
+        # Add descendants using extend
+        nodes.extend(
+            {
+                "id": descendant["id"],
+                "type": "descendant",
+                "generation": descendant["generation"],
+                "created_at": descendant["created_at"],
+            }
+            for descendant in lineage["descendants"]
+        )
 
         return nodes
 
@@ -832,22 +831,21 @@ class StrategyLineageTracker:
             + [d["id"] for d in lineage["descendants"]]
         )
 
-        # Get edges from graph
-        for _edge_key, edge_data in self.graph_edges.items():
-            source = edge_data["source"]
-            target = edge_data["target"]
-            if source in all_strategies and target in all_strategies:
-                edges.append(
-                    {
-                        "source": source,
-                        "target": target,
-                        "relationship": edge_data.get(
-                            "relationship_type", RelationshipType.PARENT
-                        ).value,
-                        "branch_id": edge_data.get("branch_id"),
-                        "merge_id": edge_data.get("merge_id"),
-                    }
-                )
+        # Get edges from graph using values() since we don't need the keys
+        edges = [
+            {
+                "source": edge_data["source"],
+                "target": edge_data["target"],
+                "relationship": edge_data.get(
+                    "relationship_type", RelationshipType.PARENT
+                ).value,
+                "branch_id": edge_data.get("branch_id"),
+                "merge_id": edge_data.get("merge_id"),
+            }
+            for edge_data in self.graph_edges.values()
+            if edge_data["source"] in all_strategies
+            and edge_data["target"] in all_strategies
+        ]
 
         return edges
 
@@ -858,15 +856,18 @@ class StrategyLineageTracker:
 
         mermaid = ["graph TD"]
 
-        # Add nodes
+        # Add nodes using extend
         for node in nodes:
             node_style = "fill:#e1f5fe" if node["type"] == "current" else "fill:#f3e5f5"
-            mermaid.append(f"    {node['id']}[{node['id']}]")
-            mermaid.append(f"    {node['id']} --> {node_style}")
+            mermaid.extend([
+                f"    {node['id']}[{node['id']}]",
+                f"    {node['id']} --> {node_style}",
+            ])
 
-        # Add edges
-        for edge in edges:
-            mermaid.append(f"    {edge['source']} --> {edge['target']}")
+        # Add edges using extend
+        mermaid.extend(
+            f"    {edge['source']} --> {edge['target']}" for edge in edges
+        )
 
         return "\n".join(mermaid)
 
@@ -875,17 +876,18 @@ class StrategyLineageTracker:
         nodes = self._get_lineage_nodes(strategy_id)
         edges = self._get_lineage_edges(strategy_id)
 
-        dot = ["digraph StrategyLineage {"]
-        dot.append("    rankdir=TB;")
+        dot = ["digraph StrategyLineage {", "    rankdir=TB;"]
 
-        # Add nodes
-        for node in nodes:
-            color = "lightblue" if node["type"] == "current" else "lightgray"
-            dot.append(f'    "{node["id"]}" [fillcolor={color}, style=filled];')
+        # Add nodes using extend
+        dot.extend(
+            f'    "{node["id"]}" [fillcolor={"lightblue" if node["type"] == "current" else "lightgray"}, style=filled];'
+            for node in nodes
+        )
 
-        # Add edges
-        for edge in edges:
-            dot.append(f'    "{edge["source"]}" -> "{edge["target"]}";')
+        # Add edges using extend
+        dot.extend(
+            f'    "{edge["source"]}" -> "{edge["target"]}";' for edge in edges
+        )
 
         dot.append("}")
         return "\n".join(dot)

@@ -835,14 +835,13 @@ class SyntheticDataGenerator:
         if scenario.final_price:
             total_return = (scenario.final_price / scenario.initial_price) - 1
             drift = total_return / n_periods
-        else:
+        elif scenario.trend_direction == "up":
             # Estimate drift from trend direction and strength
-            if scenario.trend_direction == "up":
-                drift = 0.0005 * scenario.trend_strength  # ~0.05% daily for strong uptrend
-            elif scenario.trend_direction == "down":
-                drift = -0.0005 * scenario.trend_strength
-            else:  # sideways
-                drift = 0.0
+            drift = 0.0005 * scenario.trend_strength  # ~0.05% daily for strong uptrend
+        elif scenario.trend_direction == "down":
+            drift = -0.0005 * scenario.trend_strength
+        else:  # sideways or no final price
+            drift = 0.0
 
         # Daily volatility
         daily_vol = scenario.volatility_value / np.sqrt(252)

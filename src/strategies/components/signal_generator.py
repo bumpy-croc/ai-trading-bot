@@ -615,40 +615,38 @@ class HierarchicalSignalGenerator(SignalGenerator):
                     "secondary_strength": secondary_signal.strength,
                 },
             )
+        elif primary_signal.confidence > secondary_signal.confidence * 1.5:
+            # Not confirmed but primary much stronger, use it with reduced confidence
+            return Signal(
+                direction=primary_signal.direction,
+                strength=primary_signal.strength
+                * 0.7,  # Reduce strength due to lack of confirmation
+                confidence=primary_signal.confidence * 0.8,  # Reduce confidence
+                metadata={
+                    "generator": self.name,
+                    "index": index,
+                    "mode": "unconfirmed_primary",
+                    "primary_confidence": primary_signal.confidence,
+                    "secondary_confidence": secondary_signal.confidence,
+                },
+            )
         else:
-            # Not confirmed: return HOLD or weaker signal based on confidence
-            if primary_signal.confidence > secondary_signal.confidence * 1.5:
-                # Primary much stronger, use it but reduce confidence
-                return Signal(
-                    direction=primary_signal.direction,
-                    strength=primary_signal.strength
-                    * 0.7,  # Reduce strength due to lack of confirmation
-                    confidence=primary_signal.confidence * 0.8,  # Reduce confidence
-                    metadata={
-                        "generator": self.name,
-                        "index": index,
-                        "mode": "unconfirmed_primary",
-                        "primary_confidence": primary_signal.confidence,
-                        "secondary_confidence": secondary_signal.confidence,
-                    },
-                )
-            else:
-                # Conflicting signals, return HOLD
-                return Signal(
-                    direction=SignalDirection.HOLD,
-                    strength=0.0,
-                    confidence=(primary_signal.confidence + secondary_signal.confidence)
-                    / 4,  # Low confidence
-                    metadata={
-                        "generator": self.name,
-                        "index": index,
-                        "mode": "conflicting_signals",
-                        "primary_direction": primary_signal.direction.value,
-                        "secondary_direction": secondary_signal.direction.value,
-                        "primary_confidence": primary_signal.confidence,
-                        "secondary_confidence": secondary_signal.confidence,
-                    },
-                )
+            # Conflicting signals, return HOLD
+            return Signal(
+                direction=SignalDirection.HOLD,
+                strength=0.0,
+                confidence=(primary_signal.confidence + secondary_signal.confidence)
+                / 4,  # Low confidence
+                metadata={
+                    "generator": self.name,
+                    "index": index,
+                    "mode": "conflicting_signals",
+                    "primary_direction": primary_signal.direction.value,
+                    "secondary_direction": secondary_signal.direction.value,
+                    "primary_confidence": primary_signal.confidence,
+                    "secondary_confidence": secondary_signal.confidence,
+                },
+            )
 
     def get_confidence(self, df: pd.DataFrame, index: int) -> float:
         """Get confidence based on primary generator with secondary fallback"""
