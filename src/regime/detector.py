@@ -278,7 +278,9 @@ class RegimeDetector:
         std_threshold = 1e-9
         ts_std_safe = ts_std.copy()
         # Replace zeros, near-zeros, NaN, and inf with NaN to prevent corrupt confidence scores
-        invalid_std = (ts_std_safe.abs() < std_threshold) | ts_std_safe.isna() | np.isinf(ts_std_safe)
+        invalid_std = (
+            (ts_std_safe.abs() < std_threshold) | ts_std_safe.isna() | np.isinf(ts_std_safe)
+        )
         ts_std_safe[invalid_std] = np.nan
 
         z = (ts - ts_mean) / ts_std_safe

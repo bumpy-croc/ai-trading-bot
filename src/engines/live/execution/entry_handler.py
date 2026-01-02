@@ -324,10 +324,7 @@ class LiveEntryHandler:
             return None, 0.0
 
         # Check signal direction
-        if (
-            decision.signal.direction == SignalDirection.HOLD
-            or decision.position_size <= 0
-        ):
+        if decision.signal.direction == SignalDirection.HOLD or decision.position_size <= 0:
             return None, 0.0
 
         # Check for short entry authorization

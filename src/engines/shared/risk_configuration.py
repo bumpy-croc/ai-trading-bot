@@ -100,9 +100,7 @@ def build_trailing_stop_policy(
     # Get overrides from strategy
     try:
         overrides = (
-            strategy.get_risk_overrides()
-            if hasattr(strategy, "get_risk_overrides")
-            else None
+            strategy.get_risk_overrides() if hasattr(strategy, "get_risk_overrides") else None
         )
     except Exception:
         overrides = None
@@ -158,10 +156,14 @@ def build_trailing_stop_policy(
                     ),
                     atr_multiplier=float(atr_mult) if atr_mult is not None else None,
                     breakeven_threshold=(
-                        float(breakeven_threshold) if breakeven_threshold is not None else DEFAULT_BREAKEVEN_THRESHOLD
+                        float(breakeven_threshold)
+                        if breakeven_threshold is not None
+                        else DEFAULT_BREAKEVEN_THRESHOLD
                     ),
                     breakeven_buffer=(
-                        float(breakeven_buffer) if breakeven_buffer is not None else DEFAULT_BREAKEVEN_BUFFER
+                        float(breakeven_buffer)
+                        if breakeven_buffer is not None
+                        else DEFAULT_BREAKEVEN_BUFFER
                     ),
                 )
             except (TypeError, ValueError) as e:
@@ -192,9 +194,7 @@ def build_time_exit_policy(
     # Get overrides from strategy
     try:
         overrides = (
-            strategy.get_risk_overrides()
-            if hasattr(strategy, "get_risk_overrides")
-            else None
+            strategy.get_risk_overrides() if hasattr(strategy, "get_risk_overrides") else None
         )
     except Exception:
         overrides = None

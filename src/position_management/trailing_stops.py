@@ -18,11 +18,15 @@ class TrailingStopPolicy:
     are set, atr-based distance takes precedence when ATR is available.
     """
 
-    activation_threshold: float = DEFAULT_TRAILING_ACTIVATION_THRESHOLD  # 1.5% position gain to start trailing
+    activation_threshold: float = (
+        DEFAULT_TRAILING_ACTIVATION_THRESHOLD  # 1.5% position gain to start trailing
+    )
     trailing_distance_pct: float | None = DEFAULT_TRAILING_DISTANCE_PCT  # 0.5% trail distance
     atr_multiplier: float | None = None  # e.g., 1.5 * ATR
     breakeven_threshold: float | None = None  # if None, breakeven is disabled
-    breakeven_buffer: float = DEFAULT_BREAKEVEN_BUFFER  # 0.1% above breakeven for long (below for short)
+    breakeven_buffer: float = (
+        DEFAULT_BREAKEVEN_BUFFER  # 0.1% above breakeven for long (below for short)
+    )
 
     def compute_distance(self, price: float, atr: float | None) -> float | None:
         if (

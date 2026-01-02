@@ -7,10 +7,10 @@ import pytest
 
 from src.engines.backtest.engine import Backtester
 from src.position_management.dynamic_risk import DynamicRiskConfig
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
-from src.strategies.components.risk_manager import RiskManager
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.strategies.components.strategy import Strategy
 
 pytestmark = pytest.mark.integration
 

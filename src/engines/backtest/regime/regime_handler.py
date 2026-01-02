@@ -250,13 +250,15 @@ class RegimeHandler:
             current_time: Current timestamp.
             regime_analysis: Result from regime analysis.
         """
-        self.regime_history.append({
-            "timestamp": current_time,
-            "candle_index": candle_index,
-            "regime": regime_analysis["consensus_regime"]["regime_label"],
-            "confidence": regime_analysis["consensus_regime"]["confidence"],
-            "agreement": regime_analysis["consensus_regime"]["agreement_score"],
-        })
+        self.regime_history.append(
+            {
+                "timestamp": current_time,
+                "candle_index": candle_index,
+                "regime": regime_analysis["consensus_regime"]["regime_label"],
+                "confidence": regime_analysis["consensus_regime"]["confidence"],
+                "agreement": regime_analysis["consensus_regime"]["agreement_score"],
+            }
+        )
 
     def _load_strategy(self, strategy_name: str) -> ComponentStrategy | None:
         """Load strategy by name.

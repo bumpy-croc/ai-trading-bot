@@ -2,7 +2,9 @@
 
 import pytest
 
-from src.engines.backtest.execution.execution_engine import ExecutionEngine as BacktestExecutionEngine
+from src.engines.backtest.execution.execution_engine import (
+    ExecutionEngine as BacktestExecutionEngine,
+)
 from src.engines.live.execution.execution_engine import LiveExecutionEngine
 from src.engines.live.execution.position_tracker import PositionSide
 from src.engines.shared.cost_calculator import CostCalculator

@@ -117,18 +117,12 @@ class StrategyExitChecker:
 
             side_str = normalize_side(getattr(position, "side", None))
 
-            if (
-                side_str == "long"
-                and runtime_decision.signal.direction == SignalDirection.SELL
-            ):
+            if side_str == "long" and runtime_decision.signal.direction == SignalDirection.SELL:
                 return StrategyExitResult(
                     should_exit=True,
                     exit_reason="Signal reversal",
                 )
-            if (
-                side_str == "short"
-                and runtime_decision.signal.direction == SignalDirection.BUY
-            ):
+            if side_str == "short" and runtime_decision.signal.direction == SignalDirection.BUY:
                 return StrategyExitResult(
                     should_exit=True,
                     exit_reason="Signal reversal",
@@ -190,9 +184,7 @@ class StrategyExitChecker:
 
             regime = getattr(runtime_decision, "regime", None)
 
-            if component_strategy.should_exit_position(
-                component_position, market_data, regime
-            ):
+            if component_strategy.should_exit_position(component_position, market_data, regime):
                 return StrategyExitResult(
                     should_exit=True,
                     exit_reason="Strategy signal",

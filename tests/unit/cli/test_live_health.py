@@ -3,12 +3,9 @@
 import argparse
 import json
 import os
-from unittest.mock import Mock, patch, MagicMock
-from http.server import HTTPServer
+from unittest.mock import Mock, patch
 
-import pytest
-
-from cli.commands.live_health import _handle, _run_health_server, _HealthCheckHandler
+from cli.commands.live_health import _handle, _HealthCheckHandler, _run_health_server
 
 
 class TestHealthCheckHandler:
@@ -308,7 +305,9 @@ class TestHandleLiveHealth:
             # Assert
             assert result == 0
             # --port and its value should be filtered out
-            mock_forward.assert_called_once_with("src.engines.live.runner", ["ml_basic", "--paper-trading"])
+            mock_forward.assert_called_once_with(
+                "src.engines.live.runner", ["ml_basic", "--paper-trading"]
+            )
 
     def test_filters_out_help_argument(self):
         """Test that --help argument is filtered out before forwarding."""
@@ -329,7 +328,9 @@ class TestHandleLiveHealth:
             # Assert
             assert result == 0
             # --help should be filtered out
-            mock_forward.assert_called_once_with("src.engines.live.runner", ["ml_basic", "--paper-trading"])
+            mock_forward.assert_called_once_with(
+                "src.engines.live.runner", ["ml_basic", "--paper-trading"]
+            )
 
     def test_handles_empty_args(self):
         """Test that empty args are handled correctly."""

@@ -6,7 +6,7 @@ from types import MethodType
 
 import pytest
 
-from src.strategies.components import Strategy, SignalDirection
+from src.strategies.components import SignalDirection, Strategy
 from src.strategies.ml_sentiment import create_ml_sentiment_strategy
 
 pytestmark = pytest.mark.unit

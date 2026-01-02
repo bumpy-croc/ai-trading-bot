@@ -120,7 +120,11 @@ class PositionTracker:
 
         try:
             # Convert PositionSide enum to string for metrics tracker compatibility
-            side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+            side_str = (
+                self.current_trade.side.value
+                if hasattr(self.current_trade.side, "value")
+                else self.current_trade.side
+            )
 
             self.mfe_mae_tracker.update_position_metrics(
                 position_key=self.POSITION_KEY,
@@ -223,7 +227,11 @@ class PositionTracker:
         # Only update if new stop is better
         current_sl = self.current_trade.stop_loss
         # Convert PositionSide enum to string for comparison
-        side_str = self.current_trade.side.value if hasattr(self.current_trade.side, "value") else self.current_trade.side
+        side_str = (
+            self.current_trade.side.value
+            if hasattr(self.current_trade.side, "value")
+            else self.current_trade.side
+        )
         if side_str == "long":
             should_update = current_sl is None or new_stop_loss > float(current_sl)
         else:
@@ -275,13 +283,9 @@ class PositionTracker:
         # Convert PositionSide enum to string for comparison
         side_str = trade.side.value if hasattr(trade.side, "value") else trade.side
         if side_str == "long":
-            trade_pnl_pct = (
-                (exit_price - trade.entry_price) / trade.entry_price
-            ) * fraction
+            trade_pnl_pct = ((exit_price - trade.entry_price) / trade.entry_price) * fraction
         else:
-            trade_pnl_pct = (
-                (trade.entry_price - exit_price) / trade.entry_price
-            ) * fraction
+            trade_pnl_pct = ((trade.entry_price - exit_price) / trade.entry_price) * fraction
 
         entry_balance = getattr(trade, "entry_balance", None)
         if entry_balance is not None and entry_balance > 0:

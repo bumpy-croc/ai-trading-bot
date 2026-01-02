@@ -464,9 +464,7 @@ class EntryHandler:
         # Get take profit
         tp_pct = self.default_take_profit_pct
         if tp_pct is None and self.component_strategy is not None:
-            tp_pct = getattr(
-                self.component_strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT
-            )
+            tp_pct = getattr(self.component_strategy, "take_profit_pct", DEFAULT_TAKE_PROFIT_PCT)
         if tp_pct is None:
             tp_pct = DEFAULT_TAKE_PROFIT_PCT
 

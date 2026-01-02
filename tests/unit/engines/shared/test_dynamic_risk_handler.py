@@ -5,13 +5,13 @@ and is used identically by both backtesting and live trading engines.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
 from src.engines.shared.dynamic_risk_handler import (
-    DynamicRiskHandler,
     DynamicRiskAdjustment,
+    DynamicRiskHandler,
 )
 from src.position_management.dynamic_risk import DynamicRiskConfig, DynamicRiskManager
 
@@ -340,9 +340,7 @@ class TestErrorHandling:
 
         # Create a mock manager that raises an exception
         mock_manager = Mock()
-        mock_manager.calculate_dynamic_risk_adjustments.side_effect = ValueError(
-            "Test error"
-        )
+        mock_manager.calculate_dynamic_risk_adjustments.side_effect = ValueError("Test error")
         handler.dynamic_risk_manager = mock_manager
 
         original_size = 0.05

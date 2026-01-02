@@ -137,7 +137,11 @@ DEFAULT_REGIME_MIN_DURATION_BARS = 15  # Minimum bars before switching
 DEFAULT_REGIME_TIMEFRAME_AGREEMENT = 0.6  # Require 60% agreement across timeframes
 DEFAULT_REGIME_TRANSITION_SIZE_MULTIPLIER = 0.5  # Size multiplier during transitions
 DEFAULT_REGIME_MAX_DRAWDOWN_SWITCH = 0.15  # Switch to defensive if drawdown > 15%
-DEFAULT_REGIME_TIMEFRAME_WEIGHTS = {"1h": 1.0, "4h": 1.5, "1d": 2.0}  # Higher timeframes weighted more
+DEFAULT_REGIME_TIMEFRAME_WEIGHTS = {
+    "1h": 1.0,
+    "4h": 1.5,
+    "1d": 2.0,
+}  # Higher timeframes weighted more
 DEFAULT_REGIME_TIMEFRAMES = ["1h", "4h", "1d"]  # Timeframes for multi-timeframe analysis
 
 # CPU Optimization Constants
@@ -240,6 +244,17 @@ DEFAULT_CORRELATION_SAMPLE_MIN_SIZE = 20
 DEFAULT_MFE_MAE_UPDATE_FREQUENCY_SECONDS = 60
 DEFAULT_MFE_MAE_PRECISION_DECIMALS = 8
 DEFAULT_MFE_MAE_LOG_LEVEL = "INFO"
+
+# Timeout Configuration Defaults
+# These values can be overridden via environment variables:
+# - MODEL_LOAD_TIMEOUT_SECONDS
+# - INFERENCE_TIMEOUT_SECONDS
+# - API_REQUEST_TIMEOUT_SECONDS
+# - DATA_FETCH_TIMEOUT_SECONDS
+DEFAULT_MODEL_LOAD_TIMEOUT = 60.0  # Timeout for loading ML models (ONNX, Keras)
+DEFAULT_INFERENCE_TIMEOUT = 30.0  # Timeout for model inference
+DEFAULT_API_REQUEST_TIMEOUT = 30.0  # Timeout for external API requests
+DEFAULT_DATA_FETCH_TIMEOUT = 60.0  # Timeout for historical data fetches
 
 # Numeric Precision Constants
 DEFAULT_EPSILON = 1e-9  # Small value for floating point comparisons

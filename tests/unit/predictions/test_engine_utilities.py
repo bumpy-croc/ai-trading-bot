@@ -1,6 +1,6 @@
 """Tests covering utility features of PredictionEngine."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -147,7 +147,7 @@ class TestPredictionEngineUtilities:
             confidence=0.8,
             direction=1,
             model_name="test",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             inference_time=0.1,
             features_used=10,
             cache_hit=True,

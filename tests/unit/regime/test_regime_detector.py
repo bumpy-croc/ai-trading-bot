@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -100,7 +99,7 @@ def make_trend_series(
     slope=0.001,
     noise=0.0,
     start=30000.0,
-    rng: Optional[np.random.Generator] = None,
+    rng: np.random.Generator | None = None,
 ):
     """Create a synthetic trend series with optional noise.
 

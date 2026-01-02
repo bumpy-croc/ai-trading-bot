@@ -69,7 +69,7 @@ class FearGreedProvider(SentimentDataProvider):
             if not isinstance(payload, dict):
                 logger.error(
                     "FearGreedProvider: API returned non-dict JSON (type: %s). Expected dict with 'data' key.",
-                    type(payload).__name__
+                    type(payload).__name__,
                 )
                 self.data = pd.DataFrame()
                 return

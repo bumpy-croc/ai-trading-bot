@@ -6,21 +6,21 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.strategies.ensemble_weighted import (
-    create_ensemble_weighted_strategy,
-    BASE_POSITION_SIZE,
-    MIN_POSITION_SIZE_RATIO,
-    MAX_POSITION_SIZE_RATIO,
-    STOP_LOSS_PCT,
-    TAKE_PROFIT_PCT,
-)
 from src.strategies.components import (
-    Strategy,
-    SignalDirection,
-    WeightedVotingSignalGenerator,
     ConfidenceWeightedSizer,
     MLBasicSignalGenerator,
     MLSignalGenerator,
+    SignalDirection,
+    Strategy,
+    WeightedVotingSignalGenerator,
+)
+from src.strategies.ensemble_weighted import (
+    BASE_POSITION_SIZE,
+    MAX_POSITION_SIZE_RATIO,
+    MIN_POSITION_SIZE_RATIO,
+    STOP_LOSS_PCT,
+    TAKE_PROFIT_PCT,
+    create_ensemble_weighted_strategy,
 )
 
 pytestmark = pytest.mark.unit

@@ -15,9 +15,7 @@ Test Categories:
 """
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
-from unittest.mock import Mock, MagicMock, patch
-from typing import Any
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -27,7 +25,6 @@ from src.data_providers.binance_provider import BinanceProvider
 from src.data_providers.coinbase_provider import CoinbaseProvider
 from src.data_providers.data_provider import DataProvider
 from src.trading.symbols import SymbolFactory
-
 
 # ============================================================================
 # Test Fixtures
@@ -56,7 +53,9 @@ class TestAPIErrorHandling:
 
     def test_network_timeout_handling(self, mock_binance_provider):
         """Network timeouts should be caught and handled"""
-        mock_binance_provider.get_historical_data.side_effect = requests.Timeout("Connection timeout")
+        mock_binance_provider.get_historical_data.side_effect = requests.Timeout(
+            "Connection timeout"
+        )
 
         # Should raise or return empty DataFrame
         try:
@@ -295,9 +294,7 @@ class TestSymbolValidation:
 
     def test_unsupported_symbol(self, mock_binance_provider):
         """Unsupported trading pair should raise error"""
-        mock_binance_provider.get_historical_data.side_effect = ValueError(
-            "Symbol not found"
-        )
+        mock_binance_provider.get_historical_data.side_effect = ValueError("Symbol not found")
 
         with pytest.raises(ValueError):
             mock_binance_provider.get_historical_data("FAKECOIN", "1h")
@@ -349,9 +346,7 @@ class TestTimeframeHandling:
 
     def test_invalid_timeframe_rejected(self, mock_binance_provider):
         """Invalid timeframe should raise error"""
-        mock_binance_provider.get_historical_data.side_effect = ValueError(
-            "Invalid timeframe"
-        )
+        mock_binance_provider.get_historical_data.side_effect = ValueError("Invalid timeframe")
 
         with pytest.raises(ValueError):
             mock_binance_provider.get_historical_data("BTCUSDT", "invalid")
@@ -420,9 +415,7 @@ class TestHistoricalDataEdgeCases:
 
         mock_binance_provider.get_historical_data.return_value = pd.DataFrame()
 
-        result = mock_binance_provider.get_historical_data(
-            "BTCUSDT", "1h", old_start, old_end
-        )
+        result = mock_binance_provider.get_historical_data("BTCUSDT", "1h", old_start, old_end)
 
         assert isinstance(result, pd.DataFrame)
 
@@ -597,4 +590,3 @@ class TestRateLimitingRetry:
         with pytest.raises(requests.HTTPError):
             # Should fail immediately without retries
             mock_binance_provider.get_historical_data("BTCUSDT", "1h")
-

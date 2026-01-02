@@ -291,6 +291,7 @@ class TestLiveTradingEngine:
         # Update performance tracker with test data
         # Simulate 10 trades: 6 winning, 4 losing
         from unittest.mock import Mock
+
         for _ in range(6):
             trade = Mock()
             trade.pnl = 100.0  # winning trade
@@ -547,7 +548,9 @@ def test_stop_loss_from_component_strategy(mock_data_provider):
         position_sizer=position_sizer,
     )
 
-    _ = LiveTradingEngine(strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False)
+    _ = LiveTradingEngine(
+        strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
+    )
 
     # Create test data with enough history for ML model
     df = pd.DataFrame(
@@ -631,7 +634,9 @@ def test_position_exit_with_should_exit_position(mock_data_provider):
     )
 
     # Create market data
-    market_data = MarketData(symbol="BTCUSDT", price=51490, volume=2490, timestamp=datetime.now(UTC))
+    market_data = MarketData(
+        symbol="BTCUSDT", price=51490, volume=2490, timestamp=datetime.now(UTC)
+    )
 
     # Test should_exit_position
     should_exit = strategy.should_exit_position(position, market_data)
@@ -660,7 +665,9 @@ def test_stop_loss_update_with_component_strategy(mock_data_provider):
         position_sizer=position_sizer,
     )
 
-    _ = LiveTradingEngine(strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False)
+    _ = LiveTradingEngine(
+        strategy=strategy, data_provider=mock_data_provider, enable_live_trading=False
+    )
 
     # Create test data
     df = pd.DataFrame(

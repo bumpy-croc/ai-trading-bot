@@ -21,8 +21,8 @@ SRC_PATH = PROJECT_ROOT / "src"
 if SRC_PATH.exists() and str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
-from src.engines.backtest.engine import Backtester  # noqa: E402
 from src.data_providers.mock_data_provider import MockDataProvider  # noqa: E402
+from src.engines.backtest.engine import Backtester  # noqa: E402
 from src.engines.live.trading_engine import LiveTradingEngine  # noqa: E402
 from src.risk import RiskParameters  # noqa: E402
 from src.strategies.ml_adaptive import create_ml_adaptive_strategy  # noqa: E402

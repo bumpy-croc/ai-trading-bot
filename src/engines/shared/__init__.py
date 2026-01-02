@@ -34,11 +34,6 @@ from src.engines.shared.partial_operations_manager import (
     PartialOperationsManager,
     ScaleInDecision,
 )
-# Re-export from canonical location for backward compatibility
-from src.performance.tracker import (
-    PerformanceMetrics,
-    PerformanceTracker,
-)
 from src.engines.shared.policy_hydration import (
     HydratedPolicies,
     PolicyHydrator,
@@ -58,6 +53,12 @@ from src.engines.shared.strategy_exit_checker import (
 from src.engines.shared.trailing_stop_manager import (
     TrailingStopManager,
     TrailingStopUpdate,
+)
+
+# Re-export from canonical location for backward compatibility
+from src.performance.tracker import (
+    PerformanceMetrics,
+    PerformanceTracker,
 )
 
 __all__ = [

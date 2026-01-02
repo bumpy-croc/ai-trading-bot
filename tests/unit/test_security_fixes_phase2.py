@@ -11,8 +11,9 @@ tests/unit/infrastructure/logging/test_config.py::TestSensitiveDataFilter
 """
 
 import os
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 
 def test_sec_004_binance_credentials_validation():

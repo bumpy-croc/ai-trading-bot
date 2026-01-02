@@ -2,11 +2,12 @@
 Unit tests for Performance Comparison Engine.
 """
 
+from datetime import UTC, datetime
+from unittest.mock import Mock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from datetime import UTC, datetime
-from unittest.mock import Mock, patch
 
 from src.strategies.components.testing.performance_comparison_engine import (
     ComparisonConfig,
@@ -337,9 +338,9 @@ class TestPerformanceComparisonEngine:
     def test_assess_overall_result_pass(self, mock_backtest_engine):
         """Test overall result assessment for passing case."""
         from src.strategies.components.testing.performance_parity_validator import (
-            PerformanceComparisonReport,
             MetricComparison,
             MetricType,
+            PerformanceComparisonReport,
         )
         from src.strategies.components.testing.statistical_tests import StatisticalTestResult
 
@@ -399,9 +400,9 @@ class TestPerformanceComparisonEngine:
     def test_assess_overall_result_fail(self, mock_backtest_engine):
         """Test overall result assessment for failing case."""
         from src.strategies.components.testing.performance_parity_validator import (
-            PerformanceComparisonReport,
             MetricComparison,
             MetricType,
+            PerformanceComparisonReport,
         )
 
         engine = PerformanceComparisonEngine(backtest_engine=mock_backtest_engine)
@@ -494,9 +495,9 @@ class TestPerformanceComparisonEngine:
     def test_generate_text_report(self, mock_backtest_engine):
         """Test text report generation."""
         from src.strategies.components.testing.performance_parity_validator import (
-            PerformanceComparisonReport,
             MetricComparison,
             MetricType,
+            PerformanceComparisonReport,
         )
         from src.strategies.components.testing.statistical_tests import StatisticalTestResult
 

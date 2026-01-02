@@ -1,1 +1,1 @@
-# Infrastructure tests package
+"""Unit tests for infrastructure modules."""

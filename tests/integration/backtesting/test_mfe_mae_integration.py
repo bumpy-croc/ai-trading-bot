@@ -2,12 +2,12 @@ from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
-from src.engines.backtest.engine import Backtester
 from src.data_providers.mock_data_provider import MockDataProvider
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
-from src.strategies.components.risk_manager import RiskManager
+from src.engines.backtest.engine import Backtester
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.strategies.components.strategy import Strategy
 
 
 class SimpleSignalGenerator(SignalGenerator):

@@ -1,5 +1,4 @@
 from __future__ import annotations
-from datetime import UTC, datetime
 
 import argparse
 import datetime as _dt
@@ -7,6 +6,7 @@ import os
 import subprocess
 import sys
 import traceback
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse

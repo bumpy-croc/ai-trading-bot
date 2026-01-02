@@ -3,17 +3,8 @@
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.preprocessing import MinMaxScaler
 
 from src.ml.training_pipeline.features import (
-    COVERAGE_WEIGHT,
-    DAYS_PER_YEAR,
-    FRESHNESS_WEIGHT,
-    MAX_DATA_FRESHNESS_DAYS,
-    QUALITY_THRESHOLD_HIGH,
-    QUALITY_THRESHOLD_MEDIUM,
-    RSI_MAX,
-    RSI_WINDOW,
     SMA_WINDOWS,
     assess_sentiment_data_quality,
     create_robust_features,

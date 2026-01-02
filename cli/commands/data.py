@@ -1,9 +1,9 @@
 from __future__ import annotations
-from datetime import UTC, datetime
 
 import argparse
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Ensure project root and src are in sys.path for absolute imports
@@ -103,11 +103,7 @@ def _prefill(ns: argparse.Namespace) -> int:
             cur = datetime(y + 1, 1, 1, tzinfo=UTC)
         return chunks
 
-    end = (
-        datetime.strptime(ns.end, "%Y-%m-%d").replace(tzinfo=UTC)
-        if ns.end
-        else datetime.now(UTC)
-    )
+    end = datetime.strptime(ns.end, "%Y-%m-%d").replace(tzinfo=UTC) if ns.end else datetime.now(UTC)
     if ns.start:
         start = datetime.strptime(ns.start, "%Y-%m-%d").replace(tzinfo=UTC)
     else:

@@ -1,5 +1,6 @@
 """Tests for config.config_manager module."""
 
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -330,14 +331,17 @@ class TestGetConfig:
         """Test that get_config returns a ConfigManager instance."""
         import src.config.config_manager as module
 
-        # Reset singleton
+        # Reset singleton - use a valid lock, not None
         module._config_instance = None
-        module._config_lock = None
+        module._config_lock = threading.Lock()
 
         with patch.object(module, "ConfigManager") as mock_class:
             mock_class.return_value = MagicMock()
             result = get_config()
             assert result is not None
+
+        # Reset for other tests
+        module._config_instance = None
 
     def test_returns_same_instance(self):
         """Test that get_config returns the same instance (singleton)."""
@@ -350,6 +354,9 @@ class TestGetConfig:
         result2 = get_config()
 
         assert result1 is result2
+
+        # Reset for other tests
+        module._config_instance = None
 
 
 class TestSetConfig:

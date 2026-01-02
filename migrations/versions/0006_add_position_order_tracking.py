@@ -11,9 +11,8 @@ Adds columns to track exchange order IDs for positions:
 These support real Binance order execution with server-side stop-losses (PR #451).
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0006_position_order_tracking"

@@ -8,8 +8,8 @@ pytestmark = pytest.mark.unit
 
 try:
     from src.data_providers.binance_provider import (
-        BinanceProvider,
         STOP_LOSS_LIMIT_SLIPPAGE_FACTOR,
+        BinanceProvider,
         with_rate_limit_retry,
     )
     from src.data_providers.exchange_interface import OrderSide
@@ -72,6 +72,7 @@ class TestBinanceDataProvider:
         with patch("src.data_providers.binance_provider.get_config") as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
+            mock_config_obj.get_float.return_value = 60.0  # Timeout config
             mock_config.return_value = mock_config_obj
             provider = BinanceProvider()
             df = provider.get_historical_data(
@@ -90,6 +91,7 @@ class TestBinanceDataProvider:
         with patch("src.data_providers.binance_provider.get_config") as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
+            mock_config_obj.get_float.return_value = 60.0  # Timeout config
             mock_config.return_value = mock_config_obj
             provider = BinanceProvider()
             try:
@@ -118,6 +120,7 @@ class TestBinanceDataProvider:
         with patch("src.data_providers.binance_provider.get_config") as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
+            mock_config_obj.get_float.return_value = 60.0  # Timeout config
             mock_config.return_value = mock_config_obj
             provider = BinanceProvider()
             try:
@@ -135,6 +138,7 @@ class TestBinanceDataProvider:
         with patch("src.data_providers.binance_provider.get_config") as mock_config:
             mock_config_obj = Mock()
             mock_config_obj.get_required.return_value = "fake_key"
+            mock_config_obj.get_float.return_value = 60.0  # Timeout config
             mock_config.return_value = mock_config_obj
             provider = BinanceProvider()
             try:
@@ -420,9 +424,7 @@ class TestPlaceStopLossOrder:
 
         mock_client = Mock()
         mock_client_class.return_value = mock_client
-        mock_client.create_order.side_effect = BinanceOrderException(
-            Mock(), "Order rejected"
-        )
+        mock_client.create_order.side_effect = BinanceOrderException(Mock(), "Order rejected")
         mock_client.get_exchange_info.return_value = {"symbols": []}
 
         provider = BinanceProvider()

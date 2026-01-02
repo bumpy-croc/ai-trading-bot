@@ -9,7 +9,6 @@ import pytest
 from src.engines.shared.models import PositionSide
 from src.engines.shared.partial_exit_executor import (
     PartialExitExecutor,
-    PartialExitExecutionResult,
 )
 
 

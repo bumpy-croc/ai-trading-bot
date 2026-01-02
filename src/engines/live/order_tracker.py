@@ -8,7 +8,6 @@ the trading engine when orders fill, partially fill, or get cancelled.
 import logging
 import math
 import threading
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -169,9 +168,7 @@ class OrderTracker:
             except Exception as e:
                 logger.warning(f"Failed to check order {order_id}: {e}")
 
-    def _process_order_status(
-        self, order_id: str, tracked: TrackedOrder, order: Order
-    ) -> None:
+    def _process_order_status(self, order_id: str, tracked: TrackedOrder, order: Order) -> None:
         """
         Process order status and trigger appropriate callbacks.
 
@@ -214,8 +211,7 @@ class OrderTracker:
                 return
 
             logger.info(
-                f"Order filled: {order_id} {tracked.symbol} "
-                f"qty={filled_qty} @ {avg_price}"
+                f"Order filled: {order_id} {tracked.symbol} " f"qty={filled_qty} @ {avg_price}"
             )
             # Call callback outside any lock to prevent deadlock
             if self.on_fill:

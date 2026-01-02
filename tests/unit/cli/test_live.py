@@ -4,17 +4,17 @@ import argparse
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, mock_open, MagicMock
+from unittest.mock import mock_open, patch
 
 import pytest
 
 from cli.commands.live import (
-    _handle,
     _control,
     _date_range,
+    _handle,
     _list_registry,
-    _resolve_version_path,
     _repoint_latest,
+    _resolve_version_path,
 )
 
 
@@ -25,7 +25,7 @@ class TestDateRange:
         """Test that date range is calculated correctly for given days."""
         # Arrange & Act
         with patch("cli.commands.live.datetime") as mock_datetime:
-            from datetime import UTC, datetime, timedelta
+            from datetime import UTC, datetime
 
             mock_now = datetime(2024, 10, 29, tzinfo=UTC)
             mock_datetime.now.return_value = mock_now
@@ -197,7 +197,9 @@ class TestHandleLive:
 
             # Assert
             assert result == 0
-            mock_forward.assert_called_once_with("src.engines.live.runner", ["ml_basic", "--paper-trading"])
+            mock_forward.assert_called_once_with(
+                "src.engines.live.runner", ["ml_basic", "--paper-trading"]
+            )
 
     def test_handles_empty_args(self):
         """Test that live command handles empty args."""

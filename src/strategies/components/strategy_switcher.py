@@ -980,7 +980,8 @@ class StrategySwitcher:
         tracking_info = {
             "switch_id": switch_record.switch_id,
             "start_time": datetime.now(UTC),
-            "end_time": datetime.now(UTC) + timedelta(days=self.config.switch_performance_window_days),
+            "end_time": datetime.now(UTC)
+            + timedelta(days=self.config.switch_performance_window_days),
             "from_strategy": switch_record.request.from_strategy,
             "to_strategy": switch_record.request.to_strategy,
             "pre_switch_performance": switch_record.pre_switch_performance,

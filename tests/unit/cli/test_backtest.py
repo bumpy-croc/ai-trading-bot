@@ -3,11 +3,11 @@
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from cli.commands.backtest import _handle, _load_strategy, _get_date_range
+from cli.commands.backtest import _get_date_range, _handle, _load_strategy
 
 
 class TestLoadStrategy:

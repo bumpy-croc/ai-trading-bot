@@ -2,13 +2,11 @@
 
 import json
 import subprocess
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import matplotlib
 import numpy as np
 import pytest
-import tensorflow as tf
 
 # Use non-interactive backend for tests
 matplotlib.use("Agg")

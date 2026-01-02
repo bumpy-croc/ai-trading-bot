@@ -95,11 +95,9 @@ class HealthMonitor:
         self.last_error_time = datetime.now(UTC)
 
         error_msg = str(error) if isinstance(error, Exception) else error
-        self.recent_errors.append(
-            f"{datetime.now(UTC).isoformat()}: {error_msg}"
-        )
+        self.recent_errors.append(f"{datetime.now(UTC).isoformat()}: {error_msg}")
         if len(self.recent_errors) > self._max_recent_errors:
-            self.recent_errors = self.recent_errors[-self._max_recent_errors:]
+            self.recent_errors = self.recent_errors[-self._max_recent_errors :]
 
         logger.error(
             "Error in trading loop (#%d): %s",
@@ -227,14 +225,8 @@ class HealthMonitor:
             "min_check_interval": self.min_check_interval,
             "max_check_interval": self.max_check_interval,
             "last_success_time": (
-                self.last_success_time.isoformat()
-                if self.last_success_time
-                else None
+                self.last_success_time.isoformat() if self.last_success_time else None
             ),
-            "last_error_time": (
-                self.last_error_time.isoformat()
-                if self.last_error_time
-                else None
-            ),
+            "last_error_time": (self.last_error_time.isoformat() if self.last_error_time else None),
             "is_healthy": self.consecutive_errors == 0,
         }

@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from src.engines.backtest.engine import Backtester
 from src.data_providers.data_provider import DataProvider
-from src.strategies.components.strategy import Strategy
-from src.strategies.components.signal_generator import SignalGenerator, Signal, SignalDirection
-from src.strategies.components.risk_manager import RiskManager
+from src.engines.backtest.engine import Backtester
 from src.strategies.components.position_sizer import PositionSizer
+from src.strategies.components.risk_manager import RiskManager
+from src.strategies.components.signal_generator import Signal, SignalDirection, SignalGenerator
+from src.strategies.components.strategy import Strategy
 
 
 class FixtureDataProvider(DataProvider):
@@ -349,7 +350,9 @@ def test_regime_backtester_regression(monkeypatch):
     strategy_manager.current_strategy = primary_strategy
 
     monkeypatch.setenv("FEATURE_ENABLE_REGIME_DETECTION", "true")
-    monkeypatch.setattr("src.engines.live.strategy_manager.StrategyManager", lambda: strategy_manager)
+    monkeypatch.setattr(
+        "src.engines.live.strategy_manager.StrategyManager", lambda: strategy_manager
+    )
     monkeypatch.setattr(
         "src.engines.live.regime_strategy_switcher.RegimeStrategySwitcher",
         lambda strategy_manager, regime_config=None, strategy_mapping=None, switching_config=None: StubRegimeStrategySwitcher(
@@ -403,7 +406,7 @@ def test_regime_backtester_regression(monkeypatch):
     assert observed["total_return"] == pytest.approx(expected["total_return"], rel=1e-5, abs=1e-5)
 
     assert len(observed["strategy_switches"]) == len(expected["strategy_switches"])
-    for obs, exp in zip(observed["strategy_switches"], expected["strategy_switches"]):
+    for obs, exp in zip(observed["strategy_switches"], expected["strategy_switches"], strict=False):
         assert obs["timestamp"] == exp["timestamp"]
         assert obs["old_strategy"] == exp["old_strategy"]
         assert obs["new_strategy"] == exp["new_strategy"]
@@ -413,7 +416,7 @@ def test_regime_backtester_regression(monkeypatch):
         assert obs["agreement"] == pytest.approx(exp["agreement"], rel=1e-6, abs=1e-6)
 
     assert len(observed["regime_history"]) == len(expected["regime_history"])
-    for obs, exp in zip(observed["regime_history"], expected["regime_history"]):
+    for obs, exp in zip(observed["regime_history"], expected["regime_history"], strict=False):
         assert obs["timestamp"] == exp["timestamp"]
         assert obs["regime"] == exp["regime"]
         assert obs["confidence"] == pytest.approx(exp["confidence"], rel=1e-6, abs=1e-6)

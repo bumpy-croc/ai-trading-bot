@@ -330,8 +330,7 @@ class DynamicRiskManager:
                     # Gradual recovery - reduce risk reduction
                     recovery_factor = min(
                         1.0,
-                        1.0
-                        + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR,
+                        1.0 + (recovery_return - threshold) * DEFAULT_RECOVERY_SCALING_FACTOR,
                     )
                     return RiskAdjustments(
                         position_size_factor=min(1.0, recovery_factor),
@@ -378,12 +377,10 @@ class DynamicRiskManager:
             return RiskAdjustments(primary_reason="insufficient_data")
 
         # Calculate performance score using weighted factors
-        normalized_profit = min(
-            profit_factor / DEFAULT_PERFORMANCE_PROFIT_FACTOR_DIVISOR, 1.0
+        normalized_profit = min(profit_factor / DEFAULT_PERFORMANCE_PROFIT_FACTOR_DIVISOR, 1.0)
+        performance_score = (win_rate * DEFAULT_PERFORMANCE_WIN_RATE_WEIGHT) + (
+            normalized_profit * DEFAULT_PERFORMANCE_PROFIT_FACTOR_WEIGHT
         )
-        performance_score = (
-            win_rate * DEFAULT_PERFORMANCE_WIN_RATE_WEIGHT
-        ) + (normalized_profit * DEFAULT_PERFORMANCE_PROFIT_FACTOR_WEIGHT)
 
         if performance_score < DEFAULT_PERFORMANCE_POOR_THRESHOLD:
             return RiskAdjustments(
