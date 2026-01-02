@@ -2,7 +2,45 @@
 
 **All instructions in this file must be followed when making code changes.**
 
-This file contains coding guidelines and quality standards
+This file contains coding guidelines and quality standards for this project.
+
+---
+
+## Software Architecture Principles
+
+These foundational principles guide all architectural decisions in this codebase.
+
+### 1. Separation of Concerns
+
+The foundation everything else builds on. Keep distinct responsibilities isolated (presentation, business logic, data access). This makes systems understandable, testable, and changeable. Get this wrong and complexity compounds everywhere.
+
+### 2. Design for Change (Loose Coupling)
+
+Assume requirements will evolve. Depend on abstractions rather than concretions, use interfaces at boundaries, and minimise the ripple effect of changes. This is what keeps a codebase viable at year three versus year one.
+
+### 3. Keep It Simple (YAGNI/KISS)
+
+Resist speculative generality. The cleverest abstraction you don't need yet is technical debt with interest. Build for today's requirements with room to extend, not pre-built extension points.
+
+### 4. Single Responsibility at Every Level
+
+Applies to functions, classes, modules, and services. When something has one clear reason to change, it's easier to understand, test, and replace.
+
+### 5. Define Clear Boundaries and Contracts
+
+Whether microservices or modules, explicit APIs at boundaries let teams work independently and systems evolve in pieces. This includes versioning strategies and backwards compatibility thinking.
+
+### 6. Favour Composition Over Inheritance
+
+Inheritance hierarchies become brittle; composition gives flexibility. This principle extends beyond OOP into how you combine services and modules.
+
+### 7. Design for Failure
+
+Assume networks fail, dependencies go down, and load spikes happen. Circuit breakers, retries with backoff, graceful degradation, and timeouts should be architectural defaults, not afterthoughts.
+
+### 8. Make It Observable
+
+Structured logging, metrics, and tracing aren't optional extras. If you can't see what's happening in production, you can't debug, optimise, or confidently deploy.
 
 ---
 
@@ -20,18 +58,19 @@ This file contains coding guidelines and quality standards
 - Use descriptive variable names
 - Use early returns and guard clauses
 - Avoid magic numbers. Define constants at module level
-- Avoid overly large files
+- Avoid overly large files.
 - Avoid obvious within-file duplication
 - Avoid deep nesting levels
 - Remove debugging and temporary code before commits
-- Code should be transparent in its intent
+- Code should be transparent in its intent.
 - Keep lines at a readable length
 - Avoid unreachable dead code
+- Avoid using magic numbers. All contants should be declared with a descriptive name before its use.
 - Favor composition over inheritance
 - Avoid use of goto statements
-- Don't use break in inner loops without clear documentation
-- Release locks even on exception paths
-- Place all user-customizable configuration variables at the beginning of scripts
+- Don't use break in inner loops (break statements in deeply nested loops make control flow hard to follow without clear documentation.)
+- Release locks even on exception paths (every lock acquisition must have a guaranteed release, even when exceptions occur)
+- Place all user-customizable configuration variables at the beginning of scripts.
 
 ### Functions
 - Keep functions concise
@@ -40,16 +79,17 @@ This file contains coding guidelines and quality standards
 - Don't overuse undocumented anonymous functions
 - Functions should always have a doc comment explaining what it does
 
-### Regular Expressions
-- Avoid slow regular expressions (nested quantifiers or ambiguous patterns can cause catastrophic backtracking)
+
+### Regular expressions
+- Avoid slow regular expressions (nested quantifiers or ambiguous patterns can cause catastrophic backtracking and performance issues.)
 
 ### Error Handling
 - Handle errors in catch blocks (no empty catch blocks)
-- Implement robust error handling
-- Prioritize specific exception types over generic ones
-- Log errors with sufficient context (e.g., relevant variables, operation attempted)
-- Avoid silencing errors unless explicitly requested and justified
-- Proactively include input validation and checks for null/undefined/unexpected values
+- Implement robust error handling.
+- Prioritize specific exception types over generic ones. 
+- Log errors with sufficient context (e.g., relevant variables, operation attempted). 
+- Avoid silencing errors unless explicitly requested and justified. 
+- Proactively include input validation and checks for null/undefined/unexpected values.
 
 ### Classes
 - Classes should have single responsibility
@@ -60,35 +100,36 @@ This file contains coding guidelines and quality standards
 - Avoid redundant database indexes
 
 ### Math
-- Check divisor before division operations
+- Check divisor before division operations (division by zero causes runtime crashes and must be prevented with explicit checks)
 
 ### Comments
 - Comment on the goal (why), not the mechanics (what)
-- Don't use words like "new", "updated", etc in comments or filenames
-- For complex algorithms, include a high-level comment explaining the approach
-- Comments must describe the code's current state and purpose, not history of changes
-- Use simple present tense to describe what the code *does*
-  - Bad: `// New enhanced v2 API.`
-  - Good: `// Fetches user data from the v2 API.`
+- Don't ever use words like "new", "updated", etc in comments or filenames. 
+- For complex algorithms or non-obvious logic, include a high-level comment explaining the approach before the code block
+- Comments must describe the code's current state and purpose, not the history of changes made to it. All comments should be written in the simple present tense to describe what the code *does*, not what it *used to do* or *now does*. Examples:
+	- **Bad:** `// New enhanced v2 API.`
+	- **Good:** `// * Fetches user data from the v2 API.`
+	- **Bad:** `// TODO: This was a temporary fix, will rewrite later.`
+	- **Good:** `// TODO: Refactor this logic to be more efficient.`
 
 ### Types
 - Avoid `Any` where possible in type systems
-- Type definitions properly, especially for public APIs
+- **Type definitions properly**, especially when dealing with public APIs.
 
 ### Security
 
-- Never embed actual sensitive information (API keys, passwords, personal data) directly in code
-- Always use clear, conventional placeholders (e.g., `YOUR_API_KEY`, `DATABASE_CONNECTION_STRING`)
-- Apply input validation and sanitization rigorously, especially on inputs from external sources
-- Implement retries, exponential backoff, and timeouts on all external calls
+- Never embed actual sensitive information (API keys, passwords, personal data, specific user-dependent URLs/paths) directly in code.
+- Always use clear, conventional placeholders (e.g., `YOUR_API_KEY`, `DATABASE_CONNECTION_STRING`, `PATH_TO_YOUR_FILE`).
+- Apply **input validation and sanitization** rigorously, especially on inputs from external sources.
+- Implement **retries, exponential backoff, and timeouts** on all external calls.
 
-### Documentation
+### Documentation 
 
-- Maintain documentation in `docs/` to guide team practices and architecture decisions
+- Maintain documentation in `docs/` to guide team practices and architecture decisions.
 
 ### Tests
-- Keep tests stateless: Use fixtures, avoid global state
-- Use the Arrange - Act - Assert (AAA) pattern
+- **Keep tests stateless**: Use fixtures, avoid global state.
+- When writing tests, use the Arrange - Act - Assert (AAA) pattern
 - Unit tests should be FIRST (fast, isolated, repeatable, self-validating and timely)
 
 ---
