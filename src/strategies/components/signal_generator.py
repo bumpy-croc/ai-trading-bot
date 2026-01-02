@@ -452,6 +452,13 @@ class WeightedVotingSignalGenerator(SignalGenerator):
 
         return sum(confidences) / total_weight
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the maximum warmup period required by any child generator."""
+        if not self.generators:
+            return 0
+        return max(gen.warmup_period for gen in self.generators.keys())
+
     def get_parameters(self) -> dict[str, Any]:
         """Get weighted voting parameters"""
         params = super().get_parameters()
@@ -659,6 +666,11 @@ class HierarchicalSignalGenerator(SignalGenerator):
         except Exception:
             return 0.0
 
+    @property
+    def warmup_period(self) -> int:
+        """Return the maximum warmup period required by primary or secondary generator."""
+        return max(self.primary_generator.warmup_period, self.secondary_generator.warmup_period)
+
     def get_parameters(self) -> dict[str, Any]:
         """Get hierarchical signal generator parameters"""
         params = super().get_parameters()
@@ -820,6 +832,12 @@ class RegimeAdaptiveSignalGenerator(SignalGenerator):
             return 0.9  # Slight reduction
         else:
             return 0.7  # Significant reduction in low-confidence regimes
+
+    @property
+    def warmup_period(self) -> int:
+        """Return the maximum warmup period required by any regime generator or default."""
+        all_generators = list(self.regime_generators.values()) + [self.default_generator]
+        return max(gen.warmup_period for gen in all_generators)
 
     def get_parameters(self) -> dict[str, Any]:
         """Get regime-adaptive signal generator parameters"""
