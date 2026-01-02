@@ -73,9 +73,21 @@ class SageMakerProvider(CloudTrainingProvider):
         if self._sagemaker_client is None:
             try:
                 import boto3
+                from botocore.config import Config
 
-                self._sagemaker_client = boto3.client("sagemaker", region_name=self._region)
-                self._s3_client = boto3.client("s3", region_name=self._region)
+                # Configure timeouts for external API calls (CODE.md: line 178)
+                # connect_timeout: time to establish connection
+                # read_timeout: time to read response from server
+                config = Config(
+                    connect_timeout=10,  # 10 seconds to connect
+                    read_timeout=60,  # 60 seconds to read response
+                    retries={"max_attempts": 3, "mode": "standard"},  # Retry with backoff
+                )
+
+                self._sagemaker_client = boto3.client(
+                    "sagemaker", region_name=self._region, config=config
+                )
+                self._s3_client = boto3.client("s3", region_name=self._region, config=config)
             except ImportError as exc:
                 raise ProviderNotAvailableError(
                     "boto3 is required for SageMaker provider. "

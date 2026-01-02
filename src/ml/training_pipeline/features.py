@@ -154,11 +154,18 @@ def _calculate_rsi_fast(close_prices: np.ndarray, window: int = 14) -> np.ndarra
 
     Args:
         close_prices: 1D array of close prices
-        window: RSI window size
+        window: RSI window size (must be positive)
 
     Returns:
         1D array of RSI values (with NaNs for initial window)
+
+    Raises:
+        ValueError: If window is not positive
     """
+    # Validate window parameter before using as divisor
+    if window <= 0:
+        raise ValueError(f"RSI window must be positive, got {window}")
+
     # Calculate price changes
     deltas = np.diff(close_prices, prepend=close_prices[0])
 

@@ -318,7 +318,7 @@ def save_artifacts(
         json.dump(metadata, f, indent=2, default=str)
 
     # Atomic symlink update to avoid race conditions (TOCTOU vulnerability)
-    # Create temporary symlink, then atomically replace the old one
+    # Create temporary symlink, then atomically replace the existing symlink
     latest_link = type_dir / "latest"
     temp_link = type_dir / f".latest.{version_dir.name}.tmp"
 
@@ -327,10 +327,10 @@ def save_artifacts(
         if temp_link.exists() or temp_link.is_symlink():
             temp_link.unlink()
 
-        # Create new symlink with temporary name
+        # Create symlink with temporary name
         temp_link.symlink_to(version_dir.name)
 
-        # Atomically replace old symlink (rename is atomic on POSIX systems)
+        # Atomically replace existing symlink (rename is atomic on POSIX systems)
         temp_link.replace(latest_link)
 
     except OSError as e:

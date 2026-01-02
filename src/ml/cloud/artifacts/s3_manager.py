@@ -49,8 +49,18 @@ class S3ArtifactManager:
         if self._s3_client is None:
             try:
                 import boto3
+                from botocore.config import Config
 
-                self._s3_client = boto3.client("s3", region_name=self.region)
+                # Configure timeouts for external API calls (CODE.md: line 178)
+                # connect_timeout: time to establish connection
+                # read_timeout: time to read response from server
+                config = Config(
+                    connect_timeout=10,  # 10 seconds to connect
+                    read_timeout=60,  # 60 seconds to read response
+                    retries={"max_attempts": 3, "mode": "standard"},  # Retry with backoff
+                )
+
+                self._s3_client = boto3.client("s3", region_name=self.region, config=config)
             except ImportError as exc:
                 raise ArtifactSyncError(
                     "boto3 is required for S3 operations. " "Install with: pip install '.[cloud]'"
@@ -366,10 +376,10 @@ class S3ArtifactManager:
             if temp_link.exists() or temp_link.is_symlink():
                 temp_link.unlink()
 
-            # Create new symlink with temporary name
+            # Create symlink with temporary name
             temp_link.symlink_to(version_dir.name)
 
-            # Atomically replace old symlink (os.replace is atomic on POSIX)
+            # Atomically replace existing symlink (os.replace is atomic on POSIX)
             os.replace(str(temp_link), str(latest_link))
 
             logger.info(f"Updated 'latest' symlink to {version_dir.name}")
